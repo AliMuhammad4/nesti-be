@@ -5,7 +5,6 @@ export const getMyProfessionalProfile = async (req, res, next) => {
   try {
     const user = req.user;
     const profile = await ProfessionalProfile.findOne({ user_id: user._id });
-
     res.json({
       success: true,
       user: {
@@ -20,7 +19,6 @@ export const getMyProfessionalProfile = async (req, res, next) => {
     next(error);
   }
 };
-
 export const upsertProfessionalProfile = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -38,8 +36,6 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       last_name,
       full_name,
     } = req.body;
-
-    // 1) Update user's name in the core User collection if provided
     if (first_name || last_name) {
       const user = await User.findById(userId);
       if (!user) {

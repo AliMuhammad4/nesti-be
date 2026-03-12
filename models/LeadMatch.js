@@ -1,30 +1,60 @@
 import mongoose from 'mongoose';
 
-const leadMatchSchema = new mongoose.Schema({
-  user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
+const leadMatchSchema = new mongoose.Schema(
+  {
+    user_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    professional_profile_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ProfessionalProfile',
+    },
+    lead_type: {
+      type: String,
+      enum: [
+        'hot_buyer', 'warm_buyer', 'cold_buyer',
+        'hot_seller', 'warm_seller', 'cold_seller',
+        'unknown',
+      ],
+      default: 'unknown',
+    },
+    lead_profile_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'LeadProfile',
+      default: null,
+    },
+    conversation_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ChatConversation',
+      index: true,
+    },
+    match_score: {
+      type: Number,
+      default: 0,
+    },
+    match_status: {
+      type: String,
+      enum: ['new', 'consult_booked', 'showing_booked', 'nurturing', 'converted'],
+      default: 'new',
+    },
+    compatibility_factors: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+    contact_count: {
+      type: Number,
+      default: 0,
+    },
+    first_contact_at: {
+      type: Date,
+    },
+    last_contact_at: {
+      type: Date,
+    },
   },
-  lead_type: {
-    type: String,
-    enum: ['BuyerProfile', 'SellerProfile'],
-    required: true,
-  },
-  lead_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    refPath: 'lead_type'
-  },
-  match_status: {
-    type: String,
-    enum: ['new', 'consult_booked', 'showing_booked', 'nurturing', 'converted'],
-    default: 'new',
-  },
-  conversation_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ChatConversation',
-  }
-}, { timestamps: true });
+  { timestamps: true }
+);
 
 export default mongoose.model('LeadMatch', leadMatchSchema);

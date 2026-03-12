@@ -45,16 +45,11 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       if (last_name) user.last_name = last_name;
       await user.save();
     }
-
-    // 2) Compute display full_name
     let displayFullName = full_name;
     if (!displayFullName) {
-      // Refresh user to ensure we have latest names (in case we just updated them)
       const freshUser = await User.findById(userId);
       displayFullName = `${freshUser.first_name} ${freshUser.last_name}`;
     }
-
-    // 3) Build update object only with fields that were actually sent
     const update = {};
     if (professional_type !== undefined) update.professional_type = professional_type;
     if (phone !== undefined) update.phone = phone;
@@ -66,13 +61,11 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (website !== undefined) update.website = website;
     if (certificates !== undefined) update.certificates = certificates;
     update.full_name = displayFullName;
-
     const profile = await ProfessionalProfile.findOneAndUpdate(
       { user_id: userId },
       { $set: update },
       { new: true, upsert: true, setDefaultsOnInsert: true },
     );
-
     res.json({
       success: true,
       message: 'Professional profile saved successfully',

@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Nesti AI Chatbot - Local Test</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #111827 0, #020617 40%, #020617 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    /* ── Shell ── */
+    .shell {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 440px;
+      max-width: 100%;
+    }
+
+    /* ── Dev config panel ── */
+    .panel {
+      background: #0b1120;
+      color: #e5e7eb;
+      border-radius: 14px;
+      padding: 12px 16px;
+      font-size: 12px;
+      line-height: 1.5;
+      box-shadow: 0 18px 45px rgba(15,23,42,0.9);
+    }
+    .panel h2 { font-size: 13px; margin-bottom: 6px; font-weight: 600; color: #f9fafb; }
+    .panel code { background: #020617; padding: 2px 4px; border-radius: 4px; font-size: 11px; }
+    .config-row { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+    .config-row label { min-width: 74px; opacity: .8; font-size: 11px; }
+    .config-row input {
+      flex: 1; padding: 4px 7px; border-radius: 6px;
+      border: 1px solid rgba(148,163,184,0.6);
+      background: #020617; color: #e5e7eb; font-size: 11px; outline: none;
+    }
+
+    /* ── Chat widget ── */
+    .chat-widget {
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 18px 45px rgba(15,23,42,0.45);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .chat-header {
+      padding: 13px 16px;
+      background: linear-gradient(90deg, #0f172a, #1e293b);
+      color: #f9fafb;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .chat-header-title { font-size: 14px; font-weight: 700; }
+    .chat-header-sub   { font-size: 11px; opacity: .65; margin-top: 2px; }
+    .status-pill {
+      font-size: 10px; border-radius: 999px; padding: 3px 9px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(148,163,184,0.35);
+    }
+
+    /* ── STEP 1: Intent screen ── */
+    #intentScreen {
+      padding: 28px 20px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      background: linear-gradient(160deg, #f0f4ff 0%, #e8eeff 100%);
+    }
+    .intent-heading {
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+      text-align: center;
+      line-height: 1.4;
+    }
+    .intent-sub {
+      font-size: 12px;
+      color: #64748b;
+      text-align: center;
+      margin-top: -10px;
+    }
+    .intent-cards {
+      display: flex;
+      gap: 14px;
+      width: 100%;
+    }
+    .intent-card {
+      flex: 1;
+      border: 2px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 18px 12px;
+      cursor: pointer;
+      background: #fff;
+      text-align: center;
+      transition: border-color .18s, box-shadow .18s, transform .12s;
+      user-select: none;
+    }
+    .intent-card:hover {
+      border-color: #6366f1;
+      box-shadow: 0 6px 20px rgba(99,102,241,0.18);
+      transform: translateY(-2px);
+    }
+    .intent-card.selected {
+      border-color: #4f46e5;
+      background: #eef2ff;
+      box-shadow: 0 6px 20px rgba(79,70,229,0.22);
+    }
+    .intent-icon { font-size: 32px; margin-bottom: 8px; }
+    .intent-label { font-size: 14px; font-weight: 700; color: #0f172a; }
+    .intent-desc  { font-size: 11px; color: #64748b; margin-top: 3px; }
+
+    /* ── STEP 2: Details form ── */
+    #detailsScreen {
+      padding: 20px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+      background: #f8fafc;
+    }
+    .form-heading {
+      font-size: 14px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .form-heading span {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .badge-buy  { background: #dbeafe; color: #1d4ed8; }
+    .badge-sell { background: #dcfce7; color: #15803d; }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-group label { font-size: 11px; font-weight: 600; color: #374151; }
+    .form-group input, .form-group select {
+      padding: 8px 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #111827;
+      outline: none;
+      background: #fff;
+      transition: border-color .15s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
+    }
+    .form-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .btn-back {
+      padding: 8px 16px; border-radius: 999px; border: 1px solid #d1d5db;
+      background: #fff; color: #374151; font-size: 12px; cursor: pointer;
+    }
+    .btn-start {
+      padding: 8px 20px; border-radius: 999px; border: none;
+      background: #4f46e5; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-start:hover { background: #4338ca; }
+
+    /* ── STEP 3: Chat screen ── */
+    #chatScreen { display: none; flex-direction: column; }
+
+    .chat-body {
+      padding: 14px;
+      height: 340px;
+      overflow-y: auto;
+      background: radial-gradient(circle at top, #e5e7eb 0, #eef2ff 40%, #e5e7eb 100%);
+      flex-shrink: 0;
+    }
+    .msg-wrap { margin-bottom: 10px; max-width: 86%; }
+    .msg {
+      padding: 9px 12px;
+      border-radius: 13px;
+      font-size: 13px;
+      line-height: 1.45;
+      word-wrap: break-word;
+    }
+    .msg.user {
+      margin-left: auto;
+      background: #4f46e5;
+      color: #f9fafb;
+      border-bottom-right-radius: 4px;
+    }
+    .msg.bot {
+      background: #fff;
+      color: #0f172a;
+      border-bottom-left-radius: 4px;
+      box-shadow: 0 3px 10px rgba(15,23,42,0.12);
+    }
+    .meta-line   { font-size: 10px; margin-top: 4px; color: #6b7280; }
+    .signal-line { font-size: 10px; margin-top: 2px; color: #9ca3af; font-style: italic; }
+
+    .chat-input-bar {
+      border-top: 1px solid #e5e7eb;
+      padding: 8px 10px;
+      background: #f9fafb;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .chat-input-bar input {
+      flex: 1; padding: 8px 12px; border-radius: 999px;
+      border: 1px solid #d1d5db; font-size: 13px; outline: none;
+    }
+    .chat-input-bar input:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
+    }
+    .chat-input-bar button {
+      padding: 8px 14px; border-radius: 999px; border: none;
+      background: #0f172a; color: #f9fafb; font-size: 12px;
+      font-weight: 600; cursor: pointer;
+    }
+    .chat-input-bar button:disabled { opacity: .5; cursor: default; }
+
+    /* Grade colours */
+    .hot  { color: #ef4444; font-weight: 700; }
+    .warm { color: #f59e0b; font-weight: 700; }
+    .cold { color: #60a5fa; font-weight: 700; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Dev config panel -->
+  <div class="panel">
+    <h2>Nesti AI – Local Test Widget</h2>
+    <div>Paste an <code>embedToken</code> from <code>POST /api/embed/generate</code> to start.</div>
+    <div class="config-row">
+      <label>Embed token</label>
+      <input id="embedTokenInput" type="text" placeholder="token from /api/embed/generate" />
+    </div>
+    <div class="config-row">
+      <label>API URL</label>
+      <input id="apiUrlInput" type="text" value="http://localhost:5000/api/chat" />
+    </div>
+  </div>
+
+  <!-- Chat widget -->
+  <div class="chat-widget">
+
+    <!-- Header -->
+    <div class="chat-header">
+      <div>
+        <div class="chat-header-title">Nesti AI</div>
+        <div class="chat-header-sub">24/7 Real Estate Copilot</div>
+      </div>
+      <div class="status-pill" id="statusPill">Step 1 of 3</div>
+    </div>
+
+    <!-- ── STEP 1: Intent selection ── -->
+    <div id="intentScreen">
+      <div>
+        <div class="intent-heading">What brings you here today?</div>
+        <div class="intent-sub">Select your goal so we can personalise your experience.</div>
+      </div>
+      <div class="intent-cards">
+        <div class="intent-card" id="cardBuy" onclick="selectIntent('buy')">
+          <div class="intent-icon">🏡</div>
+          <div class="intent-label">I want to Buy</div>
+          <div class="intent-desc">Find your dream home or investment property</div>
+        </div>
+        <div class="intent-card" id="cardSell" onclick="selectIntent('sell')">
+          <div class="intent-icon">💰</div>
+          <div class="intent-label">I want to Sell</div>
+          <div class="intent-desc">List your property and get the best price</div>
+        </div>
+      </div>
+      <button class="btn-start" id="intentNextBtn" onclick="goToDetails()" disabled
+        style="width:100%;padding:10px 0;font-size:13px;">
+        Continue →
+      </button>
+    </div>
+
+    <!-- ── STEP 2: Details form ── -->
+    <div id="detailsScreen">
+      <div class="form-heading">
+        Tell us a bit more
+        <span id="intentBadge" class="badge-buy">Buyer</span>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Full Name *</label>
+          <input id="f_name" type="text" placeholder="John Smith" />
+        </div>
+        <div class="form-group">
+          <label>Phone *</label>
+          <input id="f_phone" type="tel" placeholder="+1 555 000 0000" />
+        </div>
+        <div class="form-group full">
+          <label>Email *</label>
+          <input id="f_email" type="email" placeholder="you@example.com" />
+        </div>
+
+        <!-- Buyer-only fields -->
+        <div class="form-group full buyer-field">
+          <label>Where are you looking to buy?</label>
+          <input id="f_location" type="text" placeholder="City, neighbourhood, zip code…" />
+        </div>
+        <div class="form-group buyer-field">
+          <label>Budget range</label>
+          <input id="f_budget" type="text" placeholder="e.g. $400K – $600K" />
+        </div>
+        <div class="form-group buyer-field">
+          <label>Bedrooms needed</label>
+          <select id="f_beds">
+            <option value="">Any</option>
+            <option>1</option><option>2</option><option>3</option>
+            <option>4</option><option>5+</option>
+          </select>
+        </div>
+        <div class="form-group buyer-field">
+          <label>Bathrooms needed</label>
+          <select id="f_baths">
+            <option value="">Any</option>
+            <option>1</option><option>2</option><option>3</option>
+            <option>4</option><option>5+</option>
+          </select>
+        </div>
+
+        <!-- Seller-only fields -->
+        <div class="form-group full seller-field" style="display:none">
+          <label>Property address</label>
+          <input id="f_address" type="text" placeholder="123 Main St, City, State" />
+        </div>
+        <div class="form-group seller-field" style="display:none">
+          <label>Expected price</label>
+          <input id="f_price" type="text" placeholder="e.g. $550,000" />
+        </div>
+        <div class="form-group seller-field" style="display:none">
+          <label>Property type</label>
+          <select id="f_proptype">
+            <option value="">Select…</option>
+            <option>Single Family</option><option>Condo</option>
+            <option>Townhouse</option><option>Multi-Family</option><option>Land</option>
+          </select>
+        </div>
+
+        <!-- Shared -->
+        <div class="form-group full">
+          <label>Timeline</label>
+          <select id="f_timeline">
+            <option value="">Not sure yet</option>
+            <option value="asap">ASAP / within 1 month</option>
+            <option value="1-3 months">1 – 3 months</option>
+            <option value="3-6 months">3 – 6 months</option>
+            <option value="6-12 months">6 – 12 months</option>
+            <option value="12+">12+ months</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn-back" onclick="goBack()">← Back</button>
+        <button class="btn-start" onclick="startChat()">Start Chat →</button>
+      </div>
+    </div>
+
+    <!-- ── STEP 3: Chat ── -->
+    <div id="chatScreen">
+      <div id="chatBody" class="chat-body"></div>
+      <div class="chat-input-bar">
+        <input id="messageInput" type="text" placeholder="Type your message…" />
+        <button id="sendBtn">Send</button>
+      </div>
+    </div>
+
+  </div><!-- /chat-widget -->
+</div><!-- /shell -->
+
+<script>
+  /* ── State ── */
+  let chosenIntent = null;
+  let formData     = {};
+
+  const VISITOR_ID = 'visitor-' + Math.random().toString(36).slice(2, 10);
+  const SESSION_ID = 'session-' + Math.random().toString(36).slice(2, 10);
+
+  /* ── Step 1: Intent selection ── */
+  function selectIntent(intent) {
+    chosenIntent = intent;
+    document.getElementById('cardBuy').classList.toggle('selected',  intent === 'buy');
+    document.getElementById('cardSell').classList.toggle('selected', intent === 'sell');
+    document.getElementById('intentNextBtn').disabled = false;
+  }
+
+  function goToDetails() {
+    if (!chosenIntent) return;
+
+    // Show/hide intent-specific fields
+    document.querySelectorAll('.buyer-field').forEach(el =>
+      el.style.display = chosenIntent === 'buy' ? '' : 'none'
+    );
+    document.querySelectorAll('.seller-field').forEach(el =>
+      el.style.display = chosenIntent === 'sell' ? '' : 'none'
+    );
+
+    // Update badge
+    const badge = document.getElementById('intentBadge');
+    if (chosenIntent === 'buy') {
+      badge.textContent = 'Buyer';
+      badge.className = 'badge-buy';
+    } else {
+      badge.textContent = 'Seller';
+      badge.className = 'badge-sell';
+    }
+
+    document.getElementById('intentScreen').style.display  = 'none';
+    document.getElementById('detailsScreen').style.display = 'flex';
+    document.getElementById('statusPill').textContent = 'Step 2 of 3';
+  }
+
+  function goBack() {
+    document.getElementById('detailsScreen').style.display = 'none';
+    document.getElementById('intentScreen').style.display  = '';
+    document.getElementById('statusPill').textContent = 'Step 1 of 3';
+  }
+
+  /* ── Step 2: Collect form data and start chat ── */
+  function startChat() {
+    const name  = document.getElementById('f_name').value.trim();
+    const phone = document.getElementById('f_phone').value.trim();
+    const email = document.getElementById('f_email').value.trim();
+
+    if (!name || !phone || !email) {
+      alert('Please fill in your name, phone, and email to continue.');
+      return;
+    }
+
+    formData = {
+      name,
+      phone,
+      email,
+      timeline: document.getElementById('f_timeline').value,
+    };
+
+    if (chosenIntent === 'buy') {
+      formData.location = document.getElementById('f_location').value.trim();
+      formData.budget   = document.getElementById('f_budget').value.trim();
+      formData.beds     = document.getElementById('f_beds').value;
+      formData.baths    = document.getElementById('f_baths').value;
+    } else {
+      formData.address   = document.getElementById('f_address').value.trim();
+      formData.price     = document.getElementById('f_price').value.trim();
+      formData.proptype  = document.getElementById('f_proptype').value;
+    }
+
+    document.getElementById('detailsScreen').style.display = 'none';
+    document.getElementById('chatScreen').style.display    = 'flex';
+    document.getElementById('statusPill').textContent = 'Live chat';
+
+    // Build a natural opening message from the form data
+    const openingMessage = buildOpeningMessage();
+    sendMessage(openingMessage, true, {
+      intent:   chosenIntent,
+      name:     formData.name,
+      email:    formData.email,
+      phone:    formData.phone,
+      timeline: formData.timeline,
+      location: formData.location,
+      budget:   formData.budget,
+      beds:     formData.beds,
+      address:  formData.address,
+      price:    formData.price,
+    });
+  }
+
+  function buildOpeningMessage() {
+    const parts = [];
+    parts.push(`Hi! My name is ${formData.name}.`);
+    parts.push(`I am looking to ${chosenIntent === 'buy' ? 'buy' : 'sell'} a property.`);
+
+    if (chosenIntent === 'buy') {
+      if (formData.location) parts.push(`I'm interested in ${formData.location}.`);
+      if (formData.budget)   parts.push(`My budget is around ${formData.budget}.`);
+      if (formData.beds)     parts.push(`I need ${formData.beds} bedroom(s).`);
+      if (formData.baths)    parts.push(`I prefer ${formData.baths} bathroom(s).`);
+    } else {
+      if (formData.address)  parts.push(`The property is at ${formData.address}.`);
+      if (formData.price)    parts.push(`I'm expecting around ${formData.price}.`);
+      if (formData.proptype) parts.push(`It is a ${formData.proptype}.`);
+    }
+
+    if (formData.timeline) parts.push(`My timeline is ${formData.timeline}.`);
+    parts.push(`My email is ${formData.email} and my phone is ${formData.phone}.`);
+
+    return parts.join(' ');
+  }
+
+  /* ── Step 3: Chat ── */
+  const chatBody   = document.getElementById('chatBody');
+  const msgInput   = document.getElementById('messageInput');
+  const sendBtn    = document.getElementById('sendBtn');
+  const statusPill = document.getElementById('statusPill');
+
+  function gradeClass(g) {
+    return g === 'hot' ? 'hot' : g === 'warm' ? 'warm' : 'cold';
+  }
+
+  function appendMessage(text, from, meta) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrap';
+
+    const msg = document.createElement('div');
+    msg.className = 'msg ' + (from === 'user' ? 'user' : 'bot');
+    msg.textContent = text;
+    wrap.appendChild(msg);
+
+    if (meta) {
+      // Score / classification row
+      const parts = [];
+      if (meta.intent)            parts.push('intent: ' + meta.intent);
+      if (meta.lead_score != null) {
+        const gc = gradeClass(meta.lead_grade);
+        parts.push(`score: <span class="${gc}">${meta.lead_score}</span>`);
+      }
+      if (meta.lead_classification) parts.push(meta.lead_classification);
+      if (meta.emotional_state)     parts.push('mood: ' + meta.emotional_state);
+
+      if (parts.length) {
+        const ml = document.createElement('div');
+        ml.className = 'meta-line';
+        ml.innerHTML = parts.join(' &nbsp;|&nbsp; ');
+        wrap.appendChild(ml);
+      }
+
+      // Signals row
+      const s = meta.signals || {};
+      const sigs = [];
+      if (s.timeline) sigs.push('⏱ ' + s.timeline);
+      if (s.budget)   sigs.push('💰 ' + s.budget);
+      if (s.location) sigs.push('📍 ' + s.location);
+      if (s.beds)     sigs.push('🛏 ' + s.beds + ' bed');
+      if (s.baths)    sigs.push('🚿 ' + s.baths + ' bath');
+      if (sigs.length) {
+        const sl = document.createElement('div');
+        sl.className = 'signal-line';
+        sl.textContent = sigs.join('  ');
+        wrap.appendChild(sl);
+      }
+
+      // Contact row
+      const c = meta.contact || {};
+      const cons = [];
+      if (c.name)  cons.push('👤 ' + c.name);
+      if (c.email) cons.push('✉ ' + c.email);
+      if (c.phone) cons.push('📞 ' + c.phone);
+      if (cons.length) {
+        const cl = document.createElement('div');
+        cl.className = 'signal-line';
+        cl.textContent = cons.join('  ');
+        wrap.appendChild(cl);
+      }
+    }
+
+    chatBody.appendChild(wrap);
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+
+  // Track current primary intent so we can detect intent switches (buy → sell, or vice versa)
+  let activeIntent = null;
+
+  async function sendMessage(text, silent = false, formContactOverride = null) {
+    const embedToken = document.getElementById('embedTokenInput').value.trim();
+    const apiUrl     = document.getElementById('apiUrlInput').value.trim() || 'http://localhost:5000/api/chat';
+
+    if (!text) return;
+    if (!embedToken) { alert('Please paste an embed token first.'); return; }
+
+    if (!silent) appendMessage(text, 'user');
+    else {
+      // Show a compact summary bubble for the opening message
+      const summary = chosenIntent === 'buy'
+        ? `🏡 Buyer · ${formData.name} · ${formData.email}`
+        : `💰 Seller · ${formData.name} · ${formData.email}`;
+      appendMessage(summary, 'user');
+    }
+
+    msgInput.value = '';
+    msgInput.focus();
+    sendBtn.disabled = true;
+    statusPill.textContent = 'thinking…';
+
+    // Build the payload — include formContact when provided (form submit)
+    const payload = {
+      id:         SESSION_ID,
+      message:    text,
+      embedToken: embedToken,
+      visitorId:  VISITOR_ID,
+      agentType:  'agent',
+      channel:    'web',
+    };
+
+    if (formContactOverride) {
+      payload.formContact = {
+        intent:   formContactOverride.intent,
+        name:     formContactOverride.name,
+        email:    formContactOverride.email,
+        phone:    formContactOverride.phone,
+        timeline: formContactOverride.timeline  || '',
+        location: formContactOverride.location  || '',
+        budget:   formContactOverride.budget    || '',
+        beds:     formContactOverride.beds      || '',
+        baths:    formContactOverride.baths     || '',
+        address:  formContactOverride.address   || '',
+        price:    formContactOverride.price     || '',
+      };
+    }
+
+    try {
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        appendMessage('Error: ' + (data.message || 'Unknown error'), 'bot');
+      } else {
+        appendMessage(data.reply || '(no reply)', 'bot', data.meta);
+
+        // Detect intent change mid-conversation and trigger a new form
+        const newIntent = data.meta?.intent;
+        if (newIntent && activeIntent && newIntent !== activeIntent) {
+          // Open the form again for the new intent
+          chosenIntent = newIntent;
+          // Pre-fill contact fields from latest meta contact
+          const c = data.meta.contact || {};
+          document.getElementById('f_name').value  = c.name  || formData.name  || '';
+          document.getElementById('f_email').value = c.email || formData.email || '';
+          document.getElementById('f_phone').value = c.phone || formData.phone || '';
+
+          // Reset intent-specific fields
+          document.getElementById('f_location').value = '';
+          document.getElementById('f_budget').value   = '';
+          document.getElementById('f_beds').value     = '';
+          const bathsSelect = document.getElementById('f_baths');
+          if (bathsSelect) bathsSelect.value = '';
+          document.getElementById('f_address').value  = '';
+          document.getElementById('f_price').value    = '';
+          document.getElementById('f_proptype').value = '';
+
+          // Show appropriate fields & badge for the new intent
+          goToDetails();
+        }
+
+        // Initialise or update activeIntent
+        if (!activeIntent && data.meta?.intent) {
+          activeIntent = data.meta.intent;
+        }
+      }
+    } catch (err) {
+      appendMessage('Network error: ' + err.message, 'bot');
+    } finally {
+      sendBtn.disabled = false;
+      statusPill.textContent = 'Live chat';
+    }
+  }
+
+  sendBtn.addEventListener('click', () => sendMessage(msgInput.value.trim()));
+  msgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendMessage(msgInput.value.trim());
+  });
+</script>
+</body>
+</html>

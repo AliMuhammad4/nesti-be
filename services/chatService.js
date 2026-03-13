@@ -4,6 +4,7 @@ import ChatConversation from '../models/ChatConversation.js';
 import ChatMessage from '../models/ChatMessage.js';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
 import LeadMatch from '../models/LeadMatch.js';
+import LeadProfile from '../models/LeadProfile.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import logger from '../utils/logger.js';
 
@@ -21,10 +22,13 @@ import {
 } from './chat/contactUtils.js';
 import {
   mergeSignals,
+  mergeQualificationForScoring,
+  normalizeTimeline,
   scoreLead,
   buildLeadClassification,
   bestGrade,
   createLeadRecords,
+  deriveQualificationFromText,
 } from './chat/scoringUtils.js';
 import { buildSystemPrompt } from './chat/promptUtils.js';
 
@@ -42,7 +46,6 @@ export const handleChatService = async ({
   referer,
   formContact,
 }) => {
-  // ── Input validation ──
   if (!message || typeof message !== 'string' || !message.trim()) {
     return { status: 400, body: { success: false, message: 'message is required' } };
   }
@@ -58,26 +61,22 @@ export const handleChatService = async ({
   const normalizedAgentType = normalizeAgentType(agentType);
   const normalizedChannel   = channel || 'web';
 
-  // ── Embed resolution ──
   const embed = await ChatbotEmbedUrl.findOne({ token: embedToken });
   if (!embed) {
     return { status: 403, body: { success: false, message: 'Invalid or inactive embed token' } };
   }
   const userId = embed.user_id;
 
-  // ── Parallel: visitor + professional profile ──
   const [visitor, professionalProfile] = await Promise.all([
     resolveVisitor({ visitorUuid: visitorId, embedToken, userAgent, clientIp }),
     ProfessionalProfile.findOne({ user_id: userId }),
   ]);
 
-  // ── Intent: form takes priority, then keyword detection ──
   const intent =
     formContact?.intent === 'sell' || formContact?.intent === 'buy'
       ? formContact.intent
       : classifyIntentFromKeywords(trimmedMessage);
 
-  // ── Conversation lifecycle ──
   let conversation = await ChatConversation.findOne({ session_id: sessionId });
   if (!conversation) {
     conversation = await ChatConversation.create({
@@ -97,11 +96,7 @@ export const handleChatService = async ({
     await conversation.save();
   }
 
-  // ── Contact extraction ──
-  // Regex extraction from the raw message text
   const regexContact = extractContactFromMessage(trimmedMessage);
-
-  // Seed with validated form fields (form always wins over regex)
   const currentContact = mergeContact(regexContact, {
     name:    formContact?.name    || null,
     email:   formContact?.email   ? formContact.email.toLowerCase() : null,
@@ -109,17 +104,25 @@ export const handleChatService = async ({
     address: formContact?.address || null,
   });
 
-  // ── Build seed signals from form data (used in scoring below) ──
-  const formSignals = formContact ? {
-    timeline: formContact.timeline || null,
-    budget:   formContact.budget   || formContact.price || null,
-    location: formContact.location || null,
-    beds:     formContact.beds  ? (parseInt(formContact.beds, 10)  || null) : null,
-    baths:    formContact.baths ? (parseInt(formContact.baths, 10) || null) : null,
+  const storedForm = formContact || conversation.form_data;
+  const formSignals = storedForm ? {
+    timeline: storedForm.timeline || null,
+    budget:   storedForm.budget   || storedForm.price || null,
+    location: storedForm.location || null,
+    beds:     storedForm.beds  ? (parseInt(storedForm.beds, 10)  || null) : null,
+    baths:    storedForm.baths ? (parseInt(storedForm.baths, 10) || null) : null,
     area:     null,
   } : {};
 
-  // ── Save user message (before accumulation so meta.contact is stored) ──
+  const formQualification = storedForm ? {
+    mortgage_status:    storedForm.mortgage_status || null,
+    realtor_status:     storedForm.realtor_status || null,
+    motivation_reason:  storedForm.motivation_reason || null,
+    viewing_readiness:  storedForm.viewing_readiness || null,
+    living_situation:   storedForm.living_situation || null,
+    urgency_readiness:  storedForm.urgency_readiness || null,
+  } : {};
+
   await ChatMessage.create({
     conversation_id: conversation._id,
     session_id:      sessionId,
@@ -136,23 +139,27 @@ export const handleChatService = async ({
     },
   });
 
-  // ── Accumulate contact across conversation (reads stored meta, not raw text) ──
   const contactInfo = await accumulateContactInfo(conversation._id, currentContact);
   const hasContact  = Boolean(contactInfo.email || contactInfo.phone || contactInfo.name);
 
-  // ── Message count for engagement scoring ──
-  const interactionCount = await ChatMessage.countDocuments({ conversation_id: conversation._id });
+  const allUserMessages = await ChatMessage.find({
+    conversation_id: conversation._id,
+    role:            'user',
+  })
+    .sort({ createdAt: 1 })
+    .select('content');
+  const interactionCount = allUserMessages.length;
+  const conversationText = allUserMessages.map((m) => m.content).join(' ');
 
-  // ── Lead scoring (form signals seeded in so score is accurate on message 1) ──
-  const { leadScore, leadGrade, leadMeta } = scoreLead({
-    message:          trimmedMessage,
+  let { leadScore, leadGrade, leadMeta } = scoreLead({
+    message:          conversationText,
     hasContact,
     contactInfo,
     interactionCount,
     seedSignals:      formSignals,
+    formQualification,
   });
 
-  // ── Build OpenAI history ──
   const history = await ChatMessage.find({ conversation_id: conversation._id })
     .sort({ createdAt: 1 })
     .limit(20)
@@ -163,11 +170,11 @@ export const handleChatService = async ({
     ...history.map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  // ── OpenAI call ──
   let aiReply        = '';
   let aiMeta         = {};
   let aiIntent       = intent;
   let emotionalState = 'neutral';
+  let parsedAiDetails = {};
 
   try {
     const completion = await getOpenAI().chat.completions.create({
@@ -179,7 +186,8 @@ export const handleChatService = async ({
 
     const rawContent = completion.choices[0].message.content || '';
     const [replyPart, metaPart] = rawContent.split('###META###');
-    aiReply = replyPart.trim();
+    aiReply = replyPart?.trim() || '';
+    if (!aiReply) aiReply = "I'm here to help! Could you tell me a bit more about what you're looking for?";
 
     if (metaPart) {
       try {
@@ -189,34 +197,53 @@ export const handleChatService = async ({
       }
     }
 
-    // Normalize AI intent
     aiIntent = normalizeAiIntent(aiMeta.intent, intent);
     emotionalState = aiMeta.emotional_state || 'neutral';
 
-    // Merge AI-extracted contact (only fills gaps, never overwrites)
     const aiContact = aiMeta.contact || {};
     contactInfo.name    = contactInfo.name    || aiContact.full_name || null;
     contactInfo.email   = contactInfo.email   || (aiContact.email ? aiContact.email.toLowerCase() : null);
     contactInfo.phone   = contactInfo.phone   || aiContact.phone   || null;
 
-    // Merge AI details into signals (only fills gaps)
-    const aiDetails = aiMeta.details || {};
+    parsedAiDetails = aiMeta.details || {};
     leadMeta.signals = mergeSignals(leadMeta.signals, {
-      location: aiDetails.property_address || null,
-      budget:   aiDetails.budget           || null,
-      timeline: aiDetails.timeline         || null,
+      location: parsedAiDetails.property_address || null,
+      budget:   parsedAiDetails.budget           || null,
+      timeline: parsedAiDetails.timeline         || null,
     });
+
+    const aiEnhancedQualification = mergeQualificationForScoring(formQualification, parsedAiDetails);
+    const aiExtractedSignals = {
+      location: parsedAiDetails.property_address || null,
+      budget:   parsedAiDetails.budget           || null,
+      timeline: normalizeTimeline(parsedAiDetails.timeline) || formSignals.timeline || null,
+    };
+    const aiEnhancedSignals = mergeSignals(formSignals, aiExtractedSignals);
+
+    const aiEnhanced = scoreLead({
+      message:          conversationText,
+      hasContact,
+      contactInfo,
+      interactionCount,
+      seedSignals:      aiEnhancedSignals,
+      formQualification: aiEnhancedQualification,
+    });
+
+    leadScore = aiEnhanced.leadScore;
+    leadGrade = aiEnhanced.leadGrade;
+    leadMeta = aiEnhanced.leadMeta;
   } catch (err) {
     logger.error(`OpenAI error — session: ${sessionId} — ${err.message}`);
     return { status: 500, body: { success: false, message: 'AI service unavailable. Please try again.' } };
   }
 
-  // ── Compute best (highest) score/grade across conversation lifetime ──
   const finalScore = Math.max(conversation.lead_score || 0, leadScore);
   const finalGrade = bestGrade(leadGrade, conversation.lead_grade || 'unscored');
   const finalClass = buildLeadClassification(finalGrade, aiIntent);
+  // Map lukewarm → warm for DB storage (lukewarm is UI-only color, not a stored category)
+  const persistedGrade = finalGrade === 'lukewarm' ? 'warm' : finalGrade;
+  const persistedClass = buildLeadClassification(persistedGrade, aiIntent);
 
-  // ── Save AI reply message ──
   await ChatMessage.create({
     conversation_id: conversation._id,
     session_id:      sessionId,
@@ -226,32 +253,30 @@ export const handleChatService = async ({
     intent:          aiIntent,
     channel:         normalizedChannel,
     lead_score:      finalScore,
-    lead_grade:      finalGrade,
+    lead_grade:      persistedGrade,
     meta: {
       embedToken,
       contact: contactInfo,
       ai_metadata: {
         intent:            aiIntent,
         emotional_state:   emotionalState,
-        extracted_data:    aiMeta.details || {},
+        extracted_data:    parsedAiDetails,
         lead_classification: finalClass,
       },
     },
   });
 
-  // ── Update conversation rollup ──
-  conversation.intent             = aiIntent;
-  conversation.lead_score         = finalScore;
-  conversation.lead_grade         = finalGrade;
-  conversation.lead_classification = finalClass;
-  conversation.lead_reasons       = leadMeta;
-  conversation.is_qualified       = leadMeta.qualified;
-  conversation.emotional_state    = emotionalState;
+  conversation.intent              = aiIntent;
+  conversation.lead_score          = finalScore;
+  conversation.lead_grade          = persistedGrade;
+  conversation.lead_classification = persistedClass;
+  conversation.lead_reasons        = leadMeta;
+  conversation.is_qualified        = leadMeta.qualified;
+  conversation.emotional_state     = emotionalState;
   conversation.last_interaction_at = new Date();
+  if (formContact) conversation.form_data = formContact;
   await conversation.save();
 
-  // ── Lead creation / update ──
-  // Look for an existing lead MATCHED FOR THIS INTENT (buyer vs seller).
   const intentSuffix = aiIntent === 'sell' ? 'seller' : 'buyer';
   const existingLeadMatch = await LeadMatch.findOne({
     conversation_id: conversation._id,
@@ -260,12 +285,22 @@ export const handleChatService = async ({
   });
 
   if (!existingLeadMatch && professionalProfile && hasContact) {
+    const derivedQual = deriveQualificationFromText(conversationText);
+    const mergedAiDetails = {
+      ...parsedAiDetails,
+      realtor_status:     parsedAiDetails?.realtor_status     || derivedQual.realtor_status || '',
+      motivation_reason:  parsedAiDetails?.motivation_reason  || derivedQual.motivation_reason || '',
+      viewing_readiness:  parsedAiDetails?.viewing_readiness  || derivedQual.viewing_readiness || '',
+      living_situation:   parsedAiDetails?.living_situation   || derivedQual.living_situation || '',
+      urgency_readiness:  parsedAiDetails?.urgency_readiness  || derivedQual.urgency_readiness || '',
+    };
+
     await createLeadRecords({
       conversation,
       intent:                aiIntent,
       professionalProfileId: professionalProfile._id,
       leadScore:             finalScore,
-      leadGrade:             finalGrade,
+      leadGrade:             persistedGrade,
       leadMeta,
       sessionId,
       embedToken,
@@ -275,6 +310,8 @@ export const handleChatService = async ({
       contactInfo,
       userId,
       messageSnippet: trimmedMessage.slice(0, 200),
+      formContact:    formContact || {},
+      aiDetails:      mergedAiDetails,
     });
   } else if (existingLeadMatch && hasContact) {
     const prevContact = existingLeadMatch.compatibility_factors?.contact || {};
@@ -282,7 +319,6 @@ export const handleChatService = async ({
       (contactInfo.email && contactInfo.email !== prevContact.email) ||
       (contactInfo.phone && contactInfo.phone !== prevContact.phone);
 
-    // Always keep the latest/best score on the lead match
     existingLeadMatch.match_score = finalScore;
 
     if (hasNewInfo) {
@@ -295,9 +331,28 @@ export const handleChatService = async ({
     }
 
     await existingLeadMatch.save();
+
+    if (existingLeadMatch.lead_profile_id) {
+      const derivedQual = deriveQualificationFromText(conversationText);
+      const mergedQual = {
+        mortgage_status:    parsedAiDetails?.mortgage_status    || formContact?.mortgage_status,
+        realtor_status:     parsedAiDetails?.realtor_status     || derivedQual.realtor_status || formContact?.realtor_status,
+        motivation_reason:  parsedAiDetails?.motivation_reason  || derivedQual.motivation_reason || formContact?.motivation_reason,
+        viewing_readiness:  parsedAiDetails?.viewing_readiness  || derivedQual.viewing_readiness || formContact?.viewing_readiness,
+        living_situation:   parsedAiDetails?.living_situation   || derivedQual.living_situation || formContact?.living_situation,
+        urgency_readiness:  parsedAiDetails?.urgency_readiness  || derivedQual.urgency_readiness || formContact?.urgency_readiness,
+      };
+      const update = { total_score: finalScore };
+      if (leadMeta.signals?.location) update.location = leadMeta.signals.location;
+      if (leadMeta.signals?.budget) update.budget = leadMeta.signals.budget;
+      if (leadMeta.signals?.timeline) update.timeline = leadMeta.signals.timeline;
+      for (const [k, v] of Object.entries(mergedQual)) {
+        if (v) update[k] = v;
+      }
+      await LeadProfile.findByIdAndUpdate(existingLeadMatch.lead_profile_id, { $set: update });
+    }
   }
 
-  // ── Response ──
   return {
     status: 200,
     body: {
@@ -314,6 +369,7 @@ export const handleChatService = async ({
         emotional_state:     emotionalState,
         signals:             leadMeta.signals,
         lead_reasons:        leadMeta.lead_reasons,
+        sub_scores:          leadMeta.sub_scores,
         contact:             contactInfo,
       },
     },

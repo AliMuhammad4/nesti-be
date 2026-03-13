@@ -16,16 +16,14 @@
       padding: 16px;
     }
 
-    /* ── Shell ── */
     .shell {
       display: flex;
       flex-direction: column;
       gap: 14px;
-      width: 440px;
+      width: 480px;
       max-width: 100%;
     }
 
-    /* ── Dev config panel ── */
     .panel {
       background: #0b1120;
       color: #e5e7eb;
@@ -45,7 +43,6 @@
       background: #020617; color: #e5e7eb; font-size: 11px; outline: none;
     }
 
-    /* ── Chat widget ── */
     .chat-widget {
       background: #fff;
       border-radius: 18px;
@@ -55,7 +52,6 @@
       overflow: hidden;
     }
 
-    /* Header */
     .chat-header {
       padding: 13px 16px;
       background: linear-gradient(90deg, #0f172a, #1e293b);
@@ -73,7 +69,7 @@
       border: 1px solid rgba(148,163,184,0.35);
     }
 
-    /* ── STEP 1: Intent screen ── */
+    /* Step 1: Intent */
     #intentScreen {
       padding: 28px 20px 24px;
       display: flex;
@@ -82,101 +78,56 @@
       gap: 18px;
       background: linear-gradient(160deg, #f0f4ff 0%, #e8eeff 100%);
     }
-    .intent-heading {
-      font-size: 16px;
-      font-weight: 700;
-      color: #0f172a;
-      text-align: center;
-      line-height: 1.4;
-    }
-    .intent-sub {
-      font-size: 12px;
-      color: #64748b;
-      text-align: center;
-      margin-top: -10px;
-    }
-    .intent-cards {
-      display: flex;
-      gap: 14px;
-      width: 100%;
-    }
+    .intent-heading { font-size: 16px; font-weight: 700; color: #0f172a; text-align: center; line-height: 1.4; }
+    .intent-sub { font-size: 12px; color: #64748b; text-align: center; margin-top: -10px; }
+    .intent-cards { display: flex; gap: 14px; width: 100%; }
     .intent-card {
-      flex: 1;
-      border: 2px solid #e2e8f0;
-      border-radius: 14px;
-      padding: 18px 12px;
-      cursor: pointer;
-      background: #fff;
-      text-align: center;
-      transition: border-color .18s, box-shadow .18s, transform .12s;
-      user-select: none;
+      flex: 1; border: 2px solid #e2e8f0; border-radius: 14px; padding: 18px 12px;
+      cursor: pointer; background: #fff; text-align: center;
+      transition: border-color .18s, box-shadow .18s, transform .12s; user-select: none;
     }
-    .intent-card:hover {
-      border-color: #6366f1;
-      box-shadow: 0 6px 20px rgba(99,102,241,0.18);
-      transform: translateY(-2px);
-    }
-    .intent-card.selected {
-      border-color: #4f46e5;
-      background: #eef2ff;
-      box-shadow: 0 6px 20px rgba(79,70,229,0.22);
-    }
+    .intent-card:hover { border-color: #6366f1; box-shadow: 0 6px 20px rgba(99,102,241,0.18); transform: translateY(-2px); }
+    .intent-card.selected { border-color: #4f46e5; background: #eef2ff; box-shadow: 0 6px 20px rgba(79,70,229,0.22); }
     .intent-icon { font-size: 32px; margin-bottom: 8px; }
     .intent-label { font-size: 14px; font-weight: 700; color: #0f172a; }
     .intent-desc  { font-size: 11px; color: #64748b; margin-top: 3px; }
 
-    /* ── STEP 2: Details form ── */
+    /* Step 2: Form */
     #detailsScreen {
       padding: 20px;
       display: none;
       flex-direction: column;
       gap: 12px;
       background: #f8fafc;
+      max-height: 520px;
+      overflow-y: auto;
     }
-    .form-heading {
-      font-size: 14px;
-      font-weight: 700;
-      color: #0f172a;
-    }
+    .form-heading { font-size: 14px; font-weight: 700; color: #0f172a; }
     .form-heading span {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 600;
-      margin-left: 6px;
-      vertical-align: middle;
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; margin-left: 6px; vertical-align: middle;
     }
     .badge-buy  { background: #dbeafe; color: #1d4ed8; }
     .badge-sell { background: #dcfce7; color: #15803d; }
 
-    .form-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .form-group { display: flex; flex-direction: column; gap: 4px; }
     .form-group.full { grid-column: 1 / -1; }
     .form-group label { font-size: 11px; font-weight: 600; color: #374151; }
     .form-group input, .form-group select {
-      padding: 8px 10px;
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      font-size: 12px;
-      color: #111827;
-      outline: none;
-      background: #fff;
+      padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px;
+      font-size: 12px; color: #111827; outline: none; background: #fff;
       transition: border-color .15s;
     }
     .form-group input:focus, .form-group select:focus {
-      border-color: #6366f1;
-      box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
+      border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
     }
-    .form-actions {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
+    .form-section-title {
+      font-size: 12px; font-weight: 700; color: #4f46e5; margin-top: 6px;
+      padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;
+      grid-column: 1 / -1;
     }
+    .form-actions { display: flex; gap: 8px; justify-content: flex-end; }
     .btn-back {
       padding: 8px 16px; border-radius: 999px; border: 1px solid #d1d5db;
       background: #fff; color: #374151; font-size: 12px; cursor: pointer;
@@ -188,73 +139,52 @@
     }
     .btn-start:hover { background: #4338ca; }
 
-    /* ── STEP 3: Chat screen ── */
+    /* Step 3: Chat */
     #chatScreen { display: none; flex-direction: column; }
-
     .chat-body {
-      padding: 14px;
-      height: 340px;
-      overflow-y: auto;
+      padding: 14px; height: 340px; overflow-y: auto;
       background: radial-gradient(circle at top, #e5e7eb 0, #eef2ff 40%, #e5e7eb 100%);
       flex-shrink: 0;
     }
     .msg-wrap { margin-bottom: 10px; max-width: 86%; }
     .msg {
-      padding: 9px 12px;
-      border-radius: 13px;
-      font-size: 13px;
-      line-height: 1.45;
-      word-wrap: break-word;
+      padding: 9px 12px; border-radius: 13px; font-size: 13px;
+      line-height: 1.45; word-wrap: break-word;
     }
-    .msg.user {
-      margin-left: auto;
-      background: #4f46e5;
-      color: #f9fafb;
-      border-bottom-right-radius: 4px;
-    }
-    .msg.bot {
-      background: #fff;
-      color: #0f172a;
-      border-bottom-left-radius: 4px;
-      box-shadow: 0 3px 10px rgba(15,23,42,0.12);
-    }
+    .msg.user { margin-left: auto; background: #4f46e5; color: #f9fafb; border-bottom-right-radius: 4px; }
+    .msg.bot { background: #fff; color: #0f172a; border-bottom-left-radius: 4px; box-shadow: 0 3px 10px rgba(15,23,42,0.12); }
     .meta-line   { font-size: 10px; margin-top: 4px; color: #6b7280; }
     .signal-line { font-size: 10px; margin-top: 2px; color: #9ca3af; font-style: italic; }
 
     .chat-input-bar {
-      border-top: 1px solid #e5e7eb;
-      padding: 8px 10px;
-      background: #f9fafb;
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-shrink: 0;
+      border-top: 1px solid #e5e7eb; padding: 8px 10px; background: #f9fafb;
+      display: flex; gap: 8px; align-items: center; flex-shrink: 0;
     }
     .chat-input-bar input {
       flex: 1; padding: 8px 12px; border-radius: 999px;
       border: 1px solid #d1d5db; font-size: 13px; outline: none;
     }
-    .chat-input-bar input:focus {
-      border-color: #6366f1;
-      box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
-    }
+    .chat-input-bar input:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
     .chat-input-bar button {
       padding: 8px 14px; border-radius: 999px; border: none;
-      background: #0f172a; color: #f9fafb; font-size: 12px;
-      font-weight: 600; cursor: pointer;
+      background: #0f172a; color: #f9fafb; font-size: 12px; font-weight: 600; cursor: pointer;
     }
     .chat-input-bar button:disabled { opacity: .5; cursor: default; }
 
-    /* Grade colours */
-    .hot  { color: #ef4444; font-weight: 700; }
-    .warm { color: #f59e0b; font-weight: 700; }
-    .cold { color: #60a5fa; font-weight: 700; }
+    .hot      { color: #ef4444; font-weight: 700; }
+    .warm     { color: #f59e0b; font-weight: 700; }
+    .lukewarm { color: #fb923c; font-weight: 700; }
+    .cold     { color: #60a5fa; font-weight: 700; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .score-badge {
+      font-size: 12px; padding: 4px 10px; border-radius: 999px;
+      background: #f1f5f9; color: #334155; font-weight: 600;
+    }
   </style>
 </head>
 <body>
 <div class="shell">
 
-  <!-- Dev config panel -->
   <div class="panel">
     <h2>Nesti AI – Local Test Widget</h2>
     <div>Paste an <code>embedToken</code> from <code>POST /api/embed/generate</code> to start.</div>
@@ -268,19 +198,20 @@
     </div>
   </div>
 
-  <!-- Chat widget -->
   <div class="chat-widget">
 
-    <!-- Header -->
     <div class="chat-header">
       <div>
         <div class="chat-header-title">Nesti AI</div>
         <div class="chat-header-sub">24/7 Real Estate Copilot</div>
       </div>
-      <div class="status-pill" id="statusPill">Step 1 of 3</div>
+      <div class="header-right">
+        <div class="score-badge" id="scoreBadge" style="display:none;"></div>
+        <div class="status-pill" id="statusPill">Step 1 of 3</div>
+      </div>
     </div>
 
-    <!-- ── STEP 1: Intent selection ── -->
+    <!-- STEP 1: Intent -->
     <div id="intentScreen">
       <div>
         <div class="intent-heading">What brings you here today?</div>
@@ -304,7 +235,7 @@
       </button>
     </div>
 
-    <!-- ── STEP 2: Details form ── -->
+    <!-- STEP 2: Details form -->
     <div id="detailsScreen">
       <div class="form-heading">
         Tell us a bit more
@@ -312,6 +243,8 @@
       </div>
 
       <div class="form-grid">
+        <!-- Contact -->
+        <div class="form-section-title">Contact Information</div>
         <div class="form-group">
           <label>Full Name *</label>
           <input id="f_name" type="text" placeholder="John Smith" />
@@ -325,7 +258,8 @@
           <input id="f_email" type="email" placeholder="you@example.com" />
         </div>
 
-        <!-- Buyer-only fields -->
+        <!-- Buyer-only -->
+        <div class="form-section-title buyer-field">Property Requirements</div>
         <div class="form-group full buyer-field">
           <label>Where are you looking to buy?</label>
           <input id="f_location" type="text" placeholder="City, neighbourhood, zip code…" />
@@ -333,6 +267,14 @@
         <div class="form-group buyer-field">
           <label>Budget range</label>
           <input id="f_budget" type="text" placeholder="e.g. $400K – $600K" />
+        </div>
+        <div class="form-group buyer-field">
+          <label>Property type</label>
+          <select id="f_proptype_buy">
+            <option value="">Select…</option>
+            <option>Condo</option><option>Townhouse</option>
+            <option>Detached</option><option>Multi-Family</option><option>Land</option>
+          </select>
         </div>
         <div class="form-group buyer-field">
           <label>Bedrooms needed</label>
@@ -350,8 +292,34 @@
             <option>4</option><option>5+</option>
           </select>
         </div>
+        <div class="form-group full buyer-field">
+          <label>Must-have features</label>
+          <input id="f_must_haves" type="text" placeholder="e.g. pool, garage, open floor plan" />
+        </div>
+        <div class="form-group buyer-field">
+          <label>Parking required?</label>
+          <select id="f_parking">
+            <option value="">Not sure</option>
+            <option value="yes">Yes</option><option value="no">No</option>
+          </select>
+        </div>
+        <div class="form-group buyer-field">
+          <label>Backyard needed?</label>
+          <select id="f_backyard">
+            <option value="">Not sure</option>
+            <option value="yes">Yes</option><option value="no">No</option>
+          </select>
+        </div>
+        <div class="form-group buyer-field">
+          <label>School district important?</label>
+          <select id="f_school">
+            <option value="">Not sure</option>
+            <option value="yes">Yes</option><option value="no">No</option>
+          </select>
+        </div>
 
-        <!-- Seller-only fields -->
+        <!-- Seller-only -->
+        <div class="form-section-title seller-field" style="display:none">Property Details</div>
         <div class="form-group full seller-field" style="display:none">
           <label>Property address</label>
           <input id="f_address" type="text" placeholder="123 Main St, City, State" />
@@ -362,15 +330,16 @@
         </div>
         <div class="form-group seller-field" style="display:none">
           <label>Property type</label>
-          <select id="f_proptype">
+          <select id="f_proptype_sell">
             <option value="">Select…</option>
             <option>Single Family</option><option>Condo</option>
             <option>Townhouse</option><option>Multi-Family</option><option>Land</option>
           </select>
         </div>
 
-        <!-- Shared -->
-        <div class="form-group full">
+        <!-- Shared fields -->
+        <div class="form-section-title">Qualification</div>
+        <div class="form-group">
           <label>Timeline</label>
           <select id="f_timeline">
             <option value="">Not sure yet</option>
@@ -378,7 +347,92 @@
             <option value="1-3 months">1 – 3 months</option>
             <option value="3-6 months">3 – 6 months</option>
             <option value="6-12 months">6 – 12 months</option>
-            <option value="12+">12+ months</option>
+            <option value="browsing">Just browsing</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Mortgage status</label>
+          <select id="f_mortgage">
+            <option value="">Select…</option>
+            <option value="fully_pre_approved">Yes – fully pre-approved</option>
+            <option value="paying_cash">Paying cash</option>
+            <option value="in_progress">Pre-approval in progress</option>
+            <option value="not_yet">Not yet</option>
+            <option value="unsure">Unsure</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Working with a realtor?</label>
+          <select id="f_realtor">
+            <option value="">Select…</option>
+            <option value="no_agent">No – I need one</option>
+            <option value="has_agent_but_open">Yes, but open to others</option>
+            <option value="has_exclusive_agent">Yes – exclusively</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>What's driving your move?</label>
+          <select id="f_motivation">
+            <option value="">Select…</option>
+            <option value="relocation">Relocation / job move</option>
+            <option value="family_change">Growing family</option>
+            <option value="divorce">Divorce</option>
+            <option value="investment">Investment</option>
+            <option value="upgrading">Upgrading to bigger home</option>
+            <option value="downsizing">Downsizing</option>
+            <option value="just_exploring">Just exploring</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Ready to view properties?</label>
+          <select id="f_viewing">
+            <option value="">Select…</option>
+            <option value="asap">Yes – ASAP</option>
+            <option value="few_weeks">Within a few weeks</option>
+            <option value="maybe_later">Maybe later</option>
+            <option value="just_browsing">Just browsing for now</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Current living situation</label>
+          <select id="f_living">
+            <option value="">Select…</option>
+            <option value="renting">Renting</option>
+            <option value="own_need_to_sell">Own – need to sell first</option>
+            <option value="own_not_selling">Own – not selling</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Ready to make an offer if you find the right place?</label>
+          <select id="f_urgency">
+            <option value="">Select…</option>
+            <option value="yes_immediately">Yes – immediately</option>
+            <option value="maybe">Maybe</option>
+            <option value="no">No – not yet</option>
+          </select>
+        </div>
+
+        <div class="form-section-title">Contact Preferences</div>
+        <div class="form-group">
+          <label>Preferred contact method</label>
+          <select id="f_contact_method">
+            <option value="">Select…</option>
+            <option value="phone">Phone call</option>
+            <option value="text">Text / SMS</option>
+            <option value="email">Email</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="video_call">Video call</option>
+            <option value="in_person">In-person</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Best time to contact</label>
+          <select id="f_best_time">
+            <option value="">Anytime</option>
+            <option value="morning">Morning</option>
+            <option value="afternoon">Afternoon</option>
+            <option value="evening">Evening</option>
+            <option value="anytime">Anytime</option>
           </select>
         </div>
       </div>
@@ -389,7 +443,7 @@
       </div>
     </div>
 
-    <!-- ── STEP 3: Chat ── -->
+    <!-- STEP 3: Chat -->
     <div id="chatScreen">
       <div id="chatBody" class="chat-body"></div>
       <div class="chat-input-bar">
@@ -398,18 +452,16 @@
       </div>
     </div>
 
-  </div><!-- /chat-widget -->
-</div><!-- /shell -->
+  </div>
+</div>
 
 <script>
-  /* ── State ── */
   let chosenIntent = null;
   let formData     = {};
 
   const VISITOR_ID = 'visitor-' + Math.random().toString(36).slice(2, 10);
   const SESSION_ID = 'session-' + Math.random().toString(36).slice(2, 10);
 
-  /* ── Step 1: Intent selection ── */
   function selectIntent(intent) {
     chosenIntent = intent;
     document.getElementById('cardBuy').classList.toggle('selected',  intent === 'buy');
@@ -420,7 +472,6 @@
   function goToDetails() {
     if (!chosenIntent) return;
 
-    // Show/hide intent-specific fields
     document.querySelectorAll('.buyer-field').forEach(el =>
       el.style.display = chosenIntent === 'buy' ? '' : 'none'
     );
@@ -428,7 +479,6 @@
       el.style.display = chosenIntent === 'sell' ? '' : 'none'
     );
 
-    // Update badge
     const badge = document.getElementById('intentBadge');
     if (chosenIntent === 'buy') {
       badge.textContent = 'Buyer';
@@ -449,8 +499,7 @@
     document.getElementById('statusPill').textContent = 'Step 1 of 3';
   }
 
-  /* ── Step 2: Collect form data and start chat ── */
-  function startChat() {
+  async function startChat() {
     const name  = document.getElementById('f_name').value.trim();
     const phone = document.getElementById('f_phone').value.trim();
     const email = document.getElementById('f_email').value.trim();
@@ -461,41 +510,89 @@
     }
 
     formData = {
+      intent: chosenIntent,
       name,
       phone,
       email,
-      timeline: document.getElementById('f_timeline').value,
+      timeline:                  document.getElementById('f_timeline').value,
+      mortgage_status:           document.getElementById('f_mortgage').value,
+      realtor_status:            document.getElementById('f_realtor').value,
+      motivation_reason:         document.getElementById('f_motivation').value,
+      viewing_readiness:         document.getElementById('f_viewing').value,
+      living_situation:          document.getElementById('f_living').value,
+      urgency_readiness:         document.getElementById('f_urgency').value,
+      preferred_contact_method:  document.getElementById('f_contact_method').value,
+      best_time_to_contact:      document.getElementById('f_best_time').value,
     };
 
     if (chosenIntent === 'buy') {
-      formData.location = document.getElementById('f_location').value.trim();
-      formData.budget   = document.getElementById('f_budget').value.trim();
-      formData.beds     = document.getElementById('f_beds').value;
-      formData.baths    = document.getElementById('f_baths').value;
+      formData.location      = document.getElementById('f_location').value.trim();
+      formData.budget        = document.getElementById('f_budget').value.trim();
+      formData.property_type = document.getElementById('f_proptype_buy').value;
+      formData.beds          = document.getElementById('f_beds').value;
+      formData.baths         = document.getElementById('f_baths').value;
+      formData.must_have_features      = document.getElementById('f_must_haves').value.trim();
+      formData.parking_required        = document.getElementById('f_parking').value;
+      formData.backyard_needed         = document.getElementById('f_backyard').value;
+      formData.school_district_important = document.getElementById('f_school').value;
     } else {
-      formData.address   = document.getElementById('f_address').value.trim();
-      formData.price     = document.getElementById('f_price').value.trim();
-      formData.proptype  = document.getElementById('f_proptype').value;
+      formData.address       = document.getElementById('f_address').value.trim();
+      formData.price         = document.getElementById('f_price').value.trim();
+      formData.property_type = document.getElementById('f_proptype_sell').value;
     }
 
     document.getElementById('detailsScreen').style.display = 'none';
     document.getElementById('chatScreen').style.display    = 'flex';
     document.getElementById('statusPill').textContent = 'Live chat';
 
-    // Build a natural opening message from the form data
     const openingMessage = buildOpeningMessage();
-    sendMessage(openingMessage, true, {
-      intent:   chosenIntent,
-      name:     formData.name,
-      email:    formData.email,
-      phone:    formData.phone,
-      timeline: formData.timeline,
-      location: formData.location,
-      budget:   formData.budget,
-      beds:     formData.beds,
-      address:  formData.address,
-      price:    formData.price,
-    });
+    const formContactOverride = {
+      intent:                     chosenIntent,
+      name:                       formData.name,
+      email:                      formData.email,
+      phone:                      formData.phone,
+      timeline:                   formData.timeline,
+      location:                   formData.location,
+      budget:                     formData.budget,
+      beds:                       formData.beds,
+      baths:                      formData.baths,
+      address:                    formData.address,
+      price:                      formData.price,
+      property_type:              formData.property_type,
+      must_have_features:         formData.must_have_features,
+      parking_required:           formData.parking_required,
+      backyard_needed:            formData.backyard_needed,
+      school_district_important:  formData.school_district_important,
+      mortgage_status:            formData.mortgage_status,
+      realtor_status:             formData.realtor_status,
+      motivation_reason:          formData.motivation_reason,
+      viewing_readiness:          formData.viewing_readiness,
+      living_situation:           formData.living_situation,
+      urgency_readiness:          formData.urgency_readiness,
+      preferred_contact_method:   formData.preferred_contact_method,
+      best_time_to_contact:       formData.best_time_to_contact,
+    };
+
+    try {
+      const apiBase = document.getElementById('apiUrlInput').value.trim() || 'http://localhost:5000/api/chat';
+      const scoreUrl = apiBase.replace(/\/$/, '') + '/score-preview';
+      const scoreRes = await fetch(scoreUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formContact: formContactOverride }),
+      });
+      const scoreData = await scoreRes.json();
+      if (scoreData.success && scoreData.lead_score != null) {
+        const badge = document.getElementById('scoreBadge');
+        const gc = gradeClass(scoreData.lead_grade || 'cold');
+        badge.innerHTML = `Score: <span class="${gc}">${scoreData.lead_score}</span> · ${scoreData.lead_classification || ''}`;
+        badge.style.display = '';
+      }
+    } catch (e) {
+      console.warn('Score preview failed:', e);
+    }
+
+    sendMessage(openingMessage, true, formContactOverride);
   }
 
   function buildOpeningMessage() {
@@ -504,30 +601,40 @@
     parts.push(`I am looking to ${chosenIntent === 'buy' ? 'buy' : 'sell'} a property.`);
 
     if (chosenIntent === 'buy') {
-      if (formData.location) parts.push(`I'm interested in ${formData.location}.`);
-      if (formData.budget)   parts.push(`My budget is around ${formData.budget}.`);
-      if (formData.beds)     parts.push(`I need ${formData.beds} bedroom(s).`);
-      if (formData.baths)    parts.push(`I prefer ${formData.baths} bathroom(s).`);
+      if (formData.location)      parts.push(`I'm interested in ${formData.location}.`);
+      if (formData.budget)        parts.push(`My budget is around ${formData.budget}.`);
+      if (formData.property_type) parts.push(`I'm looking for a ${formData.property_type}.`);
+      if (formData.beds)          parts.push(`I need ${formData.beds} bedroom(s).`);
+      if (formData.baths)         parts.push(`I prefer ${formData.baths} bathroom(s).`);
+      if (formData.must_have_features) parts.push(`Must-haves: ${formData.must_have_features}.`);
     } else {
-      if (formData.address)  parts.push(`The property is at ${formData.address}.`);
-      if (formData.price)    parts.push(`I'm expecting around ${formData.price}.`);
-      if (formData.proptype) parts.push(`It is a ${formData.proptype}.`);
+      if (formData.address)       parts.push(`The property is at ${formData.address}.`);
+      if (formData.price)         parts.push(`I'm expecting around ${formData.price}.`);
+      if (formData.property_type) parts.push(`It is a ${formData.property_type}.`);
     }
 
     if (formData.timeline) parts.push(`My timeline is ${formData.timeline}.`);
+    if (formData.mortgage_status) parts.push(`Mortgage status: ${formData.mortgage_status.replace(/_/g, ' ')}.`);
+    if (formData.realtor_status) parts.push(`Realtor: ${formData.realtor_status.replace(/_/g, ' ')}.`);
+    if (formData.motivation_reason) parts.push(`Reason for move: ${formData.motivation_reason.replace(/_/g, ' ')}.`);
+    if (formData.viewing_readiness) parts.push(`Ready to view: ${formData.viewing_readiness.replace(/_/g, ' ')}.`);
+    if (formData.living_situation) parts.push(`Living situation: ${formData.living_situation.replace(/_/g, ' ')}.`);
+    if (formData.urgency_readiness) parts.push(`Ready to make offer: ${formData.urgency_readiness.replace(/_/g, ' ')}.`);
     parts.push(`My email is ${formData.email} and my phone is ${formData.phone}.`);
 
     return parts.join(' ');
   }
 
-  /* ── Step 3: Chat ── */
   const chatBody   = document.getElementById('chatBody');
   const msgInput   = document.getElementById('messageInput');
   const sendBtn    = document.getElementById('sendBtn');
   const statusPill = document.getElementById('statusPill');
 
   function gradeClass(g) {
-    return g === 'hot' ? 'hot' : g === 'warm' ? 'warm' : 'cold';
+    if (g === 'hot') return 'hot';
+    if (g === 'warm') return 'warm';
+    if (g === 'lukewarm') return 'lukewarm';
+    return 'cold';
   }
 
   function appendMessage(text, from, meta) {
@@ -540,7 +647,6 @@
     wrap.appendChild(msg);
 
     if (meta) {
-      // Score / classification row
       const parts = [];
       if (meta.intent)            parts.push('intent: ' + meta.intent);
       if (meta.lead_score != null) {
@@ -557,7 +663,6 @@
         wrap.appendChild(ml);
       }
 
-      // Signals row
       const s = meta.signals || {};
       const sigs = [];
       if (s.timeline) sigs.push('⏱ ' + s.timeline);
@@ -572,7 +677,6 @@
         wrap.appendChild(sl);
       }
 
-      // Contact row
       const c = meta.contact || {};
       const cons = [];
       if (c.name)  cons.push('👤 ' + c.name);
@@ -590,7 +694,6 @@
     chatBody.scrollTop = chatBody.scrollHeight;
   }
 
-  // Track current primary intent so we can detect intent switches (buy → sell, or vice versa)
   let activeIntent = null;
 
   async function sendMessage(text, silent = false, formContactOverride = null) {
@@ -602,7 +705,6 @@
 
     if (!silent) appendMessage(text, 'user');
     else {
-      // Show a compact summary bubble for the opening message
       const summary = chosenIntent === 'buy'
         ? `🏡 Buyer · ${formData.name} · ${formData.email}`
         : `💰 Seller · ${formData.name} · ${formData.email}`;
@@ -614,7 +716,6 @@
     sendBtn.disabled = true;
     statusPill.textContent = 'thinking…';
 
-    // Build the payload — include formContact when provided (form submit)
     const payload = {
       id:         SESSION_ID,
       message:    text,
@@ -624,21 +725,8 @@
       channel:    'web',
     };
 
-    if (formContactOverride) {
-      payload.formContact = {
-        intent:   formContactOverride.intent,
-        name:     formContactOverride.name,
-        email:    formContactOverride.email,
-        phone:    formContactOverride.phone,
-        timeline: formContactOverride.timeline  || '',
-        location: formContactOverride.location  || '',
-        budget:   formContactOverride.budget    || '',
-        beds:     formContactOverride.beds      || '',
-        baths:    formContactOverride.baths     || '',
-        address:  formContactOverride.address   || '',
-        price:    formContactOverride.price     || '',
-      };
-    }
+    const formToSend = formContactOverride || (Object.keys(formData).length ? { ...formData, intent: chosenIntent } : null);
+    if (formToSend) payload.formContact = formToSend;
 
     try {
       const res = await fetch(apiUrl, {
@@ -653,13 +741,16 @@
         appendMessage('Error: ' + (data.message || 'Unknown error'), 'bot');
       } else {
         appendMessage(data.reply || '(no reply)', 'bot', data.meta);
+        if (data.meta?.lead_score != null) {
+          const badge = document.getElementById('scoreBadge');
+          const gc = gradeClass(data.meta.lead_grade || 'cold');
+          badge.innerHTML = `Score: <span class="${gc}">${data.meta.lead_score}</span> · ${data.meta.lead_classification || ''}`;
+          badge.style.display = '';
+        }
 
-        // Detect intent change mid-conversation and trigger a new form
         const newIntent = data.meta?.intent;
         if (newIntent && activeIntent && newIntent !== activeIntent) {
-          // Open the form again for the new intent
           chosenIntent = newIntent;
-          // Pre-fill contact fields from latest meta contact
           const c = data.meta.contact || {};
           document.getElementById('f_name').value  = c.name  || formData.name  || '';
           document.getElementById('f_email').value = c.email || formData.email || '';
@@ -669,17 +760,19 @@
           document.getElementById('f_location').value = '';
           document.getElementById('f_budget').value   = '';
           document.getElementById('f_beds').value     = '';
-          const bathsSelect = document.getElementById('f_baths');
-          if (bathsSelect) bathsSelect.value = '';
-          document.getElementById('f_address').value  = '';
-          document.getElementById('f_price').value    = '';
-          document.getElementById('f_proptype').value = '';
+          document.getElementById('f_baths').value    = '';
+          document.getElementById('f_proptype_buy').value = '';
+          document.getElementById('f_must_haves').value   = '';
+          document.getElementById('f_parking').value      = '';
+          document.getElementById('f_backyard').value     = '';
+          document.getElementById('f_school').value       = '';
+          document.getElementById('f_address').value      = '';
+          document.getElementById('f_price').value        = '';
+          document.getElementById('f_proptype_sell').value = '';
 
-          // Show appropriate fields & badge for the new intent
           goToDetails();
         }
 
-        // Initialise or update activeIntent
         if (!activeIntent && data.meta?.intent) {
           activeIntent = data.meta.intent;
         }

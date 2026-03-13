@@ -79,6 +79,10 @@ const chatConversationSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    form_data: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
   },
   { timestamps: true }
 );

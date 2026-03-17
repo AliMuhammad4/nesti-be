@@ -336,6 +336,38 @@
             <option>Townhouse</option><option>Multi-Family</option><option>Land</option>
           </select>
         </div>
+        <div class="form-group seller-field" style="display:none">
+          <label>Bedrooms</label>
+          <select id="f_beds_sell">
+            <option value="">Select…</option>
+            <option>1</option><option>2</option><option>3</option><option>4</option><option>5+</option>
+          </select>
+        </div>
+        <div class="form-group seller-field" style="display:none">
+          <label>Bathrooms</label>
+          <select id="f_baths_sell">
+            <option value="">Select…</option>
+            <option>1</option><option>2</option><option>3</option><option>4</option><option>5+</option>
+          </select>
+        </div>
+        <div class="form-group full seller-field" style="display:none">
+          <label>Key features (garage, backyard, pool, etc.)</label>
+          <input id="f_must_haves_sell" type="text" placeholder="e.g. garage, backyard, pool" />
+        </div>
+        <div class="form-group seller-field" style="display:none">
+          <label>Parking?</label>
+          <select id="f_parking_sell">
+            <option value="">Not sure</option>
+            <option value="yes">Yes</option><option value="no">No</option>
+          </select>
+        </div>
+        <div class="form-group seller-field" style="display:none">
+          <label>Backyard?</label>
+          <select id="f_backyard_sell">
+            <option value="">Not sure</option>
+            <option value="yes">Yes</option><option value="no">No</option>
+          </select>
+        </div>
 
         <!-- Shared fields -->
         <div class="form-section-title">Qualification</div>
@@ -539,6 +571,11 @@
       formData.address       = document.getElementById('f_address').value.trim();
       formData.price         = document.getElementById('f_price').value.trim();
       formData.property_type = document.getElementById('f_proptype_sell').value;
+      formData.beds          = document.getElementById('f_beds_sell').value;
+      formData.baths         = document.getElementById('f_baths_sell').value;
+      formData.must_have_features = document.getElementById('f_must_haves_sell').value.trim();
+      formData.parking_required   = document.getElementById('f_parking_sell').value;
+      formData.backyard_needed    = document.getElementById('f_backyard_sell').value;
     }
 
     document.getElementById('detailsScreen').style.display = 'none';

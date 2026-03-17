@@ -171,6 +171,9 @@ export const loginService = async ({ email, password }) => {
 export const profileService = async (user) => {
   const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id });
 
+  const isExpired = user.account_status === 'expired' ||
+    (user.account_status === 'free_trial' && user.trial_ends_at && new Date() > new Date(user.trial_ends_at));
+
   return {
     status: 200,
     body: {
@@ -181,6 +184,8 @@ export const profileService = async (user) => {
         role: user.role,
         accountStatus: user.account_status,
         trialEndsAt: user.trial_ends_at,
+        isExpired,
+        ...(isExpired && { message: 'Account expired. Please upgrade.' }),
       },
       professionalProfile: professionalProfile || null,
     },

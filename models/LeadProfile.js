@@ -42,6 +42,25 @@ const leadProfileSchema = new mongoose.Schema(
     living_situation: { type: String },
     urgency_readiness: { type: String },
 
+    // mortgage broker specific (NESTI Mortgage Broker Lead Scoring)
+    mortgage_timeline: { type: String },
+
+    // lawyer specific (NESTI Real Estate Lawyer Lead Scoring)
+    transaction_stage: { type: String },
+    closing_timeline: { type: String },
+    transaction_type: { type: String },
+    property_value: { type: String },
+    realtor_involved: { type: String },
+    first_time_buyer: { type: String },
+    legal_services_needed: { type: String },
+    pre_approval_status: { type: String },
+    credit_score_range: { type: String },
+    employment_status: { type: String },
+    household_income: { type: String },
+    down_payment_readiness: { type: String },
+    purchase_purpose: { type: String },
+    urgency_signal: { type: String },
+
     // meta
     source: { type: String, default: 'chatbot' },
     total_score: { type: Number, default: 0 },

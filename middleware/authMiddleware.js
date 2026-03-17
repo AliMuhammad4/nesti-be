@@ -37,7 +37,6 @@ const ensureAccountStatus = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
   }
-
   // Lazy evaluation of free trial
   if (req.user.account_status === 'free_trial' && req.user.trial_ends_at) {
     if (new Date() > new Date(req.user.trial_ends_at)) {
@@ -53,4 +52,24 @@ const ensureAccountStatus = async (req, res, next) => {
   next();
 };
 
-export { protect, ensureAccountStatus };
+const ensureAgent = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authenticated' });
+  }
+  if (req.user.role !== 'agent' && req.user.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Lead management is available only for agents.' });
+  }
+  next();
+};
+
+const ensureAgentOrMortgageBroker = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authenticated' });
+  }
+  if (!['agent', 'mortgage_broker', 'lawyer', 'admin'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Lead management is available only for agents, mortgage brokers, and lawyers.' });
+  }
+  next();
+};
+
+export { protect, ensureAccountStatus, ensureAgent, ensureAgentOrMortgageBroker };

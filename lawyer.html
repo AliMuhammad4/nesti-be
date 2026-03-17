@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Nesti AI – Real Estate Lawyer Lead Widget</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #1e1b4b 0, #0f0d2e 40%, #0a0a1a 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    .shell {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 480px;
+      max-width: 100%;
+    }
+
+    .panel {
+      background: #0f0d2e;
+      color: #e5e7eb;
+      border-radius: 14px;
+      padding: 12px 16px;
+      font-size: 12px;
+      line-height: 1.5;
+      box-shadow: 0 18px 45px rgba(30,27,75,0.9);
+    }
+    .panel h2 { font-size: 13px; margin-bottom: 6px; font-weight: 600; color: #f9fafb; }
+    .panel code { background: #020617; padding: 2px 4px; border-radius: 4px; font-size: 11px; }
+    .config-row { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+    .config-row label { min-width: 74px; opacity: .8; font-size: 11px; }
+    .config-row input {
+      flex: 1; padding: 4px 7px; border-radius: 6px;
+      border: 1px solid rgba(129,140,248,0.6);
+      background: #020617; color: #e5e7eb; font-size: 11px; outline: none;
+    }
+
+    .chat-widget {
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 18px 45px rgba(30,27,75,0.45);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      padding: 13px 16px;
+      background: linear-gradient(90deg, #4f46e5, #3730a3);
+      color: #f9fafb;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .chat-header-title { font-size: 14px; font-weight: 700; }
+    .chat-header-sub   { font-size: 11px; opacity: .9; margin-top: 2px; }
+    .status-pill {
+      font-size: 10px; border-radius: 999px; padding: 3px 9px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+
+    #detailsScreen {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: linear-gradient(160deg, #eef2ff 0%, #e0e7ff 100%);
+      max-height: 560px;
+      overflow-y: auto;
+    }
+    .form-heading { font-size: 14px; font-weight: 700; color: #1e1b4b; }
+    .form-heading span {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; margin-left: 6px; vertical-align: middle;
+      background: #4f46e5; color: #fff;
+    }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-group label { font-size: 11px; font-weight: 600; color: #374151; }
+    .form-group input, .form-group select {
+      padding: 8px 10px; border: 1px solid #c7d2fe; border-radius: 8px;
+      font-size: 12px; color: #111827; outline: none; background: #fff;
+      transition: border-color .15s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.2);
+    }
+    .form-section-title {
+      font-size: 12px; font-weight: 700; color: #4f46e5; margin-top: 6px;
+      padding-bottom: 4px; border-bottom: 1px solid #c7d2fe;
+      grid-column: 1 / -1;
+    }
+    .form-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .btn-start {
+      padding: 8px 20px; border-radius: 999px; border: none;
+      background: #4f46e5; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-start:hover { background: #3730a3; }
+
+    #chatScreen { display: none; flex-direction: column; }
+    .chat-body {
+      padding: 14px; height: 340px; overflow-y: auto;
+      background: radial-gradient(circle at top, #e0e7ff 0, #eef2ff 40%, #e5e7eb 100%);
+      flex-shrink: 0;
+    }
+    .msg-wrap { margin-bottom: 10px; max-width: 86%; }
+    .msg {
+      padding: 9px 12px; border-radius: 13px; font-size: 13px;
+      line-height: 1.45; word-wrap: break-word;
+    }
+    .msg.user { margin-left: auto; background: #4f46e5; color: #f9fafb; border-bottom-right-radius: 4px; }
+    .msg.bot { background: #fff; color: #0f172a; border-bottom-left-radius: 4px; box-shadow: 0 3px 10px rgba(15,23,42,0.12); }
+    .meta-line   { font-size: 10px; margin-top: 4px; color: #6b7280; }
+    .signal-line { font-size: 10px; margin-top: 2px; color: #9ca3af; font-style: italic; }
+
+    .chat-input-bar {
+      border-top: 1px solid #e5e7eb; padding: 8px 10px; background: #f9fafb;
+      display: flex; gap: 8px; align-items: center; flex-shrink: 0;
+    }
+    .chat-input-bar input {
+      flex: 1; padding: 8px 12px; border-radius: 999px;
+      border: 1px solid #d1d5db; font-size: 13px; outline: none;
+    }
+    .chat-input-bar input:focus { border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.15); }
+    .chat-input-bar button {
+      padding: 8px 14px; border-radius: 999px; border: none;
+      background: #1e1b4b; color: #f9fafb; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .chat-input-bar button:disabled { opacity: .5; cursor: default; }
+
+    .hot      { color: #ef4444; font-weight: 700; }
+    .warm     { color: #f59e0b; font-weight: 700; }
+    .cold     { color: #60a5fa; font-weight: 700; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .score-badge {
+      font-size: 12px; padding: 4px 10px; border-radius: 999px;
+      background: #f1f5f9; color: #334155; font-weight: 600;
+    }
+    .temp-hint { font-size: 10px; color: #64748b; margin-top: 2px; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="panel">
+    <h2>Nesti AI – Real Estate Lawyer Widget</h2>
+    <div>Paste an <code>embedToken</code> from a lawyer's embed to start.</div>
+    <div class="config-row">
+      <label>Embed token</label>
+      <input id="embedTokenInput" type="text" placeholder="token from /api/embed/generate" />
+    </div>
+    <div class="config-row">
+      <label>API URL</label>
+      <input id="apiUrlInput" type="text" value="http://localhost:5000/api/chat" />
+    </div>
+  </div>
+
+  <div class="chat-widget">
+
+    <div class="chat-header">
+      <div>
+        <div class="chat-header-title">Nesti AI – Legal</div>
+        <div class="chat-header-sub">24/7 Real Estate Closing Assistant</div>
+      </div>
+      <div class="header-right">
+        <div class="score-badge" id="scoreBadge" style="display:none;"></div>
+        <div class="status-pill" id="statusPill">Step 1 of 2</div>
+      </div>
+    </div>
+
+    <div id="detailsScreen">
+      <div class="form-heading">
+        Get your closing services
+        <span>Lawyer Lead</span>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-section-title">Contact Information</div>
+        <div class="form-group">
+          <label>Full Name *</label>
+          <input id="f_name" type="text" placeholder="John Smith" />
+        </div>
+        <div class="form-group">
+          <label>Phone *</label>
+          <input id="f_phone" type="tel" placeholder="+1 555 000 0000" />
+        </div>
+        <div class="form-group full">
+          <label>Email *</label>
+          <input id="f_email" type="email" placeholder="you@example.com" />
+        </div>
+        <div class="form-group full">
+          <label>Property address / location</label>
+          <input id="f_address" type="text" placeholder="e.g. 123 Main St, DHA Lahore" />
+        </div>
+
+        <div class="form-section-title">Transaction Details (NESTI 100-point)</div>
+        <div class="form-group">
+          <label>What stage are you in?</label>
+          <select id="f_transaction_stage">
+            <option value="">Select…</option>
+            <option value="offer_accepted">Offer accepted</option>
+            <option value="actively_submitting">Actively submitting offers</option>
+            <option value="pre_approval_stage">Pre-approval stage</option>
+            <option value="just_researching">Just researching</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Expected closing date?</label>
+          <select id="f_closing_timeline">
+            <option value="">Select…</option>
+            <option value="within_30_days">Within 30 days</option>
+            <option value="30_60_days">30–60 days</option>
+            <option value="60_90_days">60–90 days</option>
+            <option value="unknown">Unknown</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Transaction type</label>
+          <select id="f_transaction_type">
+            <option value="">Select…</option>
+            <option value="home_purchase">Home purchase</option>
+            <option value="home_sale">Home sale</option>
+            <option value="refinance">Refinance</option>
+            <option value="title_transfer">Title transfer</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Approximate property price</label>
+          <select id="f_property_value">
+            <option value="">Select…</option>
+            <option value="1m_plus">$1M+</option>
+            <option value="700k_1m">$700k–$1M</option>
+            <option value="400k_700k">$400k–$700k</option>
+            <option value="under_400k">Under $400k</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Mortgage approved?</label>
+          <select id="f_mortgage_status">
+            <option value="">Select…</option>
+            <option value="fully_approved">Fully approved</option>
+            <option value="conditional_approval">Conditional approval</option>
+            <option value="still_applying">Still applying</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Working with a realtor?</label>
+          <select id="f_realtor_involved">
+            <option value="">Select…</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>First home purchase?</label>
+          <select id="f_first_time_buyer">
+            <option value="">Select…</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Legal services needed</label>
+          <select id="f_legal_services">
+            <option value="">Select…</option>
+            <option value="full_closing">Full closing services</option>
+            <option value="title_transfer">Title transfer</option>
+            <option value="document_review">Document review</option>
+          </select>
+        </div>
+
+        <div class="form-section-title">Contact Preferences</div>
+        <div class="form-group">
+          <label>Preferred contact method</label>
+          <select id="f_contact_method">
+            <option value="">Select…</option>
+            <option value="phone">Phone</option>
+            <option value="email">Email</option>
+            <option value="video_call">Video meeting</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Best time to contact</label>
+          <select id="f_best_time">
+            <option value="">Anytime</option>
+            <option value="morning">Morning</option>
+            <option value="afternoon">Afternoon</option>
+            <option value="evening">Evening</option>
+            <option value="anytime">Anytime</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn-start" onclick="startChat()">Start Chat →</button>
+      </div>
+    </div>
+
+    <div id="chatScreen">
+      <div id="chatBody" class="chat-body"></div>
+      <div class="chat-input-bar">
+        <input id="messageInput" type="text" placeholder="Type your message…" />
+        <button id="sendBtn">Send</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  let formData = {};
+
+  const VISITOR_ID = 'visitor-' + Math.random().toString(36).slice(2, 10);
+  const SESSION_ID = 'session-' + Math.random().toString(36).slice(2, 10);
+
+  async function startChat() {
+    const name  = document.getElementById('f_name').value.trim();
+    const phone = document.getElementById('f_phone').value.trim();
+    const email = document.getElementById('f_email').value.trim();
+
+    if (!name || !phone || !email) {
+      alert('Please fill in your name, phone, and email to continue.');
+      return;
+    }
+
+    formData = {
+      intent: 'buy',
+      name,
+      phone,
+      email,
+      address:               document.getElementById('f_address').value.trim(),
+      professionalType:      'lawyer',
+      transaction_stage:     document.getElementById('f_transaction_stage').value,
+      closing_timeline:      document.getElementById('f_closing_timeline').value,
+      transaction_type:     document.getElementById('f_transaction_type').value,
+      property_value:       document.getElementById('f_property_value').value,
+      mortgage_status:      document.getElementById('f_mortgage_status').value,
+      realtor_involved:     document.getElementById('f_realtor_involved').value,
+      first_time_buyer:     document.getElementById('f_first_time_buyer').value,
+      legal_services_needed: document.getElementById('f_legal_services').value,
+      preferred_contact_method: document.getElementById('f_contact_method').value,
+      best_time_to_contact:  document.getElementById('f_best_time').value,
+    };
+
+    document.getElementById('detailsScreen').style.display = 'none';
+    document.getElementById('chatScreen').style.display    = 'flex';
+    document.getElementById('statusPill').textContent = 'Live chat';
+
+    const formContactOverride = {
+      intent: 'buy',
+      professionalType: 'lawyer',
+      name: formData.name,
+      email: formData.email,
+      phone: formData.phone,
+      address:               formData.address,
+      transaction_stage:     formData.transaction_stage,
+      closing_timeline:      formData.closing_timeline,
+      transaction_type:     formData.transaction_type,
+      property_value:       formData.property_value,
+      mortgage_status:      formData.mortgage_status,
+      realtor_involved:     formData.realtor_involved,
+      first_time_buyer:     formData.first_time_buyer,
+      legal_services_needed: formData.legal_services_needed,
+      preferred_contact_method: formData.preferred_contact_method,
+      best_time_to_contact:  formData.best_time_to_contact,
+    };
+
+    try {
+      const apiBase = document.getElementById('apiUrlInput').value.trim() || 'http://localhost:5000/api/chat';
+      const scoreUrl = apiBase.replace(/\/$/, '') + '/score-preview';
+      const scoreRes = await fetch(scoreUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formContact: formContactOverride, professionalType: 'lawyer' }),
+      });
+      const scoreData = await scoreRes.json();
+      if (scoreData.success && scoreData.lead_score != null) {
+        const badge = document.getElementById('scoreBadge');
+        const gc = gradeClass(scoreData.lead_grade || 'cold');
+        const tempHint = scoreData.lead_grade === 'hot' ? '🔥 Transaction Ready' :
+          scoreData.lead_grade === 'warm' ? '🌤 Likely soon' : '❄️ Early stage';
+        badge.innerHTML = `Score: <span class="${gc}">${scoreData.lead_score}</span>/100 · ${scoreData.lead_classification || ''}<br><span class="temp-hint">${tempHint}</span>`;
+        badge.style.display = '';
+      }
+    } catch (e) {
+      console.warn('Score preview failed:', e);
+    }
+
+    sendMessage(buildOpeningMessage(), true, formContactOverride);
+  }
+
+  function buildOpeningMessage() {
+    const parts = [];
+    parts.push(`Hi! My name is ${formData.name}.`);
+    parts.push(`I need legal services for a real estate transaction.`);
+
+    if (formData.transaction_stage) parts.push(`Stage: ${formData.transaction_stage.replace(/_/g, ' ')}.`);
+    if (formData.closing_timeline) parts.push(`Closing: ${formData.closing_timeline.replace(/_/g, ' ')}.`);
+    if (formData.transaction_type) parts.push(`Transaction type: ${formData.transaction_type.replace(/_/g, ' ')}.`);
+    if (formData.property_value) parts.push(`Property value: ${formData.property_value.replace(/_/g, ' ')}.`);
+    if (formData.mortgage_status) parts.push(`Mortgage: ${formData.mortgage_status.replace(/_/g, ' ')}.`);
+    if (formData.realtor_involved) parts.push(`Realtor: ${formData.realtor_involved}.`);
+    if (formData.first_time_buyer) parts.push(`First-time buyer: ${formData.first_time_buyer}.`);
+    if (formData.legal_services_needed) parts.push(`Legal services: ${formData.legal_services_needed.replace(/_/g, ' ')}.`);
+    if (formData.address) parts.push(`Property: ${formData.address}.`);
+    parts.push(`My email is ${formData.email} and my phone is ${formData.phone}.`);
+
+    return parts.join(' ');
+  }
+
+  const chatBody   = document.getElementById('chatBody');
+  const msgInput   = document.getElementById('messageInput');
+  const sendBtn    = document.getElementById('sendBtn');
+  const statusPill = document.getElementById('statusPill');
+
+  function gradeClass(g) {
+    if (g === 'hot') return 'hot';
+    if (g === 'warm') return 'warm';
+    return 'cold';
+  }
+
+  function appendMessage(text, from, meta) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrap';
+
+    const msg = document.createElement('div');
+    msg.className = 'msg ' + (from === 'user' ? 'user' : 'bot');
+    msg.textContent = text;
+    wrap.appendChild(msg);
+
+    if (meta) {
+      const parts = [];
+      if (meta.lead_score != null) {
+        const gc = gradeClass(meta.lead_grade);
+        parts.push(`score: <span class="${gc}">${meta.lead_score}</span>/100`);
+      }
+      if (meta.lead_classification) parts.push(meta.lead_classification);
+      if (meta.emotional_state)     parts.push('mood: ' + meta.emotional_state);
+
+      if (parts.length) {
+        const ml = document.createElement('div');
+        ml.className = 'meta-line';
+        ml.innerHTML = parts.join(' &nbsp;|&nbsp; ');
+        wrap.appendChild(ml);
+      }
+
+      const s = meta.signals || {};
+      const sigs = [];
+      if (s.timeline) sigs.push('⏱ ' + s.timeline);
+      if (s.budget)   sigs.push('💰 ' + s.budget);
+      if (s.location) sigs.push('📍 ' + s.location);
+      if (sigs.length) {
+        const sl = document.createElement('div');
+        sl.className = 'signal-line';
+        sl.textContent = sigs.join('  ');
+        wrap.appendChild(sl);
+      }
+
+      const c = meta.contact || {};
+      const cons = [];
+      if (c.name)  cons.push('👤 ' + c.name);
+      if (c.email) cons.push('✉ ' + c.email);
+      if (c.phone) cons.push('📞 ' + c.phone);
+      if (cons.length) {
+        const cl = document.createElement('div');
+        cl.className = 'signal-line';
+        cl.textContent = cons.join('  ');
+        wrap.appendChild(cl);
+      }
+    }
+
+    chatBody.appendChild(wrap);
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+
+  async function sendMessage(text, silent = false, formContactOverride = null) {
+    const embedToken = document.getElementById('embedTokenInput').value.trim();
+    const apiUrl     = document.getElementById('apiUrlInput').value.trim() || 'http://localhost:5000/api/chat';
+
+    if (!text) return;
+    if (!embedToken) { alert('Please paste an embed token first.'); return; }
+
+    if (!silent) appendMessage(text, 'user');
+    else {
+      const summary = `⚖️ Legal · ${formData.name} · ${formData.email}`;
+      appendMessage(summary, 'user');
+    }
+
+    msgInput.value = '';
+    msgInput.focus();
+    sendBtn.disabled = true;
+    statusPill.textContent = 'thinking…';
+
+    const payload = {
+      id:         SESSION_ID,
+      message:    text,
+      embedToken: embedToken,
+      visitorId:  VISITOR_ID,
+      agentType:  'lawyer',
+      channel:    'web',
+    };
+
+    const formToSend = formContactOverride || (Object.keys(formData).length ? { ...formData, intent: 'buy' } : null);
+    if (formToSend) payload.formContact = formToSend;
+
+    try {
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        appendMessage('Error: ' + (data.message || 'Unknown error'), 'bot');
+      } else {
+        appendMessage(data.reply || '(no reply)', 'bot', data.meta);
+        if (data.meta?.lead_score != null) {
+          const badge = document.getElementById('scoreBadge');
+          const gc = gradeClass(data.meta.lead_grade || 'cold');
+          const tempHint = data.meta.lead_grade === 'hot' ? '🔥 Transaction Ready' :
+            data.meta.lead_grade === 'warm' ? '🌤 Likely soon' : '❄️ Early stage';
+          badge.innerHTML = `Score: <span class="${gc}">${data.meta.lead_score}</span>/100 · ${data.meta.lead_classification || ''}<br><span class="temp-hint">${tempHint}</span>`;
+          badge.style.display = '';
+        }
+      }
+    } catch (err) {
+      appendMessage('Network error: ' + err.message, 'bot');
+    } finally {
+      sendBtn.disabled = false;
+      statusPill.textContent = 'Live chat';
+    }
+  }
+
+  sendBtn.addEventListener('click', () => sendMessage(msgInput.value.trim()));
+  msgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendMessage(msgInput.value.trim());
+  });
+</script>
+</body>
+</html>

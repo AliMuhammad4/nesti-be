@@ -1,6 +1,6 @@
 import express from 'express';
 const router = express.Router();
-import { protect } from '../middleware/authMiddleware.js';
+import { protect, ensureAgentOrMortgageBroker } from '../middleware/authMiddleware.js';
 import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import ChatConversation from '../models/ChatConversation.js';
@@ -64,9 +64,11 @@ const getLeads = async (req, res, next) => {
     const leads = leadMatches.map((m) => {
       const profile = profileById.get(String(m.lead_profile_id)) || {};
       const convo   = convoById.get(String(m.conversation_id)) || {};
+      const profType = m.compatibility_factors?.professional_type || 'agent';
 
       return {
         id: String(m._id),
+        professional_type: profType,
         intent: profile.intent || null,
         lead_type: m.lead_type,
         grade: m.lead_type?.split('_')[0] || null,
@@ -83,23 +85,46 @@ const getLeads = async (req, res, next) => {
           location: profile.location || null,
           address: profile.property_address || null,
           budget: profile.budget || profile.expected_price || null,
-          timeline: profile.timeline || null,
+          timeline: profile.timeline || profile.mortgage_timeline || null,
           bedrooms: profile.bedrooms || null,
           bathrooms: profile.bathrooms || null,
+          square_footage: profile.square_footage || null,
           property_type: profile.property_type || null,
           must_have_features: profile.must_have_features || null,
           parking_required: profile.parking_required || null,
           backyard_needed: profile.backyard_needed || null,
           school_district_important: profile.school_district_important || null,
         },
-        qualification: {
-          mortgage_status: profile.mortgage_status || null,
-          realtor_status: profile.realtor_status || null,
-          motivation_reason: profile.motivation_reason || null,
-          viewing_readiness: profile.viewing_readiness || null,
-          living_situation: profile.living_situation || null,
-          urgency_readiness: profile.urgency_readiness || null,
-        },
+        qualification: profType === 'mortgage_broker'
+          ? {
+              mortgage_timeline: profile.mortgage_timeline || null,
+              pre_approval_status: profile.pre_approval_status || profile.mortgage_status || null,
+              credit_score_range: profile.credit_score_range || null,
+              employment_status: profile.employment_status || null,
+              household_income: profile.household_income || null,
+              down_payment_readiness: profile.down_payment_readiness || null,
+              purchase_purpose: profile.purchase_purpose || null,
+              urgency_signal: profile.urgency_signal || null,
+            }
+          : profType === 'lawyer'
+          ? {
+              transaction_stage: profile.transaction_stage || null,
+              closing_timeline: profile.closing_timeline || null,
+              transaction_type: profile.transaction_type || null,
+              property_value: profile.property_value || null,
+              mortgage_status: profile.mortgage_status || null,
+              realtor_involved: profile.realtor_involved || null,
+              first_time_buyer: profile.first_time_buyer || null,
+              legal_services_needed: profile.legal_services_needed || null,
+            }
+          : {
+              mortgage_status: profile.mortgage_status || null,
+              realtor_status: profile.realtor_status || null,
+              motivation_reason: profile.motivation_reason || null,
+              viewing_readiness: profile.viewing_readiness || null,
+              living_situation: profile.living_situation || null,
+              urgency_readiness: profile.urgency_readiness || null,
+            },
         embed_token: m.compatibility_factors?.embed_token || null,
         session_id: m.compatibility_factors?.session_id || convo.session_id || null,
         conversation_id: String(m.conversation_id || ''),
@@ -139,8 +164,11 @@ const getLeadById = async (req, res, next) => {
         : null,
     ]);
 
+    const profType = leadMatch.compatibility_factors?.professional_type || 'agent';
+
     const lead = {
       id: String(leadMatch._id),
+      professional_type: profType,
       intent: profile?.intent || null,
       lead_type: leadMatch.lead_type,
       grade: leadMatch.lead_type?.split('_')[0] || null,
@@ -157,23 +185,46 @@ const getLeadById = async (req, res, next) => {
         location: profile?.location || null,
         address: profile?.property_address || null,
         budget: profile?.budget || profile?.expected_price || null,
-        timeline: profile?.timeline || null,
+        timeline: profile?.timeline || profile?.mortgage_timeline || null,
         bedrooms: profile?.bedrooms || null,
         bathrooms: profile?.bathrooms || null,
+        square_footage: profile?.square_footage || null,
         property_type: profile?.property_type || null,
         must_have_features: profile?.must_have_features || null,
         parking_required: profile?.parking_required || null,
         backyard_needed: profile?.backyard_needed || null,
         school_district_important: profile?.school_district_important || null,
       },
-      qualification: {
-        mortgage_status: profile?.mortgage_status || null,
-        realtor_status: profile?.realtor_status || null,
-        motivation_reason: profile?.motivation_reason || null,
-        viewing_readiness: profile?.viewing_readiness || null,
-        living_situation: profile?.living_situation || null,
-        urgency_readiness: profile?.urgency_readiness || null,
-      },
+      qualification: profType === 'mortgage_broker'
+        ? {
+            mortgage_timeline: profile?.mortgage_timeline || null,
+            pre_approval_status: profile?.pre_approval_status || profile?.mortgage_status || null,
+            credit_score_range: profile?.credit_score_range || null,
+            employment_status: profile?.employment_status || null,
+            household_income: profile?.household_income || null,
+            down_payment_readiness: profile?.down_payment_readiness || null,
+            purchase_purpose: profile?.purchase_purpose || null,
+            urgency_signal: profile?.urgency_signal || null,
+          }
+        : profType === 'lawyer'
+        ? {
+            transaction_stage: profile?.transaction_stage || null,
+            closing_timeline: profile?.closing_timeline || null,
+            transaction_type: profile?.transaction_type || null,
+            property_value: profile?.property_value || null,
+            mortgage_status: profile?.mortgage_status || null,
+            realtor_involved: profile?.realtor_involved || null,
+            first_time_buyer: profile?.first_time_buyer || null,
+            legal_services_needed: profile?.legal_services_needed || null,
+          }
+        : {
+            mortgage_status: profile?.mortgage_status || null,
+            realtor_status: profile?.realtor_status || null,
+            motivation_reason: profile?.motivation_reason || null,
+            viewing_readiness: profile?.viewing_readiness || null,
+            living_situation: profile?.living_situation || null,
+            urgency_readiness: profile?.urgency_readiness || null,
+          },
       embed_token: leadMatch.compatibility_factors?.embed_token || null,
       session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,
       conversation_id: String(leadMatch.conversation_id || ''),
@@ -187,8 +238,8 @@ const getLeadById = async (req, res, next) => {
   }
 };
 
-router.get('/', protect, getLeads);
-router.get('/:id', protect, getLeadById);
+router.get('/', protect, ensureAgentOrMortgageBroker, getLeads);
+router.get('/:id', protect, ensureAgentOrMortgageBroker, getLeadById);
 
 // GET /api/leads/:id/conversation
 // Returns all messages in the lead's conversation (if owned by the professional)
@@ -240,7 +291,7 @@ const getLeadConversation = async (req, res, next) => {
   }
 };
 
-router.get('/:id/conversation', protect, getLeadConversation);
+router.get('/:id/conversation', protect, ensureAgentOrMortgageBroker, getLeadConversation);
 
 // DELETE /api/leads/:id
 // Deletes the lead match, its lead profile, attributions, conversation and messages
@@ -285,6 +336,6 @@ const deleteLeadById = async (req, res, next) => {
   }
 };
 
-router.delete('/:id', protect, deleteLeadById);
+router.delete('/:id', protect, ensureAgentOrMortgageBroker, deleteLeadById);
 
 export default router;

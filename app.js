@@ -1,5 +1,9 @@
 import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import dotenv from 'dotenv';
 import morgan from 'morgan';
 import logger from './utils/logger.js';
@@ -36,6 +40,14 @@ app.use('/api/billing/stripe/webhook', webhookRoutes); // Just map the stripe we
 
 // We need express.json() for all other routes
 app.use(express.json());
+
+// Static HTML pages for testing
+app.get('/mortgage-broker', (req, res) => {
+  res.sendFile(path.join(__dirname, 'mortgage-broker.html'));
+});
+app.get('/lawyer', (req, res) => {
+  res.sendFile(path.join(__dirname, 'lawyer.html'));
+});
 
 // Routes
 app.use('/auth', authRoutes);

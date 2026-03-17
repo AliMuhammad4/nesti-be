@@ -55,6 +55,8 @@ const chatConversationSchema = new mongoose.Schema(
         'Hot Buyer', 'Warm Buyer', 'Cold Buyer',
         'Hot Seller', 'Warm Seller', 'Cold Seller',
         'Hot Lead', 'Warm Lead', 'Cold Lead',
+        'Hot Mortgage Lead', 'Warm Mortgage Lead', 'Cold Mortgage Lead',
+        'Hot Lawyer Lead', 'Warm Lawyer Lead', 'Cold Lawyer Lead',
         'unclassified',
       ],
       default: 'unclassified',

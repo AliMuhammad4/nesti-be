@@ -20,17 +20,8 @@ import {
   mergeContact,
   accumulateContactInfo,
 } from './chat/contactUtils.js';
-import {
-  mergeSignals,
-  mergeQualificationForScoring,
-  normalizeTimeline,
-  scoreLead,
-  buildLeadClassification,
-  bestGrade,
-  createLeadRecords,
-  deriveQualificationFromText,
-} from './chat/scoringUtils.js';
-import { buildSystemPrompt } from './chat/promptUtils.js';
+import { mergeSignals, extractSignals } from './chat/scoring/index.js';
+import { getFlowForRole } from './chat/flows/index.js';
 
 // ─── Main Chat Service ────────────────────────────────────────────────────────
 
@@ -72,6 +63,18 @@ export const handleChatService = async ({
     ProfessionalProfile.findOne({ user_id: userId }),
   ]);
 
+  // Flow is determined by widget type (agentType) when broker/lawyer, else by embed owner's professional_type.
+  const professionalType = professionalProfile?.professional_type || 'agent';
+  const flowType =
+    normalizedAgentType === 'broker' ? 'mortgage_broker'
+    : normalizedAgentType === 'lawyer' ? 'lawyer'
+    : professionalType;
+  const flow = getFlowForRole(flowType);
+  const isAgent = flowType === 'agent';
+  const isMortgageBroker = flowType === 'mortgage_broker';
+  const isLawyer = flowType === 'lawyer';
+  const canCreateLeads = isAgent || isMortgageBroker || isLawyer;
+
   const intent =
     formContact?.intent === 'sell' || formContact?.intent === 'buy'
       ? formContact.intent
@@ -105,23 +108,8 @@ export const handleChatService = async ({
   });
 
   const storedForm = formContact || conversation.form_data;
-  const formSignals = storedForm ? {
-    timeline: storedForm.timeline || null,
-    budget:   storedForm.budget   || storedForm.price || null,
-    location: storedForm.location || null,
-    beds:     storedForm.beds  ? (parseInt(storedForm.beds, 10)  || null) : null,
-    baths:    storedForm.baths ? (parseInt(storedForm.baths, 10) || null) : null,
-    area:     null,
-  } : {};
-
-  const formQualification = storedForm ? {
-    mortgage_status:    storedForm.mortgage_status || null,
-    realtor_status:     storedForm.realtor_status || null,
-    motivation_reason:  storedForm.motivation_reason || null,
-    viewing_readiness:  storedForm.viewing_readiness || null,
-    living_situation:   storedForm.living_situation || null,
-    urgency_readiness:  storedForm.urgency_readiness || null,
-  } : {};
+  const formSignals = flow.getFormSignals(storedForm);
+  const formQualification = flow.getFormQualification(storedForm);
 
   await ChatMessage.create({
     conversation_id: conversation._id,
@@ -151,12 +139,16 @@ export const handleChatService = async ({
   const interactionCount = allUserMessages.length;
   const conversationText = allUserMessages.map((m) => m.content).join(' ');
 
-  let { leadScore, leadGrade, leadMeta } = scoreLead({
+  // Merge form signals with text-extracted signals (location, beds, baths, area from conversation)
+  const textSignals = extractSignals(conversationText);
+  const seedSignals = mergeSignals(formSignals, textSignals);
+
+  let { leadScore, leadGrade, leadMeta } = flow.scoreLead({
     message:          conversationText,
     hasContact,
     contactInfo,
     interactionCount,
-    seedSignals:      formSignals,
+    seedSignals,
     formQualification,
   });
 
@@ -165,8 +157,14 @@ export const handleChatService = async ({
     .limit(20)
     .select('role content');
 
+  const systemPrompt = flow.buildSystemPrompt(professionalProfile, {
+    isAutomatedBookingEnabled: conversation.is_automated_booking_enabled,
+    calendlyLink: professionalProfile?.calendly_link,
+    leadGrade: leadGrade,
+    intent: conversation.intent || intent,
+  });
   const openaiMessages = [
-    { role: 'system', content: buildSystemPrompt(professionalProfile) },
+    { role: 'system', content: systemPrompt },
     ...history.map((m) => ({ role: m.role, content: m.content })),
   ];
 
@@ -206,21 +204,11 @@ export const handleChatService = async ({
     contactInfo.phone   = contactInfo.phone   || aiContact.phone   || null;
 
     parsedAiDetails = aiMeta.details || {};
-    leadMeta.signals = mergeSignals(leadMeta.signals, {
-      location: parsedAiDetails.property_address || null,
-      budget:   parsedAiDetails.budget           || null,
-      timeline: parsedAiDetails.timeline         || null,
-    });
+    leadMeta.signals = mergeSignals(leadMeta.signals, flow.mergeSignalsForMeta(leadMeta.signals, parsedAiDetails));
 
-    const aiEnhancedQualification = mergeQualificationForScoring(formQualification, parsedAiDetails);
-    const aiExtractedSignals = {
-      location: parsedAiDetails.property_address || null,
-      budget:   parsedAiDetails.budget           || null,
-      timeline: normalizeTimeline(parsedAiDetails.timeline) || formSignals.timeline || null,
-    };
-    const aiEnhancedSignals = mergeSignals(formSignals, aiExtractedSignals);
-
-    const aiEnhanced = scoreLead({
+    // Use seedSignals (includes text-extracted location/beds/baths/area) as base for AI enhancement
+    const { aiEnhancedQualification, aiEnhancedSignals } = flow.enhanceWithAi(formQualification, parsedAiDetails, seedSignals);
+    const aiEnhanced = flow.scoreLead({
       message:          conversationText,
       hasContact,
       contactInfo,
@@ -237,12 +225,17 @@ export const handleChatService = async ({
     return { status: 500, body: { success: false, message: 'AI service unavailable. Please try again.' } };
   }
 
-  const finalScore = Math.max(conversation.lead_score || 0, leadScore);
-  const finalGrade = bestGrade(leadGrade, conversation.lead_grade || 'unscored');
-  const finalClass = buildLeadClassification(finalGrade, aiIntent);
-  // Map lukewarm → warm for DB storage (lukewarm is UI-only color, not a stored category)
-  const persistedGrade = finalGrade === 'lukewarm' ? 'warm' : finalGrade;
-  const persistedClass = buildLeadClassification(persistedGrade, aiIntent);
+  const finalScore = leadScore;
+
+  const finalGrade = flow.bestGrade(leadGrade, conversation.lead_grade || 'unscored');
+  const persistedGrade = flow.getPersistedGrade(finalGrade);
+  const useSimpleClassification = isMortgageBroker || isLawyer;
+  const finalClass = useSimpleClassification
+    ? flow.getLeadClassification(finalGrade)
+    : flow.getLeadClassification(finalGrade, aiIntent);
+  const persistedClass = useSimpleClassification
+    ? flow.getLeadClassification(persistedGrade)
+    : flow.getLeadClassification(persistedGrade, aiIntent);
 
   await ChatMessage.create({
     conversation_id: conversation._id,
@@ -277,27 +270,22 @@ export const handleChatService = async ({
   if (formContact) conversation.form_data = formContact;
   await conversation.save();
 
-  const intentSuffix = aiIntent === 'sell' ? 'seller' : 'buyer';
-  const existingLeadMatch = await LeadMatch.findOne({
-    conversation_id: conversation._id,
-    user_id:         userId,
-    lead_type:       new RegExp(`${intentSuffix}$`),
-  });
+  const intentSuffix = flow.getIntentSuffix(aiIntent);
+  const existingLeadMatch = canCreateLeads
+    ? await LeadMatch.findOne({
+        conversation_id: conversation._id,
+        user_id:         userId,
+        lead_type:       new RegExp(`${intentSuffix}$`),
+      })
+    : null;
 
-  if (!existingLeadMatch && professionalProfile && hasContact) {
-    const derivedQual = deriveQualificationFromText(conversationText);
-    const mergedAiDetails = {
-      ...parsedAiDetails,
-      realtor_status:     parsedAiDetails?.realtor_status     || derivedQual.realtor_status || '',
-      motivation_reason:  parsedAiDetails?.motivation_reason  || derivedQual.motivation_reason || '',
-      viewing_readiness:  parsedAiDetails?.viewing_readiness  || derivedQual.viewing_readiness || '',
-      living_situation:   parsedAiDetails?.living_situation   || derivedQual.living_situation || '',
-      urgency_readiness:  parsedAiDetails?.urgency_readiness  || derivedQual.urgency_readiness || '',
-    };
+  if (canCreateLeads && !existingLeadMatch && professionalProfile && hasContact) {
+    const derivedQual = flow.deriveQualificationFromText(conversationText);
+    const mergedAiDetails = flow.getMergedAiDetails(parsedAiDetails, derivedQual);
 
-    await createLeadRecords({
+    await flow.createNewLead({
       conversation,
-      intent:                aiIntent,
+      intent:                (isMortgageBroker || isLawyer) ? 'buy' : aiIntent,
       professionalProfileId: professionalProfile._id,
       leadScore:             finalScore,
       leadGrade:             persistedGrade,
@@ -313,13 +301,11 @@ export const handleChatService = async ({
       formContact:    formContact || {},
       aiDetails:      mergedAiDetails,
     });
-  } else if (existingLeadMatch && hasContact) {
+  } else if (canCreateLeads && existingLeadMatch && hasContact) {
     const prevContact = existingLeadMatch.compatibility_factors?.contact || {};
     const hasNewInfo  =
       (contactInfo.email && contactInfo.email !== prevContact.email) ||
       (contactInfo.phone && contactInfo.phone !== prevContact.phone);
-
-    existingLeadMatch.match_score = finalScore;
 
     if (hasNewInfo) {
       existingLeadMatch.last_contact_at  = new Date();
@@ -333,23 +319,15 @@ export const handleChatService = async ({
     await existingLeadMatch.save();
 
     if (existingLeadMatch.lead_profile_id) {
-      const derivedQual = deriveQualificationFromText(conversationText);
-      const mergedQual = {
-        mortgage_status:    parsedAiDetails?.mortgage_status    || formContact?.mortgage_status,
-        realtor_status:     parsedAiDetails?.realtor_status     || derivedQual.realtor_status || formContact?.realtor_status,
-        motivation_reason:  parsedAiDetails?.motivation_reason  || derivedQual.motivation_reason || formContact?.motivation_reason,
-        viewing_readiness:  parsedAiDetails?.viewing_readiness  || derivedQual.viewing_readiness || formContact?.viewing_readiness,
-        living_situation:   parsedAiDetails?.living_situation   || derivedQual.living_situation || formContact?.living_situation,
-        urgency_readiness:  parsedAiDetails?.urgency_readiness  || derivedQual.urgency_readiness || formContact?.urgency_readiness,
-      };
-      const update = { total_score: finalScore };
-      if (leadMeta.signals?.location) update.location = leadMeta.signals.location;
-      if (leadMeta.signals?.budget) update.budget = leadMeta.signals.budget;
-      if (leadMeta.signals?.timeline) update.timeline = leadMeta.signals.timeline;
+      const derivedQual = flow.deriveQualificationFromText(conversationText);
+      const mergedQual = flow.getLeadProfileUpdate(parsedAiDetails, derivedQual, formContact);
+      const update = {};
       for (const [k, v] of Object.entries(mergedQual)) {
-        if (v) update[k] = v;
+        if (v != null && v !== '') update[k] = v;
       }
-      await LeadProfile.findByIdAndUpdate(existingLeadMatch.lead_profile_id, { $set: update });
+      if (Object.keys(update).length) {
+        await LeadProfile.findByIdAndUpdate(existingLeadMatch.lead_profile_id, { $set: update });
+      }
     }
   }
 

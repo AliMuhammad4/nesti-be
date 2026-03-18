@@ -7,6 +7,7 @@ const leadAttributionSchema = new mongoose.Schema(
       enum: [
         'hot_buyer', 'warm_buyer', 'cold_buyer',
         'hot_seller', 'warm_seller', 'cold_seller',
+        'hot_client', 'warm_client', 'cold_client',
         'unknown',
       ],
       default: 'unknown',

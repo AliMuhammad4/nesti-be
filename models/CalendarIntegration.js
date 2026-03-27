@@ -23,7 +23,16 @@ const calendarIntegrationSchema = new mongoose.Schema({
   },
   account_email: {
     type: String,
-  }
+  },
+  /** Lowercase Calendly scheduling slug from GET /users/me (OAuth account). */
+  calendly_slug: {
+    type: String,
+  },
+  /** True when professionalProfile.calendly_link points at a different slug — webhooks will not match bookings. */
+  calendly_slug_mismatch: {
+    type:    Boolean,
+    default: false,
+  },
 }, { timestamps: true });
 
 export default mongoose.model('CalendarIntegration', calendarIntegrationSchema);

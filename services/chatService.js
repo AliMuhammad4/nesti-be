@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 
+import CalendarIntegration from '../models/CalendarIntegration.js';
 import ChatConversation from '../models/ChatConversation.js';
 import ChatMessage from '../models/ChatMessage.js';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
@@ -7,6 +8,8 @@ import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import logger from '../utils/logger.js';
+
+import { calendlyWebhookAlignmentMeta } from './calendly/calendlyAlignmentService.js';
 
 import { getOpenAI } from './chat/openaiClient.js';
 import {
@@ -22,6 +25,164 @@ import {
 } from './chat/contactUtils.js';
 import { mergeSignals, extractSignals } from './chat/scoring/index.js';
 import { getFlowForRole } from './chat/flows/index.js';
+import { getAgentActionFlow } from './chat/config/agentActionFlow.js';
+import { resolveAgentPropertyMatchesForChat } from './agent/propertyMatch/matchService.js';
+
+/**
+ * Append UTM params so Calendly webhooks return `tracking.utm_content` = conversation Mongo id.
+ * `calendlyWebhookService` matches that to `LeadMatch.conversation_id` (stronger than email-only).
+ */
+function withCalendlyConversationTracking(url, conversationObjectId) {
+  if (!url || !conversationObjectId) return url || '';
+  const id = String(conversationObjectId);
+  try {
+    const u = new URL(url);
+    u.searchParams.set('utm_content', id);
+    u.searchParams.set('utm_source', 'nesti');
+    return u.toString();
+  } catch {
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}utm_content=${encodeURIComponent(id)}&utm_source=nesti`;
+  }
+}
+
+/** Rebuild scoring signals for property matching when `lead_reasons.signals` is missing (legacy sessions). */
+export async function recomputeSignalsForPropertyMatches(conversation, storedForm, flow) {
+  const allUserMessages = await ChatMessage.find({
+    conversation_id: conversation._id,
+    role:            'user',
+  })
+    .sort({ createdAt: 1 })
+    .select('content')
+    .lean();
+  const conversationText = allUserMessages.map((m) => m.content).join(' ');
+  const formSignals = flow.getFormSignals(storedForm || {});
+  const textSignals = extractSignals(conversationText);
+  let signals = mergeSignals(formSignals, textSignals);
+  const lastAssistant = await ChatMessage.findOne({
+    conversation_id: conversation._id,
+    role:            'assistant',
+  })
+    .sort({ createdAt: -1 })
+    .select('meta')
+    .lean();
+  const parsed = lastAssistant?.meta?.ai_metadata?.extracted_data || {};
+  if (parsed && typeof parsed === 'object' && Object.keys(parsed).length) {
+    signals = mergeSignals(signals, flow.mergeSignalsForMeta(signals, parsed));
+  }
+  return signals;
+}
+
+export function flowTypeForConversation(conversation, professionalProfile) {
+  const normalizedAgentType = conversation.agent_type || 'agent';
+  const professionalType = professionalProfile?.professional_type || 'agent';
+  return normalizedAgentType === 'broker'
+    ? 'mortgage_broker'
+    : normalizedAgentType === 'lawyer'
+      ? 'lawyer'
+      : professionalType;
+}
+
+/**
+ * Property listing / comparable cards — **real-estate agent embeds only** (not mortgage broker or lawyer).
+ * Same payload shape as former `POST /api/chat` meta; uses `conversation.lead_reasons.signals` from the last turn.
+ */
+export const handlePropertyMatchesService = async ({
+  id: sessionId,
+  embedToken,
+  visitorId,
+  formContact,
+}) => {
+  if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
+    return { status: 400, body: { success: false, message: 'id (session_id) is required' } };
+  }
+  if (!embedToken || typeof embedToken !== 'string' || !embedToken.trim()) {
+    return { status: 400, body: { success: false, message: 'embedToken is required' } };
+  }
+
+  const embed = await ChatbotEmbedUrl.findOne({ token: embedToken });
+  if (!embed) {
+    return { status: 403, body: { success: false, message: 'Invalid or inactive embed token' } };
+  }
+  const userId = embed.user_id;
+
+  const conversation = await ChatConversation.findOne({
+    session_id: sessionId.trim(),
+    user_id:    userId,
+  });
+  if (!conversation) {
+    logger.warn('Chat service: property-matches session not found', {
+      op:          'chat.property_matches',
+      session_id:  sessionId.trim(),
+      owner_user_id: String(userId),
+    });
+    return { status: 404, body: { success: false, message: 'Session not found' } };
+  }
+
+  const professionalProfile = await ProfessionalProfile.findOne({ user_id: userId });
+  const flowType = flowTypeForConversation(conversation, professionalProfile);
+  const isAgent = flowType === 'agent';
+
+  if (!isAgent) {
+    return {
+      status: 200,
+      body: {
+        success: true,
+        session_id: sessionId.trim(),
+        visitor_id: visitorId || null,
+        meta: {
+          property_matches: [],
+          property_matches_context: null,
+          property_matches_note: null,
+        },
+      },
+    };
+  }
+
+  const flow = getFlowForRole(flowType);
+
+  const contactInfo = await accumulateContactInfo(conversation._id);
+  const hasContact = Boolean(contactInfo.email || contactInfo.phone || contactInfo.name);
+
+  const storedForm = formContact || conversation.form_data || {};
+  const storedIntent = storedForm?.intent;
+  const aiIntent = conversation.intent === 'sell' || conversation.intent === 'buy' ? conversation.intent : 'buy';
+  const propertyMatchIntent =
+    storedIntent === 'buy' || storedIntent === 'sell' ? storedIntent : aiIntent;
+
+  const leadReasons = conversation.lead_reasons;
+  let signals = leadReasons && typeof leadReasons === 'object' ? leadReasons.signals : null;
+  if (!signals || typeof signals !== 'object') {
+    signals = await recomputeSignalsForPropertyMatches(conversation, storedForm, flow);
+  }
+
+  const {
+    property_matches,
+    property_matches_context,
+    property_matches_note,
+  } = await resolveAgentPropertyMatchesForChat({
+    isAgent,
+    hasContact,
+    matchIntent: propertyMatchIntent,
+    userId,
+    conversationId: conversation._id,
+    leadMetaSignals: signals,
+  });
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      session_id: sessionId.trim(),
+      visitor_id: visitorId || null,
+      meta: {
+        property_matches,
+        property_matches_context,
+        property_matches_note,
+      },
+    },
+  };
+};
 
 // ─── Main Chat Service ────────────────────────────────────────────────────────
 
@@ -157,11 +318,40 @@ export const handleChatService = async ({
     .limit(20)
     .select('role content');
 
+  const calendlyLinkTrimmed = (professionalProfile?.calendly_link || '').trim();
+  const calendlyLinkForVisitor =
+    calendlyLinkTrimmed && conversation?._id
+      ? withCalendlyConversationTracking(calendlyLinkTrimmed, conversation._id)
+      : calendlyLinkTrimmed;
+  const isAutomatedBookingEnabled =
+    Boolean(calendlyLinkTrimmed) && conversation.is_automated_booking_enabled !== false;
+
+  const calendlySnapForPrompt = await ChatConversation.findById(conversation._id)
+    .select('calendly_booking_status lead_grade')
+    .lean();
+  const calendlyBookedForPrompt =
+    calendlySnapForPrompt?.calendly_booking_status === 'booked';
+  const checklistGradeForPrompt = flow.bestGrade(
+    leadGrade,
+    calendlySnapForPrompt?.lead_grade || conversation.lead_grade || 'unscored'
+  );
+  const checklistIntentForPrompt =
+    conversation.intent === 'sell' || conversation.intent === 'buy'
+      ? conversation.intent
+      : intent;
+  const postBookingChatChecklistForPrompt =
+    isAgent && calendlyBookedForPrompt
+      ? getAgentActionFlow(checklistGradeForPrompt, checklistIntentForPrompt).postBookingChatChecklist ||
+        []
+      : [];
+
   const systemPrompt = flow.buildSystemPrompt(professionalProfile, {
-    isAutomatedBookingEnabled: conversation.is_automated_booking_enabled,
-    calendlyLink: professionalProfile?.calendly_link,
+    isAutomatedBookingEnabled,
+    calendlyLink: calendlyLinkForVisitor || undefined,
     leadGrade: leadGrade,
     intent: conversation.intent || intent,
+    calendlyBooked: Boolean(postBookingChatChecklistForPrompt.length),
+    postBookingChatChecklist: postBookingChatChecklistForPrompt,
   });
   const openaiMessages = [
     { role: 'system', content: systemPrompt },
@@ -204,7 +394,6 @@ export const handleChatService = async ({
     contactInfo.phone   = contactInfo.phone   || aiContact.phone   || null;
 
     parsedAiDetails = aiMeta.details || {};
-    leadMeta.signals = mergeSignals(leadMeta.signals, flow.mergeSignalsForMeta(leadMeta.signals, parsedAiDetails));
 
     // Use seedSignals (includes text-extracted location/beds/baths/area) as base for AI enhancement
     const { aiEnhancedQualification, aiEnhancedSignals } = flow.enhanceWithAi(formQualification, parsedAiDetails, seedSignals);
@@ -220,6 +409,11 @@ export const handleChatService = async ({
     leadScore = aiEnhanced.leadScore;
     leadGrade = aiEnhanced.leadGrade;
     leadMeta = aiEnhanced.leadMeta;
+    // Re-merge AI-extracted budget/location/beds so property-match criteria + meta stay aligned after rescoring.
+    leadMeta.signals = mergeSignals(
+      leadMeta.signals,
+      flow.mergeSignalsForMeta(leadMeta.signals, parsedAiDetails)
+    );
   } catch (err) {
     logger.error(`OpenAI error — session: ${sessionId} — ${err.message}`);
     return { status: 500, body: { success: false, message: 'AI service unavailable. Please try again.' } };
@@ -283,7 +477,7 @@ export const handleChatService = async ({
     const derivedQual = flow.deriveQualificationFromText(conversationText);
     const mergedAiDetails = flow.getMergedAiDetails(parsedAiDetails, derivedQual);
 
-    await flow.createNewLead({
+    const newLeadMatch = await flow.createNewLead({
       conversation,
       intent:                (isMortgageBroker || isLawyer) ? 'buy' : aiIntent,
       professionalProfileId: professionalProfile._id,
@@ -301,6 +495,18 @@ export const handleChatService = async ({
       formContact:    formContact || {},
       aiDetails:      mergedAiDetails,
     });
+    if (newLeadMatch?._id) {
+      logger.info('Chat service: new lead match created', {
+        op:              'chat.lead',
+        flow:            flowType,
+        conversation_id: String(conversation._id),
+        session_id:      sessionId,
+        lead_match_id:   String(newLeadMatch._id),
+        owner_user_id:   String(userId),
+        lead_grade:      persistedGrade,
+        intent:          aiIntent,
+      });
+    }
   } else if (canCreateLeads && existingLeadMatch && hasContact) {
     const prevContact = existingLeadMatch.compatibility_factors?.contact || {};
     const hasNewInfo  =
@@ -323,13 +529,27 @@ export const handleChatService = async ({
       const mergedQual = flow.getLeadProfileUpdate(parsedAiDetails, derivedQual, formContact);
       const update = {};
       for (const [k, v] of Object.entries(mergedQual)) {
-        if (v != null && v !== '') update[k] = v;
+        if (v === undefined) continue;
+        if (v === '' && k !== 'budget') continue;
+        update[k] = v;
       }
       if (Object.keys(update).length) {
         await LeadProfile.findByIdAndUpdate(existingLeadMatch.lead_profile_id, { $set: update });
       }
     }
   }
+
+  // Agent-only: listing/comparable cards via `POST /api/chat/property-matches` (not broker/lawyer).
+  const property_matches_available = Boolean(isAgent && hasContact);
+
+  const calendlyBookingSnap = await ChatConversation.findById(conversation._id)
+    .select('calendly_booking_status calendly_booking_at')
+    .lean();
+
+  const calInt = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' })
+    .select('access_token calendly_slug calendly_slug_mismatch')
+    .lean();
+  const calendlyAlign = calendlyWebhookAlignmentMeta(calInt, professionalProfile);
 
   return {
     status: 200,
@@ -349,6 +569,17 @@ export const handleChatService = async ({
         lead_reasons:        leadMeta.lead_reasons,
         sub_scores:          leadMeta.sub_scores,
         contact:             contactInfo,
+        property_matches_available,
+        calendly_link:       calendlyLinkForVisitor || null,
+        conversation_id:     conversation._id ? String(conversation._id) : null,
+        automated_booking_enabled: isAutomatedBookingEnabled,
+        calendly_booking_status: calendlyBookingSnap?.calendly_booking_status ?? null,
+        calendly_booking_at:     calendlyBookingSnap?.calendly_booking_at ?? null,
+        post_booking_checklist:
+          isAgent && calendlyBookingSnap?.calendly_booking_status === 'booked'
+            ? getAgentActionFlow(finalGrade, aiIntent).postBookingChatChecklist || []
+            : null,
+        ...calendlyAlign,
       },
     },
   };

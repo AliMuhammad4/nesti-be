@@ -16,6 +16,8 @@ import billingRoutes from './routes/billingRoutes.js';
 import professionalRoutes from './routes/professionalRoutes.js';
 import calendarRoutes from './routes/calendarRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
+import calendlyWebhookRoutes from './routes/calendlyWebhookRoutes.js';
+import propertyMatchScoringRoutes from './routes/agent/propertyMatchScoringRoutes.js';
 
 // Load env
 dotenv.config();
@@ -38,10 +40,19 @@ app.use(cors());
 // Webhooks often need raw bodies, so they are routed before express.json()
 app.use('/api/billing/stripe/webhook', webhookRoutes); // Just map the stripe webhook path to here if needed or separate it. We will map all webhooks to /api/webhooks in app.js, except stripe if it needs special handling. Let's handle stripe inside webhookRoutes.
 
+app.use(
+  '/api/webhooks/calendly',
+  express.raw({ type: 'application/json' }),
+  calendlyWebhookRoutes
+);
+
 // We need express.json() for all other routes
 app.use(express.json());
 
 // Static HTML pages for testing
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
 app.get('/mortgage-broker', (req, res) => {
   res.sendFile(path.join(__dirname, 'mortgage-broker.html'));
 });
@@ -57,6 +68,7 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/professionals', professionalRoutes);
+app.use('/api/property-match-scoring', propertyMatchScoringRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/webhooks', webhookRoutes);
 

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { PropertyMatchSettingsSchema } from './propertyMatchScoringShapes.js';
 
 const professionalProfileSchema = new mongoose.Schema({
   user_id: {
@@ -40,7 +41,13 @@ const professionalProfileSchema = new mongoose.Schema({
   },
   bio: {
     type: String,
-  }
+  },
+  /** Agent-only: weights + limits for matching visitor leads to seller pipeline inventory. */
+  property_match_scoring: {
+    type: PropertyMatchSettingsSchema,
+    required: false,
+    default: undefined,
+  },
 }, { timestamps: true });
 
 export default mongoose.model('ProfessionalProfile', professionalProfileSchema);

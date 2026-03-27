@@ -75,7 +75,7 @@ const chatConversationSchema = new mongoose.Schema(
     },
     is_automated_booking_enabled: {
       type: Boolean,
-      default: false,
+      default: true,
     },
     last_interaction_at: {
       type: Date,
@@ -84,6 +84,35 @@ const chatConversationSchema = new mongoose.Schema(
     form_data: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
+    },
+    /** Set by POST /api/webhooks/calendly when invitee books or cancels (see calendlyWebhookService). */
+    calendly_booking_status: {
+      type: String,
+      enum: ['booked', 'canceled'],
+    },
+    calendly_booking_at: {
+      type: Date,
+    },
+    /** Idempotent post–Calendly-booking jobs (see postBookingAutomations.js). */
+    post_booking_automation_runs: {
+      type: [
+        {
+          key:        { type: String, required: true },
+          dedupe_key: { type: String, required: true },
+          ran_at:     { type: Date, default: Date.now },
+          status:     { type: String, enum: ['completed', 'failed', 'skipped'], required: true },
+          detail:     { type: String },
+        },
+      ],
+      default: [],
+    },
+    /**
+     * Calendly may deliver `invitee.created` more than once; we atomically claim each invitee
+     * dedupe key so digest email runs only once per booking.
+     */
+    post_booking_digest_dedupes: {
+      type:    [String],
+      default: [],
     },
   },
   { timestamps: true }

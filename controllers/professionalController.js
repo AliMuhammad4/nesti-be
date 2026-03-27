@@ -1,5 +1,6 @@
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import User from '../models/User.js';
+import { refreshCalendlySlugMismatchForUser } from '../services/calendly/calendlyAlignmentService.js';
 
 export const getMyProfessionalProfile = async (req, res, next) => {
   try {
@@ -66,6 +67,13 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       { $set: update },
       { new: true, upsert: true, setDefaultsOnInsert: true },
     );
+    if (calendly_link !== undefined) {
+      try {
+        await refreshCalendlySlugMismatchForUser(userId);
+      } catch {
+        /* non-fatal */
+      }
+    }
     res.json({
       success: true,
       message: 'Professional profile saved successfully',

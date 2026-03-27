@@ -8,6 +8,7 @@ import LeadAttribution from '../../../models/LeadAttribution.js';
 import logger from '../../../utils/logger.js';
 
 import { extractSignals, mergeSignals, buildLeadType, buildLeadClassification, GRADE_ORDER } from './common.js';
+import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 
 export const bestGrade = (a, b) =>
   (GRADE_ORDER[a] || 0) >= (GRADE_ORDER[b] || 0) ? a : b;
@@ -115,6 +116,8 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
   if (signals.budget) {
     budgetScore = signals.budget.includes('-') ? 7 : 10;
     reasons.push(budgetScore === 10 ? 'Budget: exact budget defined' : 'Budget: approximate range provided');
+  } else if (signals.financing_signal && !signals.budget) {
+    /* Financing is scored under mortgage; do not treat as purchase budget. */
   } else if (/budget|price range|how much/i.test(text)) {
     budgetScore = 2;
     reasons.push('Budget: discussed but not clearly defined');
@@ -251,14 +254,47 @@ export const createLeadRecords = async ({
   const now      = new Date();
 
   const sellerPrice = intent === 'sell' ? (formContact?.price || aiDetails?.budget || signals.budget || '') : '';
+  const locCombined =
+    signals.location ||
+    formContact?.location ||
+    aiDetails?.property_address ||
+    '';
+  const { budgetStr: buyerBudgetStr, financingStr: buyerFinancingFromBudget } =
+    intent === 'buy'
+      ? partitionBuyerBudgetInputs(
+          aiDetails?.budget,
+          formContact?.budget,
+          signals.budget
+        )
+      : { budgetStr: '', financingStr: '' };
+
+  const financingFromSignal =
+    signals.financing_signal === 'cash'
+      ? 'paying_cash'
+      : signals.financing_signal === 'pre_approved'
+        ? 'fully_pre_approved'
+        : '';
+
+  if (intent === 'buy' && buyerFinancingFromBudget && !buyerBudgetStr) {
+    logger.info('Agent lead create: financing phrase kept out of LeadProfile.budget', {
+      fromPartition: buyerFinancingFromBudget.slice(0, 120),
+      userId:        String(userId),
+    });
+  }
+
+  const budgetBuy = intent === 'buy' ? buyerBudgetStr : '';
   const leadProfile = await LeadProfile.create({
     intent,
     full_name:        contactInfo.name    || 'Unknown',
     email:            contactInfo.email   || '',
     phone:            contactInfo.phone   || '',
-    property_address: contactInfo.address || aiDetails?.property_address || '',
-    location:         signals.location    || '',
-    budget:           intent === 'buy' ? (signals.budget || '') : '',
+    property_address:
+      contactInfo.address ||
+      formContact?.address ||
+      aiDetails?.property_address ||
+      '',
+    location:         locCombined,
+    budget:           intent === 'buy' ? budgetBuy : '',
     expected_price:   sellerPrice,
     timeline:         signals.timeline    || '',
     bedrooms:         formContact?.beds || aiDetails?.bedrooms || (signals.beds != null ? String(signals.beds) : ''),
@@ -271,7 +307,12 @@ export const createLeadRecords = async ({
     school_district_important: formContact?.school_district_important || '',
     preferred_contact_method: formContact?.preferred_contact_method || '',
     best_time_to_contact:     formContact?.best_time_to_contact || '',
-    mortgage_status:    aiDetails?.mortgage_status || formContact?.mortgage_status || '',
+    mortgage_status:
+      aiDetails?.mortgage_status ||
+      formContact?.mortgage_status ||
+      buyerFinancingFromBudget ||
+      financingFromSignal ||
+      '',
     realtor_status:     formContact?.realtor_status || aiDetails?.realtor_status || '',
     motivation_reason:  formContact?.motivation_reason || aiDetails?.motivation_reason || '',
     viewing_readiness:  formContact?.viewing_readiness || aiDetails?.viewing_readiness || '',

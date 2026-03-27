@@ -1,11 +1,12 @@
 import express from 'express';
 const router = express.Router();
 import { protect } from '../middleware/authMiddleware.js';
-import { handleChat, scorePreview } from '../controllers/chatController.js';
+import { handleChat, handlePropertyMatches, scorePreview } from '../controllers/chatController.js';
 
 const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
 
 router.post('/', handleChat);
+router.post('/property-matches', handlePropertyMatches);
 router.post('/score-preview', scorePreview);
 router.get('/conversations', protect, stub);
 router.get('/conversations/:id/messages', protect, stub);

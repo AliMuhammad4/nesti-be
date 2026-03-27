@@ -132,6 +132,12 @@ export const verifyEmailService = async ({ verificationToken, otp }) => {
       professional_type: user.role,
       full_name: `${user.first_name} ${user.last_name}`,
     });
+    if (user.role === 'agent') {
+      const { ensureAgentPropertyMatchScoring } = await import(
+        './agent/propertyMatch/scoringConfig.js'
+      );
+      await ensureAgentPropertyMatchScoring(user._id);
+    }
   }
 
   return {

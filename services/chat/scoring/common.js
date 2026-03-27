@@ -2,6 +2,8 @@
  * Shared scoring utilities used by both agent and mortgage broker roles.
  */
 
+import logger from '../../../utils/logger.js';
+
 const KNOWN_CITIES = [
   'lahore', 'karachi', 'islamabad', 'clifton', 'dha', 'london',
   'dubai', 'new york', 'miami', 'los angeles', 'chicago', 'toronto',
@@ -25,22 +27,30 @@ export const extractSignals = (message = '') => {
     timeline = 'browsing';
   }
 
+  /** Purchase budget (money only). Financing belongs in financing_signal — never store "pre-approved" as budget. */
   let budget = null;
-  if (/pre.?approv|cash buyer|all.?cash/.test(text)) {
-    budget = 'pre-approved';
-  } else {
-    const m = text.match(/\$?([\d,]+)\s*(k|thousand|m|million)?/i);
-    if (m) {
-      let amount = parseFloat(m[1].replace(/,/g, ''));
-      const unit = (m[2] || '').toLowerCase();
-      if (unit === 'k' || unit === 'thousand') amount *= 1_000;
-      if (unit === 'm' || unit === 'million')  amount *= 1_000_000;
-      if (amount >= 1_000) {
-        budget = amount >= 1_000_000
-          ? `$${(amount / 1_000_000).toFixed(1)}M`
-          : `$${Math.round(amount / 1_000)}K`;
-      }
+  let financing_signal = null;
+  if (/pre.?approv|fully\s*pre|financing\s*approv/i.test(text)) {
+    financing_signal = 'pre_approved';
+  } else if (/cash buyer|all\s*-?\s*cash|paying cash|buying with cash/i.test(text)) {
+    financing_signal = 'cash';
+  }
+
+  const m = text.match(/\$?([\d,]+)\s*(k|thousand|m|million)?/i);
+  if (m) {
+    let amount = parseFloat(m[1].replace(/,/g, ''));
+    const unit = (m[2] || '').toLowerCase();
+    if (unit === 'k' || unit === 'thousand') amount *= 1_000;
+    if (unit === 'm' || unit === 'million') amount *= 1_000_000;
+    if (amount >= 1_000) {
+      budget = amount >= 1_000_000
+        ? `$${(amount / 1_000_000).toFixed(1)}M`
+        : `$${Math.round(amount / 1_000)}K`;
     }
+  }
+
+  if (financing_signal && budget) {
+    logger.debug('extractSignals: text has both financing hint and dollar budget', { financing_signal });
   }
 
   const bedsM  = text.match(/(\d+)\s*(?:bed(?:room)?s?|br)\b/);
@@ -64,16 +74,28 @@ export const extractSignals = (message = '') => {
     }
   }
 
-  return { timeline, budget, beds, baths, area, location };
+  return { timeline, budget, financing_signal, beds, baths, area, location };
+};
+
+/**
+ * Merge text-extracted signals over form seed signals.
+ * Patch values that are null / undefined / '' mean “not detected in text” and must NOT wipe the base (form) value.
+ */
+const takeIfPresent = (patch, base, key) => {
+  if (!patch) return base?.[key] ?? null;
+  const v = patch[key];
+  if (v === undefined || v === null || v === '') return base?.[key] ?? null;
+  return v;
 };
 
 export const mergeSignals = (base, patch) => ({
-  timeline: patch?.timeline || base.timeline || null,
-  budget:   patch?.budget   || base.budget   || null,
-  beds:     patch?.beds     ?? base.beds     ?? null,
-  baths:    patch?.baths    ?? base.baths    ?? null,
-  area:     patch?.area     || base.area     || null,
-  location: patch?.location || base.location || null,
+  timeline:         takeIfPresent(patch, base, 'timeline'),
+  budget:           takeIfPresent(patch, base, 'budget'),
+  financing_signal: takeIfPresent(patch, base, 'financing_signal'),
+  beds:             takeIfPresent(patch, base, 'beds'),
+  baths:            takeIfPresent(patch, base, 'baths'),
+  area:             takeIfPresent(patch, base, 'area'),
+  location:         takeIfPresent(patch, base, 'location'),
 });
 
 export const buildLeadType = (grade, intent) =>

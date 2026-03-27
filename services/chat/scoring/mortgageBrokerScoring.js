@@ -8,6 +8,7 @@ import LeadAttribution from '../../../models/LeadAttribution.js';
 import logger from '../../../utils/logger.js';
 
 import { mergeSignals, buildLeadType } from './common.js';
+import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 
 const MORTGAGE_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 
@@ -229,7 +230,7 @@ export const createMortgageLeadRecords = async ({
     phone:                  contactInfo.phone   || '',
     property_address:       addressVal,
     location:               locationVal,
-    budget:                 signals.budget      || fq.budget || '',
+    budget:                 mbBudgetStr || '',
     expected_price:         '',
     timeline:               fq.mortgage_timeline || ai.mortgage_timeline || '',
     bedrooms:               bedroomsVal ? String(bedroomsVal) : '',

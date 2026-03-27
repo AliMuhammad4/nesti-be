@@ -11,6 +11,7 @@ import {
   mergeSignals,
 } from '../scoring/index.js';
 import { buildMortgageBrokerSystemPrompt } from '../prompts/index.js';
+import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 
 export const mortgageBrokerFlow = {
   getFormQualification: (storedForm) => storedForm ? {
@@ -70,9 +71,14 @@ export const mortgageBrokerFlow = {
 
   enhanceWithAi: (formQualification, parsedAiDetails, formSignals) => {
     const aiEnhancedQualification = mergeMortgageQualificationForScoring(formQualification, parsedAiDetails);
+    const { budgetStr: mbSigBudget, financingStr: mbSigFin } = partitionBuyerBudgetInputs(
+      parsedAiDetails?.budget,
+      parsedAiDetails?.property_budget
+    );
     const aiExtractedSignals = {
       location: parsedAiDetails?.property_address || parsedAiDetails?.location || null,
-      budget:   parsedAiDetails?.budget || parsedAiDetails?.property_budget || null,
+      budget:            mbSigBudget || null,
+      financing_signal: mbSigFin || null,
       timeline: parsedAiDetails?.timeline || parsedAiDetails?.mortgage_timeline || null,
       beds:     parsedAiDetails?.bedrooms != null && parsedAiDetails?.bedrooms !== ''
         ? (parseInt(parsedAiDetails.bedrooms, 10) || null) : null,
@@ -92,14 +98,24 @@ export const mortgageBrokerFlow = {
     const beds = ai.bedrooms != null && ai.bedrooms !== '' ? (parseInt(ai.bedrooms, 10) || null) : null;
     const baths = ai.bathrooms != null && ai.bathrooms !== '' ? (parseInt(ai.bathrooms, 10) || null) : null;
     const areaVal = ai.area != null && String(ai.area).trim() !== '' ? String(ai.area).trim() : null;
-    return {
+    const out = {
       location: loc || base.location || null,
-      budget:   ai.budget || ai.property_budget || base.budget || null,
       timeline: ai.timeline || ai.mortgage_timeline || base.timeline || null,
       beds:     beds ?? base.beds ?? null,
       baths:    baths ?? base.baths ?? null,
       area:     areaVal || base.area || null,
     };
+    if (
+      Object.prototype.hasOwnProperty.call(ai, 'budget') ||
+      Object.prototype.hasOwnProperty.call(ai, 'property_budget')
+    ) {
+      const { budgetStr, financingStr } = partitionBuyerBudgetInputs(ai.budget, ai.property_budget);
+      out.budget = budgetStr || null;
+      out.financing_signal = financingStr || base.financing_signal || null;
+    } else {
+      out.budget = base.budget ?? null;
+    }
+    return out;
   },
 
   getPersistedGrade: (finalGrade) => finalGrade,

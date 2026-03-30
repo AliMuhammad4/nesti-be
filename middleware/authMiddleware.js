@@ -1,10 +1,9 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import { USER_ROLE, USER_ROLE_VALUES } from '../constants/roles.js';
 
 const protect = async (req, res, next) => {
   let token;
-
-  // Check for token in Authorization header
   if (req.headers.authorization) {
     if (req.headers.authorization.startsWith('Bearer ')) {
       token = req.headers.authorization.split(' ')[1];
@@ -12,7 +11,6 @@ const protect = async (req, res, next) => {
       token = req.headers.authorization;
     }
   } 
-  // Also check for custom 'token' header just in case
   else if (req.headers.token) {
     token = req.headers.token;
   }
@@ -56,7 +54,7 @@ const ensureAgent = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
   }
-  if (req.user.role !== 'agent' && req.user.role !== 'admin') {
+  if (req.user.role !== USER_ROLE.AGENT && req.user.role !== USER_ROLE.ADMIN) {
     return res.status(403).json({ success: false, message: 'Lead management is available only for agents.' });
   }
   next();
@@ -66,7 +64,7 @@ const ensureAgentOrMortgageBroker = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
   }
-  if (!['agent', 'mortgage_broker', 'lawyer', 'admin'].includes(req.user.role)) {
+  if (!USER_ROLE_VALUES.includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Lead management is available only for agents, mortgage brokers, and lawyers.' });
   }
   next();

@@ -124,7 +124,11 @@
       line-height: 1.45; word-wrap: break-word;
     }
     .msg.user { margin-left: auto; background: #0d9488; color: #f9fafb; border-bottom-right-radius: 4px; }
+    .msg.user a { color: #ccfbf1; font-weight: 600; text-decoration: underline; }
+    .msg.user a:hover { color: #fff; }
     .msg.bot { background: #fff; color: #0f172a; border-bottom-left-radius: 4px; box-shadow: 0 3px 10px rgba(15,23,42,0.12); }
+    .msg.bot a { color: #0d9488; font-weight: 600; text-decoration: underline; }
+    .msg.bot a:hover { color: #0f766e; }
     .meta-line   { font-size: 10px; margin-top: 4px; color: #6b7280; }
     .signal-line { font-size: 10px; margin-top: 2px; color: #9ca3af; font-style: italic; }
 
@@ -152,6 +156,51 @@
       background: #f1f5f9; color: #334155; font-weight: 600;
     }
     .temp-hint { font-size: 10px; color: #64748b; margin-top: 2px; }
+
+    .calendly-panel { border-top: 1px solid rgba(148,163,184,0.25); margin-top: 10px; padding-top: 10px; }
+    .calendly-panel .hint { font-size: 10px; opacity: 0.85; margin-top: 6px; line-height: 1.4; }
+    .calendly-connection-hint {
+      font-size: 10px;
+      margin-top: 8px;
+      line-height: 1.45;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.35);
+      display: none;
+    }
+    .btn-oauth {
+      margin-top: 6px; padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(99,102,241,0.5);
+      background: #312e81; color: #e0e7ff; font-size: 11px; font-weight: 600; cursor: pointer;
+    }
+    .btn-oauth:hover { background: #4338ca; }
+    .btn-oauth.secondary { background: #0f172a; border-color: rgba(148,163,184,0.4); color: #e2e8f0; margin-left: 6px; }
+    .file-open-warning {
+      display: none; margin: 10px 0; padding: 10px 12px; background: #fef3c7; border: 1px solid #f59e0b;
+      border-radius: 8px; font-size: 12px; line-height: 1.45; color: #78350f;
+    }
+
+    .calendly-strip {
+      margin-top: 8px; padding: 8px 10px; background: #ecfdf5; border: 1px solid #a7f3d0;
+      border-radius: 8px; font-size: 11px; line-height: 1.45; color: #064e3b;
+    }
+    .calendly-strip a { color: #047857; font-weight: 600; }
+    .calendly-strip .mono { font-size: 10px; word-break: break-all; opacity: 0.9; margin-top: 4px; font-family: ui-monospace, monospace; }
+    .calendly-strip .sub { margin-top: 6px; font-size: 10px; opacity: 0.88; }
+    .booking-checklist-box {
+      margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(6, 78, 59, 0.35);
+    }
+    .booking-checklist-title {
+      font-size: 11px; font-weight: 700; color: #065f46; margin-bottom: 6px;
+    }
+    .booking-checklist {
+      margin: 0; padding-left: 0; list-style: none; font-size: 10px; line-height: 1.45; color: #064e3b;
+    }
+    .booking-checklist li { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 5px; }
+    .booking-checklist .chk {
+      flex-shrink: 0; width: 16px; height: 16px; border-radius: 4px; background: #059669; color: #fff;
+      font-size: 10px; display: flex; align-items: center; justify-content: center; font-weight: 700;
+    }
+    .file-open-warning code { font-size: 11px; }
   </style>
 </head>
 <body>
@@ -159,7 +208,10 @@
 
   <div class="panel">
     <h2>Nesti AI – Mortgage Broker Widget</h2>
-    <div>Paste an <code>embedToken</code> from a mortgage broker's embed to start.</div>
+    <div id="fileOpenWarning" class="file-open-warning">
+      This page was opened as a <strong>file</strong> (<code>file://</code>). Use <code>http://localhost:5000/mortgage-broker</code> with your server running, or set API URL to <code>http://localhost:5000/api/chat</code>.
+    </div>
+    <div>Paste an <code>embedToken</code> from a mortgage broker embed. Use <code>http://localhost:5000/mortgage-broker</code> (or this file served by the API) so the chat API URL resolves correctly.</div>
     <div class="config-row">
       <label>Embed token</label>
       <input id="embedTokenInput" type="text" placeholder="token from /api/embed/generate" />
@@ -167,6 +219,18 @@
     <div class="config-row">
       <label>API URL</label>
       <input id="apiUrlInput" type="text" value="http://localhost:5000/api/chat" />
+    </div>
+    <p class="hint" style="margin-top:4px;font-size:10px;opacity:.9;">
+      Must point at your Nesti server. If this page is opened from Live Server or another port, use the full URL above — not <code>/api/chat</code> alone — or requests return HTML instead of JSON.
+    </p>
+
+    <div class="calendly-panel">
+      <div><strong>Calendly (same as agent widget — no JWT)</strong></div>
+      <div>
+        <button type="button" class="btn-oauth" id="btnCalendlyOAuth">Connect Calendly (OAuth)</button>
+        <button type="button" class="btn-oauth secondary" id="btnCalendlyStatus">Calendar status</button>
+      </div>
+      <div id="calendlyConnectionHint" class="calendly-connection-hint" aria-live="polite"></div>
     </div>
   </div>
 
@@ -351,6 +415,64 @@
 </div>
 
 <script>
+  (function fixFileProtocolApiUrl() {
+    if (window.location.protocol !== 'file:') return;
+    const api = document.getElementById('apiUrlInput');
+    if (api) {
+      const v = (api.value || '').trim();
+      if (!v || v === '/api/chat' || (v.startsWith('/') && !v.startsWith('//'))) {
+        api.value = 'http://localhost:5000/api/chat';
+      }
+    }
+    const warn = document.getElementById('fileOpenWarning');
+    if (warn) warn.style.display = 'block';
+  })();
+
+  /**
+   * Relative `/api/chat` is resolved against the *page* origin. Live Server / :80 / :3000 → HTML, not JSON.
+   * Infer default ports when `location.port` is empty (e.g. http://localhost → port 80).
+   */
+  function resolveChatApiUrl() {
+    const v = document.getElementById('apiUrlInput').value.trim() || 'http://localhost:5000/api/chat';
+    if (window.location.protocol === 'file:' && v.startsWith('/') && !v.startsWith('//')) {
+      return 'http://localhost:5000' + v;
+    }
+    if (v.startsWith('/') && !v.startsWith('//')) {
+      const h = window.location.hostname;
+      const isLocal = h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+      const effectivePort =
+        window.location.port ||
+        (window.location.protocol === 'https:' ? '443' : '80');
+      if (isLocal && effectivePort !== '5000') {
+        return 'http://localhost:5000' + v;
+      }
+    }
+    return v;
+  }
+
+  function apiOriginFromChatUrl() {
+    try {
+      return new URL(resolveChatApiUrl()).origin;
+    } catch {
+      return window.location.protocol === 'file:' ? 'http://localhost:5000' : window.location.origin;
+    }
+  }
+
+  async function fetchJsonWithHint(res) {
+    const text = await res.text();
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith('<!DOCTYPE') || /^<html[\s>]/i.test(trimmed)) {
+      throw new Error(
+        'Server returned HTML instead of JSON. Set API URL to http://localhost:5000/api/chat when using another dev port.'
+      );
+    }
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error((e && e.message ? e.message : 'Invalid JSON') + ' — response was not valid JSON.');
+    }
+  }
+
   let formData = {};
 
   const VISITOR_ID = 'visitor-' + Math.random().toString(36).slice(2, 10);
@@ -413,14 +535,14 @@
     };
 
     try {
-      const apiBase = document.getElementById('apiUrlInput').value.trim() || 'http://localhost:5000/api/chat';
+      const apiBase = resolveChatApiUrl();
       const scoreUrl = apiBase.replace(/\/$/, '') + '/score-preview';
       const scoreRes = await fetch(scoreUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ formContact: formContactOverride, professionalType: 'mortgage_broker' }),
       });
-      const scoreData = await scoreRes.json();
+      const scoreData = await fetchJsonWithHint(scoreRes);
       if (scoreData.success && scoreData.lead_score != null) {
         const badge = document.getElementById('scoreBadge');
         const gc = gradeClass(scoreData.lead_grade || 'cold');
@@ -467,17 +589,49 @@
     return 'cold';
   }
 
+  /** Escape HTML; only http(s) URLs allowed inside Markdown links. */
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /** Turn [label](https://...) into clickable <a>; preserve line breaks. Same as index.html. */
+  function formatMessageContent(text) {
+    const str = String(text ?? '');
+    const linkRe = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = linkRe.exec(str)) !== null) {
+      const chunk = str.slice(last, m.index);
+      out += escapeHtml(chunk).replace(/\n/g, '<br>');
+      out +=
+        '<a href="' +
+        escapeHtml(m[2]) +
+        '" target="_blank" rel="noopener noreferrer">' +
+        escapeHtml(m[1]) +
+        '</a>';
+      last = m.lastIndex;
+    }
+    out += escapeHtml(str.slice(last)).replace(/\n/g, '<br>');
+    return out;
+  }
+
   function appendMessage(text, from, meta) {
     const wrap = document.createElement('div');
     wrap.className = 'msg-wrap';
 
     const msg = document.createElement('div');
     msg.className = 'msg ' + (from === 'user' ? 'user' : 'bot');
-    msg.textContent = text;
+    msg.innerHTML = formatMessageContent(text);
     wrap.appendChild(msg);
 
     if (meta) {
       const parts = [];
+      if (meta.intent)            parts.push('intent: ' + meta.intent);
       if (meta.lead_score != null) {
         const gc = gradeClass(meta.lead_grade);
         parts.push(`score: <span class="${gc}">${meta.lead_score}</span>/100`);
@@ -497,6 +651,8 @@
       if (s.timeline) sigs.push('⏱ ' + s.timeline);
       if (s.budget)   sigs.push('💰 ' + s.budget);
       if (s.location) sigs.push('📍 ' + s.location);
+      if (s.beds)     sigs.push('🛏 ' + s.beds + ' bed');
+      if (s.baths)    sigs.push('🚿 ' + s.baths + ' bath');
       if (sigs.length) {
         const sl = document.createElement('div');
         sl.className = 'signal-line';
@@ -515,15 +671,131 @@
         cl.textContent = cons.join('  ');
         wrap.appendChild(cl);
       }
+
+      if (
+        meta.calendly_link ||
+        meta.conversation_id ||
+        meta.automated_booking_enabled != null ||
+        meta.calendly_booking_status ||
+        meta.calendly_webhook_alignment ||
+        (Array.isArray(meta.post_booking_checklist) && meta.post_booking_checklist.length)
+      ) {
+        const cal = document.createElement('div');
+        cal.className = 'calendly-strip';
+        if (meta.automated_booking_enabled && meta.calendly_link) {
+          const row = document.createElement('div');
+          const a = document.createElement('a');
+          a.href = meta.calendly_link;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.textContent = 'Open tracked scheduling link';
+          row.appendChild(document.createTextNode('Calendly: '));
+          row.appendChild(a);
+          cal.appendChild(row);
+          const mono = document.createElement('div');
+          mono.className = 'mono';
+          mono.textContent = meta.calendly_link;
+          cal.appendChild(mono);
+        } else if (meta.automated_booking_enabled && !meta.calendly_link) {
+          cal.textContent =
+            'Automated booking is on, but this broker has no calendly_link on their profile — set it via PATCH professional profile.';
+        } else if (!meta.automated_booking_enabled) {
+          cal.textContent = 'Automated booking is off for this conversation.';
+        }
+        if (meta.conversation_id) {
+          const cid = document.createElement('div');
+          cid.className = 'sub';
+          cid.innerHTML =
+            '<strong>conversation_id</strong> (use as webhook <code>tracking.utm_content</code>):<br/>' +
+            '<span class="mono">' +
+            escapeHtml(meta.conversation_id) +
+            '</span>';
+          cal.appendChild(cid);
+        }
+        if (meta.calendly_booking_status) {
+          const st = document.createElement('div');
+          st.className = 'sub';
+          const at = meta.calendly_booking_at
+            ? ' · ' + escapeHtml(new Date(meta.calendly_booking_at).toLocaleString())
+            : '';
+          st.innerHTML =
+            '<strong>Booking status:</strong> ' + escapeHtml(meta.calendly_booking_status) + at;
+          cal.appendChild(st);
+        } else if (meta.automated_booking_enabled && meta.calendly_link) {
+          const st = document.createElement('div');
+          st.className = 'sub';
+          st.textContent =
+            'No booking recorded yet — after someone books, Calendly must POST to /api/webhooks/calendly (use ngrok locally). Send another message to refresh.';
+          cal.appendChild(st);
+        }
+        if (meta.calendly_link && meta.calendly_webhook_alignment === 'slug_mismatch') {
+          const w = document.createElement('div');
+          w.className = 'sub';
+          w.style.color = '#b45309';
+          w.style.marginTop = '6px';
+          w.innerHTML =
+            '<strong>Calendly account mismatch:</strong> OAuth is for <code>' +
+            escapeHtml(meta.calendly_connected_slug || '?') +
+            '</code> but the scheduling link is <code>' +
+            escapeHtml(meta.calendly_profile_slug || '?') +
+            '</code>. Calendly will not send webhooks for bookings on this link. Fix: click <strong>Connect Calendly</strong> while signed in as the same Calendly user as the link, or change <code>calendly_link</code> on your professional profile to match the connected account.';
+          cal.appendChild(w);
+        } else if (meta.calendly_link && meta.calendly_webhook_alignment === 'no_oauth') {
+          const w = document.createElement('div');
+          w.className = 'sub';
+          w.style.color = '#b45309';
+          w.style.marginTop = '6px';
+          w.textContent =
+            'Calendly is not connected for this embed owner — Connect Calendly, then Register webhook, or bookings will not update chat status.';
+          cal.appendChild(w);
+        } else if (meta.calendly_link && meta.calendly_webhook_alignment === 'reconnect_recommended') {
+          const w = document.createElement('div');
+          w.className = 'sub';
+          w.style.color = '#b45309';
+          w.style.marginTop = '6px';
+          w.textContent =
+            'Reconnect Calendly once (Connect Calendly) so we can verify your scheduling slug matches this link.';
+          cal.appendChild(w);
+        }
+        if (
+          meta.calendly_booking_status === 'booked' &&
+          Array.isArray(meta.post_booking_checklist) &&
+          meta.post_booking_checklist.length
+        ) {
+          const box = document.createElement('div');
+          box.className = 'booking-checklist-box';
+          const ttl = document.createElement('div');
+          ttl.className = 'booking-checklist-title';
+          ttl.textContent = 'After your booking — recommended next steps';
+          box.appendChild(ttl);
+          const ul = document.createElement('ul');
+          ul.className = 'booking-checklist';
+          meta.post_booking_checklist.forEach((item) => {
+            const li = document.createElement('li');
+            const mark = document.createElement('span');
+            mark.className = 'chk';
+            mark.textContent = '✓';
+            const txt = document.createElement('span');
+            txt.textContent = String(item);
+            li.appendChild(mark);
+            li.appendChild(txt);
+            ul.appendChild(li);
+          });
+          box.appendChild(ul);
+          cal.appendChild(box);
+        }
+        wrap.appendChild(cal);
+      }
     }
 
     chatBody.appendChild(wrap);
     chatBody.scrollTop = chatBody.scrollHeight;
+    return wrap;
   }
 
   async function sendMessage(text, silent = false, formContactOverride = null) {
     const embedToken = document.getElementById('embedTokenInput').value.trim();
-    const apiUrl     = document.getElementById('apiUrlInput').value.trim() || 'http://localhost:5000/api/chat';
+    const apiUrl     = resolveChatApiUrl();
 
     if (!text) return;
     if (!embedToken) { alert('Please paste an embed token first.'); return; }
@@ -558,7 +830,7 @@
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const data = await fetchJsonWithHint(res);
 
       if (!data.success) {
         appendMessage('Error: ' + (data.message || 'Unknown error'), 'bot');
@@ -585,6 +857,153 @@
   msgInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendMessage(msgInput.value.trim());
   });
+
+  let calendlyHintFetchAbort;
+  async function refreshCalendlyConnectionHint() {
+    const hint = document.getElementById('calendlyConnectionHint');
+    const btn = document.getElementById('btnCalendlyOAuth');
+    if (!hint || !btn) return;
+    const embedToken = document.getElementById('embedTokenInput').value.trim();
+    if (!embedToken) {
+      hint.textContent = '';
+      hint.style.display = 'none';
+      btn.textContent = 'Connect Calendly (OAuth)';
+      return;
+    }
+    calendlyHintFetchAbort?.abort();
+    const ac = new AbortController();
+    calendlyHintFetchAbort = ac;
+    hint.style.display = 'block';
+    hint.textContent = 'Checking Calendly connection…';
+    hint.style.color = '#94a3b8';
+    try {
+      const origin = apiOriginFromChatUrl();
+      const res = await fetch(
+        origin + '/api/calendar/status/embed?embedToken=' + encodeURIComponent(embedToken),
+        { signal: ac.signal }
+      );
+      const data = await fetchJsonWithHint(res);
+      if (!data.success) {
+        hint.textContent =
+          data.message ||
+          'Could not read calendar status (HTTP ' + res.status + '). Is CALENDLY_CONNECT_BY_EMBED enabled?';
+        hint.style.color = '#fcd34d';
+        btn.textContent = 'Connect Calendly (OAuth)';
+        return;
+      }
+      const cal = (data.status || []).find((r) => r.provider === 'calendly');
+      if (cal) {
+        const em = cal.account_email ? String(cal.account_email) : 'on file';
+        hint.textContent =
+          'Calendly is already connected for this embed owner (' +
+          em +
+          '). No need to connect again on each visit — only use the button to switch accounts or if tokens were revoked.';
+        hint.style.color = '#86efac';
+        btn.textContent = 'Reconnect Calendly (optional)';
+      } else {
+        hint.textContent =
+          'Calendly is not connected for this embed owner yet. Connect once; the link is stored on the server, not in this browser tab.';
+        hint.style.color = '#fcd34d';
+        btn.textContent = 'Connect Calendly (OAuth)';
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      hint.textContent = 'Could not reach calendar status API: ' + e.message;
+      hint.style.color = '#fca5a5';
+    }
+  }
+
+  let calendlyHintDebounce;
+  function scheduleRefreshCalendlyHint() {
+    clearTimeout(calendlyHintDebounce);
+    calendlyHintDebounce = setTimeout(refreshCalendlyConnectionHint, 250);
+  }
+
+  const embedTokenInputEl = document.getElementById('embedTokenInput');
+  if (embedTokenInputEl) {
+    embedTokenInputEl.addEventListener('change', scheduleRefreshCalendlyHint);
+    embedTokenInputEl.addEventListener('blur', scheduleRefreshCalendlyHint);
+  }
+  const apiUrlInputForCal = document.getElementById('apiUrlInput');
+  if (apiUrlInputForCal) {
+    apiUrlInputForCal.addEventListener('change', scheduleRefreshCalendlyHint);
+    apiUrlInputForCal.addEventListener('blur', scheduleRefreshCalendlyHint);
+  }
+  window.addEventListener('focus', scheduleRefreshCalendlyHint);
+  /** One debounced pass after load — do not call refreshCalendlyConnectionHint directly on a timer (bypasses debounce and duplicates focus/blur). */
+  scheduleRefreshCalendlyHint();
+
+  const btnCal = document.getElementById('btnCalendlyOAuth');
+  if (btnCal) {
+    btnCal.addEventListener('click', async () => {
+      const embedToken = document.getElementById('embedTokenInput').value.trim();
+      if (!embedToken) {
+        alert('Paste embed token first (same as for chat).');
+        return;
+      }
+      const origin = apiOriginFromChatUrl();
+      const url =
+        origin +
+        '/api/calendar/connect/calendly/embed?embedToken=' +
+        encodeURIComponent(embedToken);
+      const popup = window.open('about:blank', '_blank');
+      try {
+        const res = await fetch(url);
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        let data;
+        if (ct.includes('application/json')) {
+          data = await res.json();
+        } else {
+          const text = await res.text();
+          if (popup) popup.close();
+          alert('Bad response (' + res.status + '). Is the API URL correct and the server running?\n' + text.slice(0, 300));
+          return;
+        }
+        if (!data.success || !data.authUrl) {
+          if (popup) popup.close();
+          alert(data.message || 'Connect failed (HTTP ' + res.status + ')');
+          return;
+        }
+        if (popup) {
+          popup.location.href = data.authUrl;
+        } else if (confirm('Allow popups for this site, or open Calendly in this tab?')) {
+          window.location.href = data.authUrl;
+        }
+      } catch (e) {
+        if (popup) popup.close();
+        alert('Request failed: ' + e.message + '\n\nIf you opened this page as a file (file://), use http://localhost:5000/mortgage-broker instead.');
+      }
+    });
+  }
+
+  const btnStat = document.getElementById('btnCalendlyStatus');
+  if (btnStat) {
+    btnStat.addEventListener('click', async () => {
+      const embedToken = document.getElementById('embedTokenInput').value.trim();
+      if (!embedToken) {
+        alert('Paste embed token first.');
+        return;
+      }
+      const origin = apiOriginFromChatUrl();
+      const url =
+        origin + '/api/calendar/status/embed?embedToken=' + encodeURIComponent(embedToken);
+      try {
+        const res = await fetch(url);
+        const data = await fetchJsonWithHint(res);
+        console.log('Calendar status (embed):', data);
+        alert(
+          data.success
+            ? 'Calendar status logged to the browser console (F12 → Console).'
+            : data.message || JSON.stringify(data)
+        );
+        refreshCalendlyConnectionHint();
+      } catch (e) {
+        console.error(e);
+        alert('Error: ' + e.message);
+      }
+    });
+  }
+
 </script>
 </body>
 </html>

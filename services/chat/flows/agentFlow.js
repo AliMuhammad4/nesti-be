@@ -1,7 +1,4 @@
-/**
- * Agent role – Real estate lead flow handler.
- */
-
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import {
   mergeSignals,
   normalizeTimeline,
@@ -17,6 +14,8 @@ import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js
 import logger from '../../../utils/logger.js';
 
 export const agentFlow = {
+  flowRole: PROFESSIONAL_TYPE.AGENT,
+
   getFormQualification: (storedForm) => storedForm ? {
     mortgage_status:    storedForm.mortgage_status || null,
     realtor_status:     storedForm.realtor_status || null,

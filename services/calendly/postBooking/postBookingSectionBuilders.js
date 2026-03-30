@@ -1,3 +1,4 @@
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 
 import LeadMatch from '../../../models/LeadMatch.js';
 import {
@@ -25,7 +26,7 @@ import {
 
 export async function buildPropertyMatchesSection(ctx) {
   const { flowType } = ctx;
-  if (flowType !== 'agent') {
+  if (flowType !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 'skipped', detail: 'not_agent_embed', sectionHtml: null };
   }
 
@@ -48,7 +49,7 @@ export async function buildPropertyMatchesSection(ctx) {
 }
 
 export async function buildShowingItinerarySection(ctx) {
-  if (ctx.flowType !== 'agent') {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 'skipped', detail: 'not_agent_embed', sectionHtml: null };
   }
   const bundle = await fetchPropertyMatchBundle(ctx);
@@ -105,7 +106,7 @@ export async function buildShowingItinerarySection(ctx) {
 }
 
 export async function buildMapRouteSection(ctx) {
-  if (ctx.flowType !== 'agent') {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 'skipped', detail: 'not_agent_embed', sectionHtml: null };
   }
   const bundle = await fetchPropertyMatchBundle(ctx);
@@ -149,7 +150,7 @@ export async function buildMapRouteSection(ctx) {
 }
 
 export async function buildBudgetAnalysisSection(ctx) {
-  if (ctx.flowType !== 'agent') {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 'skipped', detail: 'not_agent_embed', sectionHtml: null };
   }
   const bundle = await fetchPropertyMatchBundle(ctx);
@@ -226,7 +227,7 @@ export async function buildPropertyAlertsSection(ctx) {
     });
   }
 
-  if (ctx.flowType !== 'agent') {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 'skipped', detail: 'not_agent_embed', sectionHtml: null };
   }
 
@@ -272,7 +273,7 @@ export async function buildPropertyAlertsSection(ctx) {
 }
 
 export async function buildSellerFollowupSection(ctx) {
-  if (ctx.flowType !== 'agent') {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 'skipped', detail: 'not_agent_embed', sectionHtml: null };
   }
   const bundle = await fetchPropertyMatchBundle(ctx);
@@ -311,7 +312,7 @@ export async function buildSellerFollowupSection(ctx) {
 }
 
 export async function buildMarketReportSection(ctx) {
-  if (ctx.flowType !== 'agent') {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 'skipped', detail: 'not_agent_embed', sectionHtml: null };
   }
   const bundle = await fetchPropertyMatchBundle(ctx);
@@ -362,12 +363,150 @@ export async function buildMarketReportSection(ctx) {
   };
 }
 
+function humanizeMortgageField(key, val) {
+  if (val == null || val === '') return '—';
+  const s = String(val);
+  const maps = {
+    mortgage_timeline: {
+      immediately:     'Immediately',
+      '1_2_months':    '1–2 months',
+      '3_6_months':    '3–6 months',
+      '6_12_months':   '6–12 months',
+      just_researching: 'Just researching',
+    },
+    pre_approval_status: {
+      need_now:          'Need pre-approval now',
+      expired:           'Pre-approval expired',
+      in_progress:       'In progress',
+      already_approved:  'Already approved',
+      just_researching:  'Just researching',
+    },
+    credit_score_range: {
+      '750_plus': '750+',
+      '700_749':  '700–749',
+      '650_699':  '650–699',
+      '600_649':  '600–649',
+      under_600:  'Under 600',
+    },
+    household_income: {
+      '200k_plus': '$200k+',
+      '150k_200k': '$150k–200k',
+      '100k_150k': '$100k–150k',
+      '70k_100k':  '$70k–100k',
+      under_70k:   'Under $70k',
+    },
+    down_payment_readiness: {
+      '20_plus': '20%+',
+      '10_19':   '10–19%',
+      '5_9':     '5–9%',
+      under_5:   'Under 5%',
+      no_savings: 'No savings yet',
+    },
+    property_budget: {
+      clearly_defined: 'Clearly defined',
+      approximate:     'Approximate',
+      not_sure:        'Not sure yet',
+    },
+  };
+  const m = maps[key];
+  return m && m[s] ? m[s] : s.replace(/_/g, ' ');
+}
+
+export async function buildMortgagePreapprovalDocsSection(ctx) {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    return { status: 'skipped', detail: 'not_mortgage_embed', sectionHtml: null };
+  }
+  const leadProfile = await loadLeadProfileForConversation({
+    conversationId: ctx.conversation._id,
+    userId:         ctx.userId,
+    intent:         'buy',
+  });
+  const guest = escapeHtml(leadProfile?.full_name?.trim() || 'there');
+  const broker = agentDisplayName(ctx);
+  const sectionHtml = `
+    <p style="margin:0 0 12px;">Hi ${guest}, here is a concise <strong>pre-approval document checklist</strong> to prepare for your appointment with <strong>${escapeHtml(broker)}</strong>. Bring what applies to your situation; your broker will confirm the exact list.</p>
+    <ul style="margin:0;padding-left:20px;line-height:1.55;">
+      <li style="margin-bottom:8px;"><strong>Pay stubs</strong> — recent pay periods (often last 30–60 days).</li>
+      <li style="margin-bottom:8px;"><strong>Bank statements</strong> — accounts used for down payment and closing.</li>
+      <li style="margin-bottom:8px;"><strong>Government-issued ID</strong>.</li>
+      <li style="margin-bottom:0;"><strong>T4s / tax documents</strong> — as requested for your file (e.g. T4, notices of assessment).</li>
+    </ul>
+    <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#64748b;">Not a complete underwriting list; self-employed and other situations may require more. Not financial or tax advice.</p>
+  `;
+  return { status: 'completed', detail: 'preapproval_docs', sectionHtml };
+}
+
+export async function buildMortgagePlanningSummarySection(ctx) {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    return { status: 'skipped', detail: 'not_mortgage_embed', sectionHtml: null };
+  }
+  const leadProfile = await loadLeadProfileForConversation({
+    conversationId: ctx.conversation._id,
+    userId:         ctx.userId,
+    intent:         'buy',
+  });
+  const broker = agentDisplayName(ctx);
+  const rows = [
+    ['Mortgage timeline', humanizeMortgageField('mortgage_timeline', leadProfile?.mortgage_timeline)],
+    ['Pre-approval status', humanizeMortgageField('pre_approval_status', leadProfile?.pre_approval_status)],
+    ['Credit (self-reported band)', humanizeMortgageField('credit_score_range', leadProfile?.credit_score_range)],
+    ['Household income (band)', humanizeMortgageField('household_income', leadProfile?.household_income)],
+    ['Down payment readiness', humanizeMortgageField('down_payment_readiness', leadProfile?.down_payment_readiness)],
+    ['Price / budget clarity', humanizeMortgageField('property_budget', leadProfile?.property_budget)],
+    ['Target area', escapeHtml(leadProfile?.location || leadProfile?.property_address || '—')],
+  ];
+  const btd =
+    'padding:10px 12px;border:1px solid #e2e8f0;font-size:14px;line-height:1.45;color:#334155;';
+  const tableRows = rows
+    .map(
+      ([k, v]) =>
+        `<tr><td style="${btd}"><strong style="color:#0f172a;">${escapeHtml(k)}</strong></td>
+        <td style="${btd}">${escapeHtml(String(v))}</td></tr>`
+    )
+    .join('');
+
+  const sectionHtml = `
+    <p style="margin:0 0 14px;"><strong>Mortgage planning snapshot</strong> from your Nesti conversation — for discussion with <strong>${escapeHtml(broker)}</strong>. Use the visit to align on <strong>affordability</strong> (payment vs purchase price) and <strong>down payment</strong> sources and timeline. This is <strong>not</strong> a pre-approval or financial advice.</p>
+    <table role="presentation" style="border-collapse:collapse;width:100%;max-width:560px;margin:0 0 16px;">${tableRows}</table>
+    <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">Figures are self-reported. Rates, stress tests, and programme rules change — your broker will confirm what applies to you.</p>
+  `;
+  return { status: 'completed', detail: 'planning_snapshot', sectionHtml };
+}
+
+export async function buildMortgageReadinessGuideSection(ctx) {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    return { status: 'skipped', detail: 'not_mortgage_embed', sectionHtml: null };
+  }
+  const leadProfile = await loadLeadProfileForConversation({
+    conversationId: ctx.conversation._id,
+    userId:         ctx.userId,
+    intent:         'buy',
+  });
+  const broker = agentDisplayName(ctx);
+  const credit = humanizeMortgageField('credit_score_range', leadProfile?.credit_score_range);
+  const timeline = humanizeMortgageField('mortgage_timeline', leadProfile?.mortgage_timeline);
+  const sectionHtml = `
+    <p style="margin:0 0 12px;"><strong>Financial readiness</strong> — you&rsquo;ve booked time with <strong>${escapeHtml(broker)}</strong>. Early-stage goals: understand credit, savings, and a realistic path to homeownership.</p>
+    <ul style="margin:0 0 14px;padding-left:20px;line-height:1.55;">
+      <li style="margin-bottom:8px;"><strong>Self-reported credit band:</strong> ${escapeHtml(credit)} — ask what steps (if any) could strengthen your file over time.</li>
+      <li style="margin-bottom:8px;"><strong>Timeline:</strong> ${escapeHtml(timeline)} — align expectations on when you might be ready to apply.</li>
+      <li style="margin-bottom:8px;"><strong>Savings habit:</strong> even small regular contributions toward down payment and closing costs build readiness.</li>
+      <li style="margin-bottom:0;"><strong>Questions to bring:</strong> how approval works, costs beyond the mortgage, and what documentation you&rsquo;ll need later.</li>
+    </ul>
+    <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">Educational summary only — not credit repair, legal, or tax advice.</p>
+  `;
+  return { status: 'completed', detail: 'readiness_guide', sectionHtml };
+}
+
 export const SECTION_BUILDERS = {
-  property_matches:     buildPropertyMatchesSection,
-  showing_itinerary:    buildShowingItinerarySection,
-  map_route:            buildMapRouteSection,
-  budget_analysis:      buildBudgetAnalysisSection,
-  property_alerts:      buildPropertyAlertsSection,
-  seller_followup_pack: buildSellerFollowupSection,
-  market_report:        buildMarketReportSection,
+  property_matches:           buildPropertyMatchesSection,
+  showing_itinerary:          buildShowingItinerarySection,
+  map_route:                  buildMapRouteSection,
+  budget_analysis:            buildBudgetAnalysisSection,
+  property_alerts:            buildPropertyAlertsSection,
+  seller_followup_pack:       buildSellerFollowupSection,
+  market_report:              buildMarketReportSection,
+  mortgage_preapproval_docs:  buildMortgagePreapprovalDocsSection,
+  mortgage_planning_summary:  buildMortgagePlanningSummarySection,
+  mortgage_readiness_guide:   buildMortgageReadinessGuideSection,
 };

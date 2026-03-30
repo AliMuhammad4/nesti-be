@@ -1,7 +1,4 @@
-/**
- * Lawyer role – Real estate lawyer lead flow handler.
- */
-
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import {
   scoreLawyerLead,
   mergeLawyerQualificationForScoring,
@@ -13,6 +10,8 @@ import { mergeSignals } from '../scoring/common.js';
 import { buildLawyerSystemPrompt } from '../prompts/lawyerPrompt.js';
 
 export const lawyerFlow = {
+  flowRole: PROFESSIONAL_TYPE.LAWYER,
+
   getFormQualification: (storedForm) => storedForm ? {
     transaction_stage:     storedForm.transaction_stage || null,
     closing_timeline:      storedForm.closing_timeline || null,

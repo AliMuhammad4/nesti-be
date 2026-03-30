@@ -8,13 +8,16 @@ export const SELLER_PREP_CHECKLIST = [
   'Identify ideal closing timeline and any must-have sale conditions.',
 ];
 export const SECTION_TITLES = {
-  property_matches:     'Matched properties',
-  showing_itinerary:    'Suggested showing itinerary',
-  map_route:            'Tour route and directions',
-  budget_analysis:      'Budget and financing overview',
-  property_alerts:      'Listing alert preferences',
-  seller_followup_pack: 'Listing preparation summary',
-  market_report:        'Market and neighbourhood overview',
+  property_matches:          'Matched properties',
+  showing_itinerary:         'Suggested showing itinerary',
+  map_route:                 'Tour route and directions',
+  budget_analysis:           'Budget and financing overview',
+  property_alerts:           'Listing alert preferences',
+  seller_followup_pack:      'Listing preparation summary',
+  market_report:             'Market and neighbourhood overview',
+  mortgage_preapproval_docs: 'Pre-approval document checklist',
+  mortgage_planning_summary: 'Mortgage planning snapshot',
+  mortgage_readiness_guide:  'Financial readiness and next steps',
 };
 
 export function formatMoney(n) {

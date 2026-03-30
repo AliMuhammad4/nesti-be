@@ -3,12 +3,14 @@ import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import User from '../../models/User.js';
 import logger from '../../utils/logger.js';
 import { getAgentActionFlow } from '../chat/config/agentActionFlow.js';
+import { getMortgageBrokerActionFlow } from '../chat/config/mortgageBrokerActionFlow.js';
 import { flowTypeForConversation } from '../chatService.js';
 import { agentDisplayName } from './postBooking/postBookingContext.js';
 import { comprehensivePlainText, SECTION_TITLES, wrapComprehensiveEmail } from './postBooking/postBookingEmailHtml.js';
 import { sendVisitorAndAgentCopy } from './postBooking/postBookingMailer.js';
 import { alreadyRan, appendRun } from './postBooking/postBookingPersistence.js';
 import { SECTION_BUILDERS } from './postBooking/postBookingSectionBuilders.js';
+import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
 export async function runPostBookingAutomations({
   conversationId,
@@ -31,9 +33,12 @@ export async function runPostBookingAutomations({
     User.findById(uid).select('email first_name last_name').lean(),
   ]);
 
-  const flowType = flowTypeForConversation(conversation, professionalProfile);
+  const flowType = await flowTypeForConversation(conversation, professionalProfile);
   const intent = conversation.intent === 'sell' ? 'sell' : 'buy';
-  const actionFlow = getAgentActionFlow(conversation.lead_grade || 'unscored', intent);
+  const actionFlow =
+    flowType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+      ? getMortgageBrokerActionFlow(conversation.lead_grade || 'unscored')
+      : getAgentActionFlow(conversation.lead_grade || 'unscored', intent);
   const keys = actionFlow.postBookingAutomations || [];
 
   if (!keys.length) {

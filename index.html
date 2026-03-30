@@ -260,6 +260,15 @@
 
     .calendly-panel { border-top: 1px solid rgba(148,163,184,0.25); margin-top: 10px; padding-top: 10px; }
     .calendly-panel .hint { font-size: 10px; opacity: 0.85; margin-top: 6px; line-height: 1.4; }
+    .calendly-connection-hint {
+      font-size: 10px;
+      margin-top: 8px;
+      line-height: 1.45;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.35);
+      display: none;
+    }
     .btn-oauth {
       margin-top: 6px; padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(99,102,241,0.5);
       background: #312e81; color: #e0e7ff; font-size: 11px; font-weight: 600; cursor: pointer;
@@ -321,6 +330,7 @@
         <button type="button" class="btn-oauth" id="btnCalendlyOAuth">Connect Calendly (OAuth)</button>
         <button type="button" class="btn-oauth secondary" id="btnCalendlyStatus">Calendar status</button>
       </div>
+      <div id="calendlyConnectionHint" class="calendly-connection-hint" aria-live="polite"></div>
       <div class="config-row" style="margin-top:10px;">
         <label>Webhook URL (ngrok)</label>
         <input id="calendlyWebhookUrlInput" type="text" placeholder="https://YOUR-SUBDOMAIN.ngrok-free.dev/api/webhooks/calendly" style="width:100%;max-width:520px;" />
@@ -332,6 +342,7 @@
       </div>
       <div class="hint">
         Uses the same <strong>embed token</strong> as chat (paste above). Links Calendly to the <em>embed owner</em> account.
+        <strong>OAuth lives on the server</strong> (per embed owner) — you are <em>not</em> required to click Connect every time you open this page; the line below shows live status after you paste a token.
         Run <code>ngrok http 5000</code>, paste the <strong>real</strong> <code>https</code> host + <code>/api/webhooks/calendly</code> (not <code>YOUR-SUBDOMAIN</code>), then <strong>Register webhook</strong> (after Connect). Or set <code>CALENDLY_WEBHOOK_TARGET_URL</code> in <code>.env</code> and reconnect OAuth.
         <strong>Bookings only update chat</strong> when Calendly <strong>POSTs</strong> to that URL (intent buy/sell does not matter). Use the <strong>Open tracked scheduling link</strong> from the chat widget (it adds <code>utm_content</code>); opening a plain Calendly URL may not match the conversation unless the invitee email matches your lead. If ngrok shows no POST after a real booking, the Calendly user who connected OAuth must be the <strong>same</strong> as the host of <code>calendly_link</code>, or use org-scope webhooks / <code>CALENDLY_WEBHOOK_REGISTER_SCOPE=user</code> as needed. If POSTs return <strong>401</strong>, fix <code>CALENDLY_WEBHOOK_SIGNING_KEY</code> or set <code>CALENDLY_SKIP_WEBHOOK_SIGNATURE=true</code> in dev only.
         <strong>List webhooks</strong> shows what Calendly has stored; <strong>Simulate booking</strong> tests your DB without Calendly (non-production only).
@@ -776,7 +787,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ formContact: formContactOverride }),
       });
-      const scoreData = await scoreRes.json();
+      const scoreData = await fetchJsonWithHint(scoreRes);
       if (scoreData.success && scoreData.lead_score != null) {
         const badge = document.getElementById('scoreBadge');
         const gc = gradeClass(scoreData.lead_grade || 'cold');
@@ -1211,7 +1222,7 @@
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const data = await fetchJsonWithHint(res);
 
       if (!data.success) {
         appendMessage('Error: ' + (data.message || 'Unknown error'), 'bot');
@@ -1234,7 +1245,7 @@
               formContact: formToSend || undefined,
             }),
           })
-            .then((r) => r.json())
+            .then((r) => fetchJsonWithHint(r))
             .then((pm) => {
               propertyMatchesFetchDone = true;
               if (!pm.success || !botWrap || !pm.meta?.property_matches_context) return;
@@ -1320,12 +1331,40 @@
     if (e.key === 'Enter') sendMessage(msgInput.value.trim());
   });
 
+  /**
+   * Relative `/api/chat` is resolved against the *page* origin. Live Server, VS Code preview,
+   * or another local port then returns HTML (404 / SPA shell) → "Unexpected token '<'" on .json().
+   * When the page is on localhost but not the API port (5000), point at the backend explicitly.
+   */
   function resolveChatApiUrl() {
     const v = document.getElementById('apiUrlInput').value.trim() || '/api/chat';
     if (window.location.protocol === 'file:' && v.startsWith('/') && !v.startsWith('//')) {
       return 'http://localhost:5000' + v;
     }
+    if (v.startsWith('/') && !v.startsWith('//')) {
+      const h = window.location.hostname;
+      const isLocal = h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+      const p = window.location.port || '';
+      if (isLocal && p && p !== '5000') {
+        return 'http://localhost:5000' + v;
+      }
+    }
     return v;
+  }
+
+  async function fetchJsonWithHint(res) {
+    const text = await res.text();
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith('<!DOCTYPE') || /^<html[\s>]/i.test(trimmed)) {
+      throw new Error(
+        'Server returned HTML instead of JSON. If you use Live Server or another dev port, set API URL to http://localhost:5000/api/chat (or your deployed API base).'
+      );
+    }
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error((e && e.message ? e.message : 'Invalid JSON') + ' — response was not valid JSON.');
+    }
   }
 
   function apiOriginFromChatUrl() {
@@ -1335,6 +1374,76 @@
       return window.location.protocol === 'file:' ? 'http://localhost:5000' : window.location.origin;
     }
   }
+
+  /** Server already stores Calendly OAuth per embed owner — this only updates the dev widget label. */
+  let calendlyHintFetchAbort;
+  async function refreshCalendlyConnectionHint() {
+    const hint = document.getElementById('calendlyConnectionHint');
+    const btn = document.getElementById('btnCalendlyOAuth');
+    if (!hint || !btn) return;
+    const embedToken = document.getElementById('embedTokenInput').value.trim();
+    if (!embedToken) {
+      hint.textContent = '';
+      hint.style.display = 'none';
+      btn.textContent = 'Connect Calendly (OAuth)';
+      return;
+    }
+    calendlyHintFetchAbort?.abort();
+    const ac = new AbortController();
+    calendlyHintFetchAbort = ac;
+    hint.style.display = 'block';
+    hint.textContent = 'Checking Calendly connection…';
+    hint.style.color = '#94a3b8';
+    try {
+      const origin = apiOriginFromChatUrl();
+      const res = await fetch(
+        origin + '/api/calendar/status/embed?embedToken=' + encodeURIComponent(embedToken),
+        { signal: ac.signal }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!data.success) {
+        hint.textContent =
+          data.message ||
+          'Could not read calendar status (HTTP ' + res.status + '). Use Calendar status for details.';
+        hint.style.color = '#fcd34d';
+        btn.textContent = 'Connect Calendly (OAuth)';
+        return;
+      }
+      const cal = (data.status || []).find((r) => r.provider === 'calendly');
+      if (cal) {
+        const em = cal.account_email ? String(cal.account_email) : 'on file';
+        hint.textContent =
+          'Calendly is already connected for this embed owner (' +
+          em +
+          '). No need to connect again on each visit — only use the button to switch accounts or if tokens were revoked.';
+        hint.style.color = '#86efac';
+        btn.textContent = 'Reconnect Calendly (optional)';
+      } else {
+        hint.textContent =
+          'Calendly is not connected for this embed owner yet. Connect once; the link is stored on the server, not in this browser tab.';
+        hint.style.color = '#fcd34d';
+        btn.textContent = 'Connect Calendly (OAuth)';
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      hint.textContent = 'Could not reach calendar status API: ' + e.message;
+      hint.style.color = '#fca5a5';
+    }
+  }
+
+  let calendlyHintDebounce;
+  function scheduleRefreshCalendlyHint() {
+    clearTimeout(calendlyHintDebounce);
+    calendlyHintDebounce = setTimeout(refreshCalendlyConnectionHint, 250);
+  }
+
+  const embedTokenInputEl = document.getElementById('embedTokenInput');
+  if (embedTokenInputEl) {
+    embedTokenInputEl.addEventListener('change', scheduleRefreshCalendlyHint);
+    embedTokenInputEl.addEventListener('blur', scheduleRefreshCalendlyHint);
+  }
+  window.addEventListener('focus', scheduleRefreshCalendlyHint);
+  scheduleRefreshCalendlyHint();
 
   document.getElementById('btnCalendlyOAuth').addEventListener('click', async () => {
     const embedToken = document.getElementById('embedTokenInput').value.trim();
@@ -1393,6 +1502,7 @@
       const res = await fetch(url);
       const data = await res.json();
       out.textContent = JSON.stringify(data, null, 2);
+      refreshCalendlyConnectionHint();
     } catch (e) {
       out.textContent = 'Error: ' + e.message;
     }

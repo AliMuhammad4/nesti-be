@@ -1,14 +1,9 @@
-/**
- * Agent role – Real estate system prompt for buy/sell lead qualification.
- * Integrates BUYER/SELLER action flow by grade (hot/warm/early).
- */
-
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { getAgentActionFlow } from '../config/agentActionFlow.js';
-
 export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
   const name     = professionalProfile?.full_name         || 'a real estate professional';
   const location = professionalProfile?.location          || 'your area';
-  const type     = professionalProfile?.professional_type || 'agent';
+  const type     = professionalProfile?.professional_type || PROFESSIONAL_TYPE.AGENT;
   const {
     isAutomatedBookingEnabled,
     calendlyLink,
@@ -18,10 +13,8 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     postBookingChatChecklist = [],
   } = options;
   const hasBookingLink = isAutomatedBookingEnabled && calendlyLink;
-
   const actionFlow = getAgentActionFlow(leadGrade, intent);
   const isBuyer = intent !== 'sell';
-
   const recommendedLine =
     actionFlow.recommendedAppointment?.length > 0
       ? `- Prioritize recommending: ${actionFlow.recommendedAppointment.join('; ')}`
@@ -30,7 +23,6 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     actionFlow.aiSupportAfterBooking?.length > 0
       ? actionFlow.aiSupportAfterBooking.join('; ')
       : 'Standard follow-up';
-
   const clientPrompt = typeof actionFlow.prompt === 'string' ? actionFlow.prompt.trim() : '';
   const exactPromptBlock = clientPrompt
     ? `- When the visitor has shared contact and is qualified, use this EXACT client-facing prompt (character-for-character):
@@ -43,7 +35,6 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
   const noLinkPromptBlock = clientPrompt
     ? `- When qualified, use this prompt (without a link): "${clientPrompt}"`
     : `- When qualified, invite them to book with ${name} in line with the goal (no fixed script for this tier).`;
-
   const automationBlock = hasBookingLink
     ? `
 REALTOR ACTION FLOW (automation enabled — ${actionFlow.tierLabel}):

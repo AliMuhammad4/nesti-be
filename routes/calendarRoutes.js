@@ -175,7 +175,7 @@ const callbackCalendar = async (req, res) => {
         expires_at:    expiresAt,
         ...(accountLabel ? { account_email: String(accountLabel) } : {}),
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
 
     try {

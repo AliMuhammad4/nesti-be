@@ -1,4 +1,5 @@
 import ProfessionalProfile from '../../../models/ProfessionalProfile.js';
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 
 const BUYER_KEYS = [
   'baseScore',
@@ -118,7 +119,7 @@ function resolvedFromDefaults() {
 /** Loads scoring from the agent's ProfessionalProfile; falls back to defaults so matching works before first save. */
 export async function getResolvedPropertyMatchScoring(userId) {
   const profile = await ProfessionalProfile.findOne({ user_id: userId }).lean();
-  if (!profile || profile.professional_type !== 'agent') return null;
+  if (!profile || profile.professional_type !== PROFESSIONAL_TYPE.AGENT) return null;
 
   const fromProfile = resolvedFromDoc(profile.property_match_scoring);
   if (fromProfile) return fromProfile;
@@ -138,7 +139,7 @@ export function parseFullPropertyMatchScoringPayload(body) {
 /** Persist defaults on ProfessionalProfile when missing (signup / seed). */
 export async function ensureAgentPropertyMatchScoring(userId) {
   const profile = await ProfessionalProfile.findOne({ user_id: userId }).lean();
-  if (!profile || profile.professional_type !== 'agent') return false;
+  if (!profile || profile.professional_type !== PROFESSIONAL_TYPE.AGENT) return false;
 
   if (resolvedFromDoc(profile.property_match_scoring)) return true;
 

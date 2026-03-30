@@ -25,13 +25,42 @@ import {
 } from './chat/contactUtils.js';
 import { mergeSignals, extractSignals } from './chat/scoring/index.js';
 import { getFlowForRole } from './chat/flows/index.js';
-import { getAgentActionFlow } from './chat/config/agentActionFlow.js';
+import {
+  supportsPropertyMatches,
+  usesMortgageAffordabilitySnapshot,
+  resolveCalendlyUrlForFlow,
+  isAutomatedBookingEnabledForFlow,
+  getPostBookingChecklistForPrompt,
+  getPostBookingChecklistForMeta,
+  classifyLeadForFlow,
+  usesFixedBuyIntentForLeadMatch,
+} from './chat/flows/flowRoleMeta.js';
+import { buildMortgageAffordabilitySnapshot } from './chat/mortgageAffordabilityFromLead.js';
 import { resolveAgentPropertyMatchesForChat } from './agent/propertyMatch/matchService.js';
+import {
+  PROFESSIONAL_TYPE,
+  WIDGET_AGENT_TYPE,
+  isValidProfessionalType,
+  professionalTypeToWidgetAgentType,
+  resolveChatFlowType,
+  resolveFlowTypeFromLegacySignals,
+} from '../constants/roles.js';
+import { mortgageBrokerHasPreferredContactPrefs } from './chat/mortgageCalendlyUtils.js';
 
 /**
  * Append UTM params so Calendly webhooks return `tracking.utm_content` = conversation Mongo id.
  * `calendlyWebhookService` matches that to `LeadMatch.conversation_id` (stronger than email-only).
  */
+function getLastAssistantExtractedData(historyDocs) {
+  for (let i = historyDocs.length - 1; i >= 0; i -= 1) {
+    const m = historyDocs[i];
+    if (m.role === 'assistant') {
+      return m.meta?.ai_metadata?.extracted_data || {};
+    }
+  }
+  return {};
+}
+
 function withCalendlyConversationTracking(url, conversationObjectId) {
   if (!url || !conversationObjectId) return url || '';
   const id = String(conversationObjectId);
@@ -73,14 +102,21 @@ export async function recomputeSignalsForPropertyMatches(conversation, storedFor
   return signals;
 }
 
-export function flowTypeForConversation(conversation, professionalProfile) {
-  const normalizedAgentType = conversation.agent_type || 'agent';
-  const professionalType = professionalProfile?.professional_type || 'agent';
-  return normalizedAgentType === 'broker'
-    ? 'mortgage_broker'
-    : normalizedAgentType === 'lawyer'
-      ? 'lawyer'
-      : professionalType;
+/**
+ * Resolves the same flow key as live chat: embed-bound role → conversation cache → legacy agent_type + profile.
+ */
+export async function flowTypeForConversation(conversation, professionalProfile) {
+  if (conversation?.embed_flow_role && isValidProfessionalType(conversation.embed_flow_role)) {
+    return conversation.embed_flow_role;
+  }
+  const normalizedAgentType = conversation.agent_type || WIDGET_AGENT_TYPE.AGENT;
+  if (conversation?.embed_id) {
+    const emb = await ChatbotEmbedUrl.findById(conversation.embed_id).select('widget_role').lean();
+    if (emb) {
+      return resolveChatFlowType({ embed: emb, normalizedAgentType, professionalProfile });
+    }
+  }
+  return resolveFlowTypeFromLegacySignals({ normalizedAgentType, professionalProfile });
 }
 
 /**
@@ -120,10 +156,10 @@ export const handlePropertyMatchesService = async ({
   }
 
   const professionalProfile = await ProfessionalProfile.findOne({ user_id: userId });
-  const flowType = flowTypeForConversation(conversation, professionalProfile);
-  const isAgent = flowType === 'agent';
+  const flowType = await flowTypeForConversation(conversation, professionalProfile);
+  const flow = getFlowForRole(flowType);
 
-  if (!isAgent) {
+  if (!supportsPropertyMatches(flow)) {
     return {
       status: 200,
       body: {
@@ -138,8 +174,6 @@ export const handlePropertyMatchesService = async ({
       },
     };
   }
-
-  const flow = getFlowForRole(flowType);
 
   const contactInfo = await accumulateContactInfo(conversation._id);
   const hasContact = Boolean(contactInfo.email || contactInfo.phone || contactInfo.name);
@@ -161,7 +195,7 @@ export const handlePropertyMatchesService = async ({
     property_matches_context,
     property_matches_note,
   } = await resolveAgentPropertyMatchesForChat({
-    isAgent,
+    isAgent: true,
     hasContact,
     matchIntent: propertyMatchIntent,
     userId,
@@ -224,17 +258,15 @@ export const handleChatService = async ({
     ProfessionalProfile.findOne({ user_id: userId }),
   ]);
 
-  // Flow is determined by widget type (agentType) when broker/lawyer, else by embed owner's professional_type.
-  const professionalType = professionalProfile?.professional_type || 'agent';
-  const flowType =
-    normalizedAgentType === 'broker' ? 'mortgage_broker'
-    : normalizedAgentType === 'lawyer' ? 'lawyer'
-    : professionalType;
+  // Flow: role-specific embed (`widget_role`) wins; else agentType + profile (legacy).
+  const flowType = resolveChatFlowType({
+    embed,
+    normalizedAgentType,
+    professionalProfile,
+  });
+  const effectiveWidgetType = professionalTypeToWidgetAgentType(flowType);
   const flow = getFlowForRole(flowType);
-  const isAgent = flowType === 'agent';
-  const isMortgageBroker = flowType === 'mortgage_broker';
-  const isLawyer = flowType === 'lawyer';
-  const canCreateLeads = isAgent || isMortgageBroker || isLawyer;
+  const canCreateLeads = Boolean(flow?.flowRole);
 
   const intent =
     formContact?.intent === 'sell' || formContact?.intent === 'buy'
@@ -242,6 +274,8 @@ export const handleChatService = async ({
       : classifyIntentFromKeywords(trimmedMessage);
 
   let conversation = await ChatConversation.findOne({ session_id: sessionId });
+  const embedFlowRole =
+    embed.widget_role && isValidProfessionalType(embed.widget_role) ? embed.widget_role : undefined;
   if (!conversation) {
     conversation = await ChatConversation.create({
       session_id:  sessionId,
@@ -249,12 +283,14 @@ export const handleChatService = async ({
       visitor_id:  visitor._id,
       embed_id:    embed._id,
       embed_token: embedToken,
-      agent_type:  normalizedAgentType,
+      embed_flow_role: embedFlowRole,
+      agent_type:  effectiveWidgetType,
       channel:     normalizedChannel,
       intent,
     });
   } else {
-    conversation.agent_type          = normalizedAgentType;
+    conversation.agent_type = effectiveWidgetType;
+    if (embedFlowRole) conversation.embed_flow_role = embedFlowRole;
     conversation.channel             = normalizedChannel;
     conversation.last_interaction_at = new Date();
     await conversation.save();
@@ -277,7 +313,7 @@ export const handleChatService = async ({
     session_id:      sessionId,
     role:            'user',
     content:         trimmedMessage,
-    agent_type:      normalizedAgentType,
+    agent_type:      effectiveWidgetType,
     intent,
     channel:         normalizedChannel,
     meta: {
@@ -316,15 +352,28 @@ export const handleChatService = async ({
   const history = await ChatMessage.find({ conversation_id: conversation._id })
     .sort({ createdAt: 1 })
     .limit(20)
-    .select('role content');
+    .select('role content meta');
 
-  const calendlyLinkTrimmed = (professionalProfile?.calendly_link || '').trim();
+  const calendlyLinkTrimmed = resolveCalendlyUrlForFlow(flow, professionalProfile, leadGrade);
   const calendlyLinkForVisitor =
     calendlyLinkTrimmed && conversation?._id
       ? withCalendlyConversationTracking(calendlyLinkTrimmed, conversation._id)
       : calendlyLinkTrimmed;
-  const isAutomatedBookingEnabled =
-    Boolean(calendlyLinkTrimmed) && conversation.is_automated_booking_enabled !== false;
+  const isAutomatedBookingEnabled = isAutomatedBookingEnabledForFlow(
+    flow,
+    professionalProfile,
+    conversation
+  );
+
+  const lastAssistantExtracted = getLastAssistantExtractedData(history);
+  const deferCalendlyLink =
+    flow.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER &&
+    isAutomatedBookingEnabled &&
+    Boolean(calendlyLinkForVisitor) &&
+    !mortgageBrokerHasPreferredContactPrefs({
+      formContact: storedForm,
+      lastAssistantExtracted,
+    });
 
   const calendlySnapForPrompt = await ChatConversation.findById(conversation._id)
     .select('calendly_booking_status lead_grade')
@@ -339,11 +388,9 @@ export const handleChatService = async ({
     conversation.intent === 'sell' || conversation.intent === 'buy'
       ? conversation.intent
       : intent;
-  const postBookingChatChecklistForPrompt =
-    isAgent && calendlyBookedForPrompt
-      ? getAgentActionFlow(checklistGradeForPrompt, checklistIntentForPrompt).postBookingChatChecklist ||
-        []
-      : [];
+  const postBookingChatChecklistForPrompt = calendlyBookedForPrompt
+    ? getPostBookingChecklistForPrompt(flow, checklistGradeForPrompt, checklistIntentForPrompt)
+    : [];
 
   const systemPrompt = flow.buildSystemPrompt(professionalProfile, {
     isAutomatedBookingEnabled,
@@ -352,6 +399,7 @@ export const handleChatService = async ({
     intent: conversation.intent || intent,
     calendlyBooked: Boolean(postBookingChatChecklistForPrompt.length),
     postBookingChatChecklist: postBookingChatChecklistForPrompt,
+    ...(flow.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER ? { deferCalendlyLink } : {}),
   });
   const openaiMessages = [
     { role: 'system', content: systemPrompt },
@@ -363,6 +411,8 @@ export const handleChatService = async ({
   let aiIntent       = intent;
   let emotionalState = 'neutral';
   let parsedAiDetails = {};
+  let mortgageBrokerSnapshotQual = null;
+  let mortgageBrokerSnapshotSignals = null;
 
   try {
     const completion = await getOpenAI().chat.completions.create({
@@ -423,20 +473,15 @@ export const handleChatService = async ({
 
   const finalGrade = flow.bestGrade(leadGrade, conversation.lead_grade || 'unscored');
   const persistedGrade = flow.getPersistedGrade(finalGrade);
-  const useSimpleClassification = isMortgageBroker || isLawyer;
-  const finalClass = useSimpleClassification
-    ? flow.getLeadClassification(finalGrade)
-    : flow.getLeadClassification(finalGrade, aiIntent);
-  const persistedClass = useSimpleClassification
-    ? flow.getLeadClassification(persistedGrade)
-    : flow.getLeadClassification(persistedGrade, aiIntent);
+  const finalClass = classifyLeadForFlow(flow, finalGrade, aiIntent);
+  const persistedClass = classifyLeadForFlow(flow, persistedGrade, aiIntent);
 
   await ChatMessage.create({
     conversation_id: conversation._id,
     session_id:      sessionId,
     role:            'assistant',
     content:         aiReply,
-    agent_type:      normalizedAgentType,
+    agent_type:      effectiveWidgetType,
     intent:          aiIntent,
     channel:         normalizedChannel,
     lead_score:      finalScore,
@@ -479,7 +524,7 @@ export const handleChatService = async ({
 
     const newLeadMatch = await flow.createNewLead({
       conversation,
-      intent:                (isMortgageBroker || isLawyer) ? 'buy' : aiIntent,
+      intent:                usesFixedBuyIntentForLeadMatch(flow) ? 'buy' : aiIntent,
       professionalProfileId: professionalProfile._id,
       leadScore:             finalScore,
       leadGrade:             persistedGrade,
@@ -540,7 +585,7 @@ export const handleChatService = async ({
   }
 
   // Agent-only: listing/comparable cards via `POST /api/chat/property-matches` (not broker/lawyer).
-  const property_matches_available = Boolean(isAgent && hasContact);
+  const property_matches_available = Boolean(supportsPropertyMatches(flow) && hasContact);
 
   const calendlyBookingSnap = await ChatConversation.findById(conversation._id)
     .select('calendly_booking_status calendly_booking_at')
@@ -550,6 +595,15 @@ export const handleChatService = async ({
     .select('access_token calendly_slug calendly_slug_mismatch')
     .lean();
   const calendlyAlign = calendlyWebhookAlignmentMeta(calInt, professionalProfile);
+
+  const mortgage_affordability_snapshot =
+    usesMortgageAffordabilitySnapshot(flow) && mortgageBrokerSnapshotQual
+      ? buildMortgageAffordabilitySnapshot(
+          mortgageBrokerSnapshotQual,
+          mortgageBrokerSnapshotSignals || {},
+          finalGrade
+        )
+      : null;
 
   return {
     status: 200,
@@ -570,16 +624,17 @@ export const handleChatService = async ({
         sub_scores:          leadMeta.sub_scores,
         contact:             contactInfo,
         property_matches_available,
-        calendly_link:       calendlyLinkForVisitor || null,
+        calendly_link:       deferCalendlyLink ? null : calendlyLinkForVisitor || null,
         conversation_id:     conversation._id ? String(conversation._id) : null,
         automated_booking_enabled: isAutomatedBookingEnabled,
         calendly_booking_status: calendlyBookingSnap?.calendly_booking_status ?? null,
         calendly_booking_at:     calendlyBookingSnap?.calendly_booking_at ?? null,
         post_booking_checklist:
-          isAgent && calendlyBookingSnap?.calendly_booking_status === 'booked'
-            ? getAgentActionFlow(finalGrade, aiIntent).postBookingChatChecklist || []
+          calendlyBookingSnap?.calendly_booking_status === 'booked'
+            ? getPostBookingChecklistForMeta(flow, finalGrade, aiIntent)
             : null,
         ...calendlyAlign,
+        ...(mortgage_affordability_snapshot ? { mortgage_affordability_snapshot } : {}),
       },
     },
   };

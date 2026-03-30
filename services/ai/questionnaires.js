@@ -1,6 +1,8 @@
+import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+
 export const QUESTIONNAIRES = {
-  mortgage_broker: {
-    type: 'mortgage_broker',
+  [PROFESSIONAL_TYPE.MORTGAGE_BROKER]: {
+    type: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
     title: 'NESTI Mortgage Broker Lead Qualification',
     total_score: 100,
     questions: [
@@ -33,8 +35,8 @@ export const QUESTIONNAIRES = {
       { id: 'best_time_to_contact', field: 'best_time_to_contact', question: 'Best time to contact?', type: 'select', max_points: 0, options: [{ value: 'morning', label: 'Morning' }, { value: 'afternoon', label: 'Afternoon' }, { value: 'evening', label: 'Evening' }, { value: 'anytime', label: 'Anytime' }] },
     ],
   },
-  lawyer: {
-    type: 'lawyer',
+  [PROFESSIONAL_TYPE.LAWYER]: {
+    type: PROFESSIONAL_TYPE.LAWYER,
     title: 'NESTI Real Estate Lawyer Lead Qualification',
     total_score: 100,
     questions: [
@@ -54,13 +56,13 @@ export const QUESTIONNAIRES = {
 
 const resolveType = (type) => {
   const typeKey = String(type || '').toLowerCase().replace(/-/g, '_');
-  if (typeKey === 'mortgage') return 'mortgage_broker';
+  if (typeKey === 'mortgage') return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
   return typeKey;
 };
 
 export const getQuestionnaire = (type) => {
   const resolvedType = resolveType(type);
-  const questionnaire = QUESTIONNAIRES[resolvedType] || QUESTIONNAIRES.mortgage_broker;
+  const questionnaire = QUESTIONNAIRES[resolvedType] || QUESTIONNAIRES[PROFESSIONAL_TYPE.MORTGAGE_BROKER];
 
   return {
     success: true,

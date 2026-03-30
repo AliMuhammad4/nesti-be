@@ -1,5 +1,7 @@
 import { handleChatService, handlePropertyMatchesService } from '../services/chatService.js';
+import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageAffordabilityFromLead.js';
 import { scoreLead, scoreMortgageBrokerLead, scoreLawyerLead } from '../services/chat/scoring/index.js';
+import { PROFESSIONAL_TYPE } from '../constants/roles.js';
 import logger from '../utils/logger.js';
 
 function maskEmbedToken(token) {
@@ -127,10 +129,11 @@ export const handlePropertyMatches = async (req, res, next) => {
 /** Score preview from form data (no chat session required) */
 export const scorePreview = async (req, res, next) => {
   try {
+    let mortgage_affordability_snapshot = null;
     const formContact = req.body.formContact || req.body;
-    const professionalType = req.body.professionalType || formContact.professionalType || 'agent';
-    const isMortgageBroker = professionalType === 'mortgage_broker';
-    const isLawyer = professionalType === 'lawyer';
+    const professionalType = req.body.professionalType || formContact.professionalType || PROFESSIONAL_TYPE.AGENT;
+    const isMortgageBroker = professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+    const isLawyer = professionalType === PROFESSIONAL_TYPE.LAWYER;
     const intent = formContact.intent || 'buy';
 
     const formSignals = isLawyer
@@ -209,6 +212,7 @@ export const scorePreview = async (req, res, next) => {
       leadScore = result.leadScore;
       leadGrade = result.leadGrade;
       leadMeta = result.leadMeta;
+      mortgage_affordability_snapshot = buildMortgageAffordabilitySnapshot(formQualification, formSignals, leadGrade);
     } else {
       const formQualification = {
         mortgage_status:    formContact.mortgage_status || null,
@@ -266,6 +270,7 @@ export const scorePreview = async (req, res, next) => {
       is_qualified:      leadMeta.qualified,
       lead_reasons:      leadMeta.lead_reasons,
       sub_scores:        leadMeta.sub_scores,
+      ...(mortgage_affordability_snapshot ? { mortgage_affordability_snapshot } : {}),
     });
   } catch (error) {
     next(error);

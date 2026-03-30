@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { PropertyMatchSettingsSchema } from './propertyMatchScoringShapes.js';
 
 const professionalProfileSchema = new mongoose.Schema({
@@ -10,8 +11,8 @@ const professionalProfileSchema = new mongoose.Schema({
   },
   professional_type: {
     type: String,
-    enum: ['agent', 'lawyer', 'mortgage_broker'],
-    default: 'agent',
+    enum: PROFESSIONAL_TYPE_VALUES,
+    default: PROFESSIONAL_TYPE.AGENT,
   },
   full_name: {
     type: String,
@@ -39,10 +40,18 @@ const professionalProfileSchema = new mongoose.Schema({
   calendly_link: {
     type: String,
   },
+  mortgage_calendly_link_hot: {
+    type: String,
+  },
+  mortgage_calendly_link_warm: {
+    type: String,
+  },
+  mortgage_calendly_link_early: {
+    type: String,
+  },
   bio: {
     type: String,
   },
-  /** Agent-only: weights + limits for matching visitor leads to seller pipeline inventory. */
   property_match_scoring: {
     type: PropertyMatchSettingsSchema,
     required: false,

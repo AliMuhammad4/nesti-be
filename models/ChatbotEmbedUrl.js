@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 
 const chatbotEmbedUrlSchema = new mongoose.Schema({
   user_id: {
@@ -10,6 +11,10 @@ const chatbotEmbedUrlSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
+  },
+  widget_role: {
+    type: String,
+    enum: PROFESSIONAL_TYPE_VALUES,
   },
   allowed_domains: [{
     type: String,

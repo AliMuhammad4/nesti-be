@@ -1,28 +1,18 @@
-/**
- * 1) Copies legacy PropertyMatchScoring collection into ProfessionalProfile.property_match_scoring (if present)
- * 2) Ensures each agent profile has property_match_scoring (defaults if still missing)
- *
- * Run: npm run seed:property-match-scoring
- * Requires MONGO_URI (or MONGODB_URI) in .env
- */
-
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
-
+import { PROFESSIONAL_TYPE } from '../constants/roles.js';
 dotenv.config();
-
 async function migrateLegacyScoringCollection() {
   const legacy = mongoose.connection.collection('propertymatchscorings');
   const count = await legacy.countDocuments();
   if (!count) return 0;
-
   const { default: ProfessionalProfile } = await import('../models/ProfessionalProfile.js');
   const cursor = legacy.find({});
   let migrated = 0;
   for await (const doc of cursor) {
     if (!doc.user_id || !doc.buyer || !doc.seller) continue;
     const r = await ProfessionalProfile.updateOne(
-      { user_id: doc.user_id, professional_type: 'agent' },
+      { user_id: doc.user_id, professional_type: PROFESSIONAL_TYPE.AGENT },
       {
         $set: {
           property_match_scoring: {
@@ -62,7 +52,7 @@ async function main() {
     '../services/agent/propertyMatch/scoringConfig.js'
   );
 
-  const agents = await ProfessionalProfile.find({ professional_type: 'agent' }).select('user_id').lean();
+  const agents = await ProfessionalProfile.find({ professional_type: PROFESSIONAL_TYPE.AGENT }).select('user_id').lean();
   let n = 0;
   for (const a of agents) {
     const ok = await ensureAgentPropertyMatchScoring(a.user_id);

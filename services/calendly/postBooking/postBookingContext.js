@@ -1,5 +1,6 @@
 import LeadMatch from '../../../models/LeadMatch.js';
 import LeadProfile from '../../../models/LeadProfile.js';
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { getFlowForRole } from '../../chat/flows/index.js';
 import { recomputeSignalsForPropertyMatches } from '../../chatService.js';
 import { resolveAgentPropertyMatchesForChat } from '../../agent/propertyMatch/matchService.js';
@@ -11,7 +12,7 @@ export function agentDisplayName(ctx) {
   );
 }
 export async function loadLeadProfileForConversation({ conversationId, userId, intent }) {
-  const suffix = intent === 'sell' ? '_seller$' : '_buyer$';
+  const suffix = intent === 'sell' ? '_seller$' : '(buyer|client)$';
   const lm = await LeadMatch.findOne({
     conversation_id: conversationId,
     user_id:         userId,
@@ -25,8 +26,8 @@ export async function loadLeadProfileForConversation({ conversationId, userId, i
 
 export async function fetchPropertyMatchBundle(ctx) {
   const { conversation, userId, flowType } = ctx;
-  if (flowType !== 'agent') return { error: 'not_agent_embed' };
-  const flow = getFlowForRole('agent');
+  if (flowType !== PROFESSIONAL_TYPE.AGENT) return { error: 'not_agent_embed' };
+  const flow = getFlowForRole(PROFESSIONAL_TYPE.AGENT);
   const storedForm = conversation.form_data || {};
   const storedIntent = storedForm?.intent;
   const aiIntent =

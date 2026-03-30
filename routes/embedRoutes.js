@@ -3,17 +3,38 @@ const router = express.Router();
 import { protect } from '../middleware/authMiddleware.js';
 import crypto from 'crypto';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
+import ProfessionalProfile from '../models/ProfessionalProfile.js';
+import { PROFESSIONAL_TYPE } from '../constants/roles.js';
+import { validateWidgetRoleAgainstProfile } from '../utils/embedWidgetRole.js';
 
 const generateEmbedToken = async (req, res, next) => {
   try {
+    const profile = await ProfessionalProfile.findOne({ user_id: req.user._id }).lean();
+    const raw =
+      req.body.widget_role != null && String(req.body.widget_role).trim() !== ''
+        ? String(req.body.widget_role).trim()
+        : profile?.professional_type || PROFESSIONAL_TYPE.AGENT;
+
+    const genCheck = validateWidgetRoleAgainstProfile(raw, profile);
+    if (!genCheck.ok) {
+      return res.status(400).json({ success: false, message: genCheck.message });
+    }
+
     const token = crypto.randomBytes(24).toString('hex');
     const embed = await ChatbotEmbedUrl.create({
       user_id: req.user._id,
       token,
+      widget_role: raw,
       allowed_domains: req.body.allowed_domains || [],
       widget_settings: req.body.widget_settings || {},
     });
-    res.json({ success: true, token: embed.token, id: embed._id, message: 'Embed token generated' });
+    res.json({
+      success: true,
+      token: embed.token,
+      id: embed._id,
+      widget_role: embed.widget_role,
+      message: 'Embed token generated',
+    });
   } catch (error) {
     next(error);
   }
@@ -32,7 +53,12 @@ const resolveEmbed = async (req, res, next) => {
   try {
     const embed = await ChatbotEmbedUrl.findOne({ token: req.params.token });
     if (!embed) return res.status(404).json({ success: false, message: 'Invalid embed token' });
-    res.json({ success: true, isValid: true, userId: embed.user_id });
+    res.json({
+      success: true,
+      isValid: true,
+      userId: embed.user_id,
+      widget_role: embed.widget_role ?? null,
+    });
   } catch (error) {
     next(error);
   }
@@ -40,10 +66,26 @@ const resolveEmbed = async (req, res, next) => {
 
 const updateEmbed = async (req, res, next) => {
   try {
+    const body = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(body, 'widget_role')) {
+      const wr = body.widget_role;
+      if (wr != null && String(wr).trim() !== '') {
+        const v = String(wr).trim();
+        const profile = await ProfessionalProfile.findOne({ user_id: req.user._id }).lean();
+        const patchCheck = validateWidgetRoleAgainstProfile(v, profile);
+        if (!patchCheck.ok) {
+          return res.status(400).json({ success: false, message: patchCheck.message });
+        }
+        body.widget_role = v;
+      } else {
+        delete body.widget_role;
+      }
+    }
+
     const embed = await ChatbotEmbedUrl.findOneAndUpdate(
       { _id: req.params.id, user_id: req.user._id },
-      { $set: req.body },
-      { new: true }
+      { $set: body },
+      { returnDocument: 'after' }
     );
     if (!embed) return res.status(404).json({ success: false, message: 'Embed not found' });
     res.json({ success: true, embed });

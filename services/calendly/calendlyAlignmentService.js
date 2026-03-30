@@ -1,37 +1,29 @@
 import CalendarIntegration from '../../models/CalendarIntegration.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
+import { primaryCalendlyLinkForAlignment } from '../chat/mortgageCalendlyUtils.js';
 import { extractCalendlySlugFromLink } from './calendlyUrlUtils.js';
 import { fetchCalendlyUserResource } from './oauthService.js';
 
-/**
- * After OAuth: store Calendly `slug` from users/me and compare to profile.calendly_link.
- * Webhooks only fire for bookings on the OAuth account’s scheduling pages.
- */
 export async function applyCalendlyOAuthAlignment(userId, accessToken) {
   const resource = await fetchCalendlyUserResource(accessToken);
   if (!resource) return;
-
   let slug =
     resource?.slug ||
     (resource?.scheduling_url ? extractCalendlySlugFromLink(resource.scheduling_url) : null);
   if (slug) slug = String(slug).toLowerCase().trim() || null;
-
   const profile = await ProfessionalProfile.findOne({ user_id: userId })
-    .select('calendly_link')
+    .select('calendly_link mortgage_calendly_link_hot mortgage_calendly_link_warm mortgage_calendly_link_early')
     .lean();
-  const linkSlug = extractCalendlySlugFromLink(profile?.calendly_link || '');
+  const linkSlug = extractCalendlySlugFromLink(primaryCalendlyLinkForAlignment(profile));
   const mismatch = Boolean(slug && linkSlug && slug !== linkSlug);
-
   const $set = { calendly_slug_mismatch: mismatch };
   if (slug) $set.calendly_slug = slug;
-
   await CalendarIntegration.updateOne(
     { user_id: userId, provider: 'calendly' },
     { $set }
   );
 }
 
-/** After PATCH profile calendly_link — recompute mismatch using stored OAuth slug. */
 export async function refreshCalendlySlugMismatchForUser(userId) {
   const integ = await CalendarIntegration.findOne({
     user_id:  userId,
@@ -40,26 +32,20 @@ export async function refreshCalendlySlugMismatchForUser(userId) {
     .select('calendly_slug')
     .lean();
   if (!integ?.calendly_slug) return;
-
   const profile = await ProfessionalProfile.findOne({ user_id: userId })
-    .select('calendly_link')
+    .select('calendly_link mortgage_calendly_link_hot mortgage_calendly_link_warm mortgage_calendly_link_early')
     .lean();
-  const linkSlug = extractCalendlySlugFromLink(profile?.calendly_link || '');
+  const linkSlug = extractCalendlySlugFromLink(primaryCalendlyLinkForAlignment(profile));
   const oauthSlug = String(integ.calendly_slug).toLowerCase();
   const mismatch = Boolean(linkSlug && oauthSlug && linkSlug !== oauthSlug);
-
   await CalendarIntegration.updateOne(
     { _id: integ._id },
     { $set: { calendly_slug_mismatch: mismatch } }
   );
 }
 
-/**
- * @param {object | null} integ — lean doc with access_token?, calendly_slug?, calendly_slug_mismatch?
- * @param {object | null} professionalProfile
- */
 export function calendlyWebhookAlignmentMeta(integ, professionalProfile) {
-  const link = (professionalProfile?.calendly_link || '').trim();
+  const link = primaryCalendlyLinkForAlignment(professionalProfile || {});
   if (!link) {
     return {
       calendly_webhook_alignment: 'no_calendly_link',

@@ -1,6 +1,4 @@
 import mongoose from 'mongoose';
-
-/** Shared shape — every field required; values come only from stored documents. */
 export const BuyerScoringSchema = new mongoose.Schema(
   {
     baseScore: { type: Number, required: true },
@@ -38,7 +36,6 @@ export const SellerScoringSchema = new mongoose.Schema(
   { _id: false }
 );
 
-/** Embedded on ProfessionalProfile — one scoring profile per agent. */
 export const PropertyMatchSettingsSchema = new mongoose.Schema(
   {
     buyer: { type: BuyerScoringSchema, required: true },

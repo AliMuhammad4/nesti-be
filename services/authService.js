@@ -1,5 +1,6 @@
 import User from '../models/User.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
+import { USER_ROLE, USER_ROLE_VALUES } from '../constants/roles.js';
 import jwt from 'jsonwebtoken';
 import sendEmail from '../utils/sendEmail.js';
 import logger from '../utils/logger.js';
@@ -29,8 +30,7 @@ export const signupService = async (payload) => {
     return { status: 400, body: { success: false, message: 'Please provide all required fields' } };
   }
 
-  const validRoles = ['agent', 'lawyer', 'mortgage_broker', 'admin'];
-  const assignedRole = role && validRoles.includes(role) ? role : 'agent';
+  const assignedRole = role && USER_ROLE_VALUES.includes(role) ? role : USER_ROLE.AGENT;
 
   const userExists = await User.findOne({ email });
   if (userExists) {
@@ -126,13 +126,13 @@ export const verifyEmailService = async ({ verificationToken, otp }) => {
     trial_ends_at,
   });
 
-  if (user.role !== 'admin') {
+  if (user.role !== USER_ROLE.ADMIN) {
     await ProfessionalProfile.create({
       user_id: user._id,
       professional_type: user.role,
       full_name: `${user.first_name} ${user.last_name}`,
     });
-    if (user.role === 'agent') {
+    if (user.role === USER_ROLE.AGENT) {
       const { ensureAgentPropertyMatchScoring } = await import(
         './agent/propertyMatch/scoringConfig.js'
       );

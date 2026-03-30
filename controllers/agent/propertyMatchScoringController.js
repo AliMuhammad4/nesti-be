@@ -1,3 +1,4 @@
+import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import {
   getResolvedPropertyMatchScoring,
@@ -7,7 +8,7 @@ import {
 export const getMyPropertyMatchScoring = async (req, res, next) => {
   try {
     const profile = await ProfessionalProfile.findOne({ user_id: req.user._id }).lean();
-    if (!profile || profile.professional_type !== 'agent') {
+    if (!profile || profile.professional_type !== PROFESSIONAL_TYPE.AGENT) {
       return res.status(404).json({
         success: false,
         code:    'NOT_AGENT_PROFILE',
@@ -46,7 +47,7 @@ export const putMyPropertyMatchScoring = async (req, res, next) => {
     }
 
     const updated = await ProfessionalProfile.findOneAndUpdate(
-      { user_id: req.user._id, professional_type: 'agent' },
+      { user_id: req.user._id, professional_type: PROFESSIONAL_TYPE.AGENT },
       {
         $set: {
           property_match_scoring: {
@@ -58,7 +59,7 @@ export const putMyPropertyMatchScoring = async (req, res, next) => {
           },
         },
       },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
 
     if (!updated) {

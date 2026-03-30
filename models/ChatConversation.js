@@ -1,4 +1,9 @@
 import mongoose from 'mongoose';
+import {
+  PROFESSIONAL_TYPE_VALUES,
+  WIDGET_AGENT_TYPE,
+  WIDGET_AGENT_TYPE_VALUES,
+} from '../constants/roles.js';
 
 const chatConversationSchema = new mongoose.Schema(
   {
@@ -24,10 +29,15 @@ const chatConversationSchema = new mongoose.Schema(
     embed_token: {
       type: String,
     },
+    /** Denormalized from ChatbotEmbedUrl.widget_role for flow routing without an extra join. */
+    embed_flow_role: {
+      type: String,
+      enum: PROFESSIONAL_TYPE_VALUES,
+    },
     agent_type: {
       type: String,
-      enum: ['agent', 'broker', 'lawyer'],
-      default: 'agent',
+      enum: WIDGET_AGENT_TYPE_VALUES,
+      default: WIDGET_AGENT_TYPE.AGENT,
     },
     channel: {
       type: String,

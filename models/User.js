@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { USER_ROLE, USER_ROLE_VALUES } from '../constants/roles.js';
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -22,8 +23,8 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['agent', 'lawyer', 'mortgage_broker', 'admin'],
-    default: 'agent',
+    enum: USER_ROLE_VALUES,
+    default: USER_ROLE.AGENT,
   },
   is_verified: {
     type: Boolean,
@@ -61,8 +62,6 @@ const userSchema = new mongoose.Schema({
     type: Date,
   }
 }, { timestamps: true });
-
-// Password hashing middleware
 userSchema.pre('save', async function () {
   if (!this.isModified('password')) {
     return;
@@ -71,9 +70,7 @@ userSchema.pre('save', async function () {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Match user entered password to hashed password in database
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
-
 export default mongoose.model('User', userSchema);

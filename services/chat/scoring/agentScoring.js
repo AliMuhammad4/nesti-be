@@ -2,13 +2,15 @@
  * Agent role – Real estate lead scoring (NESTI agent spec).
  */
 
-import LeadProfile from '../../../models/LeadProfile.js';
-import LeadMatch from '../../../models/LeadMatch.js';
-import LeadAttribution from '../../../models/LeadAttribution.js';
 import logger from '../../../utils/logger.js';
 
 import { extractSignals, mergeSignals, buildLeadType, buildLeadClassification, GRADE_ORDER } from './common.js';
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
+import {
+  createValidatedLeadAttribution,
+  createValidatedLeadMatch,
+  createValidatedLeadProfile,
+} from './leadPersistence.js';
 
 export const bestGrade = (a, b) =>
   (GRADE_ORDER[a] || 0) >= (GRADE_ORDER[b] || 0) ? a : b;
@@ -283,7 +285,7 @@ export const createLeadRecords = async ({
   }
 
   const budgetBuy = intent === 'buy' ? buyerBudgetStr : '';
-  const leadProfile = await LeadProfile.create({
+  const leadProfile = await createValidatedLeadProfile({
     intent,
     full_name:        contactInfo.name    || 'Unknown',
     email:            contactInfo.email   || '',
@@ -322,7 +324,7 @@ export const createLeadRecords = async ({
     total_score:      leadScore,
   });
 
-  const leadMatch = await LeadMatch.create({
+  const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
     professional_profile_id: professionalProfileId,
     conversation_id:         conversation._id,
@@ -345,7 +347,7 @@ export const createLeadRecords = async ({
     },
   });
 
-  await LeadAttribution.create({
+  await createValidatedLeadAttribution({
     lead_type:       leadType,
     source:          'chatbot',
     converted:       false,

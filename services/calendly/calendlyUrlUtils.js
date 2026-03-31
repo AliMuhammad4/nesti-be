@@ -1,7 +1,3 @@
-/**
- * Public Calendly scheduling URLs look like https://calendly.com/{slug}/event-type
- */
-
 export function extractCalendlySlugFromLink(url) {
   if (!url || typeof url !== 'string') return null;
   const t = url.trim();

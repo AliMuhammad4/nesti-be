@@ -1,10 +1,4 @@
-/**
- * Shared mortgage-broker qualification / signal merging — used by mortgageBrokerFlow.
- * Keeps enhanceWithAi + mergeSignalsForMeta + profile merge logic in one place.
- */
-
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
-
 const MORTGAGE_STORED_QUALIFICATION_KEYS = [
   'mortgage_timeline',
   'pre_approval_status',
@@ -25,7 +19,6 @@ export function pickStoredFormQualification(storedForm) {
   }
   return o;
 }
-
 export function pickStoredFormSignals(storedForm) {
   if (!storedForm) return {};
   return {

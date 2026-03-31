@@ -1,6 +1,3 @@
-/**
- * Mortgage broker: tier-specific Calendly URLs on ProfessionalProfile fall back to `calendly_link`.
- */
 
 const TIER_FIELDS = {
   hot:   'mortgage_calendly_link_hot',
@@ -36,10 +33,12 @@ export function primaryCalendlyLinkForAlignment(profile) {
   return '';
 }
 
-export function mortgageBrokerHasPreferredContactPrefs({ formContact, lastAssistantExtracted }) {
+export function visitorHasPreferredContactPrefs({ formContact, lastAssistantExtracted }) {
   const fc = formContact || {};
   const ext = lastAssistantExtracted || {};
   const method = String(fc.preferred_contact_method || ext.preferred_contact_method || '').trim();
   const time = String(fc.best_time_to_contact || ext.best_time_to_contact || '').trim();
   return Boolean(method && time);
 }
+
+export const mortgageBrokerHasPreferredContactPrefs = visitorHasPreferredContactPrefs;

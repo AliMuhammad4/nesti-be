@@ -1,6 +1,6 @@
 import CalendarIntegration from '../../models/CalendarIntegration.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
-import { primaryCalendlyLinkForAlignment } from '../chat/mortgageCalendlyUtils.js';
+import { primaryCalendlyLinkForAlignment } from '../chat/mortgageBroker/mortgageCalendlyUtils.js';
 import { extractCalendlySlugFromLink } from './calendlyUrlUtils.js';
 import { fetchCalendlyUserResource } from './oauthService.js';
 

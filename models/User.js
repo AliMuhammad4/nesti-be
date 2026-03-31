@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { USER_ROLE, USER_ROLE_VALUES } from '../constants/roles.js';
+import { ACCOUNT_STATUSES, SUBSCRIPTION_TIERS } from '../constants/validationEnums.js';
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -38,12 +39,12 @@ const userSchema = new mongoose.Schema({
   },
   account_status: {
     type: String,
-    enum: ['free_trial', 'active', 'expired', 'canceled'],
+    enum: ACCOUNT_STATUSES,
     default: 'free_trial',
   },
   subscription_tier: {
     type: String,
-    enum: ['starter', 'pro', 'enterprise'],
+    enum: SUBSCRIPTION_TIERS,
     default: 'starter',
   },
   trial_ends_at: {

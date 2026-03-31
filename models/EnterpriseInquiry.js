@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { ENTERPRISE_INQUIRY_STATUSES } from '../constants/validationEnums.js';
 
 const enterpriseInquirySchema = new mongoose.Schema({
   user_id: {
@@ -18,7 +19,7 @@ const enterpriseInquirySchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'contacted', 'resolved'],
+    enum: ENTERPRISE_INQUIRY_STATUSES,
     default: 'pending',
   }
 }, { timestamps: true });

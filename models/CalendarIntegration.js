@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { CALENDAR_PROVIDERS } from '../constants/validationEnums.js';
 
 const calendarIntegrationSchema = new mongoose.Schema({
   user_id: {
@@ -8,7 +9,7 @@ const calendarIntegrationSchema = new mongoose.Schema({
   },
   provider: {
     type: String,
-    enum: ['google', 'calendly'],
+    enum: CALENDAR_PROVIDERS,
     required: true,
   },
   access_token: {
@@ -24,11 +25,9 @@ const calendarIntegrationSchema = new mongoose.Schema({
   account_email: {
     type: String,
   },
-  /** Lowercase Calendly scheduling slug from GET /users/me (OAuth account). */
   calendly_slug: {
     type: String,
   },
-  /** True when professionalProfile.calendly_link points at a different slug — webhooks will not match bookings. */
   calendly_slug_mismatch: {
     type:    Boolean,
     default: false,

@@ -1,3 +1,6 @@
+import logger from '../../../utils/logger.js';
+import sendEmail from '../../../utils/sendEmail.js';
+
 export const MAX_MAP_STOPS = 8;
 export const SHOWING_MINS = '30–45';
 export const SELLER_PREP_CHECKLIST = [
@@ -8,24 +11,27 @@ export const SELLER_PREP_CHECKLIST = [
   'Identify ideal closing timeline and any must-have sale conditions.',
 ];
 export const SECTION_TITLES = {
-  property_matches:          'Matched properties',
-  showing_itinerary:         'Suggested showing itinerary',
-  map_route:                 'Tour route and directions',
-  budget_analysis:           'Budget and financing overview',
-  property_alerts:           'Listing alert preferences',
-  seller_followup_pack:      'Listing preparation summary',
-  market_report:             'Market and neighbourhood overview',
+  property_matches: 'Matched properties',
+  showing_itinerary: 'Suggested showing itinerary',
+  map_route: 'Tour route and directions',
+  budget_analysis: 'Budget and financing overview',
+  property_alerts: 'Listing alert preferences',
+  seller_followup_pack: 'Listing preparation summary',
+  market_report: 'Market and neighbourhood overview',
   mortgage_preapproval_docs: 'Pre-approval document checklist',
   mortgage_planning_summary: 'Mortgage planning snapshot',
-  mortgage_readiness_guide:  'Financial readiness and next steps',
+  mortgage_readiness_guide: 'Financial readiness and next steps',
+  lawyer_closing_checklist: 'Closing checklist & document preparation',
+  lawyer_legal_preparation: 'Legal preparation overview',
+  lawyer_legal_education: 'Real estate law — introductory steps',
 };
 
 export function formatMoney(n) {
   if (n == null || !Number.isFinite(Number(n))) return '—';
   try {
     return new Intl.NumberFormat('en-US', {
-      style:                 'currency',
-      currency:              'USD',
+      style: 'currency',
+      currency: 'USD',
       maximumFractionDigits: 0,
     }).format(Number(n));
   } catch {
@@ -207,4 +213,64 @@ export function sellerListingSnapshotHtml(leadProfile) {
 export function sellerChecklistHtml() {
   const items = SELLER_PREP_CHECKLIST.map((x) => `<li style="margin-bottom:6px;">${escapeHtml(x)}</li>`).join('');
   return `<p style="margin:16px 0 8px;font-size:14px;font-weight:600;color:#0f172a;">Preparation checklist</p><ul style="margin:0;padding-left:20px;line-height:1.55;">${items}</ul>`;
+}
+
+function smtpConfigured() {
+  return Boolean(
+    process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS
+  );
+}
+
+function normEmail(e) {
+  if (!e || typeof e !== 'string') return '';
+  return e.trim().toLowerCase();
+}
+
+function agentEmailCopyEnabled() {
+  const v = String(process.env.POST_BOOKING_AGENT_EMAIL_COPY ?? 'true').toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(v);
+}
+
+export async function sendVisitorAndAgentCopy(ctx, { visitorSubject, html, text }) {
+  if (!ctx.inviteeEmail) {
+    return { status: 'skipped', detail: 'no_invitee_email' };
+  }
+  if (!smtpConfigured()) {
+    return { status: 'skipped', detail: 'smtp_not_configured' };
+  }
+
+  const visitorSend = await sendEmail({
+    email: ctx.inviteeEmail,
+    subject: visitorSubject,
+    message: text,
+    htmlMessage: html,
+  });
+  if (!visitorSend.success) {
+    return { status: 'failed', detail: String(visitorSend.error?.message || 'send_failed') };
+  }
+
+  const inviteeNorm = normEmail(ctx.inviteeEmail);
+  const agentNorm = normEmail(ctx.agentUser?.email);
+  const sameInbox = Boolean(inviteeNorm && agentNorm && inviteeNorm === agentNorm);
+
+  if (ctx.agentUser?.email && agentEmailCopyEnabled() && !sameInbox) {
+    const agentCopy = await sendEmail({
+      email: ctx.agentUser.email,
+      subject: `[Nesti] Copy: ${visitorSubject}`,
+      message: `Copy of materials sent to the client at ${ctx.inviteeEmail}. Open the HTML version for the full message.`,
+      htmlMessage: html,
+    });
+    if (!agentCopy.success) {
+      logger.warn('postBooking: agent copy failed', {
+        err: agentCopy.error?.message,
+        subject: visitorSubject,
+      });
+    }
+  } else if (sameInbox) {
+    logger.debug('postBooking: skipping agent copy (same address as invitee)', {
+      email_domain: inviteeNorm.split('@')[1] || null,
+    });
+  }
+
+  return { status: 'completed' };
 }

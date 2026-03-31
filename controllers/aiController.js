@@ -1,10 +1,6 @@
-import {
-  getLeadInsights,
-  getQuestionnaire,
-  scoreQuestionnaire,
-  getProfessionalGuidance,
-  toggleAutomation,
-} from '../services/aiService.js';
+import { getLeadInsights } from '../services/ai/leadInsights.js';
+import { getQuestionnaire, scoreQuestionnaire } from '../services/ai/questionnaires.js';
+import { getProfessionalGuidance, toggleAutomation } from '../services/ai/automation.js';
 export const getGuidance = async (req, res) => {
   const result = getProfessionalGuidance();
   res.json(result);

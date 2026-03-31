@@ -1,61 +1,65 @@
 import { getAgentActionFlow } from '../config/agentActionFlow.js';
 import { getMortgageBrokerActionFlow } from '../config/mortgageBrokerActionFlow.js';
+import { getLawyerActionFlow } from '../config/lawyerActionFlow.js';
 import {
   hasMortgageCalendlyConfigured,
   resolveMortgageCalendlyUrl,
-} from '../mortgageCalendlyUtils.js';
+} from '../mortgageBroker/mortgageCalendlyUtils.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
-export const FLOW_ROLE = PROFESSIONAL_TYPE;
+
+const isAgent = (flow) => flow?.flowRole === PROFESSIONAL_TYPE.AGENT;
+const isBroker = (flow) => flow?.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+
 export function supportsPropertyMatches(flow) {
-  return flow?.flowRole === FLOW_ROLE.AGENT;
+  return isAgent(flow);
 }
-export function usesMortgageAffordabilitySnapshot(flow) {
-  return flow?.flowRole === FLOW_ROLE.MORTGAGE_BROKER;
-}
-export function usesTieredMortgageCalendly(flow) {
-  return flow?.flowRole === FLOW_ROLE.MORTGAGE_BROKER;
-}
+
+export const usesMortgageAffordabilitySnapshot = isBroker;
+
+export const usesTieredMortgageCalendly = isBroker;
+
 export function leadClassificationUsesIntent(flow) {
-  return flow?.flowRole === FLOW_ROLE.AGENT;
+  return isAgent(flow);
 }
 
 export function usesFixedBuyIntentForLeadMatch(flow) {
-  return flow?.flowRole === FLOW_ROLE.MORTGAGE_BROKER || flow?.flowRole === FLOW_ROLE.LAWYER;
+  return isBroker(flow) || flow?.flowRole === PROFESSIONAL_TYPE.LAWYER;
 }
 
 export function resolveCalendlyUrlForFlow(flow, professionalProfile, leadGrade) {
-  if (usesTieredMortgageCalendly(flow)) {
+  if (isBroker(flow)) {
     return resolveMortgageCalendlyUrl(professionalProfile, leadGrade);
   }
   return (professionalProfile?.calendly_link || '').trim();
 }
+
 export function isAutomatedBookingEnabledForFlow(flow, professionalProfile, conversation) {
-  const hasCalendly =
-    usesTieredMortgageCalendly(flow)
-      ? hasMortgageCalendlyConfigured(professionalProfile)
-      : Boolean((professionalProfile?.calendly_link || '').trim());
+  const hasCalendly = isBroker(flow)
+    ? hasMortgageCalendlyConfigured(professionalProfile)
+    : Boolean((professionalProfile?.calendly_link || '').trim());
   return hasCalendly && conversation.is_automated_booking_enabled !== false;
 }
 
-export function getPostBookingChecklistForPrompt(flow, leadGrade, aiIntent) {
-  if (flow?.flowRole === FLOW_ROLE.AGENT) {
+function postBookingChecklistItemsForFlow(flow, leadGrade, aiIntent) {
+  const role = flow?.flowRole;
+  if (role === PROFESSIONAL_TYPE.AGENT) {
     return getAgentActionFlow(leadGrade, aiIntent).postBookingChatChecklist || [];
   }
-  if (flow?.flowRole === FLOW_ROLE.MORTGAGE_BROKER) {
+  if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return getMortgageBrokerActionFlow(leadGrade).postBookingChatChecklist || [];
   }
-  return [];
+  if (role === PROFESSIONAL_TYPE.LAWYER) {
+    return getLawyerActionFlow(leadGrade).postBookingChatChecklist || [];
+  }
+  return null;
+}
+
+export function getPostBookingChecklistForPrompt(flow, leadGrade, aiIntent) {
+  return postBookingChecklistItemsForFlow(flow, leadGrade, aiIntent) ?? [];
 }
 
 export function getPostBookingChecklistForMeta(flow, leadGrade, aiIntent) {
-  if (flow?.flowRole === FLOW_ROLE.LAWYER) return null;
-  if (flow?.flowRole === FLOW_ROLE.AGENT) {
-    return getAgentActionFlow(leadGrade, aiIntent).postBookingChatChecklist || [];
-  }
-  if (flow?.flowRole === FLOW_ROLE.MORTGAGE_BROKER) {
-    return getMortgageBrokerActionFlow(leadGrade).postBookingChatChecklist || [];
-  }
-  return null;
+  return postBookingChecklistItemsForFlow(flow, leadGrade, aiIntent);
 }
 
 export function classifyLeadForFlow(flow, finalGrade, aiIntent) {
@@ -63,4 +67,53 @@ export function classifyLeadForFlow(flow, finalGrade, aiIntent) {
     return flow.getLeadClassification(finalGrade, aiIntent);
   }
   return flow.getLeadClassification(finalGrade);
+}
+
+// Mortgage broker + lawyer flow wiring (shared implementations)
+
+export const clientIntentSuffix = () => 'client';
+
+export const identityPersistedGrade = (finalGrade) => finalGrade;
+
+export function tieredProfessionalLabel(finalGrade, suffixPhrase) {
+  const g = String(finalGrade || '');
+  const head = g ? g.charAt(0).toUpperCase() + g.slice(1) : '';
+  return `${head} ${suffixPhrase}`;
+}
+
+export async function dispatchClientLead(createRecordsFn, params) {
+  const {
+    conversation,
+    professionalProfileId,
+    leadScore,
+    leadGrade,
+    leadMeta,
+    sessionId,
+    embedToken,
+    clientIp,
+    userAgent,
+    referer,
+    contactInfo,
+    userId,
+    messageSnippet,
+    formContact,
+    aiDetails,
+  } = params;
+  return createRecordsFn({
+    conversation,
+    professionalProfileId,
+    leadScore,
+    leadGrade,
+    leadMeta,
+    sessionId,
+    embedToken,
+    clientIp,
+    userAgent,
+    referer,
+    contactInfo,
+    userId,
+    messageSnippet,
+    formContact,
+    aiDetails,
+  });
 }

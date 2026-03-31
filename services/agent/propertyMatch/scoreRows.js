@@ -47,7 +47,6 @@ export function humanizeFinancingStatus(raw) {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-/** Reasons from scoreRowsForBuyer describe the listing row; rephrase for seller viewing a buyer lead. */
 export function buyerMatchReasonsForSellerView(reasons, listingBedrooms) {
   return reasons.map((r) => {
     const m = /^(\d+)\+ beds$/.exec(r);
@@ -59,13 +58,11 @@ export function buyerMatchReasonsForSellerView(reasons, listingBedrooms) {
   });
 }
 
-/** Seller view: buyer lead. `price` = numeric budget when known; financing vs purchase budget split. */
 export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { listingBedrooms } = {}) {
   const loc = (profile.location || profile.property_address || '').trim();
   const beds = parseInt(String(profile.bedrooms || ''), 10);
   const baths = parseFloat(String(profile.bathrooms || ''));
   const type = (profile.property_type || '').trim();
-
   const { budgetStr, financingStr } = partitionBuyerBudgetInputs(
     profile.budget,
     profile.expected_price

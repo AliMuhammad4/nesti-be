@@ -1,13 +1,5 @@
-/** Budget / price string parsing for agent property matching (no DB). */
-
-/** Matches CRM / scoring enums (snake_case) and plain English. */
 const FINANCING_PHRASE =
   /fully_pre_approved|partially_pre_approved|not_pre_approved|pre_approved|pre-?approv|preapprov|cash buyer|^cash$|financing in progress|financing status|not yet pre|mortgage status/i;
-
-/**
- * Split mixed chat/AI values so purchase budget (dollars) is not stored as financing text.
- * Order: prefer explicit dollar amounts; financing-like strings go to financingStr only.
- */
 export function partitionBuyerBudgetInputs(...candidates) {
   const list = candidates
     .flat()

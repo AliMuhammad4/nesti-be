@@ -1,5 +1,5 @@
-import { handleChatService, handlePropertyMatchesService } from '../services/chatService.js';
-import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageAffordabilityFromLead.js';
+import { handleChatService, handlePropertyMatchesService } from '../services/chat/chatService.js';
+import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageBroker/mortgageAffordabilityFromLead.js';
 import { scoreLead, scoreMortgageBrokerLead, scoreLawyerLead } from '../services/chat/scoring/index.js';
 import { PROFESSIONAL_TYPE } from '../constants/roles.js';
 import logger from '../utils/logger.js';
@@ -33,7 +33,6 @@ export const handleChat = async (req, res, next) => {
       message_len:  typeof message === 'string' ? message.length : 0,
     });
 
-    // Capture request metadata for attribution
     const clientIp =
       (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
       req.socket?.remoteAddress ||
@@ -51,7 +50,7 @@ export const handleChat = async (req, res, next) => {
       clientIp,
       userAgent,
       referer,
-      formContact,   // structured contact from the frontend form (name, email, phone)
+      formContact,
     });
 
     const meta = result.body?.meta;
@@ -85,7 +84,6 @@ export const handleChat = async (req, res, next) => {
   }
 };
 
-/** Agent chats only: listing / comparable cards for the session (mortgage & lawyer flows get empty meta). */
 export const handlePropertyMatches = async (req, res, next) => {
   const startedAt = Date.now();
   try {
@@ -126,7 +124,6 @@ export const handlePropertyMatches = async (req, res, next) => {
   }
 };
 
-/** Score preview from form data (no chat session required) */
 export const scorePreview = async (req, res, next) => {
   try {
     let mortgage_affordability_snapshot = null;

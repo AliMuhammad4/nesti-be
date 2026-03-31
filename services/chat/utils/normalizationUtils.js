@@ -1,4 +1,4 @@
-import { WIDGET_AGENT_TYPE } from '../../constants/roles.js';
+import { WIDGET_AGENT_TYPE } from '../../../constants/roles.js';
 export const normalizeAgentType = (raw = '') => {
   const v = String(raw || '').toLowerCase().trim();
   if (['broker', 'mortgage', 'mortgage broker', 'lender'].includes(v)) return WIDGET_AGENT_TYPE.BROKER;
@@ -29,4 +29,3 @@ export const normalizeAiIntent = (raw = '', fallback = 'buy') => {
   if (v === 'buy'  || v === 'buyer')  return 'buy';
   return fallback;
 };
-

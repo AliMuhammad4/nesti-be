@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
+import { CHAT_INTENTS, YES_NO_EMPTY } from '../constants/validationEnums.js';
 const leadProfileSchema = new mongoose.Schema(
   {
     intent: {
       type: String,
-      enum: ['buy', 'sell'],
+      enum: CHAT_INTENTS,
       required: true,
     },
     full_name: { type: String },
@@ -19,9 +20,9 @@ const leadProfileSchema = new mongoose.Schema(
     square_footage: { type: String },
     property_type: { type: String },
     must_have_features: { type: String },
-    parking_required: { type: String, enum: ['yes', 'no', ''], default: '' },
-    backyard_needed: { type: String, enum: ['yes', 'no', ''], default: '' },
-    school_district_important: { type: String, enum: ['yes', 'no', ''], default: '' },
+    parking_required: { type: String, enum: YES_NO_EMPTY, default: '' },
+    backyard_needed: { type: String, enum: YES_NO_EMPTY, default: '' },
+    school_district_important: { type: String, enum: YES_NO_EMPTY, default: '' },
     preferred_contact_method: { type: String },
     best_time_to_contact: { type: String },
     mortgage_status: { type: String },

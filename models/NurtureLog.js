@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { NURTURE_LOG_STATUSES } from '../constants/validationEnums.js';
 
 const nurtureLogSchema = new mongoose.Schema({
   user_id: {
@@ -29,7 +30,7 @@ const nurtureLogSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['sent', 'failed'],
+    enum: NURTURE_LOG_STATUSES,
     default: 'sent',
   }
 }, { timestamps: true });

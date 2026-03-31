@@ -1,18 +1,11 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
-
 import ChatConversation from '../../models/ChatConversation.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
 import logger from '../../utils/logger.js';
-
 import { runPostBookingAutomations } from './postBookingAutomations.js';
 
-/**
- * Calendly Webhooks API v2 — verify `Calendly-Webhook-Signature` with CALENDLY_WEBHOOK_SIGNING_KEY
- * (from your OAuth app in the Developer Portal). Separate from OAuth access tokens and from PATs.
- * @see https://developer.calendly.com/api-docs/webhook-signatures
- */
 export function verifyCalendlySignature(rawBodyString, signatureHeader, signingKey) {
   if (!signingKey || !signatureHeader || rawBodyString == null) return false;
   try {
@@ -46,16 +39,11 @@ function normalizeEmail(e) {
   return t || null;
 }
 
-/** Calendly puts invitee fields on `payload` for invitee.* events. */
 function extractInviteeEmail(payload) {
   if (!payload || typeof payload !== 'object') return null;
   return normalizeEmail(payload.email || payload.invitee?.email);
 }
 
-/**
- * UTM params from the scheduling URL appear on the invitee and sometimes on the embedded
- * `scheduled_event` object — check both so chat links with `utm_content=<conversationId>` match.
- */
 function extractTrackingUtmContent(payload) {
   if (!payload || typeof payload !== 'object') return null;
   const pick = (tracking) => {
@@ -129,9 +117,6 @@ async function syncChatConversationCalendly(conversationObjectId, { status, setB
   await ChatConversation.findByIdAndUpdate(conversationObjectId, { $set });
 }
 
-/**
- * @param {object} body — parsed Calendly webhook JSON
- */
 export async function processCalendlyWebhook(body) {
   const eventName = body?.event;
   const payload = body?.payload ?? body?.resource;

@@ -1,10 +1,13 @@
 import LeadProfile from '../../../models/LeadProfile.js';
-import LeadMatch from '../../../models/LeadMatch.js';
-import LeadAttribution from '../../../models/LeadAttribution.js';
 import logger from '../../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { mergeSignals, buildMortgageBrokerLeadType } from './common.js';
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
+import {
+  createValidatedLeadAttribution,
+  createValidatedLeadMatch,
+  createValidatedLeadProfile,
+} from './leadPersistence.js';
 const MORTGAGE_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestMortgageGrade = (a, b) =>
   (MORTGAGE_GRADE_ORDER[a] || 0) >= (MORTGAGE_GRADE_ORDER[b] || 0) ? a : b;
@@ -209,7 +212,7 @@ export const createMortgageLeadRecords = async ({
 
   const { budgetStr: mbBudgetStr } = partitionBuyerBudgetInputs(fq.budget, ai.budget);
 
-  const leadProfile = await LeadProfile.create({
+  const leadProfile = await createValidatedLeadProfile({
     intent:                 'buy',
     full_name:              contactInfo.name    || 'Unknown',
     email:                  contactInfo.email   || '',
@@ -248,7 +251,7 @@ export const createMortgageLeadRecords = async ({
     total_score:            leadScore,
   });
 
-  const leadMatch = await LeadMatch.create({
+  const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
     professional_profile_id: professionalProfileId,
     conversation_id:         conversation._id,
@@ -272,7 +275,7 @@ export const createMortgageLeadRecords = async ({
     },
   });
 
-  await LeadAttribution.create({
+  await createValidatedLeadAttribution({
     lead_type:       leadType,
     source:          'chatbot',
     converted:       false,

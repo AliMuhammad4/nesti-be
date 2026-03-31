@@ -1,5 +1,4 @@
 import express from 'express';
-
 import logger from '../utils/logger.js';
 import {
   verifyCalendlySignature,
@@ -8,7 +7,6 @@ import {
 
 const router = express.Router();
 
-/** Browsers use GET — Calendly uses POST. This confirms the route is mounted. */
 router.get('/', (req, res) => {
   res.status(200).json({
     ok:      true,
@@ -18,10 +16,6 @@ router.get('/', (req, res) => {
   });
 });
 
-/**
- * POST /api/webhooks/calendly
- * Calendly POSTs invitee.created / invitee.canceled here. Verify with CALENDLY_WEBHOOK_SIGNING_KEY in production.
- */
 router.post('/', async (req, res) => {
   const requestStartedAt = Date.now();
   try {

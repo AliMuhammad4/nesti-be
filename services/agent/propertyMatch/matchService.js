@@ -1,11 +1,3 @@
-/**
- * Agent property matches (chat meta)
- *
- * Buy intent: score other seller leads vs this buyer (budget, area, beds).
- * Sell intent: score (a) other seller leads as comparables, and (b) buyer leads vs this listing — merged by score.
- * Data: LeadMatch + LeadProfile for the same agent (embed owner). Results are computed each request, not stored.
- */
-
 import LeadMatch from '../../../models/LeadMatch.js';
 import LeadProfile from '../../../models/LeadProfile.js';
 import { getResolvedPropertyMatchScoring } from './scoringConfig.js';
@@ -23,19 +15,15 @@ import {
   scoreRowsForSellerComparable,
 } from './scoreRows.js';
 
-// ─── Other sellers on file (this agent’s pipeline) ───────────────────────────
-
 function sellerLeadProfileToRow(profile) {
   const price = parseInventoryPrice(profile.expected_price || profile.budget);
   if (!price || price <= 0) return null;
   const loc = (profile.location || '').trim();
   const addr = (profile.property_address || '').trim();
   if (!loc && !addr) return null;
-
   const beds = parseInt(String(profile.bedrooms || ''), 10);
   const baths = parseFloat(String(profile.bathrooms || ''));
   const typeLabel = (profile.property_type || 'Property').trim();
-
   return {
     _id: `lead:${String(profile._id)}`,
     title: typeLabel,
@@ -149,11 +137,6 @@ async function leadProfileForAgentIntent({ conversationId, userId, intent }) {
   if (!lm?.lead_profile_id) return null;
   return LeadProfile.findById(lm.lead_profile_id).lean();
 }
-
-/** After lead creation: same chat turn, show scored matches for this visitor’s intent (agent embeds only).
- *  `matchIntent` should reflect the visitor’s buy/sell choice (e.g. form intent), not necessarily the
- *  model’s `###META###` intent — otherwise a misclassified “sell” turn would show seller comparables +
- *  buyer inquiries instead of listings-only for a buyer. */
 export async function resolveAgentPropertyMatchesForChat({
   isAgent,
   hasContact,

@@ -1,8 +1,9 @@
+import ChatConversation from '../../../models/ChatConversation.js';
 import LeadMatch from '../../../models/LeadMatch.js';
 import LeadProfile from '../../../models/LeadProfile.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
-import { getFlowForRole } from '../../chat/flows/index.js';
-import { recomputeSignalsForPropertyMatches } from '../../chatService.js';
+import { getFlowForRole } from '../../chat/flows/getFlowForRole.js';
+import { recomputeSignalsForPropertyMatches } from '../../chat/chatService.js';
 import { resolveAgentPropertyMatchesForChat } from '../../agent/propertyMatch/matchService.js';
 export function agentDisplayName(ctx) {
   return (
@@ -64,4 +65,15 @@ export async function fetchPropertyMatchBundle(ctx) {
     propertyMatchIntent,
     storedForm,
   };
+}
+
+export async function appendRun(conversationId, entry) {
+  await ChatConversation.findByIdAndUpdate(conversationId, {
+    $push: { post_booking_automation_runs: entry },
+  });
+}
+
+export function alreadyRan(conversation, key, dedupe) {
+  const runs = conversation.post_booking_automation_runs || [];
+  return runs.some((r) => r.key === key && r.dedupe_key === dedupe);
 }

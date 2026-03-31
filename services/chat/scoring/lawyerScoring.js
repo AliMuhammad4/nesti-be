@@ -1,9 +1,11 @@
-import LeadProfile from '../../../models/LeadProfile.js';
-import LeadMatch from '../../../models/LeadMatch.js';
-import LeadAttribution from '../../../models/LeadAttribution.js';
 import logger from '../../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { mergeSignals } from './common.js';
+import {
+  createValidatedLeadAttribution,
+  createValidatedLeadMatch,
+  createValidatedLeadProfile,
+} from './leadPersistence.js';
 const LAWYER_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestLawyerGrade = (a, b) =>
   (LAWYER_GRADE_ORDER[a] || 0) >= (LAWYER_GRADE_ORDER[b] || 0) ? a : b;
@@ -175,7 +177,7 @@ export const createLawyerLeadRecords = async ({
   const fq       = formContact || {};
   const ai       = aiDetails || {};
 
-  const leadProfile = await LeadProfile.create({
+  const leadProfile = await createValidatedLeadProfile({
     intent:                   'buy',
     full_name:                contactInfo.name    || 'Unknown',
     email:                    contactInfo.email   || '',
@@ -199,7 +201,7 @@ export const createLawyerLeadRecords = async ({
     total_score:              leadScore,
   });
 
-  const leadMatch = await LeadMatch.create({
+  const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
     professional_profile_id: professionalProfileId,
     conversation_id:         conversation._id,
@@ -223,7 +225,7 @@ export const createLawyerLeadRecords = async ({
     },
   });
 
-  await LeadAttribution.create({
+  await createValidatedLeadAttribution({
     lead_type:       leadType,
     source:          'chatbot',
     converted:       false,

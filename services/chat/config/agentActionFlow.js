@@ -1,16 +1,9 @@
-/**
- * Agent appointment / Calendly guidance by lead tier and intent.
- * Score bands (see agentScoring.js): hot 80–100, warm 60–79, lukewarm 40–59, cold 0–39.
- * Client spec: WARM = 60–79, EARLY = 0–59 → lukewarm uses the early flow, not warm.
- */
-
 const mapGradeToTier = (grade) => {
   if (grade === 'hot') return 'hot';
   if (grade === 'warm') return 'warm';
   return 'early';
 };
 
-/** Backend jobs after Calendly `invitee.created` (see services/calendly/postBookingAutomations.js). */
 const BUYER = {
   hot: {
     goal: 'Get them into a showing or strategy call immediately',
@@ -86,7 +79,6 @@ const SELLER = {
   warm: {
     goal: 'Listing strategy session',
     recommendedAppointment: [],
-    // Requirements list Calendly + AI sends only; no fixed Nesti prompt line.
     prompt: '',
     calendlyOptions: ['Seller Strategy Call', 'Home Value Review'],
     aiSupportAfterBooking: ['Market report', 'Recent neighbourhood sales'],

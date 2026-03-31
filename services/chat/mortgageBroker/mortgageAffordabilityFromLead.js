@@ -1,5 +1,5 @@
-import { partitionBuyerBudgetInputs, parseMaxBudget } from '../agent/propertyMatch/parsing.js';
-import { getMortgageBrokerActionFlow } from './config/mortgageBrokerActionFlow.js';
+import { partitionBuyerBudgetInputs, parseMaxBudget } from '../../agent/propertyMatch/parsing.js';
+import { getMortgageBrokerActionFlow } from '../config/mortgageBrokerActionFlow.js';
 const DEFAULT_RATE = 5.5;
 const DEFAULT_AMORT_YEARS = 25;
 const AFFORDABILITY_DISCLAIMER =

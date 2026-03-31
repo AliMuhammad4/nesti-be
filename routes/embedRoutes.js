@@ -1,11 +1,13 @@
 import express from 'express';
 const router = express.Router();
 import { protect } from '../middleware/authMiddleware.js';
+import { validateBody } from '../middleware/validate.js';
 import crypto from 'crypto';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import { PROFESSIONAL_TYPE } from '../constants/roles.js';
 import { validateWidgetRoleAgainstProfile } from '../utils/embedWidgetRole.js';
+import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
 
 const generateEmbedToken = async (req, res, next) => {
   try {
@@ -103,10 +105,10 @@ const deleteEmbed = async (req, res, next) => {
   }
 };
 
-router.post('/generate', protect, generateEmbedToken);
+router.post('/generate', protect, validateBody(embedGenerateBodySchema), generateEmbedToken);
 router.get('/list', protect, listEmbeds);
 router.get('/resolve/:token', resolveEmbed);
-router.patch('/:id', protect, updateEmbed);
+router.patch('/:id', protect, validateBody(embedPatchBodySchema), updateEmbed);
 router.delete('/:id', protect, deleteEmbed);
 
 export default router;

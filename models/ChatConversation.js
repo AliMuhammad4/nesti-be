@@ -4,6 +4,13 @@ import {
   WIDGET_AGENT_TYPE,
   WIDGET_AGENT_TYPE_VALUES,
 } from '../constants/roles.js';
+import {
+  CALENDLY_BOOKING_STATUSES,
+  CHAT_INTENTS,
+  LEAD_CLASSIFICATIONS,
+  LEAD_GRADES,
+  POST_BOOKING_RUN_STATUSES,
+} from '../constants/validationEnums.js';
 
 const chatConversationSchema = new mongoose.Schema(
   {
@@ -29,7 +36,6 @@ const chatConversationSchema = new mongoose.Schema(
     embed_token: {
       type: String,
     },
-    /** Denormalized from ChatbotEmbedUrl.widget_role for flow routing without an extra join. */
     embed_flow_role: {
       type: String,
       enum: PROFESSIONAL_TYPE_VALUES,
@@ -45,7 +51,7 @@ const chatConversationSchema = new mongoose.Schema(
     },
     intent: {
       type: String,
-      enum: ['buy', 'sell'],
+      enum: CHAT_INTENTS,
       default: 'buy',
     },
     lead_score: {
@@ -56,19 +62,12 @@ const chatConversationSchema = new mongoose.Schema(
     },
     lead_grade: {
       type: String,
-      enum: ['hot', 'warm', 'cold', 'unscored'],
+      enum: LEAD_GRADES,
       default: 'unscored',
     },
     lead_classification: {
       type: String,
-      enum: [
-        'Hot Buyer', 'Warm Buyer', 'Cold Buyer',
-        'Hot Seller', 'Warm Seller', 'Cold Seller',
-        'Hot Lead', 'Warm Lead', 'Cold Lead',
-        'Hot Mortgage Lead', 'Warm Mortgage Lead', 'Cold Mortgage Lead',
-        'Hot Lawyer Lead', 'Warm Lawyer Lead', 'Cold Lawyer Lead',
-        'unclassified',
-      ],
+      enum: LEAD_CLASSIFICATIONS,
       default: 'unclassified',
     },
     lead_reasons: {
@@ -98,7 +97,7 @@ const chatConversationSchema = new mongoose.Schema(
     /** Set by POST /api/webhooks/calendly when invitee books or cancels (see calendlyWebhookService). */
     calendly_booking_status: {
       type: String,
-      enum: ['booked', 'canceled'],
+      enum: CALENDLY_BOOKING_STATUSES,
     },
     calendly_booking_at: {
       type: Date,
@@ -110,16 +109,12 @@ const chatConversationSchema = new mongoose.Schema(
           key:        { type: String, required: true },
           dedupe_key: { type: String, required: true },
           ran_at:     { type: Date, default: Date.now },
-          status:     { type: String, enum: ['completed', 'failed', 'skipped'], required: true },
+          status:     { type: String, enum: POST_BOOKING_RUN_STATUSES, required: true },
           detail:     { type: String },
         },
       ],
       default: [],
     },
-    /**
-     * Calendly may deliver `invitee.created` more than once; we atomically claim each invitee
-     * dedupe key so digest email runs only once per booking.
-     */
     post_booking_digest_dedupes: {
       type:    [String],
       default: [],

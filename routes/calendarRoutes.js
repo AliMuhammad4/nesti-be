@@ -1,7 +1,11 @@
 import express from 'express';
 import mongoose from 'mongoose';
-
 import { protect } from '../middleware/authMiddleware.js';
+import { validateBody } from '../middleware/validate.js';
+import {
+  webhookSubscriptionBodySchema,
+  simulateInviteeBodySchema,
+} from '../schemas/calendarRouteSchemas.js';
 import CalendarIntegration from '../models/CalendarIntegration.js';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
 import ChatConversation from '../models/ChatConversation.js';
@@ -23,9 +27,7 @@ import {
   registerCalendlyInviteeWebhook,
 } from '../services/calendly/registerInviteeWebhook.js';
 import { processCalendlyWebhook } from '../services/calendly/calendlyWebhookService.js';
-
 const router = express.Router();
-
 function maskEmbedToken(token) {
   if (token == null || typeof token !== 'string') return null;
   const t = token.trim();
@@ -34,7 +36,6 @@ function maskEmbedToken(token) {
   return `…${t.slice(-6)}`;
 }
 
-/** Anyone with the embed token can start OAuth for that embed’s owner — dev default; prod needs CALENDLY_CONNECT_BY_EMBED=true */
 function calendlyConnectByEmbedAllowed() {
   return (
     process.env.CALENDLY_CONNECT_BY_EMBED === 'true' ||
@@ -42,7 +43,6 @@ function calendlyConnectByEmbedAllowed() {
   );
 }
 
-/** List/simulate Calendly helpers (off in production unless CALENDLY_DEV_TOOLS=true). */
 function calendlyDevToolsAllowed() {
   return (
     process.env.CALENDLY_DEV_TOOLS === 'true' || process.env.NODE_ENV !== 'production'
@@ -131,10 +131,6 @@ const connectCalendar = async (req, res) => {
   }
 };
 
-/**
- * Calendly redirects here with ?code=...&state=... (no Bearer token).
- * Register the same URL in the OAuth app as CALENDLY_REDIRECT_URI.
- */
 const callbackCalendar = async (req, res) => {
   try {
     const { provider } = req.params;
@@ -248,10 +244,6 @@ const getBookings = async (req, res) => {
   });
 };
 
-/**
- * Bearer: register invitee webhooks after ngrok URL changes.
- * Body: { "webhookUrl": "https://....ngrok-free.dev/api/webhooks/calendly" } optional if CALENDLY_WEBHOOK_TARGET_URL is set.
- */
 const registerCalendlyWebhookSubscription = async (req, res) => {
   try {
     const webhookUrl = String(
@@ -282,7 +274,6 @@ const registerCalendlyWebhookSubscription = async (req, res) => {
   }
 };
 
-/** Same as Bearer but uses embedToken (widget / local test). */
 const registerCalendlyWebhookSubscriptionEmbed = async (req, res) => {
   if (!calendlyConnectByEmbedAllowed()) {
     return res.status(403).json({
@@ -332,7 +323,6 @@ const registerCalendlyWebhookSubscriptionEmbed = async (req, res) => {
   }
 };
 
-/** GET ?embedToken= — list Calendly webhook_subscriptions for the OAuth user (debug ngrok URL / scope). */
 const listCalendlyWebhooksEmbed = async (req, res) => {
   if (!calendlyConnectByEmbedAllowed() || !calendlyDevToolsAllowed()) {
     return res.status(403).json({ success: false, message: 'Not available' });
@@ -361,10 +351,6 @@ const listCalendlyWebhooksEmbed = async (req, res) => {
   }
 };
 
-/**
- * Dev: pretend Calendly POSTed invitee.created — updates ChatConversation / LeadMatch like a real webhook.
- * Body: { embedToken, conversationId, email? } — conversation must belong to embed owner.
- */
 const simulateCalendlyInviteeCreatedEmbed = async (req, res) => {
   if (!calendlyConnectByEmbedAllowed() || !calendlyDevToolsAllowed()) {
     return res.status(403).json({ success: false, message: 'Not available' });
@@ -443,10 +429,23 @@ const disconnectCalendar = async (req, res) => {
 
 router.get('/connect/calendly/embed', connectCalendlyByEmbed);
 router.get('/status/embed', getCalendarStatusByEmbed);
-router.post('/calendly/webhook-subscription', protect, registerCalendlyWebhookSubscription);
-router.post('/calendly/webhook-subscription/embed', registerCalendlyWebhookSubscriptionEmbed);
+router.post(
+  '/calendly/webhook-subscription',
+  protect,
+  validateBody(webhookSubscriptionBodySchema),
+  registerCalendlyWebhookSubscription
+);
+router.post(
+  '/calendly/webhook-subscription/embed',
+  validateBody(webhookSubscriptionBodySchema),
+  registerCalendlyWebhookSubscriptionEmbed
+);
 router.get('/calendly/webhook-subscriptions/embed', listCalendlyWebhooksEmbed);
-router.post('/calendly/simulate-invitee-created/embed', simulateCalendlyInviteeCreatedEmbed);
+router.post(
+  '/calendly/simulate-invitee-created/embed',
+  validateBody(simulateInviteeBodySchema),
+  simulateCalendlyInviteeCreatedEmbed
+);
 router.get('/connect/:provider', protect, connectCalendar);
 router.get('/callback/:provider', callbackCalendar);
 router.get('/status', protect, getCalendarStatus);

@@ -8,6 +8,7 @@ import {
 } from '../../agent/propertyMatch/parsing.js';
 import { humanizeFinancingStatus } from '../../agent/propertyMatch/scoreRows.js';
 import { agentDisplayName, fetchPropertyMatchBundle, loadLeadProfileForConversation } from './postBookingContext.js';
+import { getLawyerActionFlow } from '../../chat/config/lawyerActionFlow.js';
 import {
   EMAIL_LINK_STYLE,
   MAX_MAP_STOPS,
@@ -22,7 +23,7 @@ import {
   matchesToHtml,
   sellerChecklistHtml,
   sellerListingSnapshotHtml,
-} from './postBookingEmailHtml.js';
+} from './postBookingEmail.js';
 
 export async function buildPropertyMatchesSection(ctx) {
   const { flowType } = ctx;
@@ -498,6 +499,79 @@ export async function buildMortgageReadinessGuideSection(ctx) {
   return { status: 'completed', detail: 'readiness_guide', sectionHtml };
 }
 
+export async function buildLawyerClosingChecklistSection(ctx) {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.LAWYER) {
+    return { status: 'skipped', detail: 'not_lawyer_embed', sectionHtml: null };
+  }
+  const leadProfile = await loadLeadProfileForConversation({
+    conversationId: ctx.conversation._id,
+    userId:         ctx.userId,
+    intent:         'buy',
+  });
+  const guest = escapeHtml(leadProfile?.full_name?.trim() || 'there');
+  const lawyer = agentDisplayName(ctx);
+  const stage = escapeHtml(leadProfile?.transaction_stage?.replace(/_/g, ' ') || '—');
+  const closing = escapeHtml(leadProfile?.closing_timeline?.replace(/_/g, ' ') || '—');
+  const sectionHtml = `
+    <p style="margin:0 0 12px;">Hi ${guest}, here is a concise <strong>closing checklist</strong> and <strong>document preparation</strong> guide before your consultation with <strong>${lawyer}</strong>. Your lawyer will confirm what applies to your file.</p>
+    <ul style="margin:0 0 12px;padding-left:20px;line-height:1.55;">
+      <li style="margin-bottom:8px;"><strong>Transaction snapshot:</strong> stage ${stage}; expected closing window ${closing}.</li>
+      <li style="margin-bottom:8px;"><strong>Closing checklist:</strong> review outstanding conditions, title matters, lender instructions, and closing adjustments.</li>
+      <li style="margin-bottom:8px;"><strong>Documents to prepare:</strong> government-issued ID; agreement of purchase and sale; lender or mortgage correspondence; void cheque for deposits if requested.</li>
+      <li style="margin-bottom:0;"><strong>Questions to bring:</strong> title, insurance, closing costs, and any dates that must align with your lender.</li>
+    </ul>
+    <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">Not legal advice — general preparation only.</p>
+  `;
+  return { status: 'completed', detail: 'lawyer_closing', sectionHtml };
+}
+
+export async function buildLawyerLegalPreparationSection(ctx) {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.LAWYER) {
+    return { status: 'skipped', detail: 'not_lawyer_embed', sectionHtml: null };
+  }
+  const leadProfile = await loadLeadProfileForConversation({
+    conversationId: ctx.conversation._id,
+    userId:         ctx.userId,
+    intent:         'buy',
+  });
+  const guest = escapeHtml(leadProfile?.full_name?.trim() || 'there');
+  const lawyer = agentDisplayName(ctx);
+  const flow = getLawyerActionFlow(ctx.conversation.lead_grade || 'warm');
+  const sectionHtml = `
+    <p style="margin:0 0 12px;">Hi ${guest}, you&rsquo;ve booked <strong>${escapeHtml(flow.goal)}</strong> with <strong>${lawyer}</strong>. This section summarizes <strong>legal preparation</strong> themes — not legal advice.</p>
+    <ul style="margin:0 0 12px;padding-left:20px;line-height:1.55;">
+      <li style="margin-bottom:8px;">What typically happens between offer acceptance and closing (milestones vary by province and file).</li>
+      <li style="margin-bottom:8px;">How your lawyer coordinates with your lender and realtor when applicable.</li>
+      <li style="margin-bottom:0;">Documents and information to gather early so review stays on schedule.</li>
+    </ul>
+    <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">Use your appointment to confirm specifics for your transaction.</p>
+  `;
+  return { status: 'completed', detail: 'lawyer_legal_prep', sectionHtml };
+}
+
+export async function buildLawyerLegalEducationSection(ctx) {
+  if (ctx.flowType !== PROFESSIONAL_TYPE.LAWYER) {
+    return { status: 'skipped', detail: 'not_lawyer_embed', sectionHtml: null };
+  }
+  const leadProfile = await loadLeadProfileForConversation({
+    conversationId: ctx.conversation._id,
+    userId:         ctx.userId,
+    intent:         'buy',
+  });
+  const guest = escapeHtml(leadProfile?.full_name?.trim() || 'there');
+  const lawyer = agentDisplayName(ctx);
+  const sectionHtml = `
+    <p style="margin:0 0 12px;">Hi ${guest}, you&rsquo;ve booked an introductory session with <strong>${lawyer}</strong> for <strong>real estate legal education</strong> — how lawyers support purchases, sales, and transfers in your market.</p>
+    <ul style="margin:0 0 12px;padding-left:20px;line-height:1.55;">
+      <li style="margin-bottom:8px;">Bring your top questions (timeline, documents, first-time buyer steps).</li>
+      <li style="margin-bottom:8px;">Share whether you are browsing, under contract, or somewhere in between.</li>
+      <li style="margin-bottom:0;">Ask how legal review fits with financing and closing.</li>
+    </ul>
+    <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">Educational overview only — not legal advice.</p>
+  `;
+  return { status: 'completed', detail: 'lawyer_legal_edu', sectionHtml };
+}
+
 export const SECTION_BUILDERS = {
   property_matches:           buildPropertyMatchesSection,
   showing_itinerary:          buildShowingItinerarySection,
@@ -509,4 +583,7 @@ export const SECTION_BUILDERS = {
   mortgage_preapproval_docs:  buildMortgagePreapprovalDocsSection,
   mortgage_planning_summary:  buildMortgagePlanningSummarySection,
   mortgage_readiness_guide:   buildMortgageReadinessGuideSection,
+  lawyer_closing_checklist:    buildLawyerClosingChecklistSection,
+  lawyer_legal_preparation:    buildLawyerLegalPreparationSection,
+  lawyer_legal_education:      buildLawyerLegalEducationSection,
 };

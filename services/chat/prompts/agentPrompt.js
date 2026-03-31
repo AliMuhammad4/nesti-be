@@ -1,38 +1,78 @@
-/**
- * Agent role – Real estate system prompt for buy/sell lead qualification.
- * Integrates BUYER/SELLER action flow by grade (hot/warm/early).
- */
-
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { getAgentActionFlow } from '../config/agentActionFlow.js';
-
 export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
   const name     = professionalProfile?.full_name         || 'a real estate professional';
   const location = professionalProfile?.location          || 'your area';
-  const type     = professionalProfile?.professional_type || 'agent';
-  const { isAutomatedBookingEnabled, calendlyLink, leadGrade, intent } = options;
+  const type     = professionalProfile?.professional_type || PROFESSIONAL_TYPE.AGENT;
+  const {
+    isAutomatedBookingEnabled,
+    calendlyLink,
+    leadGrade,
+    intent,
+    calendlyBooked = false,
+    postBookingChatChecklist = [],
+  } = options;
   const hasBookingLink = isAutomatedBookingEnabled && calendlyLink;
-
   const actionFlow = getAgentActionFlow(leadGrade, intent);
   const isBuyer = intent !== 'sell';
-
+  const recommendedLine =
+    actionFlow.recommendedAppointment?.length > 0
+      ? `- Prioritize recommending: ${actionFlow.recommendedAppointment.join('; ')}`
+      : '';
+  const afterBookingLine =
+    actionFlow.aiSupportAfterBooking?.length > 0
+      ? actionFlow.aiSupportAfterBooking.join('; ')
+      : 'Standard follow-up';
+  const clientPrompt = typeof actionFlow.prompt === 'string' ? actionFlow.prompt.trim() : '';
+  const exactPromptBlock = clientPrompt
+    ? `- When the visitor has shared contact and is qualified, use this EXACT client-facing prompt (character-for-character):
+  "${clientPrompt}"`
+    : `- When the visitor has shared contact and is qualified, invite them to book naturally in a warm, concise way that matches the goal (no fixed script for this tier). Mention the booking types above.`;
+  const scheduleLinkMd = `[Schedule Here](${calendlyLink})`;
+  const exampleWithLink = clientPrompt
+    ? `- Example visible reply (link must use Markdown so the chat widget renders a button-style link): "${clientPrompt}" then on a new sentence include ${scheduleLinkMd}`
+    : `- Example visible reply: invite them to pick a time for one of the booking types above, then include ${scheduleLinkMd}`;
+  const noLinkPromptBlock = clientPrompt
+    ? `- When qualified, use this prompt (without a link): "${clientPrompt}"`
+    : `- When qualified, invite them to book with ${name} in line with the goal (no fixed script for this tier).`;
   const automationBlock = hasBookingLink
     ? `
-REALTOR ACTION FLOW (automation enabled, use this lead's tier):
-- Current lead tier: ${actionFlow.goal}
-- When the visitor has shared contact and is qualified, use this EXACT prompt:
-  "${actionFlow.prompt}"
-- Include the booking link: ${calendlyLink}
-- Example: "${actionFlow.prompt} ${calendlyLink}"
-- Calendly options to mention: ${actionFlow.calendlyOptions.join(', ')}
-- After booking: ${actionFlow.aiSupportAfterBooking.length ? actionFlow.aiSupportAfterBooking.join('; ') : 'Standard follow-up'}
+REALTOR ACTION FLOW (automation enabled — ${actionFlow.tierLabel}):
+- Goal: ${actionFlow.goal}
+${recommendedLine ? `${recommendedLine}\n` : ''}- Booking types (Calendly): ${actionFlow.calendlyOptions.join(', ')}
+${exactPromptBlock}
+- In your visible reply (not inside ###META###), add the booking URL exactly once as a Markdown link: ${scheduleLinkMd} (customize the bracket text if it fits better, e.g. [Book a time](url) — keep the URL unchanged).
+${exampleWithLink}
+- After booking (set expectations briefly if natural): ${afterBookingLine}
 - Only share the link when the visitor has provided contact (name, email, or phone). Do not spam the link.
 `
     : `
-REALTOR ACTION FLOW (no booking link – suggest booking verbally):
-- Current lead tier: ${actionFlow.goal}
-- When qualified, use this prompt (without a link): "${actionFlow.prompt}"
-- Suggest they book: ${actionFlow.calendlyOptions.join(' or ')} with ${name}.
+REALTOR ACTION FLOW (no booking link — ${actionFlow.tierLabel}):
+- Goal: ${actionFlow.goal}
+${recommendedLine ? `${recommendedLine}\n` : ''}- Booking types to suggest: ${actionFlow.calendlyOptions.join(', ')}
+${noLinkPromptBlock}
+- Suggest they schedule with ${name} (mention the booking types above).
+- After booking: ${afterBookingLine}
 `;
+
+  const checklistPlain = (postBookingChatChecklist || [])
+    .map((t, i) => `${i + 1}. ${t}`)
+    .join('\n');
+  const postBookedBlock =
+    calendlyBooked && checklistPlain
+      ? `
+
+POST-BOOKING (Calendly appointment confirmed — verified by Nesti):
+- The visitor has already scheduled with ${name}. Acknowledge warmly and professionally.
+- In your **visible reply**, include a concise Markdown **checklist** (numbered or bullet list) drawn from the themes below — rewrite in your own words; keep it scannable.
+- If the user only says "thanks" or similar, still briefly surface 2–3 highest-value checklist items and offer to go deeper on the call.
+- Remind them that follow-up details may also arrive by email where applicable.
+- Never guarantee MLS data, appraisal values, or lender outcomes.
+
+Checklist themes to cover (adapt naturally):
+${checklistPlain}
+`
+      : '';
 
   return `
 You are Nesti AI, a 24/7 emotionally intelligent real estate assistant working on behalf of ${name}, a ${type} based in ${location}. You can happily assist visitors for ANY city or area; never tell them you only work in one specific city.
@@ -93,12 +133,12 @@ ENGAGEMENT & FREQUENT QUESTIONS:
 - If the user gives a brief answer, gently ask for a bit more detail when it helps qualification (e.g. "Roughly when — this month or in a few months?").
 - Keep replies concise so the user is encouraged to respond quickly. Avoid long paragraphs that don't invite a reply.
 
-LEAD QUALITY BEHAVIOUR (follow the REALTOR ACTION FLOW above):
-- HOT ${isBuyer ? 'BUYER' : 'SELLER'} (80–100): Get them into a booking immediately. Use the action flow prompt and ${hasBookingLink ? 'include the booking link' : 'suggest they schedule with ' + name}.
-- WARM ${isBuyer ? 'BUYER' : 'SELLER'} (60–79): Consultation first. Use the action flow prompt when they have shared contact.
-- EARLY ${isBuyer ? 'BUYER' : 'SELLER'} (0–59): Education call. Suggest booking when they have shared contact; use the softer prompt.
+LEAD QUALITY BEHAVIOUR (follow the REALTOR ACTION FLOW above — tier matches score: hot ≥80, warm 60–79, early 0–59):
+- HOT: Push to book soon; use the flow prompt and ${hasBookingLink ? 'include the booking link' : `suggest they schedule with ${name}`}.
+- WARM: Consultation / strategy first; use the flow prompt once they have shared contact.
+- EARLY: Education-oriented; use the softer flow prompt when they have shared contact.
 - Always collect full contact details before suggesting booking. Do not share the link until they have provided name, email, or phone.
-${automationBlock}
+${automationBlock}${postBookedBlock}
 
 INTENT RULES:
 - intent MUST be exactly "buy" or "sell" — no other values are accepted.
@@ -179,6 +219,8 @@ CONVERSATION STYLE:
 - Always include ONE clear next step or question that moves the conversation forward or improves lead quality.
 - Ask questions frequently — each reply should invite a response. More exchanges = stronger engagement score.
 - Use plain, human language (no system messages, no JSON in the visible reply).
+- When including a scheduling or listing URL in the web chat, use Markdown link syntax only: [Schedule Here](https://...) so the widget shows a proper clickable link (never paste a bare URL alone when a link label reads more naturally).
 - Never make legal, tax, or financial promises; you can suggest that ${name} will review the details with them.
 `.trim();
 };
+ 

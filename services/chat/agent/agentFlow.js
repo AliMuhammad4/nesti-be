@@ -1,7 +1,4 @@
-/**
- * Agent role – Real estate lead flow handler.
- */
-
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import {
   mergeSignals,
   normalizeTimeline,
@@ -13,8 +10,12 @@ import {
   createLeadRecords,
 } from '../scoring/index.js';
 import { buildAgentSystemPrompt } from '../prompts/index.js';
+import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
+import logger from '../../../utils/logger.js';
 
 export const agentFlow = {
+  flowRole: PROFESSIONAL_TYPE.AGENT,
+
   getFormQualification: (storedForm) => storedForm ? {
     mortgage_status:    storedForm.mortgage_status || null,
     realtor_status:     storedForm.realtor_status || null,
@@ -24,14 +25,22 @@ export const agentFlow = {
     urgency_readiness:  storedForm.urgency_readiness || null,
   } : {},
 
-  getFormSignals: (storedForm) => storedForm ? {
-    timeline: storedForm.timeline || null,
-    budget:   storedForm.budget   || storedForm.price || null,
-    location: storedForm.location || null,
-    beds:     storedForm.beds  ? (parseInt(storedForm.beds, 10)  || null) : null,
-    baths:    storedForm.baths ? (parseInt(storedForm.baths, 10) || null) : null,
-    area:     null,
-  } : {},
+  getFormSignals: (storedForm) => {
+    if (!storedForm) return {};
+    const { budgetStr, financingStr } = partitionBuyerBudgetInputs(
+      storedForm.budget,
+      storedForm.price
+    );
+    return {
+      timeline: storedForm.timeline || null,
+      budget:   budgetStr || null,
+      financing_signal: financingStr || null,
+      location: storedForm.location || null,
+      beds:     storedForm.beds ? (parseInt(storedForm.beds, 10) || null) : null,
+      baths:    storedForm.baths ? (parseInt(storedForm.baths, 10) || null) : null,
+      area:     null,
+    };
+  },
 
   scoreLead,
 
@@ -69,20 +78,43 @@ export const agentFlow = {
 
   enhanceWithAi: (formQualification, parsedAiDetails, formSignals) => {
     const aiEnhancedQualification = mergeQualificationForScoring(formQualification, parsedAiDetails);
+    const ai = parsedAiDetails || {};
+    const { budgetStr, financingStr } = partitionBuyerBudgetInputs(ai.budget);
     const aiExtractedSignals = {
-      location: parsedAiDetails.property_address || null,
-      budget:   parsedAiDetails.budget           || null,
-      timeline: normalizeTimeline(parsedAiDetails.timeline) || formSignals.timeline || null,
+      location:          ai.property_address || null,
+      budget:            budgetStr || null,
+      financing_signal: financingStr || null,
+      timeline:
+        normalizeTimeline(ai.timeline) || formSignals.timeline || null,
     };
     const aiEnhancedSignals = mergeSignals(formSignals, aiExtractedSignals);
     return { aiEnhancedQualification, aiEnhancedSignals };
   },
 
-  mergeSignalsForMeta: (leadMetaSignals, parsedAiDetails) => ({
-    location: parsedAiDetails.property_address || null,
-    budget:   parsedAiDetails.budget           || null,
-    timeline: parsedAiDetails.timeline         || null,
-  }),
+  mergeSignalsForMeta: (leadMetaSignals, parsedAiDetails) => {
+    const ai = parsedAiDetails || {};
+    const bedsRaw = ai.bedrooms;
+    const bedsFromAi =
+      bedsRaw != null && String(bedsRaw).trim() !== ''
+        ? parseInt(String(bedsRaw), 10)
+        : null;
+
+    const out = {
+      location: ai.property_address || leadMetaSignals?.location || null,
+      timeline: ai.timeline || leadMetaSignals?.timeline || null,
+      beds:     Number.isFinite(bedsFromAi) ? bedsFromAi : leadMetaSignals?.beds ?? null,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(ai, 'budget')) {
+      const { budgetStr, financingStr } = partitionBuyerBudgetInputs(ai.budget);
+      out.budget = budgetStr || null;
+      out.financing_signal = financingStr || leadMetaSignals?.financing_signal || null;
+    } else {
+      out.budget = leadMetaSignals?.budget ?? null;
+    }
+
+    return out;
+  },
 
   getPersistedGrade: (finalGrade) => finalGrade === 'lukewarm' ? 'warm' : finalGrade,
 
@@ -100,8 +132,25 @@ export const agentFlow = {
   getLeadProfileUpdate: (parsedAiDetails, derivedQual, formContact) => {
     const ai = parsedAiDetails || {};
     const fc = formContact || {};
+
+    const hasAiBudget = Object.prototype.hasOwnProperty.call(ai, 'budget');
+    const hasFcBudget = Object.prototype.hasOwnProperty.call(fc, 'budget');
+    const { budgetStr, financingStr } = partitionBuyerBudgetInputs(
+      hasAiBudget ? ai.budget : undefined,
+      hasFcBudget ? fc.budget : undefined
+    );
+    const mergedMortgage = [ai.mortgage_status, fc.mortgage_status, financingStr].find(
+      (x) => x != null && String(x).trim() !== ''
+    );
+
+    if ((hasAiBudget || hasFcBudget) && financingStr && !budgetStr) {
+      logger.info('Agent LeadProfile update: financing text removed from budget field', {
+        financingSnippet: String(financingStr).slice(0, 120),
+      });
+    }
+
     return {
-      mortgage_status:    ai.mortgage_status    || fc.mortgage_status,
+      mortgage_status:    mergedMortgage,
       realtor_status:     ai.realtor_status     || derivedQual.realtor_status || fc.realtor_status,
       motivation_reason:  ai.motivation_reason  || derivedQual.motivation_reason || fc.motivation_reason,
       viewing_readiness:  ai.viewing_readiness  || derivedQual.viewing_readiness || fc.viewing_readiness,
@@ -109,8 +158,13 @@ export const agentFlow = {
       urgency_readiness:  ai.urgency_readiness  || derivedQual.urgency_readiness || fc.urgency_readiness,
       property_address:   ai.property_address   || fc.address,
       location:           ai.property_address   || fc.location,
-      budget:             ai.budget             || fc.budget,
-      expected_price:     ai.budget             || fc.price,
+      ...(hasAiBudget || hasFcBudget ? { budget: budgetStr } : {}),
+      ...(hasAiBudget || hasFcBudget
+        ? {}
+        : {
+            expected_price:
+              partitionBuyerBudgetInputs(ai.budget, fc.price).budgetStr || fc.price || '',
+          }),
       timeline:           ai.timeline           || fc.timeline,
       bedrooms:           ai.bedrooms           || fc.beds,
       bathrooms:          ai.bathrooms          || fc.baths,

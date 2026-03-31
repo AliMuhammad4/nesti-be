@@ -1,11 +1,38 @@
-import { handleChatService } from '../services/chatService.js';
+import { handleChatService, handlePropertyMatchesService } from '../services/chat/chatService.js';
+import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageBroker/mortgageAffordabilityFromLead.js';
 import { scoreLead, scoreMortgageBrokerLead, scoreLawyerLead } from '../services/chat/scoring/index.js';
+import { PROFESSIONAL_TYPE } from '../constants/roles.js';
+import logger from '../utils/logger.js';
+
+function maskEmbedToken(token) {
+  if (token == null || typeof token !== 'string') return null;
+  const t = token.trim();
+  if (!t) return null;
+  if (t.length <= 8) return '***';
+  return `…${t.slice(-6)}`;
+}
+
+function hasChatContact(meta) {
+  const c = meta?.contact;
+  if (!c || typeof c !== 'object') return false;
+  return Boolean(c.email || c.phone || c.name);
+}
 
 export const handleChat = async (req, res, next) => {
+  const startedAt = Date.now();
   try {
     const { id, message, embedToken, visitorId, agentType, channel, formContact } = req.body;
 
-    // Capture request metadata for attribution
+    logger.info('Chat API: request', {
+      op:           'chat.message',
+      session_id:   id || null,
+      embed_token:  maskEmbedToken(embedToken),
+      visitor_id:   visitorId || null,
+      agent_type:   agentType || null,
+      channel:      channel || null,
+      message_len:  typeof message === 'string' ? message.length : 0,
+    });
+
     const clientIp =
       (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
       req.socket?.remoteAddress ||
@@ -23,22 +50,87 @@ export const handleChat = async (req, res, next) => {
       clientIp,
       userAgent,
       referer,
-      formContact,   // structured contact from the frontend form (name, email, phone)
+      formContact,
+    });
+
+    const meta = result.body?.meta;
+    logger.info('Chat API: response', {
+      op:                      'chat.message',
+      http_status:             result.status,
+      ms:                      Date.now() - startedAt,
+      session_id:              result.body?.session_id ?? id ?? null,
+      visitor_id:              result.body?.visitor_id ?? visitorId ?? null,
+      conversation_id:         meta?.conversation_id ?? null,
+      intent:                  meta?.intent ?? null,
+      lead_grade:              meta?.lead_grade ?? null,
+      lead_score:              meta?.lead_score ?? null,
+      is_qualified:            meta?.is_qualified ?? null,
+      has_contact:             hasChatContact(meta),
+      automated_booking:       meta?.automated_booking_enabled ?? null,
+      calendly_booking_status: meta?.calendly_booking_status ?? null,
+      calendly_webhook_alignment: meta?.calendly_webhook_alignment ?? null,
+      has_calendly_link:       Boolean(meta?.calendly_link),
+      property_matches_avail:  meta?.property_matches_available ?? null,
     });
 
     res.status(result.status).json(result.body);
   } catch (error) {
+    logger.error('Chat API: error', {
+      op:    'chat.message',
+      error: error.message,
+      stack: error.stack,
+    });
     next(error);
   }
 };
 
-/** Score preview from form data (no chat session required) */
+export const handlePropertyMatches = async (req, res, next) => {
+  const startedAt = Date.now();
+  try {
+    const { id, embedToken, visitorId, formContact } = req.body;
+    logger.info('Chat API: property-matches request', {
+      op:          'chat.property_matches',
+      session_id:  id || null,
+      embed_token: maskEmbedToken(embedToken),
+      visitor_id:  visitorId || null,
+    });
+
+    const result = await handlePropertyMatchesService({
+      id,
+      embedToken,
+      visitorId,
+      formContact,
+    });
+
+    const pm = result.body?.meta?.property_matches;
+    const count = Array.isArray(pm) ? pm.length : 0;
+    logger.info('Chat API: property-matches response', {
+      op:                      'chat.property_matches',
+      http_status:             result.status,
+      ms:                      Date.now() - startedAt,
+      session_id:              result.body?.session_id ?? id ?? null,
+      context:                 result.body?.meta?.property_matches_context ?? null,
+      match_count:             count,
+    });
+
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    logger.error('Chat API: property-matches error', {
+      op:    'chat.property_matches',
+      error: error.message,
+      stack: error.stack,
+    });
+    next(error);
+  }
+};
+
 export const scorePreview = async (req, res, next) => {
   try {
+    let mortgage_affordability_snapshot = null;
     const formContact = req.body.formContact || req.body;
-    const professionalType = req.body.professionalType || formContact.professionalType || 'agent';
-    const isMortgageBroker = professionalType === 'mortgage_broker';
-    const isLawyer = professionalType === 'lawyer';
+    const professionalType = req.body.professionalType || formContact.professionalType || PROFESSIONAL_TYPE.AGENT;
+    const isMortgageBroker = professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+    const isLawyer = professionalType === PROFESSIONAL_TYPE.LAWYER;
     const intent = formContact.intent || 'buy';
 
     const formSignals = isLawyer
@@ -117,6 +209,7 @@ export const scorePreview = async (req, res, next) => {
       leadScore = result.leadScore;
       leadGrade = result.leadGrade;
       leadMeta = result.leadMeta;
+      mortgage_affordability_snapshot = buildMortgageAffordabilitySnapshot(formQualification, formSignals, leadGrade);
     } else {
       const formQualification = {
         mortgage_status:    formContact.mortgage_status || null,
@@ -174,6 +267,7 @@ export const scorePreview = async (req, res, next) => {
       is_qualified:      leadMeta.qualified,
       lead_reasons:      leadMeta.lead_reasons,
       sub_scores:        leadMeta.sub_scores,
+      ...(mortgage_affordability_snapshot ? { mortgage_affordability_snapshot } : {}),
     });
   } catch (error) {
     next(error);

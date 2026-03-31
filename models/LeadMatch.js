@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { LEAD_TYPES, MATCH_STATUSES } from '../constants/validationEnums.js';
 
 const leadMatchSchema = new mongoose.Schema(
   {
@@ -13,12 +14,7 @@ const leadMatchSchema = new mongoose.Schema(
     },
     lead_type: {
       type: String,
-      enum: [
-        'hot_buyer', 'warm_buyer', 'cold_buyer',
-        'hot_seller', 'warm_seller', 'cold_seller',
-        'hot_client', 'warm_client', 'cold_client',
-        'unknown',
-      ],
+      enum: LEAD_TYPES,
       default: 'unknown',
     },
     lead_profile_id: {
@@ -37,7 +33,7 @@ const leadMatchSchema = new mongoose.Schema(
     },
     match_status: {
       type: String,
-      enum: ['new', 'consult_booked', 'showing_booked', 'nurturing', 'converted'],
+      enum: MATCH_STATUSES,
       default: 'new',
     },
     compatibility_factors: {

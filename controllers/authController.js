@@ -7,12 +7,15 @@ import {
   forgotPasswordService,
   verifyResetOtpService,
   resetPasswordService,
-} from '../services/authService.js';
+} from '../services/auth/authService.js';
+
+const send = (res, result) => {
+  res.status(result.status).json(result.body);
+};
 
 const signup = async (req, res, next) => {
   try {
-    const result = await signupService(req.body);
-    res.status(result.status).json(result.body);
+    send(res, await signupService(req.body));
   } catch (error) {
     next(error);
   }
@@ -20,11 +23,13 @@ const signup = async (req, res, next) => {
 
 const verifyEmail = async (req, res, next) => {
   try {
-    const { otp } = req.body;
-    const verificationToken = req.headers.authorization || req.headers.token;
-
-    const result = await verifyEmailService({ verificationToken, otp });
-    res.status(result.status).json(result.body);
+    send(
+      res,
+      await verifyEmailService({
+        verificationToken: req.headers.authorization || req.headers.token,
+        otp: req.body.otp,
+      })
+    );
   } catch (error) {
     next(error);
   }
@@ -32,8 +37,7 @@ const verifyEmail = async (req, res, next) => {
 
 const login = async (req, res, next) => {
   try {
-    const result = await loginService(req.body);
-    res.status(result.status).json(result.body);
+    send(res, await loginService(req.body));
   } catch (error) {
     next(error);
   }
@@ -41,24 +45,24 @@ const login = async (req, res, next) => {
 
 const profile = async (req, res, next) => {
   try {
-    const result = await profileService(req.user);
-    res.status(result.status).json(result.body);
+    send(res, await profileService(req.user));
   } catch (error) {
     next(error);
   }
 };
 
-// other controller methods: google, publicProfile, changePassword, etc.
 const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
 
 const changePassword = async (req, res, next) => {
   try {
-    const result = await changePasswordService({
-      userId: req.user._id,
-      currentPassword: req.body.currentPassword,
-      newPassword: req.body.newPassword,
-    });
-    res.status(result.status).json(result.body);
+    send(
+      res,
+      await changePasswordService({
+        userId: req.user._id,
+        currentPassword: req.body.currentPassword,
+        newPassword: req.body.newPassword,
+      })
+    );
   } catch (error) {
     next(error);
   }
@@ -66,8 +70,7 @@ const changePassword = async (req, res, next) => {
 
 const forgotPassword = async (req, res, next) => {
   try {
-    const result = await forgotPasswordService(req.body);
-    res.status(result.status).json(result.body);
+    send(res, await forgotPasswordService(req.body));
   } catch (error) {
     next(error);
   }
@@ -75,8 +78,7 @@ const forgotPassword = async (req, res, next) => {
 
 const verifyResetOtp = async (req, res, next) => {
   try {
-    const result = await verifyResetOtpService(req.body);
-    res.status(result.status).json(result.body);
+    send(res, await verifyResetOtpService(req.body));
   } catch (error) {
     next(error);
   }
@@ -84,14 +86,13 @@ const verifyResetOtp = async (req, res, next) => {
 
 const resetPassword = async (req, res, next) => {
   try {
-    const resetToken =
-      req.headers.authorization || req.headers['reset-token'] || req.headers.token;
-
-    const result = await resetPasswordService({
-      resetToken,
-      newPassword: req.body.newPassword,
-    });
-    res.status(result.status).json(result.body);
+    send(
+      res,
+      await resetPasswordService({
+        resetToken: req.headers.authorization || req.headers['reset-token'] || req.headers.token,
+        newPassword: req.body.newPassword,
+      })
+    );
   } catch (error) {
     next(error);
   }
@@ -104,8 +105,17 @@ const checkEmail = stub;
 const resendVerification = stub;
 
 export {
-  signup, verifyEmail, login, profile,
-  google, googleSignup, publicProfile,
-  changePassword, forgotPassword, resetPassword,
-  verifyResetOtp, checkEmail, resendVerification,
+  signup,
+  verifyEmail,
+  login,
+  profile,
+  google,
+  googleSignup,
+  publicProfile,
+  changePassword,
+  forgotPassword,
+  resetPassword,
+  verifyResetOtp,
+  checkEmail,
+  resendVerification,
 };

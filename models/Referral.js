@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { REFERRAL_STATUSES } from '../constants/validationEnums.js';
 
 const referralSchema = new mongoose.Schema({
   user_id: {
@@ -22,7 +23,7 @@ const referralSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'rejected', 'completed'],
+    enum: REFERRAL_STATUSES,
     default: 'pending',
   },
   notes: {

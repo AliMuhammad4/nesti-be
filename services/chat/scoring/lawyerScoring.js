@@ -1,60 +1,44 @@
-/**
- * Lawyer role – NESTI 100-point real estate lawyer lead scoring.
- * Real estate lawyers care about transaction readiness, not browsing.
- */
-
-import LeadProfile from '../../../models/LeadProfile.js';
-import LeadMatch from '../../../models/LeadMatch.js';
-import LeadAttribution from '../../../models/LeadAttribution.js';
 import logger from '../../../utils/logger.js';
-
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { mergeSignals } from './common.js';
-
+import {
+  createValidatedLeadAttribution,
+  createValidatedLeadMatch,
+  createValidatedLeadProfile,
+} from './leadPersistence.js';
 const LAWYER_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
-
 export const bestLawyerGrade = (a, b) =>
   (LAWYER_GRADE_ORDER[a] || 0) >= (LAWYER_GRADE_ORDER[b] || 0) ? a : b;
-
 const buildLawyerLeadType = (grade) => `${grade}_client`;
-
 export const deriveLawyerQualificationFromText = (text = '') => {
   const t = String(text || '').toLowerCase();
   const out = {};
-
   if (/offer accepted|offer was accepted|accepted an offer|we have an offer/i.test(t)) out.transaction_stage = 'offer_accepted';
   else if (/actively submitting|submitting offers|putting in offers|making offers/i.test(t)) out.transaction_stage = 'actively_submitting';
   else if (/pre.?approval|pre.?approv stage|getting pre.?approv|mortgage stage/i.test(t)) out.transaction_stage = 'pre_approval_stage';
   else if (/just research|researching|exploring|browsing|not sure yet/i.test(t)) out.transaction_stage = 'just_researching';
-
   if (/within 30 days|30 days|this month|closing this month|next month closing/i.test(t)) out.closing_timeline = 'within_30_days';
   else if (/30.?60 days|30 to 60|1.?2 months|60 days/i.test(t)) out.closing_timeline = '30_60_days';
   else if (/60.?90 days|60 to 90|2.?3 months|90 days/i.test(t)) out.closing_timeline = '60_90_days';
   else if (/unknown|not sure|don'?t know|tbd/i.test(t) && /closing|date/i.test(t)) out.closing_timeline = 'unknown';
-
   if (/home purchase|buying a home|purchasing|purchase/i.test(t)) out.transaction_type = 'home_purchase';
   else if (/home sale|selling|sale of|selling my home/i.test(t)) out.transaction_type = 'home_sale';
   else if (/refinanc|refi/i.test(t)) out.transaction_type = 'refinance';
   else if (/title transfer|transfer title|estate transfer/i.test(t)) out.transaction_type = 'title_transfer';
-
   if (/\$?1\s*m|\$?1,?000,?000|1m\+|million plus|over a million/i.test(t)) out.property_value = '1m_plus';
   else if (/\$?700k|\$?700,?000|700k.?1m|700.?1\s*m|700k to 1m/i.test(t)) out.property_value = '700k_1m';
   else if (/\$?400k|\$?400,?000|400k.?700k|400.?700/i.test(t)) out.property_value = '400k_700k';
   else if (/under 400|below 400|less than 400k/i.test(t)) out.property_value = 'under_400k';
-
   if (/fully approved|mortgage approved|loan approved|approved/i.test(t)) out.mortgage_status = 'fully_approved';
   else if (/conditional|conditions|subject to/i.test(t)) out.mortgage_status = 'conditional_approval';
   else if (/still applying|in progress|applying|working on/i.test(t)) out.mortgage_status = 'still_applying';
-
   if (/yes.*realtor|working with (a )?realtor|have (a )?realtor|have (an )?agent/i.test(t)) out.realtor_involved = 'yes';
   else if (/no (realtor|agent)|don'?t have (a )?(realtor|agent)/i.test(t)) out.realtor_involved = 'no';
-
   if (/first time|first.?time buyer|first home|never bought/i.test(t)) out.first_time_buyer = 'yes';
   else if (/no.*second|not first|bought before|previous home/i.test(t)) out.first_time_buyer = 'no';
-
   if (/full closing|complete closing|full legal|closing services/i.test(t)) out.legal_services_needed = 'full_closing';
   else if (/title transfer|transfer services/i.test(t)) out.legal_services_needed = 'title_transfer';
   else if (/document review|review documents|contract review/i.test(t)) out.legal_services_needed = 'document_review';
-
   return out;
 };
 
@@ -193,7 +177,7 @@ export const createLawyerLeadRecords = async ({
   const fq       = formContact || {};
   const ai       = aiDetails || {};
 
-  const leadProfile = await LeadProfile.create({
+  const leadProfile = await createValidatedLeadProfile({
     intent:                   'buy',
     full_name:                contactInfo.name    || 'Unknown',
     email:                    contactInfo.email   || '',
@@ -217,7 +201,7 @@ export const createLawyerLeadRecords = async ({
     total_score:              leadScore,
   });
 
-  const leadMatch = await LeadMatch.create({
+  const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
     professional_profile_id: professionalProfileId,
     conversation_id:         conversation._id,
@@ -237,11 +221,11 @@ export const createLawyerLeadRecords = async ({
       message_snippet: messageSnippet,
       contact:         contactInfo,
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
-      professional_type: 'lawyer',
+      professional_type: PROFESSIONAL_TYPE.LAWYER,
     },
   });
 
-  await LeadAttribution.create({
+  await createValidatedLeadAttribution({
     lead_type:       leadType,
     source:          'chatbot',
     converted:       false,

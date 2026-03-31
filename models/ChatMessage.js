@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { CHAT_MESSAGE_ROLES, LEAD_GRADES } from '../constants/validationEnums.js';
 
 const chatMessageSchema = new mongoose.Schema(
   {
@@ -14,7 +15,7 @@ const chatMessageSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['user', 'assistant'],
+      enum: CHAT_MESSAGE_ROLES,
       required: true,
     },
     content: {
@@ -37,7 +38,7 @@ const chatMessageSchema = new mongoose.Schema(
     },
     lead_grade: {
       type: String,
-      enum: ['hot', 'warm', 'cold', 'unscored'],
+      enum: LEAD_GRADES,
       default: 'unscored',
     },
     meta: {

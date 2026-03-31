@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { USER_ROLE, USER_ROLE_VALUES } from '../constants/roles.js';
+import { ACCOUNT_STATUSES, SUBSCRIPTION_TIERS } from '../constants/validationEnums.js';
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -22,8 +24,8 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['agent', 'lawyer', 'mortgage_broker', 'admin'],
-    default: 'agent',
+    enum: USER_ROLE_VALUES,
+    default: USER_ROLE.AGENT,
   },
   is_verified: {
     type: Boolean,
@@ -37,12 +39,12 @@ const userSchema = new mongoose.Schema({
   },
   account_status: {
     type: String,
-    enum: ['free_trial', 'active', 'expired', 'canceled'],
+    enum: ACCOUNT_STATUSES,
     default: 'free_trial',
   },
   subscription_tier: {
     type: String,
-    enum: ['starter', 'pro', 'enterprise'],
+    enum: SUBSCRIPTION_TIERS,
     default: 'starter',
   },
   trial_ends_at: {
@@ -61,8 +63,6 @@ const userSchema = new mongoose.Schema({
     type: Date,
   }
 }, { timestamps: true });
-
-// Password hashing middleware
 userSchema.pre('save', async function () {
   if (!this.isModified('password')) {
     return;
@@ -71,9 +71,7 @@ userSchema.pre('save', async function () {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Match user entered password to hashed password in database
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
-
 export default mongoose.model('User', userSchema);

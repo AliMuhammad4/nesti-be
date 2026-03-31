@@ -1,12 +1,13 @@
 import ChatConversation from '../../models/ChatConversation.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
+import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
 const getTemperatureLabel = (grade, professionalType) => {
-  if (professionalType === 'lawyer') {
+  if (professionalType === PROFESSIONAL_TYPE.LAWYER) {
     return grade === 'hot' ? 'Transaction Ready' : grade === 'warm' ? 'Likely soon' : 'Early stage';
   }
-  if (professionalType === 'mortgage_broker') {
+  if (professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return grade === 'hot' ? 'Ready for Mortgage Now' : grade === 'warm' ? 'Likely soon' : 'Early stage';
   }
   return grade === 'hot' ? 'Ready to Act' : grade === 'warm' ? 'Likely soon' : 'Early stage';
@@ -14,7 +15,7 @@ const getTemperatureLabel = (grade, professionalType) => {
 
 const buildQualificationData = (profile, professionalType) => {
   if (!profile) return null;
-  if (professionalType === 'mortgage_broker') {
+  if (professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return {
       mortgage_timeline: profile.mortgage_timeline,
       pre_approval_status: profile.pre_approval_status || profile.mortgage_status,
@@ -26,7 +27,7 @@ const buildQualificationData = (profile, professionalType) => {
       urgency_signal: profile.urgency_signal,
     };
   }
-  if (professionalType === 'lawyer') {
+  if (professionalType === PROFESSIONAL_TYPE.LAWYER) {
     return {
       transaction_stage: profile.transaction_stage,
       closing_timeline: profile.closing_timeline,
@@ -51,10 +52,10 @@ const buildQualificationData = (profile, professionalType) => {
 const buildNextSteps = (grade, profile, professionalType) => {
   const steps = [];
   if (grade === 'hot') {
-    if (professionalType === 'lawyer') {
+    if (professionalType === PROFESSIONAL_TYPE.LAWYER) {
       steps.push('Schedule consultation immediately — client is transaction-ready');
       steps.push('Send closing checklist and documents needed');
-    } else if (professionalType === 'mortgage_broker') {
+    } else if (professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
       steps.push('Schedule a call immediately — lead is ready for mortgage');
       steps.push('Send pre-approval application link');
     } else {
@@ -62,7 +63,7 @@ const buildNextSteps = (grade, profile, professionalType) => {
     }
   } else if (grade === 'warm') {
     steps.push('Follow up within 1–2 days with next steps');
-    steps.push(professionalType === 'lawyer' ? 'Share educational content on closing process' : 'Share educational content');
+    steps.push(professionalType === PROFESSIONAL_TYPE.LAWYER ? 'Share educational content on closing process' : 'Share educational content');
   } else {
     steps.push('Add to nurture sequence');
     steps.push('Re-engage when timeline or readiness improves');
@@ -91,7 +92,7 @@ export const getLeadInsights = async ({ userId, conversationId }) => {
     ? await LeadProfile.findById(leadMatch.lead_profile_id).lean()
     : null;
 
-  const professionalType = leadMatch?.compatibility_factors?.professional_type || 'agent';
+  const professionalType = leadMatch?.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
   const leadReasons = conversation.lead_reasons?.lead_reasons || [];
   const subScores = conversation.lead_reasons?.sub_scores || {};
   const score = leadMatch?.match_score ?? conversation.lead_score ?? 0;

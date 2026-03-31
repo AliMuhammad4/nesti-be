@@ -1,5 +1,6 @@
 import express from 'express';
 const router = express.Router();
+import { PROFESSIONAL_TYPE } from '../constants/roles.js';
 import { protect, ensureAgentOrMortgageBroker } from '../middleware/authMiddleware.js';
 import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
@@ -7,16 +8,14 @@ import ChatConversation from '../models/ChatConversation.js';
 import LeadAttribution from '../models/LeadAttribution.js';
 import ChatMessage from '../models/ChatMessage.js';
 
-// GET /api/leads
-// Returns leads owned by the authenticated professional, optionally filtered by embedToken/intent/grade/status.
 const getLeads = async (req, res, next) => {
   try {
     const userId = req.user._id;
     const {
       embedToken,
-      intent,   // "buy" | "sell"
-      grade,    // "hot" | "warm" | "cold"
-      status,   // match_status
+      intent,
+      grade,
+      status,
     } = req.query;
 
     const match = { user_id: userId };
@@ -25,11 +24,10 @@ const getLeads = async (req, res, next) => {
       match.match_status = status;
     }
     if (grade) {
-      // grade is stored inside lead_type as "<grade>_buyer|seller"
       match.lead_type = new RegExp(`^${grade}_`);
     }
     if (intent === 'buy' || intent === 'sell') {
-      const suffix = intent === 'sell' ? 'seller' : 'buyer';
+      const suffix = intent === 'sell' ? 'seller' : '(buyer|client)';
       match.lead_type = new RegExp(`${suffix}$`);
     }
 
@@ -45,7 +43,6 @@ const getLeads = async (req, res, next) => {
       return res.json({ success: true, leads: [] });
     }
 
-    // Load linked profiles and conversations in bulk
     const profileIds = leadMatches
       .map((m) => m.lead_profile_id)
       .filter(Boolean);
@@ -64,7 +61,7 @@ const getLeads = async (req, res, next) => {
     const leads = leadMatches.map((m) => {
       const profile = profileById.get(String(m.lead_profile_id)) || {};
       const convo   = convoById.get(String(m.conversation_id)) || {};
-      const profType = m.compatibility_factors?.professional_type || 'agent';
+      const profType = m.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
 
       return {
         id: String(m._id),
@@ -95,7 +92,7 @@ const getLeads = async (req, res, next) => {
           backyard_needed: profile.backyard_needed || null,
           school_district_important: profile.school_district_important || null,
         },
-        qualification: profType === 'mortgage_broker'
+        qualification: profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
           ? {
               mortgage_timeline: profile.mortgage_timeline || null,
               pre_approval_status: profile.pre_approval_status || profile.mortgage_status || null,
@@ -106,7 +103,7 @@ const getLeads = async (req, res, next) => {
               purchase_purpose: profile.purchase_purpose || null,
               urgency_signal: profile.urgency_signal || null,
             }
-          : profType === 'lawyer'
+          : profType === PROFESSIONAL_TYPE.LAWYER
           ? {
               transaction_stage: profile.transaction_stage || null,
               closing_timeline: profile.closing_timeline || null,
@@ -139,8 +136,6 @@ const getLeads = async (req, res, next) => {
   }
 };
 
-// GET /api/leads/:id
-// Returns a single lead (with joined profile + conversation) owned by the authenticated professional.
 const getLeadById = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -195,7 +190,7 @@ const getLeadById = async (req, res, next) => {
         backyard_needed: profile?.backyard_needed || null,
         school_district_important: profile?.school_district_important || null,
       },
-      qualification: profType === 'mortgage_broker'
+      qualification: profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
         ? {
             mortgage_timeline: profile?.mortgage_timeline || null,
             pre_approval_status: profile?.pre_approval_status || profile?.mortgage_status || null,
@@ -206,7 +201,7 @@ const getLeadById = async (req, res, next) => {
             purchase_purpose: profile?.purchase_purpose || null,
             urgency_signal: profile?.urgency_signal || null,
           }
-        : profType === 'lawyer'
+        : profType === PROFESSIONAL_TYPE.LAWYER
         ? {
             transaction_stage: profile?.transaction_stage || null,
             closing_timeline: profile?.closing_timeline || null,
@@ -241,8 +236,6 @@ const getLeadById = async (req, res, next) => {
 router.get('/', protect, ensureAgentOrMortgageBroker, getLeads);
 router.get('/:id', protect, ensureAgentOrMortgageBroker, getLeadById);
 
-// GET /api/leads/:id/conversation
-// Returns all messages in the lead's conversation (if owned by the professional)
 const getLeadConversation = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -293,8 +286,6 @@ const getLeadConversation = async (req, res, next) => {
 
 router.get('/:id/conversation', protect, ensureAgentOrMortgageBroker, getLeadConversation);
 
-// DELETE /api/leads/:id
-// Deletes the lead match, its lead profile, attributions, conversation and messages
 const deleteLeadById = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -312,16 +303,13 @@ const deleteLeadById = async (req, res, next) => {
     const profileId = leadMatch.lead_profile_id;
     const conversationId = leadMatch.conversation_id;
 
-    // Delete lead match first
     await LeadMatch.deleteOne({ _id: leadMatch._id });
 
-    // Delete associated profile
     if (profileId) {
       await LeadProfile.deleteOne({ _id: profileId });
       await LeadAttribution.deleteMany({ lead_profile_id: profileId });
     }
 
-    // Delete conversation + messages
     if (conversationId) {
       await ChatConversation.deleteOne({ _id: conversationId });
       await ChatMessage.deleteMany({ conversation_id: conversationId });

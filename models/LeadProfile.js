@@ -1,19 +1,15 @@
 import mongoose from 'mongoose';
-
+import { CHAT_INTENTS, YES_NO_EMPTY } from '../constants/validationEnums.js';
 const leadProfileSchema = new mongoose.Schema(
   {
     intent: {
       type: String,
-      enum: ['buy', 'sell'],
+      enum: CHAT_INTENTS,
       required: true,
     },
-
-    // core contact
     full_name: { type: String },
     email: { type: String },
     phone: { type: String },
-
-    // property + requirements
     property_address: { type: String },
     location: { type: String },
     budget: { type: String },
@@ -23,29 +19,19 @@ const leadProfileSchema = new mongoose.Schema(
     bathrooms: { type: String },
     square_footage: { type: String },
     property_type: { type: String },
-
-    // property preference matching data (spec #12)
     must_have_features: { type: String },
-    parking_required: { type: String, enum: ['yes', 'no', ''], default: '' },
-    backyard_needed: { type: String, enum: ['yes', 'no', ''], default: '' },
-    school_district_important: { type: String, enum: ['yes', 'no', ''], default: '' },
-
-    // CRM contact preferences (spec #11)
+    parking_required: { type: String, enum: YES_NO_EMPTY, default: '' },
+    backyard_needed: { type: String, enum: YES_NO_EMPTY, default: '' },
+    school_district_important: { type: String, enum: YES_NO_EMPTY, default: '' },
     preferred_contact_method: { type: String },
     best_time_to_contact: { type: String },
-
-    // qualification signals captured during conversation
     mortgage_status: { type: String },
     realtor_status: { type: String },
     motivation_reason: { type: String },
     viewing_readiness: { type: String },
     living_situation: { type: String },
     urgency_readiness: { type: String },
-
-    // mortgage broker specific (NESTI Mortgage Broker Lead Scoring)
     mortgage_timeline: { type: String },
-
-    // lawyer specific (NESTI Real Estate Lawyer Lead Scoring)
     transaction_stage: { type: String },
     closing_timeline: { type: String },
     transaction_type: { type: String },
@@ -60,12 +46,10 @@ const leadProfileSchema = new mongoose.Schema(
     down_payment_readiness: { type: String },
     purchase_purpose: { type: String },
     urgency_signal: { type: String },
-
-    // meta
+    mortgage_property_budget: { type: String },
     source: { type: String, default: 'chatbot' },
     total_score: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
-
 export default mongoose.model('LeadProfile', leadProfileSchema);

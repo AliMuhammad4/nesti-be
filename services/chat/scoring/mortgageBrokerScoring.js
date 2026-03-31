@@ -1,67 +1,55 @@
-/**
- * Mortgage broker role – NESTI 100-point mortgage lead scoring.
- */
-
 import LeadProfile from '../../../models/LeadProfile.js';
-import LeadMatch from '../../../models/LeadMatch.js';
-import LeadAttribution from '../../../models/LeadAttribution.js';
 import logger from '../../../utils/logger.js';
-
-import { mergeSignals, buildLeadType } from './common.js';
-
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
+import { mergeSignals, buildMortgageBrokerLeadType } from './common.js';
+import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
+import {
+  createValidatedLeadAttribution,
+  createValidatedLeadMatch,
+  createValidatedLeadProfile,
+} from './leadPersistence.js';
 const MORTGAGE_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
-
 export const bestMortgageGrade = (a, b) =>
   (MORTGAGE_GRADE_ORDER[a] || 0) >= (MORTGAGE_GRADE_ORDER[b] || 0) ? a : b;
-
 export const deriveMortgageQualificationFromText = (text = '') => {
   const t = String(text || '').toLowerCase();
   const out = {};
-
   if (/immediately|right away|asap|urgent|apply now/i.test(t)) out.mortgage_timeline = 'immediately';
   else if (/1.?2.?month|within 1.?2 months|next month|next 2 months/i.test(t)) out.mortgage_timeline = '1_2_months';
   else if (/3.?6.?month|within 3.?6|3 to 6 months/i.test(t)) out.mortgage_timeline = '3_6_months';
   else if (/6.?12.?month|within a year|6 to 12|next year/i.test(t)) out.mortgage_timeline = '6_12_months';
   else if (/research|browsing|just looking|exploring|not sure/i.test(t)) out.mortgage_timeline = 'just_researching';
-
   if (/need pre.?approval|need pre.?approv now|want pre.?approval/i.test(t)) out.pre_approval_status = 'need_now';
   else if (/expired|pre.?approval expired|pre.?approv expired/i.test(t)) out.pre_approval_status = 'expired';
   else if (/in progress|working on pre.?approval/i.test(t)) out.pre_approval_status = 'in_progress';
   else if (/already approved|already pre.?approv|have pre.?approval/i.test(t)) out.pre_approval_status = 'already_approved';
   else if (/just research|researching|exploring/i.test(t)) out.pre_approval_status = 'just_researching';
-
   if (/75[0-9]|76[0-9]|7[7-9]\d|8[0-9]\d|9[0-9]\d|excellent credit/i.test(t)) out.credit_score_range = '750_plus';
   else if (/70[0-9]|71[0-9]|72[0-9]|73[0-9]|74[0-9]|good credit/i.test(t)) out.credit_score_range = '700_749';
   else if (/65[0-9]|66[0-9]|67[0-9]|68[0-9]|69[0-9]|fair credit/i.test(t)) out.credit_score_range = '650_699';
   else if (/60[0-9]|61[0-9]|62[0-9]|63[0-9]|64[0-9]/i.test(t)) out.credit_score_range = '600_649';
   else if (/under 600|below 600|poor credit|bad credit/i.test(t)) out.credit_score_range = 'under_600';
-
   if (/full.?time|employed full time|permanent job/i.test(t)) out.employment_status = 'full_time';
   else if (/self.?employed|self employed|own business/i.test(t)) out.employment_status = 'self_employed';
   else if (/contract|contractor|temporary/i.test(t)) out.employment_status = 'contract';
   else if (/new job|just started|less than a year/i.test(t)) out.employment_status = 'new_job';
   else if (/unemployed|between jobs|not working/i.test(t)) out.employment_status = 'unemployed';
-
   if (/\$?200\s*k|\$?200,?000|200k\+|200k plus/i.test(t)) out.household_income = '200k_plus';
   else if (/\$?150\s*k|\$?150,?000|150k\s*[-–]\s*200k|150.?200k/i.test(t)) out.household_income = '150k_200k';
   else if (/\$?100\s*k|\$?100,?000|100k\s*[-–]\s*150k/i.test(t)) out.household_income = '100k_150k';
   else if (/\$?70\s*k|\$?70,?000|70k\s*[-–]\s*100k/i.test(t)) out.household_income = '70k_100k';
   else if (/under 70k|below 70k|less than 70k/i.test(t)) out.household_income = 'under_70k';
-
   if (/20\s*%|20%|twenty percent|20 percent plus/i.test(t)) out.down_payment_readiness = '20_plus';
   else if (/10\s*[-–]\s*19|10.?19%|10 to 19 percent/i.test(t)) out.down_payment_readiness = '10_19';
   else if (/5\s*[-–]\s*9|5.?9%|5 to 9 percent/i.test(t)) out.down_payment_readiness = '5_9';
   else if (/under 5|below 5%|less than 5/i.test(t)) out.down_payment_readiness = 'under_5';
   else if (/no savings|no down payment|no money saved|haven't saved/i.test(t)) out.down_payment_readiness = 'no_savings';
-
   if (/primary residence|first home|primary home|main home/i.test(t)) out.purchase_purpose = 'primary_residence';
   else if (/investment|rental property|investment property/i.test(t)) out.purchase_purpose = 'investment';
   else if (/vacation|second home|cottage|vacation home/i.test(t)) out.purchase_purpose = 'vacation_home';
-
   if (/yes.*approved tomorrow|start house hunting immediately|immediately.*house hunt/i.test(t)) out.urgency_signal = 'yes';
   else if (/maybe|might|consider/i.test(t) && /house hunt|approved/i.test(t)) out.urgency_signal = 'maybe';
   else if (/no.*not yet|not ready|take my time/i.test(t)) out.urgency_signal = 'no';
-
   return out;
 };
 
@@ -210,7 +198,7 @@ export const createMortgageLeadRecords = async ({
   formContact,
   aiDetails,
 }) => {
-  const leadType = buildLeadType(leadGrade, 'buy');
+  const leadType = buildMortgageBrokerLeadType(leadGrade);
   const signals  = leadMeta.signals || {};
   const now      = new Date();
   const fq       = formContact || {};
@@ -222,14 +210,16 @@ export const createMortgageLeadRecords = async ({
   const locationVal = signals.location || ai.location || ai.property_address || '';
   const addressVal = contactInfo.address || ai.property_address || locationVal || '';
 
-  const leadProfile = await LeadProfile.create({
+  const { budgetStr: mbBudgetStr } = partitionBuyerBudgetInputs(fq.budget, ai.budget);
+
+  const leadProfile = await createValidatedLeadProfile({
     intent:                 'buy',
     full_name:              contactInfo.name    || 'Unknown',
     email:                  contactInfo.email   || '',
     phone:                  contactInfo.phone   || '',
     property_address:       addressVal,
     location:               locationVal,
-    budget:                 signals.budget      || fq.budget || '',
+    budget:                 mbBudgetStr || '',
     expected_price:         '',
     timeline:               fq.mortgage_timeline || ai.mortgage_timeline || '',
     bedrooms:               bedroomsVal ? String(bedroomsVal) : '',
@@ -256,11 +246,12 @@ export const createMortgageLeadRecords = async ({
     down_payment_readiness: ai.down_payment_readiness || fq.down_payment_readiness || '',
     purchase_purpose:       ai.purchase_purpose || fq.purchase_purpose || '',
     urgency_signal:         ai.urgency_signal || fq.urgency_signal || '',
+    mortgage_property_budget: fq.property_budget || ai.property_budget || '',
     source:                 'chatbot',
     total_score:            leadScore,
   });
 
-  const leadMatch = await LeadMatch.create({
+  const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
     professional_profile_id: professionalProfileId,
     conversation_id:         conversation._id,
@@ -280,11 +271,11 @@ export const createMortgageLeadRecords = async ({
       message_snippet: messageSnippet,
       contact:         contactInfo,
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
-      professional_type: 'mortgage_broker',
+      professional_type: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
     },
   });
 
-  await LeadAttribution.create({
+  await createValidatedLeadAttribution({
     lead_type:       leadType,
     source:          'chatbot',
     converted:       false,

@@ -1,6 +1,6 @@
 import crypto from 'crypto';
-import Visitor from '../../models/Visitor.js';
-import ChatMessage from '../../models/ChatMessage.js';
+import Visitor from '../../../models/Visitor.js';
+import ChatMessage from '../../../models/ChatMessage.js';
 
 // ─── Visitor Resolution ────────────────────────────────────────────────────────
 
@@ -69,7 +69,5 @@ export const accumulateContactInfo = async (conversationId, latestContact = {}) 
     accumulated = mergeContact(accumulated, stored);
   }
 
-  // Apply the latest contact on top (already extracted before this call)
   return mergeContact(accumulated, latestContact);
 };
-

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { CALENDAR_PROVIDERS } from '../constants/validationEnums.js';
 
 const calendarIntegrationSchema = new mongoose.Schema({
   user_id: {
@@ -8,7 +9,7 @@ const calendarIntegrationSchema = new mongoose.Schema({
   },
   provider: {
     type: String,
-    enum: ['google', 'calendly'],
+    enum: CALENDAR_PROVIDERS,
     required: true,
   },
   access_token: {
@@ -23,7 +24,14 @@ const calendarIntegrationSchema = new mongoose.Schema({
   },
   account_email: {
     type: String,
-  }
+  },
+  calendly_slug: {
+    type: String,
+  },
+  calendly_slug_mismatch: {
+    type:    Boolean,
+    default: false,
+  },
 }, { timestamps: true });
 
 export default mongoose.model('CalendarIntegration', calendarIntegrationSchema);

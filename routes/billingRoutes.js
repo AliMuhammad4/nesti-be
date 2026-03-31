@@ -1,6 +1,8 @@
 import express from 'express';
 const router = express.Router();
 import { protect } from '../middleware/authMiddleware.js';
+import { validateBody } from '../middleware/validate.js';
+import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 
 const setupIntent = async (req, res) => {
   res.json({ success: true, clientSecret: 'pi_secret_123' });
@@ -26,7 +28,14 @@ const getEnterpriseStatus = async (req, res) => {
 router.post('/setup-intent', protect, setupIntent);
 router.post('/subscriptions', protect, handleSubscriptions);
 router.get('/payment-methods', protect, getPaymentMethods);
-router.post('/enterprise-inquiry', protect, handleEnterpriseInquiry);
+router.post(
+  '/enterprise-inquiry',
+  protect,
+  validateBody(
+    enterpriseInquiryCreateSchema.fork(['user_id'], (s) => s.optional())
+  ),
+  handleEnterpriseInquiry
+);
 router.get('/enterprise-status', protect, getEnterpriseStatus);
 
 export default router;

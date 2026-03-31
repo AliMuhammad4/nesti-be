@@ -1,15 +1,11 @@
 import mongoose from 'mongoose';
+import { LEAD_TYPES, LEAD_QUALITY_LEVELS } from '../constants/validationEnums.js';
 
 const leadAttributionSchema = new mongoose.Schema(
   {
     lead_type: {
       type: String,
-      enum: [
-        'hot_buyer', 'warm_buyer', 'cold_buyer',
-        'hot_seller', 'warm_seller', 'cold_seller',
-        'hot_client', 'warm_client', 'cold_client',
-        'unknown',
-      ],
+      enum: LEAD_TYPES,
       default: 'unknown',
     },
     source: {
@@ -61,7 +57,7 @@ const leadAttributionSchema = new mongoose.Schema(
     },
     initial_quality: {
       type: String,
-      enum: ['hot', 'warm', 'cold'],
+      enum: LEAD_QUALITY_LEVELS,
       default: 'cold',
     },
   },

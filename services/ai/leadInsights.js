@@ -17,35 +17,37 @@ const buildQualificationData = (profile, professionalType) => {
   if (!profile) return null;
   if (professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return {
-      mortgage_timeline: profile.mortgage_timeline,
-      pre_approval_status: profile.pre_approval_status || profile.mortgage_status,
-      credit_score_range: profile.credit_score_range,
-      employment_status: profile.employment_status,
-      household_income: profile.household_income,
-      down_payment_readiness: profile.down_payment_readiness,
-      purchase_purpose: profile.purchase_purpose,
-      urgency_signal: profile.urgency_signal,
+      mortgage_timeline: profile.qualification?.mortgage_broker?.mortgage_timeline,
+      pre_approval_status:
+        profile.qualification?.mortgage_broker?.pre_approval_status ||
+        profile.qualification?.mortgage_broker?.mortgage_status,
+      credit_score_range: profile.qualification?.mortgage_broker?.credit_score_range,
+      employment_status: profile.qualification?.mortgage_broker?.employment_status,
+      household_income: profile.qualification?.mortgage_broker?.household_income,
+      down_payment_readiness: profile.qualification?.mortgage_broker?.down_payment_readiness,
+      purchase_purpose: profile.qualification?.mortgage_broker?.purchase_purpose,
+      urgency_signal: profile.qualification?.mortgage_broker?.urgency_signal,
     };
   }
   if (professionalType === PROFESSIONAL_TYPE.LAWYER) {
     return {
-      transaction_stage: profile.transaction_stage,
-      closing_timeline: profile.closing_timeline,
-      transaction_type: profile.transaction_type,
-      property_value: profile.property_value,
-      mortgage_status: profile.mortgage_status,
-      realtor_involved: profile.realtor_involved,
-      first_time_buyer: profile.first_time_buyer,
-      legal_services_needed: profile.legal_services_needed,
+      transaction_stage: profile.qualification?.lawyer?.transaction_stage,
+      closing_timeline: profile.qualification?.lawyer?.closing_timeline,
+      transaction_type: profile.qualification?.lawyer?.transaction_type,
+      property_value: profile.qualification?.lawyer?.property_value,
+      mortgage_status: profile.qualification?.lawyer?.mortgage_status,
+      realtor_involved: profile.qualification?.lawyer?.realtor_involved,
+      first_time_buyer: profile.qualification?.lawyer?.first_time_buyer,
+      legal_services_needed: profile.qualification?.lawyer?.legal_services_needed,
     };
   }
   return {
-    mortgage_status: profile.mortgage_status,
-    realtor_status: profile.realtor_status,
-    motivation_reason: profile.motivation_reason,
-    viewing_readiness: profile.viewing_readiness,
-    living_situation: profile.living_situation,
-    urgency_readiness: profile.urgency_readiness,
+    mortgage_status: profile.qualification?.agent?.mortgage_status,
+    realtor_status: profile.qualification?.agent?.realtor_status,
+    motivation_reason: profile.qualification?.agent?.motivation_reason,
+    viewing_readiness: profile.qualification?.agent?.viewing_readiness,
+    living_situation: profile.qualification?.agent?.living_situation,
+    urgency_readiness: profile.qualification?.agent?.urgency_readiness,
   };
 };
 
@@ -68,8 +70,12 @@ const buildNextSteps = (grade, profile, professionalType) => {
     steps.push('Add to nurture sequence');
     steps.push('Re-engage when timeline or readiness improves');
   }
-  if (profile?.preferred_contact_method) steps.push(`Preferred contact: ${profile.preferred_contact_method}`);
-  if (profile?.best_time_to_contact) steps.push(`Best time: ${profile.best_time_to_contact}`);
+  if (profile?.contact_preferences?.preferred_contact_method) {
+    steps.push(`Preferred contact: ${profile.contact_preferences.preferred_contact_method}`);
+  }
+  if (profile?.contact_preferences?.best_time_to_contact) {
+    steps.push(`Best time: ${profile.contact_preferences.best_time_to_contact}`);
+  }
   return steps;
 };
 

@@ -57,6 +57,18 @@ const professionalProfileSchema = new mongoose.Schema({
     required: false,
     default: undefined,
   },
+  // New reference-based ICP storage.
+  active_icp_profile_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'IcpProfile',
+    default: null,
+  },
+  icp_profile_ids: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'IcpProfile',
+    },
+  ],
 }, { timestamps: true });
 
 export default mongoose.model('ProfessionalProfile', professionalProfileSchema);

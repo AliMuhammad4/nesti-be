@@ -6,7 +6,7 @@ import {
 } from './parsing.js';
 
 export const parseBedrooms = (profile, signals) => {
-  const b = profile?.bedrooms ?? signals?.beds;
+  const b = profile?.property?.bedrooms ?? signals?.beds;
   if (b == null || b === '') return null;
   const n = parseInt(String(b), 10);
   return Number.isFinite(n) ? n : null;
@@ -59,22 +59,22 @@ export function buyerMatchReasonsForSellerView(reasons, listingBedrooms) {
 }
 
 export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { listingBedrooms } = {}) {
-  const loc = (profile.location || profile.property_address || '').trim();
-  const beds = parseInt(String(profile.bedrooms || ''), 10);
-  const baths = parseFloat(String(profile.bathrooms || ''));
-  const type = (profile.property_type || '').trim();
+  const loc = (profile.property?.location || profile.property?.address || '').trim();
+  const beds = parseInt(String(profile.property?.bedrooms || ''), 10);
+  const baths = parseFloat(String(profile.property?.bathrooms || ''));
+  const type = (profile.property?.property_type || '').trim();
   const { budgetStr, financingStr } = partitionBuyerBudgetInputs(
-    profile.budget,
-    profile.expected_price
+    profile.property?.budget,
+    profile.property?.expected_price
   );
   const financingRaw =
-    String(profile.mortgage_status || '').trim() || financingStr || undefined;
+    String(profile.qualification?.agent?.mortgage_status || '').trim() || financingStr || undefined;
   const financingLabel = financingRaw ? humanizeFinancingStatus(financingRaw) : undefined;
 
   let price =
     (budgetStr && (parseInventoryPrice(budgetStr) || parseMaxBudget(budgetStr))) || null;
   if (price == null || !Number.isFinite(price) || price <= 0) {
-    const exp = String(profile.expected_price || '').trim();
+    const exp = String(profile.property?.expected_price || '').trim();
     if (exp) {
       price = parseInventoryPrice(exp) || parseMaxBudget(exp) || null;
       if (price != null && (!Number.isFinite(price) || price <= 0)) price = null;
@@ -148,7 +148,7 @@ export function scoreRowsForBuyer(rows, { leadProfile, maxBudget, minBeds, leadL
       reasons.push('Area match');
     }
 
-    const pt = norm(leadProfile?.property_type);
+    const pt = norm(leadProfile?.property?.property_type);
     if (pt && norm(row.property_type).includes(pt)) {
       score += b.typePoints;
       reasons.push('Property type match');
@@ -199,7 +199,7 @@ export function scoreRowsForSellerComparable(
       }
     }
 
-    const pt = norm(leadProfile?.property_type);
+    const pt = norm(leadProfile?.property?.property_type);
     if (pt && norm(row.property_type).includes(pt)) {
       score += s.typePoints;
       reasons.push('Same property type');

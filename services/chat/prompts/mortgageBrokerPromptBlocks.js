@@ -179,7 +179,7 @@ FIELD VALUES GUIDE FOR META (use these exact values):
 - household_income: "200k_plus" | "150k_200k" | "100k_150k" | "70k_100k" | "under_70k" | ""
 - down_payment_readiness: "20_plus" | "10_19" | "5_9" | "under_5" | "no_savings" | ""
 - property_budget: "clearly_defined" | "approximate" | "not_sure" | ""
-- purchase_purpose: "primary_residence" | "investment" | "vacation_home" | ""
+- purchase_purpose: "primary_residence" | "investment" | "vacation_home" | "refinance" | ""
 - urgency_signal: "yes" | "maybe" | "no" | ""
 - preferred_contact_method: "phone" | "text" | "email" | "whatsapp" | "video_call" | "in_person" | ""
 - best_time_to_contact: "morning" | "afternoon" | "evening" | "anytime" | ""

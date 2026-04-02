@@ -176,7 +176,12 @@ export const loginService = async ({ email, password }) => {
 };
 
 export const profileService = async (user) => {
-  const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id });
+  const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id })
+    .select('-property_match_scoring')
+    .lean();
+  const hasIcpConfigured = Boolean(
+    professionalProfile?.active_icp_profile_id
+  );
 
   const trialExpired =
     user.account_status === 'free_trial' &&
@@ -197,7 +202,12 @@ export const profileService = async (user) => {
         isExpired,
         ...(isExpired && { message: 'Account expired. Please upgrade.' }),
       },
-      professionalProfile: professionalProfile || null,
+      professionalProfile: professionalProfile
+        ? {
+            ...professionalProfile,
+            has_icp_configured: hasIcpConfigured,
+          }
+        : null,
     },
   };
 };

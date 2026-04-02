@@ -2,10 +2,12 @@ import logger from '../../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { mergeSignals } from './common.js';
 import {
+  bumpLeadProfileStats,
   createValidatedLeadAttribution,
   createValidatedLeadMatch,
-  createValidatedLeadProfile,
+  createOrReuseLeadProfile,
 } from './leadPersistence.js';
+import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 const LAWYER_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestLawyerGrade = (a, b) =>
   (LAWYER_GRADE_ORDER[a] || 0) >= (LAWYER_GRADE_ORDER[b] || 0) ? a : b;
@@ -167,6 +169,7 @@ export const createLawyerLeadRecords = async ({
   contactInfo,
   userId,
   professionalProfileId,
+  activeIcpProfileId,
   messageSnippet,
   formContact,
   aiDetails,
@@ -177,29 +180,52 @@ export const createLawyerLeadRecords = async ({
   const fq       = formContact || {};
   const ai       = aiDetails || {};
 
-  const leadProfile = await createValidatedLeadProfile({
-    intent:                   'buy',
-    full_name:                contactInfo.name    || 'Unknown',
-    email:                    contactInfo.email   || '',
-    phone:                    contactInfo.phone   || '',
-    property_address:        contactInfo.address || ai.property_address || '',
-    location:                 ai.location || ai.property_address || '',
-    budget:                   signals.budget || fq.budget || '',
-    expected_price:           ai.property_value || fq.property_value || '',
-    timeline:                 fq.closing_timeline || ai.closing_timeline || '',
-    preferred_contact_method:  fq.preferred_contact_method || ai.preferred_contact_method || '',
-    best_time_to_contact:     fq.best_time_to_contact || ai.best_time_to_contact || '',
-    transaction_stage:        ai.transaction_stage || fq.transaction_stage || '',
-    closing_timeline:         ai.closing_timeline || fq.closing_timeline || '',
-    transaction_type:        ai.transaction_type || fq.transaction_type || '',
-    property_value:           ai.property_value || fq.property_value || '',
-    mortgage_status:         ai.mortgage_status || fq.mortgage_status || '',
-    realtor_involved:         ai.realtor_involved || fq.realtor_involved || '',
-    first_time_buyer:         ai.first_time_buyer || fq.first_time_buyer || '',
-    legal_services_needed:   ai.legal_services_needed || fq.legal_services_needed || '',
-    source:                   'chatbot',
-    total_score:              leadScore,
+  const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
+    payload: {
+      intent: 'buy',
+      identity: {
+        full_name: contactInfo.name || 'Unknown',
+        email: contactInfo.email || '',
+        phone: contactInfo.phone || '',
+      },
+      contact_preferences: {
+        preferred_contact_method: fq.preferred_contact_method || ai.preferred_contact_method || '',
+        best_time_to_contact: fq.best_time_to_contact || ai.best_time_to_contact || '',
+      },
+      property: {
+        address: contactInfo.address || ai.property_address || '',
+        location: ai.location || ai.property_address || '',
+        budget: signals.budget || fq.budget || '',
+        expected_price: '',
+        timeline: fq.closing_timeline || ai.closing_timeline || '',
+      },
+      qualification: {
+        lawyer: {
+          transaction_stage: ai.transaction_stage || fq.transaction_stage || '',
+          closing_timeline: ai.closing_timeline || fq.closing_timeline || '',
+          transaction_type: ai.transaction_type || fq.transaction_type || '',
+          property_value: ai.property_value || fq.property_value || '',
+          mortgage_status: ai.mortgage_status || fq.mortgage_status || '',
+          realtor_involved: ai.realtor_involved || fq.realtor_involved || '',
+          first_time_buyer: ai.first_time_buyer || fq.first_time_buyer || '',
+          legal_services_needed: ai.legal_services_needed || fq.legal_services_needed || '',
+        },
+      },
+      source: 'chatbot',
+      total_score: leadScore,
+    },
+    userId,
+    professionalType: PROFESSIONAL_TYPE.LAWYER,
+    contactInfo,
+    leadGrade,
   });
+
+  let icpFit = null;
+  try {
+    icpFit = await computeIcpFitForLead(leadProfile, userId, { reusedExisting, activeIcpProfileId });
+  } catch (err) {
+    logger.warn('ICP scoring failed, skipping', { error: err.message });
+  }
 
   const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
@@ -222,7 +248,18 @@ export const createLawyerLeadRecords = async ({
       contact:         contactInfo,
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
       professional_type: PROFESSIONAL_TYPE.LAWYER,
+      repeat_visitor: reusedExisting,
     },
+    ...(icpFit
+      ? {
+          icp_fit: {
+            fit_score: icpFit.fit_score,
+            fit_tier: icpFit.fit_tier,
+            matched_factors: icpFit.matched_factors,
+            missing_factors: icpFit.missing_factors,
+          },
+        }
+      : {}),
   });
 
   await createValidatedLeadAttribution({
@@ -237,6 +274,8 @@ export const createLawyerLeadRecords = async ({
     initial_score:   leadScore,
     initial_quality: leadGrade,
   });
+
+  await bumpLeadProfileStats(leadProfile._id, 'buy', leadType);
 
   logger.info(`Lawyer lead created: ${leadType} | score: ${leadScore} | conversation: ${conversation._id}`);
 

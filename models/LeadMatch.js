@@ -40,6 +40,12 @@ const leadMatchSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    icp_fit: {
+      fit_score: { type: Number, default: null },
+      fit_tier: { type: String, enum: ['perfect_match', 'good_match', 'low_match', null], default: null },
+      matched_factors: [{ type: String }],
+      missing_factors: [{ type: String }],
+    },
     contact_count: {
       type: Number,
       default: 0,

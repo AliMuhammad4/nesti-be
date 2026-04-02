@@ -93,7 +93,9 @@ async function findLeadForBooking(email, trackingUtmContent) {
   if (byContact) return { lead: byContact, matchedVia: 'leadmatch_contact_email' };
 
   // Same email as chat-created LeadProfile (your agent flow always sets both).
-  const profile = await LeadProfile.findOne({ email: { $regex: emailRe } }).sort({ updatedAt: -1 });
+  const profile = await LeadProfile.findOne({
+    $or: [{ 'identity.canonical_email': { $regex: emailRe } }, { 'identity.email': { $regex: emailRe } }],
+  }).sort({ updatedAt: -1 });
   if (profile?._id) {
     const lm = await LeadMatch.findOne({ lead_profile_id: profile._id }).sort({ last_contact_at: -1 });
     if (lm) return { lead: lm, matchedVia: 'leadprofile_email' };

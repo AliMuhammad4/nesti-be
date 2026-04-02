@@ -85,6 +85,7 @@ export async function dispatchClientLead(createRecordsFn, params) {
   const {
     conversation,
     professionalProfileId,
+    activeIcpProfileId,
     leadScore,
     leadGrade,
     leadMeta,
@@ -102,6 +103,7 @@ export async function dispatchClientLead(createRecordsFn, params) {
   return createRecordsFn({
     conversation,
     professionalProfileId,
+    activeIcpProfileId,
     leadScore,
     leadGrade,
     leadMeta,

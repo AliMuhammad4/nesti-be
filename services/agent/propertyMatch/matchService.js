@@ -16,14 +16,14 @@ import {
 } from './scoreRows.js';
 
 function sellerLeadProfileToRow(profile) {
-  const price = parseInventoryPrice(profile.expected_price || profile.budget);
+  const price = parseInventoryPrice(profile.property?.expected_price || profile.property?.budget);
   if (!price || price <= 0) return null;
-  const loc = (profile.location || '').trim();
-  const addr = (profile.property_address || '').trim();
+  const loc = (profile.property?.location || '').trim();
+  const addr = (profile.property?.address || '').trim();
   if (!loc && !addr) return null;
-  const beds = parseInt(String(profile.bedrooms || ''), 10);
-  const baths = parseFloat(String(profile.bathrooms || ''));
-  const typeLabel = (profile.property_type || 'Property').trim();
+  const beds = parseInt(String(profile.property?.bedrooms || ''), 10);
+  const baths = parseFloat(String(profile.property?.bathrooms || ''));
+  const typeLabel = (profile.property?.property_type || 'Property').trim();
   return {
     _id: `lead:${String(profile._id)}`,
     title: typeLabel,
@@ -32,7 +32,7 @@ function sellerLeadProfileToRow(profile) {
     price,
     bedrooms: Number.isFinite(beds) ? beds : 0,
     bathrooms: Number.isFinite(baths) ? baths : 0,
-    property_type: profile.property_type || '',
+    property_type: profile.property?.property_type || '',
     image_url: '',
     listing_url: '',
     summary: '',
@@ -189,12 +189,15 @@ export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {
   if (!rows.length) return [];
 
   const budgetStr = leadProfile?.budget || signals?.budget;
+  const profileBudget = leadProfile?.property?.budget || leadProfile?.property?.expected_price;
   const maxBudget =
-    (budgetStr && parseInventoryPrice(budgetStr)) || parseMaxBudget(budgetStr) || null;
+    ((profileBudget || budgetStr) && parseInventoryPrice(profileBudget || budgetStr)) ||
+    parseMaxBudget(profileBudget || budgetStr) ||
+    null;
   const minBeds = parseBedrooms(leadProfile, signals);
   const leadLocation =
-    leadProfile?.location ||
-    leadProfile?.property_address ||
+    leadProfile?.property?.location ||
+    leadProfile?.property?.address ||
     signals?.location ||
     '';
 
@@ -222,8 +225,8 @@ export async function getSellerComparableMatches({
   let sellerRows = await loadSellerInventoryRows(userId, excludeIds, cfg.inventoryLimit);
 
   const sellerLine =
-    leadProfile?.property_address ||
-    leadProfile?.location ||
+    leadProfile?.property?.address ||
+    leadProfile?.property?.location ||
     signals?.location ||
     '';
   if (sellerLine && String(sellerLine).trim()) {
@@ -231,29 +234,29 @@ export async function getSellerComparableMatches({
   }
 
   const askStr =
-    leadProfile?.expected_price || leadProfile?.budget || signals?.budget || '';
+    leadProfile?.property?.expected_price || leadProfile?.property?.budget || signals?.budget || '';
   const askPrice = parseInventoryPrice(askStr) || parseMaxBudget(askStr) || null;
   const sellerLoc =
-    leadProfile?.property_address ||
-    leadProfile?.location ||
+    leadProfile?.property?.address ||
+    leadProfile?.property?.location ||
     signals?.location ||
     '';
   const sellerBeds = parseBedrooms(leadProfile, signals);
 
   const sellerListingRow = {
     _id: `self:${String(excludeLeadProfileId || 'listing')}`,
-    title: (leadProfile?.property_type || 'Your property').trim() || 'Your property',
-    address: (leadProfile?.property_address || '').trim(),
+    title: (leadProfile?.property?.property_type || 'Your property').trim() || 'Your property',
+    address: (leadProfile?.property?.address || '').trim(),
     location: (sellerLoc || '').trim(),
     price: askPrice != null && askPrice > 0 ? askPrice : 0,
     bedrooms:
       sellerBeds != null && Number.isFinite(sellerBeds)
         ? sellerBeds
         : 0,
-    bathrooms: Number.isFinite(parseFloat(String(leadProfile?.bathrooms || '')))
-      ? parseFloat(String(leadProfile.bathrooms))
+    bathrooms: Number.isFinite(parseFloat(String(leadProfile?.property?.bathrooms || '')))
+      ? parseFloat(String(leadProfile.property.bathrooms))
       : 0,
-    property_type: leadProfile?.property_type || '',
+    property_type: leadProfile?.property?.property_type || '',
     image_url: '',
     listing_url: '',
     summary: '',
@@ -277,16 +280,16 @@ export async function getSellerComparableMatches({
   const b = cfg.buyer;
   for (const bp of buyerProfiles) {
     const { budgetStr: bbStr, financingStr: bbFin } = partitionBuyerBudgetInputs(
-      bp.budget,
-      bp.expected_price
+      bp.property?.budget,
+      bp.property?.expected_price
     );
     const maxBudget =
       (bbStr && (parseInventoryPrice(bbStr) || parseMaxBudget(bbStr))) ||
-      (String(bp.expected_price || '').trim() &&
-        (parseInventoryPrice(bp.expected_price) || parseMaxBudget(bp.expected_price))) ||
+      (String(bp.property?.expected_price || '').trim() &&
+        (parseInventoryPrice(bp.property.expected_price) || parseMaxBudget(bp.property.expected_price))) ||
       null;
     const minBeds = parseBedrooms(bp, {});
-    const leadLocation = bp.location || bp.property_address || '';
+    const leadLocation = bp.property?.location || bp.property?.address || '';
     if (maxBudget == null && !String(leadLocation || '').trim() && !bbFin) continue;
 
     const [one] = scoreRowsForBuyer(

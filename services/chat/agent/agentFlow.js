@@ -53,11 +53,12 @@ export const agentFlow = {
   bestGrade,
 
   createNewLead: async (params) => {
-    const { conversation, intent, professionalProfileId, leadScore, leadGrade, leadMeta, sessionId, embedToken, clientIp, userAgent, referer, contactInfo, userId, messageSnippet, formContact, aiDetails } = params;
+    const { conversation, intent, professionalProfileId, activeIcpProfileId, leadScore, leadGrade, leadMeta, sessionId, embedToken, clientIp, userAgent, referer, contactInfo, userId, messageSnippet, formContact, aiDetails } = params;
     return createLeadRecords({
       conversation,
       intent,
       professionalProfileId,
+      activeIcpProfileId,
       leadScore,
       leadGrade,
       leadMeta,

@@ -14,6 +14,7 @@ import {
   mergeContact,
   accumulateContactInfo,
 } from './utils/contactUtils.js';
+import { mergeFormContactData } from './utils/mergeFormContactData.js';
 import { mergeSignals, extractSignals } from './scoring/index.js';
 import { getFlowForRole } from './flows/getFlowForRole.js';
 import {
@@ -89,7 +90,10 @@ export const handlePropertyMatchesService = async ({
 
   const contactInfo = await accumulateContactInfo(conversation._id);
   const hasContact = Boolean(contactInfo.email || contactInfo.phone || contactInfo.name);
-  const storedForm = formContact || conversation.form_data || {};
+  const storedForm = mergeFormContactData(
+    conversation.form_data && typeof conversation.form_data === 'object' ? conversation.form_data : {},
+    formContact && typeof formContact === 'object' ? formContact : {},
+  );
   const storedIntent = storedForm?.intent;
   const aiIntent =
     conversation.intent === 'sell' || conversation.intent === 'buy' ? conversation.intent : 'buy';
@@ -211,7 +215,11 @@ export const handleChatService = async ({
     address: formContact?.address || null,
   });
 
-  const storedForm = formContact || conversation.form_data;
+  const mergedFormContact = mergeFormContactData(
+    conversation.form_data && typeof conversation.form_data === 'object' ? conversation.form_data : {},
+    formContact && typeof formContact === 'object' ? formContact : {},
+  );
+  const storedForm = mergedFormContact;
   const formSignals = flow.getFormSignals(storedForm);
   const formQualification = flow.getFormQualification(storedForm);
 
@@ -364,7 +372,7 @@ export const handleChatService = async ({
   conversation.is_qualified = leadMeta.qualified;
   conversation.emotional_state = emotionalState;
   conversation.last_interaction_at = new Date();
-  if (formContact) conversation.form_data = formContact;
+  conversation.form_data = mergedFormContact;
   await conversation.save();
 
   await syncLeadMatchAfterTurn({
@@ -383,7 +391,7 @@ export const handleChatService = async ({
     clientIp,
     userAgent,
     referer,
-    formContact,
+    formContact: mergedFormContact,
     parsedAiDetails,
     finalScore,
     persistedGrade,

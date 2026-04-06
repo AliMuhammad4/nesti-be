@@ -116,6 +116,11 @@ function resolvedFromDefaults() {
   return { buyer, seller, ...g };
 }
 
+/** In-memory defaults (no DB) — used when profile scoring is missing or unavailable. */
+export function getDefaultResolvedPropertyMatchScoring() {
+  return resolvedFromDefaults();
+}
+
 /** Loads scoring from the agent's ProfessionalProfile; falls back to defaults so matching works before first save. */
 export async function getResolvedPropertyMatchScoring(userId) {
   const profile = await ProfessionalProfile.findOne({ user_id: userId }).lean();

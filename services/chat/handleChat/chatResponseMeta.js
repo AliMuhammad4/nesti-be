@@ -7,6 +7,8 @@ import {
   usesMortgageAffordabilitySnapshot,
 } from '../flows/flowRoleMeta.js';
 import { buildMortgageAffordabilitySnapshot } from '../mortgageBroker/mortgageAffordabilityFromLead.js';
+import { buildConversionHintFromGrade } from '../../conversion/buildLeadConversionPack.js';
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 
 export async function buildChatResponseMeta({
   flow,
@@ -47,6 +49,19 @@ export async function buildChatResponseMeta({
         )
       : null;
 
+  const appointmentStatus =
+    calendlyBookingSnap?.calendly_booking_status === 'booked' ? 'booked' : 'not_booked';
+
+  const conversion = buildConversionHintFromGrade({
+    grade: finalGrade,
+    intent: aiIntent,
+    appointmentStatus,
+    hasPhone: !!(contactInfo?.phone),
+    hasEmail: !!(contactInfo?.email),
+    preferredContactMethod: contactInfo?.preferred_contact_method ?? null,
+    professionalType: professionalProfile?.professional_type ?? PROFESSIONAL_TYPE.AGENT,
+  });
+
   return {
     intent: aiIntent,
     lead_score: finalScore,
@@ -59,6 +74,7 @@ export async function buildChatResponseMeta({
     sub_scores: leadMeta.sub_scores,
     contact: contactInfo,
     property_matches_available,
+    conversion,
     calendly_link: deferCalendlyLink ? null : calendlyLinkForVisitor || null,
     conversation_id: conversation._id ? String(conversation._id) : null,
     automated_booking_enabled: isAutomatedBookingEnabled,

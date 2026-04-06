@@ -12,6 +12,7 @@ import LeadProfile from './LeadProfile.js';
 import Visitor from './Visitor.js';
 import LeadAttribution from './LeadAttribution.js';
 import IcpProfile from './IcpProfile.js';
+import ProfessionalNotification from './ProfessionalNotification.js';
 export {
   User,
   ChatConversation,
@@ -27,4 +28,5 @@ export {
   LeadAttribution,
   LeadProfile,
   IcpProfile,
+  ProfessionalNotification,
 };

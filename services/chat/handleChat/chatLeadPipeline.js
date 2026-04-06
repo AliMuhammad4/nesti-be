@@ -1,7 +1,15 @@
 import logger from '../../../utils/logger.js';
 import LeadMatch from '../../../models/LeadMatch.js';
 import LeadProfile from '../../../models/LeadProfile.js';
+import ChatConversation from '../../../models/ChatConversation.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
+import { resolveAppointmentStatus } from '../../../utils/resolveAppointmentStatus.js';
+import { buildWorkspaceLeadConversionPreview } from '../../conversion/buildLeadConversionPack.js';
+import { emitWorkspaceLeadEvent } from '../../realtime/workspaceSocket.js';
+import {
+  emitNewLeadCreatedNotification,
+  sendNewLeadCreatedEmailIfEnabled,
+} from '../../realtime/leadCreatedNotify.js';
 import { buildLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
@@ -125,6 +133,50 @@ export async function syncLeadMatchAfterTurn({
         lead_grade: persistedGrade,
         intent: aiIntent,
       });
+      try {
+        const convo = await ChatConversation.findById(conversation._id)
+          .select('calendly_booking_status lead_reasons last_interaction_at intent')
+          .lean();
+        const appointment_status = resolveAppointmentStatus(newLeadMatch.match_status, convo?.calendly_booking_status);
+        const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'buy' : aiIntent;
+        const conversion_preview = buildWorkspaceLeadConversionPreview({
+          leadMatch: newLeadMatch,
+          conversation: convo || conversation,
+          intent: socketIntent,
+        });
+        emitWorkspaceLeadEvent(userId, {
+          kind: 'lead_created',
+          lead_match_id: String(newLeadMatch._id),
+          lead_profile_id: newLeadMatch.lead_profile_id ? String(newLeadMatch.lead_profile_id) : null,
+          conversation_id: String(conversation._id),
+          session_id: sessionId,
+          grade: persistedGrade,
+          score: Number(newLeadMatch.match_score ?? finalScore),
+          intent: socketIntent,
+          icp_fit_tier: newLeadMatch.icp_fit?.fit_tier ?? null,
+          icp_fit_score: newLeadMatch.icp_fit?.fit_score ?? null,
+          appointment_status,
+          high_intent: persistedGrade === 'hot' || persistedGrade === 'warm',
+          conversion_preview,
+        });
+        await emitNewLeadCreatedNotification(userId, {
+          newLeadMatch,
+          conversationId: conversation._id,
+          sessionId,
+          persistedGrade,
+          finalScore,
+          socketIntent,
+          appointment_status,
+          conversion_preview,
+        });
+        void sendNewLeadCreatedEmailIfEnabled(userId, {
+          newLeadMatch,
+          persistedGrade,
+          conversion_preview,
+        });
+      } catch (e) {
+        logger.warn('Workspace lead event (create) failed', { error: e.message });
+      }
     }
     return;
   }
@@ -154,6 +206,7 @@ export async function syncLeadMatchAfterTurn({
 
   await existingLeadMatch.save();
 
+  let profileQualFieldCount = 0;
   if (existingLeadMatch.lead_profile_id) {
     const derivedQual = flow.deriveQualificationFromText(conversationText);
     const mergedQual = flow.getLeadProfileUpdate(parsedAiDetails, derivedQual, formContact);
@@ -184,7 +237,9 @@ export async function syncLeadMatchAfterTurn({
       $set: { ...qualUpdate, ...scoringUpdate },
     });
 
-    if (Object.keys(qualUpdate).length) {
+    profileQualFieldCount = Object.keys(qualUpdate).length;
+
+    if (profileQualFieldCount) {
       try {
         const leadProfile = await LeadProfile.findById(existingLeadMatch.lead_profile_id).lean();
         if (leadProfile) {
@@ -209,5 +264,39 @@ export async function syncLeadMatchAfterTurn({
         logger.warn('ICP rescore after lead profile update failed', { error: err.message });
       }
     }
+  }
+
+  try {
+    const fresh = await LeadMatch.findById(existingLeadMatch._id).lean();
+    const convo = fresh?.conversation_id
+      ? await ChatConversation.findById(fresh.conversation_id)
+          .select('calendly_booking_status lead_reasons last_interaction_at intent')
+          .lean()
+      : null;
+    const appointment_status = resolveAppointmentStatus(fresh?.match_status, convo?.calendly_booking_status);
+    const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'buy' : aiIntent;
+    const conversion_preview = buildWorkspaceLeadConversionPreview({
+      leadMatch: fresh || existingLeadMatch,
+      conversation: convo || conversation,
+      intent: socketIntent,
+    });
+    emitWorkspaceLeadEvent(userId, {
+      kind: 'lead_updated',
+      lead_match_id: String(existingLeadMatch._id),
+      lead_profile_id: fresh?.lead_profile_id ? String(fresh.lead_profile_id) : null,
+      conversation_id: fresh?.conversation_id ? String(fresh.conversation_id) : null,
+      session_id: sessionId,
+      grade: persistedGrade,
+      score: Number(fresh?.match_score ?? finalScore),
+      intent: socketIntent,
+      icp_fit_tier: fresh?.icp_fit?.fit_tier ?? null,
+      icp_fit_score: fresh?.icp_fit?.fit_score ?? null,
+      appointment_status,
+      high_intent: persistedGrade === 'hot' || persistedGrade === 'warm',
+      profile_fields_updated: profileQualFieldCount > 0,
+      conversion_preview,
+    });
+  } catch (e) {
+    logger.warn('Workspace lead event (update) failed', { error: e.message });
   }
 }

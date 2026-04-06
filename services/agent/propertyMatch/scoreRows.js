@@ -1,4 +1,4 @@
-import { locationOverlaps, norm } from './locationUtils.js';
+﻿import { locationOverlaps, norm } from './locationUtils.js';
 import {
   partitionBuyerBudgetInputs,
   parseInventoryPrice,
@@ -12,23 +12,115 @@ export const parseBedrooms = (profile, signals) => {
   return Number.isFinite(n) ? n : null;
 };
 
+/** Shared context for buyer scoring + preference filter (single source of truth). */
+export function buildBuyerScoringContext(leadProfile, signals = {}) {
+  const budgetStr = leadProfile?.budget || signals?.budget;
+  const profileBudget = leadProfile?.property?.budget || leadProfile?.property?.expected_price;
+  const maxBudget =
+    ((profileBudget || budgetStr) && parseInventoryPrice(profileBudget || budgetStr)) ||
+    parseMaxBudget(profileBudget || budgetStr) ||
+    null;
+  const minBeds = parseBedrooms(leadProfile, signals);
+  const leadLocation =
+    leadProfile?.property?.location ||
+    leadProfile?.property?.address ||
+    signals?.location ||
+    '';
+  return { leadProfile, maxBudget, minBeds, leadLocation };
+}
+
+export function buyerSpecifiedAnyPreference(ctx) {
+  const { leadLocation, maxBudget, minBeds, leadProfile } = ctx;
+  const loc = String(leadLocation || '').trim();
+  const typeN = norm(leadProfile?.property?.property_type || '');
+  return (
+    Boolean(loc) ||
+    (maxBudget != null && Number.isFinite(maxBudget) && maxBudget > 0) ||
+    (minBeds != null && minBeds > 0) ||
+    Boolean(typeN)
+  );
+}
+
+function computeBuyerRowAlignmentState(row, ctx, b) {
+  const { leadProfile, maxBudget, minBeds, leadLocation } = ctx;
+  const loc = String(leadLocation || '').trim();
+  const hasLoc = Boolean(loc);
+  const hasBudget = maxBudget != null && Number.isFinite(maxBudget) && maxBudget > 0;
+  const hasBeds = minBeds != null && minBeds > 0;
+  const pt = norm(leadProfile?.property?.property_type || '');
+
+  const areaMatch = hasLoc && locationOverlaps(loc, row.location, row.address);
+
+  let budgetTier = null;
+  if (hasBudget && row.price != null && row.price > 0) {
+    if (row.price <= maxBudget * b.budgetWithinCapMult) budgetTier = 'within';
+    else if (row.price <= maxBudget * b.budgetSlightCapMult) budgetTier = 'slight';
+    else budgetTier = 'over';
+  }
+
+  let bedsTier = null;
+  if (hasBeds) {
+    if (row.bedrooms >= minBeds) bedsTier = 'match';
+    else if (row.bedrooms === minBeds - 1) bedsTier = 'close';
+    else bedsTier = 'under';
+  }
+
+  const typeMatch = Boolean(pt && norm(row.property_type || '').includes(pt));
+
+  return {
+    areaMatch,
+    budgetTier,
+    bedsTier,
+    typeMatch,
+  };
+}
+
+/**
+ * Location is the only hard filter — showing a Lahore buyer Toronto listings is useless.
+ * Budget, beds, and type are scoring factors: mismatches lower the score but do not disqualify
+ * a row, so partial matches still surface as ranked suggestions.
+ */
+export function applyBuyerPreferenceFilter(scored, ctx) {
+  const loc = String(ctx.leadLocation || '').trim();
+  if (!loc) return scored;
+  return scored.filter((x) => locationOverlaps(loc, x.row.location, x.row.address));
+}
+
+function resolveMatchHeadline(reasons, source) {
+  const count = reasons.length;
+  if (count === 0) return null;
+  if (source === 'buyer_lead') {
+    if (count >= 3) return 'Strong buyer match';
+    if (count >= 2) return 'Interested buyer';
+    return 'Possible buyer';
+  }
+  if (count >= 3) return 'Strong listing match';
+  if (count >= 2) return 'Good listing match';
+  return 'Partial match';
+}
+
 export const mapMatchResults = (picked, maxDisplayScore, source = 'seller_lead') =>
-  picked.map(({ row, score, reasons }) => ({
-    id: String(row._id),
-    title: row.title,
-    address: row.address,
-    location: row.location,
-    price: row.price,
-    bedrooms: row.bedrooms,
-    bathrooms: row.bathrooms,
-    property_type: row.property_type,
-    image_url: row.image_url || '',
-    listing_url: row.listing_url || '',
-    summary: row.summary || '',
-    match_score: Math.min(maxDisplayScore, Math.round(score)),
-    match_reasons: reasons,
-    source,
-  }));
+  picked.map(({ row, score, reasons }) => {
+    const id = String(row._id);
+    const resolvedSource = id.startsWith('nesti:') ? 'agent_profile' : source;
+    return {
+      id,
+      title: row.title,
+      address: row.address,
+      location: row.location,
+      price: row.price,
+      bedrooms: row.bedrooms,
+      bathrooms: row.bathrooms,
+      property_type: row.property_type,
+      image_url: row.image_url || '',
+      listing_url: row.listing_url || '',
+      summary: row.summary || '',
+      match_score: Math.min(maxDisplayScore, Math.round(score)),
+      match_headline: resolveMatchHeadline(reasons, resolvedSource),
+      match_reasons: reasons,
+      source: resolvedSource,
+    };
+  });
 
 const FINANCING_STATUS_LABELS = {
   fully_pre_approved:   'Fully pre-approved',
@@ -97,6 +189,7 @@ export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { 
   }
   if (financingLabel) displayParts.push(financingLabel);
 
+  const mappedReasons = buyerMatchReasonsForSellerView(reasons, listingBedrooms);
   const out = {
     id: String(profile._id),
     title: 'Buyer inquiry',
@@ -108,7 +201,8 @@ export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { 
     bedrooms: Number.isFinite(beds) ? beds : null,
     property_type: type || undefined,
     match_score: Math.min(maxDisplayScore, Math.round(score)),
-    match_reasons: buyerMatchReasonsForSellerView(reasons, listingBedrooms),
+    match_headline: resolveMatchHeadline(reasons, 'buyer_lead'),
+    match_reasons: mappedReasons,
     source: 'buyer_lead',
   };
 
@@ -117,39 +211,37 @@ export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { 
   return out;
 }
 
-export function scoreRowsForBuyer(rows, { leadProfile, maxBudget, minBeds, leadLocation }, b) {
+export function scoreRowsForBuyer(rows, ctx, b) {
   return rows.map((row) => {
+    const st = computeBuyerRowAlignmentState(row, ctx, b);
     let score = b.baseScore;
     const reasons = [];
 
-    if (maxBudget != null && row.price > 0) {
-      if (row.price <= maxBudget * b.budgetWithinCapMult) {
-        score += b.budgetWithinPoints;
-        reasons.push('Within budget');
-      } else if (row.price <= maxBudget * b.budgetSlightCapMult) {
-        score += b.budgetSlightPoints;
-        reasons.push('Slightly above budget');
-      } else {
-        score += b.budgetOverPenalty;
-      }
+    if (st.budgetTier === 'within') {
+      score += b.budgetWithinPoints;
+      reasons.push('Within budget');
+    } else if (st.budgetTier === 'slight') {
+      score += b.budgetSlightPoints;
+      reasons.push('Slightly above budget');
+    } else if (st.budgetTier === 'over') {
+      score += b.budgetOverPenalty;
     }
 
-    if (minBeds != null && row.bedrooms >= minBeds) {
+    if (st.bedsTier === 'match') {
       score += b.bedsMatchPoints;
       reasons.push(`${row.bedrooms}+ beds`);
-    } else if (minBeds != null && row.bedrooms === minBeds - 1) {
+    } else if (st.bedsTier === 'close') {
       score += b.bedsClosePoints;
-    } else if (minBeds != null && row.bedrooms < minBeds - 1) {
+    } else if (st.bedsTier === 'under') {
       score += b.bedsUnderPenalty;
     }
 
-    if (leadLocation && locationOverlaps(leadLocation, row.location, row.address)) {
+    if (st.areaMatch) {
       score += b.areaPoints;
       reasons.push('Area match');
     }
 
-    const pt = norm(leadProfile?.property?.property_type);
-    if (pt && norm(row.property_type).includes(pt)) {
+    if (st.typeMatch) {
       score += b.typePoints;
       reasons.push('Property type match');
     }
@@ -172,7 +264,7 @@ export function scoreRowsForSellerComparable(
       reasons.push('Same area / comparable location');
     }
 
-    if (askPrice != null && row.price > 0) {
+    if (askPrice != null && row.price != null && row.price > 0) {
       const lowT = askPrice * s.priceTightLowMult;
       const highT = askPrice * s.priceTightHighMult;
       const lowW = askPrice * s.priceWideLowMult;

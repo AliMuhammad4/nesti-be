@@ -87,7 +87,7 @@ export const handleChat = async (req, res, next) => {
 export const handlePropertyMatches = async (req, res, next) => {
   const startedAt = Date.now();
   try {
-    const { id, embedToken, visitorId, formContact } = req.body;
+    const { id, embedToken, visitorId, formContact, page, limit } = req.body;
     logger.info('Chat API: property-matches request', {
       op:          'chat.property_matches',
       session_id:  id || null,
@@ -100,6 +100,8 @@ export const handlePropertyMatches = async (req, res, next) => {
       embedToken,
       visitorId,
       formContact,
+      page,
+      limit,
     });
 
     const pm = result.body?.meta?.property_matches;

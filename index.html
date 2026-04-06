@@ -324,6 +324,23 @@
       <input id="apiUrlInput" type="text" value="/api/chat" />
     </div>
 
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.25);">
+      <div><strong>Notifications (dashboard)</strong></div>
+      <div class="hint" style="margin-top:6px;">
+        New leads are stored and pushed on Socket.IO (<code>notifications:item</code>). The REST API is not called from the chat widget — use your <strong>agent JWT</strong> (same user that owns the embed) to fetch or subscribe below.
+      </div>
+      <div class="config-row" style="margin-top:6px;">
+        <label title="From POST /auth/login for the embed owner">JWT</label>
+        <input id="dashboardJwtInput" type="password" placeholder="Bearer token for embed owner" autocomplete="off" />
+      </div>
+      <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <button type="button" class="btn-oauth secondary" id="btnNotificationsFetch">GET /api/notifications</button>
+        <button type="button" class="btn-oauth secondary" id="btnNotificationsSocket">Connect notifications socket</button>
+        <span id="notificationsSocketStatus" style="font-size:11px;opacity:.75;"></span>
+      </div>
+      <pre id="notificationsDebugOut" style="display:none;margin-top:8px;padding:8px;background:#020617;border-radius:8px;font-size:10px;overflow:auto;max-height:180px;white-space:pre-wrap;"></pre>
+    </div>
+
     <div class="calendly-panel">
       <div><strong>Calendly (widget — no JWT)</strong></div>
       <div>
@@ -425,8 +442,8 @@
           <label>Property type</label>
           <select id="f_proptype_buy">
             <option value="">Select…</option>
-            <option>Condo</option><option>Townhouse</option>
-            <option>Detached</option><option>Multi-Family</option><option>Land</option>
+            <option>Single Family</option><option>Condo</option>
+            <option>Townhouse</option><option>Multi-Family</option><option>Land</option>
           </select>
         </div>
         <div class="form-group buyer-field">
@@ -659,8 +676,7 @@
 
   const VISITOR_ID = 'visitor-' + Math.random().toString(36).slice(2, 10);
   const SESSION_ID = 'session-' + Math.random().toString(36).slice(2, 10);
-  /** Load listing cards at most once per session (avoid POST /property-matches on every chat turn). */
-  let propertyMatchesFetchDone = false;
+  /** Always recalculate matches for current lead context; guard only concurrent fetches. */
   let propertyMatchesFetchInFlight = false;
 
   function selectIntent(intent) {
@@ -1183,6 +1199,19 @@
 
   let activeIntent = null;
 
+  /** Visitor asked to see listings / comps — refetch even after the one-time auto load ran. */
+  function userRequestedPropertyMatches(messageText) {
+    const t = String(messageText || '').toLowerCase();
+    return (
+      /\b(match|matches|matching)\b/.test(t) ||
+      /\b(listing|listings)\b/.test(t) ||
+      /\b(propert(y|ies)|homes?)\b/.test(t) && /\b(show|see|find|send|give|any|what|list)\b/.test(t) ||
+      /\b(comps?|comparables?)\b/.test(t) ||
+      /\bsimilar (homes?|properties|listings)\b/.test(t) ||
+      /\bwhat('?s| is) (on |)the market\b/.test(t)
+    );
+  }
+
   async function sendMessage(text, silent = false, formContactOverride = null) {
     const embedToken = document.getElementById('embedTokenInput').value.trim();
     const apiUrl     = resolveChatApiUrl();
@@ -1230,7 +1259,6 @@
         const botWrap = appendMessage(data.reply || '(no reply)', 'bot', data.meta);
         if (
           data.meta?.property_matches_available &&
-          !propertyMatchesFetchDone &&
           !propertyMatchesFetchInFlight
         ) {
           propertyMatchesFetchInFlight = true;
@@ -1247,7 +1275,6 @@
           })
             .then((r) => fetchJsonWithHint(r))
             .then((pm) => {
-              propertyMatchesFetchDone = true;
               if (!pm.success || !botWrap || !pm.meta?.property_matches_context) return;
               const formSnap =
                 Object.keys(formData).length && chosenIntent
@@ -1593,6 +1620,95 @@
       if (!res.ok) alert(data.message || 'HTTP ' + res.status);
     } catch (e) {
       out.textContent = 'Error: ' + e.message;
+    }
+  });
+
+  /** --- Notifications: REST + Socket.IO (agent JWT; not used by embed chat flow) --- */
+  let notificationsSocket = null;
+
+  function showNotificationsOut(payload) {
+    const pre = document.getElementById('notificationsDebugOut');
+    if (!pre) return;
+    pre.style.display = 'block';
+    pre.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+  }
+
+  function appendNotificationsOut(line) {
+    const pre = document.getElementById('notificationsDebugOut');
+    if (!pre) return;
+    pre.style.display = 'block';
+    pre.textContent = (pre.textContent ? pre.textContent + '\n' : '') + line;
+  }
+
+  function loadSocketIoClient() {
+    if (window.io) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.socket.io/4.8.1/socket.io.min.js';
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Failed to load socket.io client from CDN'));
+      document.head.appendChild(s);
+    });
+  }
+
+  document.getElementById('btnNotificationsFetch')?.addEventListener('click', async () => {
+    const jwt = document.getElementById('dashboardJwtInput').value.trim();
+    if (!jwt) {
+      alert('Paste the professional JWT (same user that owns the embed).');
+      return;
+    }
+    const origin = apiOriginFromChatUrl();
+    try {
+      const res = await fetch(origin + '/api/notifications?limit=10', {
+        headers: { Authorization: 'Bearer ' + jwt },
+      });
+      const data = await res.json().catch(() => ({}));
+      showNotificationsOut({ http: res.status, body: data });
+    } catch (e) {
+      showNotificationsOut('Error: ' + e.message);
+    }
+  });
+
+  document.getElementById('btnNotificationsSocket')?.addEventListener('click', async () => {
+    const jwt = document.getElementById('dashboardJwtInput').value.trim();
+    const statusEl = document.getElementById('notificationsSocketStatus');
+    const btn = document.getElementById('btnNotificationsSocket');
+    if (notificationsSocket) {
+      notificationsSocket.disconnect();
+      notificationsSocket = null;
+      if (statusEl) statusEl.textContent = '';
+      if (btn) btn.textContent = 'Connect notifications socket';
+      appendNotificationsOut('[socket] disconnected');
+      return;
+    }
+    if (!jwt) {
+      alert('Paste JWT first.');
+      return;
+    }
+    try {
+      await loadSocketIoClient();
+      const origin = apiOriginFromChatUrl();
+      notificationsSocket = window.io(origin, {
+        path: '/socket.io',
+        auth: { token: jwt },
+        transports: ['websocket', 'polling'],
+      });
+      notificationsSocket.on('connect', () => {
+        if (statusEl) statusEl.textContent = 'Connected';
+        if (btn) btn.textContent = 'Disconnect socket';
+        appendNotificationsOut('[socket] connected');
+      });
+      notificationsSocket.on('workspace:ready', (p) =>
+        appendNotificationsOut('[socket] workspace:ready ' + JSON.stringify(p))
+      );
+      notificationsSocket.on('notifications:item', (p) =>
+        appendNotificationsOut('[socket] notifications:item ' + JSON.stringify(p))
+      );
+      notificationsSocket.on('connect_error', (err) => {
+        appendNotificationsOut('[socket] connect_error ' + (err && err.message ? err.message : String(err)));
+      });
+    } catch (e) {
+      alert(e.message);
     }
   });
 </script>

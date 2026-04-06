@@ -1,26 +1,45 @@
+import mongoose from 'mongoose';
 import LeadMatch from '../../../models/LeadMatch.js';
 import LeadProfile from '../../../models/LeadProfile.js';
-import { getResolvedPropertyMatchScoring } from './scoringConfig.js';
+import ProfessionalProfile from '../../../models/ProfessionalProfile.js';
+import {
+  getDefaultResolvedPropertyMatchScoring,
+  getResolvedPropertyMatchScoring,
+} from './scoringConfig.js';
 import {
   parseMaxBudget,
   parseInventoryPrice,
-  partitionBuyerBudgetInputs,
 } from './parsing.js';
-import { rowMatchesSellerAddress } from './locationUtils.js';
+import { locationOverlaps, rowMatchesSellerAddress } from './locationUtils.js';
 import {
-  mapMatchResults,
+  applyBuyerPreferenceFilter,
+  buildBuyerScoringContext,
   mapBuyerMatchResult,
+  mapMatchResults,
   parseBedrooms,
   scoreRowsForBuyer,
   scoreRowsForSellerComparable,
 } from './scoreRows.js';
 
+function envAgentAreaFallbackEnabled() {
+  return ['1', 'true', 'yes', 'on'].includes(String(process.env.PROPERTY_MATCH_AGENT_AREA_FALLBACK ?? '').trim().toLowerCase());
+}
+
 function sellerLeadProfileToRow(profile) {
-  const price = parseInventoryPrice(profile.property?.expected_price || profile.property?.budget);
-  if (!price || price <= 0) return null;
+  const rawPrice = profile.property?.expected_price || profile.property?.budget || '';
+  const fromParse = parseInventoryPrice(rawPrice);
+  const fromMax = parseMaxBudget(rawPrice);
+  let price =
+    fromParse && fromParse > 0
+      ? fromParse
+      : fromMax != null && Number.isFinite(fromMax) && fromMax > 0
+        ? fromMax
+        : null;
+
   const loc = (profile.property?.location || '').trim();
   const addr = (profile.property?.address || '').trim();
   if (!loc && !addr) return null;
+
   const beds = parseInt(String(profile.property?.bedrooms || ''), 10);
   const baths = parseFloat(String(profile.property?.bathrooms || ''));
   const typeLabel = (profile.property?.property_type || 'Property').trim();
@@ -41,80 +60,132 @@ function sellerLeadProfileToRow(profile) {
 
 async function loadSellerInventoryRows(userId, excludeLeadProfileIds, inventoryLimit) {
   const exclude = new Set(excludeLeadProfileIds.filter(Boolean).map(String));
+  const seen = new Set();
+  const out = [];
+  const pushFromProfile = (p) => {
+    const id = String(p._id);
+    if (exclude.has(id) || seen.has(id)) return;
+    const row = sellerLeadProfileToRow(p);
+    if (!row) return;
+    seen.add(id);
+    out.push(row);
+  };
 
-  const matches = await LeadMatch.find({
+  const matchDocs = await LeadMatch.find({
     user_id: userId,
     lead_type: { $regex: '_seller$' },
     lead_profile_id: { $ne: null },
   })
     .sort({ createdAt: -1 })
-    .limit(inventoryLimit)
+    .limit(Math.max(inventoryLimit * 2, 40))
     .select('lead_profile_id')
     .lean();
 
-  const ids = [...new Set(matches.map((m) => m.lead_profile_id).filter(Boolean).map(String))].filter(
-    (id) => !exclude.has(id)
-  );
-  if (!ids.length) return [];
+  const orderedFromMatches = [
+    ...new Set(matchDocs.map((m) => String(m.lead_profile_id)).filter((id) => id && mongoose.Types.ObjectId.isValid(id))),
+  ].filter((id) => !exclude.has(id));
 
-  const profiles = await LeadProfile.find({
-    _id: { $in: ids },
-    intent: 'sell',
-  }).lean();
-
-  const out = [];
-  for (const p of profiles) {
-    if (exclude.has(String(p._id))) continue;
-    const row = sellerLeadProfileToRow(p);
-    if (row) out.push(row);
+  if (orderedFromMatches.length) {
+    const oids = orderedFromMatches.map((id) => new mongoose.Types.ObjectId(id));
+    const byMatch = await LeadProfile.find({
+      _id: { $in: oids },
+      intent: 'sell',
+    }).lean();
+    const byId = new Map(byMatch.map((p) => [String(p._id), p]));
+    for (const id of orderedFromMatches) {
+      if (out.length >= inventoryLimit) break;
+      const p = byId.get(id);
+      if (p) pushFromProfile(p);
+    }
   }
+
+  if (out.length < inventoryLimit) {
+    const ownerQuery = {
+      intent: 'sell',
+      $or: [{ 'ownership.user_id': userId }, { owner_user_id: userId }],
+    };
+    if (seen.size) {
+      ownerQuery._id = {
+        $nin: [...seen].map((id) => new mongoose.Types.ObjectId(id)),
+      };
+    }
+    const moreProfiles = await LeadProfile.find(ownerQuery)
+      .sort({ updatedAt: -1 })
+      .limit(Math.max(inventoryLimit * 2, 40))
+      .lean();
+    for (const p of moreProfiles) {
+      if (out.length >= inventoryLimit) break;
+      pushFromProfile(p);
+    }
+  }
+
   return out;
 }
 
-async function loadBuyerLeadProfiles(userId, excludeLeadProfileIds, inventoryLimit) {
+async function loadBuyerLeadProfiles(userId, excludeLeadProfileIds, limit = 40) {
   const exclude = new Set(excludeLeadProfileIds.filter(Boolean).map(String));
-
-  const matches = await LeadMatch.find({
+  const seen = new Set();
+  const out = [];
+  const matchDocs = await LeadMatch.find({
     user_id: userId,
     lead_type: { $regex: '_buyer$' },
     lead_profile_id: { $ne: null },
   })
     .sort({ createdAt: -1 })
-    .limit(inventoryLimit)
+    .limit(Math.max(limit * 2, 40))
     .select('lead_profile_id')
     .lean();
 
-  const ids = [...new Set(matches.map((m) => m.lead_profile_id).filter(Boolean).map(String))].filter(
-    (id) => !exclude.has(id)
-  );
-  if (!ids.length) return [];
+  const orderedIds = [
+    ...new Set(matchDocs.map((m) => String(m.lead_profile_id)).filter((id) => id && mongoose.Types.ObjectId.isValid(id))),
+  ].filter((id) => !exclude.has(id));
 
-  return LeadProfile.find({
-    _id: { $in: ids },
-    intent: 'buy',
-  }).lean();
+  if (orderedIds.length) {
+    const oids = orderedIds.map((id) => new mongoose.Types.ObjectId(id));
+    const profiles = await LeadProfile.find({ _id: { $in: oids }, intent: 'buy' }).lean();
+    const byId = new Map(profiles.map((p) => [String(p._id), p]));
+    for (const id of orderedIds) {
+      if (out.length >= limit) break;
+      const p = byId.get(id);
+      if (p && !seen.has(id)) { seen.add(id); out.push(p); }
+    }
+  }
+
+  return out;
 }
-
-function pickScoredBatch(scored, minPick, maxN) {
-  const sorted = [...scored].sort((a, c) => c.score - a.score);
-  const above = sorted.filter((x) => x.score > minPick);
-  const base = above.length ? above : sorted.slice(0, maxN);
-  return base.slice(0, maxN);
+async function agentServiceAreaFallbackRows(userId) {
+  const profile = await ProfessionalProfile.findOne({ user_id: userId })
+    .select('location target_neighborhoods')
+    .lean();
+  if (!profile) return [];
+  const area = [profile.target_neighborhoods, profile.location]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean)
+    .join(' · ');
+  if (!area) return [];
+  return [
+    {
+      _id: 'nesti:agent-service-area',
+      title: 'Agent service area',
+      address: '',
+      location: area.slice(0, 240),
+      price: null,
+      bedrooms: 0,
+      bathrooms: 0,
+      property_type: '',
+      image_url: '',
+      listing_url: '',
+      summary:
+        "Not a listing—no seller properties are saved in this agent's CRM yet. Areas above are from the agent profile; ask them for homes for sale.",
+    },
+  ];
 }
-
-// ─── Chat response helpers ───────────────────────────────────────────────────
 
 export function propertyMatchesFooterNote(context, matchCount) {
   const n = Number(matchCount) || 0;
-  if (context === 'buy') {
+  if (context === 'buy' || context === 'sell') {
     if (n > 0) return null;
-    return "No other seller properties on file with this agent match those details yet—they'll follow up with tailored options.";
-  }
-  if (context === 'sell') {
-    if (n > 0) {
-      return 'Seller rows are informal comparables; buyer rows are possible interest from inquiries on file—not offers or guarantees.';
-    }
-    return 'No comparable seller listings or matching buyer inquiries on file right now—they can discuss next steps with you directly.';
+    return null;
   }
   return null;
 }
@@ -134,9 +205,26 @@ async function leadProfileForAgentIntent({ conversationId, userId, intent }) {
   })
     .select('lead_profile_id')
     .lean();
-  if (!lm?.lead_profile_id) return null;
-  return LeadProfile.findById(lm.lead_profile_id).lean();
+  if (lm?.lead_profile_id) {
+    return LeadProfile.findById(lm.lead_profile_id).lean();
+  }
+  if (intent === 'buy') {
+    const fallbackLm = await LeadMatch.findOne({
+      conversation_id: conversationId,
+      user_id:         userId,
+      lead_profile_id: { $ne: null },
+    })
+      .sort({ updatedAt: -1 })
+      .select('lead_profile_id')
+      .lean();
+    if (fallbackLm?.lead_profile_id) {
+      const p = await LeadProfile.findById(fallbackLm.lead_profile_id).lean();
+      if (p?.intent === 'buy') return p;
+    }
+  }
+  return null;
 }
+
 export async function resolveAgentPropertyMatchesForChat({
   isAgent,
   hasContact,
@@ -145,15 +233,22 @@ export async function resolveAgentPropertyMatchesForChat({
   conversationId,
   leadMetaSignals,
 }) {
-  if (!isAgent || !hasContact) return emptyPropertyMatchesMeta();
-  if (matchIntent !== 'buy' && matchIntent !== 'sell') return emptyPropertyMatchesMeta();
+  if (!isAgent || !hasContact) {
+    return emptyPropertyMatchesMeta();
+  }
+  if (matchIntent !== 'buy' && matchIntent !== 'sell') {
+    return emptyPropertyMatchesMeta();
+  }
 
   const leadProfileDoc = await leadProfileForAgentIntent({
     conversationId,
     userId,
     intent: matchIntent,
   });
-  if (!leadProfileDoc) return emptyPropertyMatchesMeta();
+
+  if (!leadProfileDoc) {
+    return emptyPropertyMatchesMeta();
+  }
 
   if (matchIntent === 'buy') {
     const property_matches = await getBuyerPropertyMatches({
@@ -168,11 +263,10 @@ export async function resolveAgentPropertyMatchesForChat({
     };
   }
 
-  const property_matches = await getSellerComparableMatches({
+  const property_matches = await getBuyerMatchesForSellerProperty({
     userId,
-    leadProfile:          leadProfileDoc,
-    signals:              leadMetaSignals,
-    excludeLeadProfileId: leadProfileDoc._id,
+    leadProfile: leadProfileDoc,
+    signals:     leadMetaSignals,
   });
   return {
     property_matches,
@@ -182,34 +276,64 @@ export async function resolveAgentPropertyMatchesForChat({
 }
 
 export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {} }) {
-  const cfg = await getResolvedPropertyMatchScoring(userId);
+  let cfg = await getResolvedPropertyMatchScoring(userId);
+  if (!cfg) cfg = getDefaultResolvedPropertyMatchScoring();
   if (!cfg) return [];
 
-  const rows = await loadSellerInventoryRows(userId, [], cfg.inventoryLimit);
-  if (!rows.length) return [];
+  let rows = await loadSellerInventoryRows(userId, [], cfg.inventoryLimit);
+  if (!rows.length && envAgentAreaFallbackEnabled()) {
+    rows = await agentServiceAreaFallbackRows(userId);
+  }
 
-  const budgetStr = leadProfile?.budget || signals?.budget;
-  const profileBudget = leadProfile?.property?.budget || leadProfile?.property?.expected_price;
-  const maxBudget =
-    ((profileBudget || budgetStr) && parseInventoryPrice(profileBudget || budgetStr)) ||
-    parseMaxBudget(profileBudget || budgetStr) ||
-    null;
-  const minBeds = parseBedrooms(leadProfile, signals);
-  const leadLocation =
-    leadProfile?.property?.location ||
-    leadProfile?.property?.address ||
-    signals?.location ||
-    '';
-
+  if (!rows.length) {
+    return [];
+  }
+  const ctx = buildBuyerScoringContext(leadProfile, signals);
   const b = cfg.buyer;
-  const scored = scoreRowsForBuyer(rows, { leadProfile, maxBudget, minBeds, leadLocation }, b);
+  const scored = scoreRowsForBuyer(rows, ctx, b);
+  const pool = applyBuyerPreferenceFilter(scored, ctx);
+  const sorted = pool.sort((a, c) => c.score - a.score);
+  const minPick = b.pickMinScore;
+  const aboveThreshold = sorted.filter((x) => x.score > minPick);
+  const picked = aboveThreshold.length ? aboveThreshold : sorted.slice(0, cfg.maxMatches);
+  return mapMatchResults(picked.slice(0, cfg.maxMatches), cfg.maxDisplayScore);
+}
+
+export async function getBuyerMatchesForSellerProperty({ userId, leadProfile, signals = {} }) {
+  let cfg = await getResolvedPropertyMatchScoring(userId);
+  if (!cfg) cfg = getDefaultResolvedPropertyMatchScoring();
+  if (!cfg) return [];
+  const sellerRow = sellerLeadProfileToRow(leadProfile);
+  if (!sellerRow) {
+    return [];
+  }
+  const buyerProfiles = await loadBuyerLeadProfiles(userId, [leadProfile._id], cfg.inventoryLimit);
+  if (!buyerProfiles.length) {
+    return [];
+  }
+  const b = cfg.buyer;
+  const scored = [];
+  for (const bp of buyerProfiles) {
+    const ctx = buildBuyerScoringContext(bp, {});
+    const loc = String(ctx.leadLocation || '').trim();
+    if (loc && !locationOverlaps(loc, sellerRow.location, sellerRow.address)) {
+      continue;
+    }
+    const [s] = scoreRowsForBuyer([sellerRow], ctx, b);
+    scored.push({ profile: bp, score: s.score, reasons: s.reasons });
+  }
+
   const sorted = scored.sort((a, c) => c.score - a.score);
   const minPick = b.pickMinScore;
-  const picked = sorted.filter((x) => x.score > minPick).length
-    ? sorted.filter((x) => x.score > minPick)
-    : sorted.slice(0, cfg.maxMatches);
+  const aboveThreshold = sorted.filter((x) => x.score > minPick);
+  const picked = (aboveThreshold.length ? aboveThreshold : sorted.slice(0, cfg.maxMatches))
+    .slice(0, cfg.maxMatches);
 
-  return mapMatchResults(picked.slice(0, cfg.maxMatches), cfg.maxDisplayScore);
+  return picked.map(({ profile, score, reasons }) =>
+    mapBuyerMatchResult(profile, score, reasons, cfg.maxDisplayScore, {
+      listingBedrooms: sellerRow.bedrooms || null,
+    })
+  );
 }
 
 export async function getSellerComparableMatches({
@@ -218,12 +342,11 @@ export async function getSellerComparableMatches({
   signals = {},
   excludeLeadProfileId = null,
 }) {
-  const cfg = await getResolvedPropertyMatchScoring(userId);
+  let cfg = await getResolvedPropertyMatchScoring(userId);
+  if (!cfg) cfg = getDefaultResolvedPropertyMatchScoring();
   if (!cfg) return [];
-
   const excludeIds = excludeLeadProfileId ? [excludeLeadProfileId] : [];
   let sellerRows = await loadSellerInventoryRows(userId, excludeIds, cfg.inventoryLimit);
-
   const sellerLine =
     leadProfile?.property?.address ||
     leadProfile?.property?.location ||
@@ -232,7 +355,15 @@ export async function getSellerComparableMatches({
   if (sellerLine && String(sellerLine).trim()) {
     sellerRows = sellerRows.filter((r) => !rowMatchesSellerAddress(sellerLine, r));
   }
-
+  const sellerGeo = String(
+    leadProfile?.property?.location ||
+      leadProfile?.property?.address ||
+      signals?.location ||
+      ''
+  ).trim();
+  if (sellerGeo) {
+    sellerRows = sellerRows.filter((r) => locationOverlaps(sellerGeo, r.location, r.address));
+  }
   const askStr =
     leadProfile?.property?.expected_price || leadProfile?.property?.budget || signals?.budget || '';
   const askPrice = parseInventoryPrice(askStr) || parseMaxBudget(askStr) || null;
@@ -242,77 +373,16 @@ export async function getSellerComparableMatches({
     signals?.location ||
     '';
   const sellerBeds = parseBedrooms(leadProfile, signals);
-
-  const sellerListingRow = {
-    _id: `self:${String(excludeLeadProfileId || 'listing')}`,
-    title: (leadProfile?.property?.property_type || 'Your property').trim() || 'Your property',
-    address: (leadProfile?.property?.address || '').trim(),
-    location: (sellerLoc || '').trim(),
-    price: askPrice != null && askPrice > 0 ? askPrice : 0,
-    bedrooms:
-      sellerBeds != null && Number.isFinite(sellerBeds)
-        ? sellerBeds
-        : 0,
-    bathrooms: Number.isFinite(parseFloat(String(leadProfile?.property?.bathrooms || '')))
-      ? parseFloat(String(leadProfile.property.bathrooms))
-      : 0,
-    property_type: leadProfile?.property?.property_type || '',
-    image_url: '',
-    listing_url: '',
-    summary: '',
-  };
-
-  const merged = [];
-
-  if (sellerRows.length) {
-    const s = cfg.seller;
-    const sellerScored = scoreRowsForSellerComparable(
-      sellerRows,
-      { leadProfile, askPrice, sellerLoc, sellerBeds },
-      s
-    );
-    for (const p of pickScoredBatch(sellerScored, s.pickMinScore, cfg.maxMatches)) {
-      merged.push({ score: p.score, kind: 'seller', payload: p });
-    }
-  }
-
-  const buyerProfiles = await loadBuyerLeadProfiles(userId, excludeIds, cfg.inventoryLimit);
-  const b = cfg.buyer;
-  for (const bp of buyerProfiles) {
-    const { budgetStr: bbStr, financingStr: bbFin } = partitionBuyerBudgetInputs(
-      bp.property?.budget,
-      bp.property?.expected_price
-    );
-    const maxBudget =
-      (bbStr && (parseInventoryPrice(bbStr) || parseMaxBudget(bbStr))) ||
-      (String(bp.property?.expected_price || '').trim() &&
-        (parseInventoryPrice(bp.property.expected_price) || parseMaxBudget(bp.property.expected_price))) ||
-      null;
-    const minBeds = parseBedrooms(bp, {});
-    const leadLocation = bp.property?.location || bp.property?.address || '';
-    if (maxBudget == null && !String(leadLocation || '').trim() && !bbFin) continue;
-
-    const [one] = scoreRowsForBuyer(
-      [sellerListingRow],
-      { leadProfile: bp, maxBudget, minBeds, leadLocation },
-      b
-    );
-    merged.push({ score: one.score, kind: 'buyer', profile: bp, reasons: one.reasons });
-  }
-
-  merged.sort((a, c) => c.score - a.score);
-
-  const minPick = Math.min(cfg.seller.pickMinScore, cfg.buyer.pickMinScore);
-  const above = merged.filter((x) => x.score > minPick);
-  const pool = above.length ? above : merged.slice(0, cfg.maxMatches);
-  const top = pool.slice(0, cfg.maxMatches);
-
-  return top.map((entry) => {
-    if (entry.kind === 'seller') {
-      return mapMatchResults([entry.payload], cfg.maxDisplayScore, 'seller_lead')[0];
-    }
-    return mapBuyerMatchResult(entry.profile, entry.score, entry.reasons, cfg.maxDisplayScore, {
-      listingBedrooms: sellerListingRow.bedrooms,
-    });
-  });
+  if (!sellerRows.length) return [];
+  const s = cfg.seller;
+  const sellerScored = scoreRowsForSellerComparable(
+    sellerRows,
+    { leadProfile, askPrice, sellerLoc, sellerBeds },
+    s
+  );
+  const sellerPicks = sellerScored
+    .filter((p) => p.score > s.pickMinScore)
+    .sort((a, c) => c.score - a.score)
+    .slice(0, cfg.maxMatches);
+  return mapMatchResults(sellerPicks, cfg.maxDisplayScore, 'seller_lead');
 }

@@ -9,12 +9,14 @@ import {
   getLeadProfiles,
   getLeadProfileById,
   getLeads,
+  getLeadPropertyMatches,
 } from '../services/lead/leadService.js';
 
 router.get('/', protect, ensureAgentOrMortgageBroker, getLeads);
 router.get('/profiles', protect, ensureAgentOrMortgageBroker, getLeadProfiles);
 router.get('/profiles/:profileId', protect, ensureAgentOrMortgageBroker, getLeadProfileById);
 router.get('/profiles/:profileId/leads', protect, ensureAgentOrMortgageBroker, getLeadsByProfileId);
+router.get('/:id/property-matches', protect, ensureAgentOrMortgageBroker, getLeadPropertyMatches);
 router.get('/:id', protect, ensureAgentOrMortgageBroker, getLeadById);
 router.get('/:id/conversation', protect, ensureAgentOrMortgageBroker, getLeadConversation);
 router.delete('/:id', protect, ensureAgentOrMortgageBroker, deleteLeadById);

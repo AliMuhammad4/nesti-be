@@ -21,7 +21,6 @@ import {
   supportsPropertyMatches,
   classifyLeadForFlow,
 } from './flows/flowRoleMeta.js';
-import { resolveAgentPropertyMatchesForChat } from '../agent/propertyMatch/matchService.js';
 import {
   isValidProfessionalType,
   professionalTypeToWidgetAgentType,
@@ -38,6 +37,7 @@ import {
   buildChatResponseMeta,
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
+import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
 
 export { flowTypeForConversation, recomputeSignalsForPropertyMatches } from './handleChat/index.js';
 export const handlePropertyMatchesService = async ({
@@ -45,6 +45,8 @@ export const handlePropertyMatchesService = async ({
   embedToken,
   visitorId,
   formContact,
+  page,
+  limit,
 }) => {
   if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
     return { status: 400, body: { success: false, message: 'id (session_id) is required' } };
@@ -87,49 +89,17 @@ export const handlePropertyMatchesService = async ({
       },
     };
   }
-
-  const contactInfo = await accumulateContactInfo(conversation._id);
-  const hasContact = Boolean(contactInfo.email || contactInfo.phone || contactInfo.name);
-  const storedForm = mergeFormContactData(
-    conversation.form_data && typeof conversation.form_data === 'object' ? conversation.form_data : {},
-    formContact && typeof formContact === 'object' ? formContact : {},
-  );
-  const storedIntent = storedForm?.intent;
-  const aiIntent =
-    conversation.intent === 'sell' || conversation.intent === 'buy' ? conversation.intent : 'buy';
-  const propertyMatchIntent =
-    storedIntent === 'buy' || storedIntent === 'sell' ? storedIntent : aiIntent;
-  const leadReasons = conversation.lead_reasons;
-  let signals = leadReasons && typeof leadReasons === 'object' ? leadReasons.signals : null;
-  if (!signals || typeof signals !== 'object') {
-    signals = await recomputeSignalsForPropertyMatches(conversation, storedForm, flow);
-  }
-  const {
-    property_matches,
-    property_matches_context,
-    property_matches_note,
-  } = await resolveAgentPropertyMatchesForChat({
-    isAgent: true,
-    hasContact,
-    matchIntent: propertyMatchIntent,
+  const payload = await buildPropertyMatchesPayload({
+    conversation,
     userId,
-    conversationId: conversation._id,
-    leadMetaSignals: signals,
+    visitorId,
+    formContact,
+    page,
+    limit,
+    flow,
   });
-
-  return {
-    status: 200,
-    body: {
-      success: true,
-      session_id: sessionId.trim(),
-      visitor_id: visitorId || null,
-      meta: {
-        property_matches,
-        property_matches_context,
-        property_matches_note,
-      },
-    },
-  };
+  if (!payload.session_id) payload.session_id = sessionId.trim();
+  return { status: 200, body: payload };
 };
 
 export const handleChatService = async ({

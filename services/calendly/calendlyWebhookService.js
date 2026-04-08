@@ -5,6 +5,13 @@ import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
 import logger from '../../utils/logger.js';
 import { runPostBookingAutomations } from './postBookingAutomations.js';
+import { buildWorkspaceLeadConversionPreview } from '../conversion/buildLeadConversionPack.js';
+import { emitLeadLifecycleNotification } from '../realtime/leadCreatedNotify.js';
+import {
+  urgencyWindowLabel,
+  severityFromConversionPreview,
+  primaryNextActionFromPreview,
+} from '../lead/leadExperienceContract.js';
 
 export function verifyCalendlySignature(rawBodyString, signatureHeader, signingKey) {
   if (!signingKey || !signatureHeader || rawBodyString == null) return false;
@@ -119,6 +126,21 @@ async function syncChatConversationCalendly(conversationObjectId, { status, setB
   await ChatConversation.findByIdAndUpdate(conversationObjectId, { $set });
 }
 
+function buildLeadNotificationBase(lead, conversationId, preview) {
+  return {
+    lead_match_id: lead._id,
+    lead_profile_id: lead.lead_profile_id || null,
+    conversation_id: conversationId || null,
+    session_id: lead.compatibility_factors?.session_id || null,
+    grade: String(lead.lead_type || '').split('_')[0] || null,
+    score: lead.match_score ?? null,
+    urgency: preview?.urgency ?? null,
+    urgency_window: urgencyWindowLabel(preview),
+    outcomes_headline: preview?.outcomes_headline ?? null,
+    action: { type: 'open_lead', lead_match_id: String(lead._id) },
+  };
+}
+
 export async function processCalendlyWebhook(body) {
   const eventName = body?.event;
   const payload = body?.payload ?? body?.resource;
@@ -194,6 +216,31 @@ export async function processCalendlyWebhook(body) {
       });
     }
 
+    if (lead?.user_id && lead?._id) {
+      const convForPreview = conversationId
+        ? await ChatConversation.findById(conversationId)
+            .select('calendly_booking_status lead_reasons last_interaction_at intent')
+            .lean()
+        : null;
+      const preview = buildWorkspaceLeadConversionPreview({
+        leadMatch: lead,
+        conversation: convForPreview,
+        intent: convForPreview?.intent || null,
+      });
+      await emitLeadLifecycleNotification(lead.user_id, {
+        ...buildLeadNotificationBase(lead, conversationId, preview),
+        notification_type: 'appointment_booked',
+        title: 'Appointment booked',
+        body: preview.why_match_one_liner || 'Lead booked an appointment.',
+        severity: severityFromConversionPreview(preview?.alert ? { alert: preview.alert } : null),
+        intent: convForPreview?.intent || null,
+        appointment_status: 'booked',
+        speed_to_lead_tip: preview?.urgency === 'immediate' ? 'Confirm appointment details now to reduce no-shows.' : null,
+        booking_cta: preview?.booking_cta ?? null,
+        primary_next_action: primaryNextActionFromPreview(preview),
+      });
+    }
+
     let ownerUserId = lead?.user_id || null;
     if (conversationId && !ownerUserId) {
       const convOwner = await ChatConversation.findById(conversationId).select('user_id').lean();
@@ -257,6 +304,37 @@ export async function processCalendlyWebhook(body) {
       logger.info('Calendly invitee.canceled: conversation marked canceled', {
         op:              'calendly.booking',
         conversation_id: String(conversationId),
+      });
+    }
+
+    if (lead?.user_id && lead?._id) {
+      const convForPreview = conversationId
+        ? await ChatConversation.findById(conversationId)
+            .select('calendly_booking_status lead_reasons last_interaction_at intent')
+            .lean()
+        : null;
+      const preview = buildWorkspaceLeadConversionPreview({
+        leadMatch: lead,
+        conversation: convForPreview,
+        intent: convForPreview?.intent || null,
+      });
+      await emitLeadLifecycleNotification(lead.user_id, {
+        ...buildLeadNotificationBase(lead, conversationId, preview),
+        notification_type: 'appointment_canceled',
+        title: 'Appointment canceled',
+        body: 'Booked appointment was canceled. Re-engage quickly to recover this opportunity.',
+        severity: 'high',
+        intent: convForPreview?.intent || null,
+        appointment_status: 'canceled',
+        urgency: 'same_day',
+        urgency_window: '24 hr',
+        speed_to_lead_tip: 'Follow up within the same day to recover booking momentum.',
+        booking_cta: 'Offer 2-3 new time slots now.',
+        primary_next_action: {
+          id: 'offer_meeting_slots',
+          title: 'Offer 2-3 specific times to rebook',
+          follow_up_template: preview?.primary_follow_up_template ?? null,
+        },
       });
     }
 

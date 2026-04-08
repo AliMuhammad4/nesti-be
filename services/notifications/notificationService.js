@@ -1,21 +1,15 @@
 import mongoose from 'mongoose';
 import ProfessionalNotification from '../../models/ProfessionalNotification.js';
 import { parseOffsetLimitPagination, buildPaginationMeta, PAGINATION_PRESETS } from '../../utils/pagination.js';
+import {
+  urgencyWindowLabel,
+  buildSpeedToLeadTip,
+  severityFromConversionPreview,
+  conversionPreviewBody,
+  primaryNextActionFromPreview,
+  buildCollectionEmptyState,
+} from '../lead/leadExperienceContract.js';
 
-function severityFromConversionPreview(preview) {
-  const lvl = preview?.alert?.level;
-  if (lvl === 'critical') return 'critical';
-  if (lvl === 'high') return 'high';
-  return 'info';
-}
-function bodyFromConversionPreview(conversion_preview) {
-  return (
-    conversion_preview?.why_match_one_liner ||
-    conversion_preview?.why_one_liner ||
-    conversion_preview?.headline ||
-    'A new lead was captured from chat.'
-  );
-}
 export async function createLeadCreatedNotification(ownerUserId, ctx) {
   const {
     newLeadMatch,
@@ -28,13 +22,11 @@ export async function createLeadCreatedNotification(ownerUserId, ctx) {
     conversion_preview,
   } = ctx;
 
-  const body = bodyFromConversionPreview(conversion_preview);
-  const title = `New ${String(persistedGrade || 'lead')} lead`;
   return ProfessionalNotification.create({
     user_id: ownerUserId,
     notification_type: 'lead_created',
-    title,
-    body,
+    title: `New ${String(persistedGrade || 'lead')} lead`,
+    body: conversionPreviewBody(conversion_preview),
     severity: severityFromConversionPreview(conversion_preview),
     action: { type: 'open_lead', lead_match_id: String(newLeadMatch._id) },
     lead_match_id: newLeadMatch._id,
@@ -45,6 +37,59 @@ export async function createLeadCreatedNotification(ownerUserId, ctx) {
     score: Number(newLeadMatch.match_score ?? finalScore),
     intent: socketIntent ?? null,
     appointment_status: appointment_status ?? null,
+    urgency: conversion_preview?.urgency ?? null,
+    urgency_window: urgencyWindowLabel(conversion_preview),
+    speed_to_lead_tip: buildSpeedToLeadTip(conversion_preview),
+    outcomes_headline: conversion_preview?.outcomes_headline ?? null,
+    booking_cta: conversion_preview?.booking_cta ?? null,
+    primary_next_action: primaryNextActionFromPreview(conversion_preview),
+  });
+}
+
+export async function createLeadLifecycleNotification(ownerUserId, payload = {}) {
+  const {
+    notification_type = 'lead_lifecycle',
+    title = 'Lead update',
+    body = 'A lead status changed.',
+    severity = 'info',
+    lead_match_id = null,
+    lead_profile_id = null,
+    conversation_id = null,
+    session_id = null,
+    grade = null,
+    score = null,
+    intent = null,
+    appointment_status = null,
+    urgency = null,
+    urgency_window = null,
+    speed_to_lead_tip = null,
+    outcomes_headline = null,
+    booking_cta = null,
+    primary_next_action = null,
+    action = null,
+  } = payload;
+
+  return ProfessionalNotification.create({
+    user_id: ownerUserId,
+    notification_type,
+    title,
+    body,
+    severity,
+    action,
+    lead_match_id,
+    lead_profile_id,
+    conversation_id,
+    session_id,
+    grade,
+    score: score != null ? Number(score) : null,
+    intent,
+    appointment_status,
+    urgency,
+    urgency_window,
+    speed_to_lead_tip,
+    outcomes_headline,
+    booking_cta,
+    primary_next_action,
   });
 }
 
@@ -67,6 +112,29 @@ function toDto(doc) {
     score: o.score ?? null,
     intent: o.intent ?? null,
     appointment_status: o.appointment_status ?? null,
+    urgency: o.urgency ?? null,
+    urgency_window: o.urgency_window ?? null,
+    speed_to_lead_tip: o.speed_to_lead_tip ?? null,
+    outcomes_headline: o.outcomes_headline ?? null,
+    booking_cta: o.booking_cta ?? null,
+    primary_next_action: o.primary_next_action ?? null,
+    decision_support: {
+      why_this_match: o.body || null,
+      do_this_now: o.primary_next_action || null,
+      urgency: {
+        level: o.severity || null,
+        hot_lead: (o.grade || '').toLowerCase() === 'hot' || o.urgency === 'immediate',
+        response_window: o.urgency_window || null,
+        speed_to_lead_tip: o.speed_to_lead_tip || null,
+      },
+    },
+    conversion_funnel: {
+      stage: o.notification_type || null,
+      appointment_status: o.appointment_status || null,
+      urgency: o.urgency || null,
+      response_window_minutes: null,
+      sla_at_risk: null,
+    },
     created_at: o.created_at ? o.created_at.toISOString() : null,
     updated_at: o.updated_at ? o.updated_at.toISOString() : null,
   };
@@ -86,7 +154,8 @@ export async function getNotificationsForUser(userId, { limit = 20, offset = 0, 
   ]);
   const meta = buildPaginationMeta({ page, limit: lim, total });
   return {
-    items: items.map((row) => toDto(row)),
+    items: items.map(toDto),
+    empty_state: items.length ? null : buildCollectionEmptyState('notifications'),
     total: meta.total,
     limit: meta.limit,
     offset: off,
@@ -110,7 +179,7 @@ export async function markNotificationRead(userId, notificationId) {
   const doc = await ProfessionalNotification.findOneAndUpdate(
     { _id: nid, user_id: uid },
     { $set: { read_at: new Date() } },
-    { returnDocument: 'after' }
+    { returnDocument: 'after' },
   ).lean();
   return toDto(doc);
 }
@@ -119,7 +188,7 @@ export async function markAllNotificationsRead(userId) {
   const uid = new mongoose.Types.ObjectId(String(userId));
   const res = await ProfessionalNotification.updateMany(
     { user_id: uid, read_at: null },
-    { $set: { read_at: new Date() } }
+    { $set: { read_at: new Date() } },
   );
   return { modified: res.modifiedCount ?? 0 };
 }

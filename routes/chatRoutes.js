@@ -3,6 +3,7 @@ const router = express.Router();
 import { protect } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { handleChat, handlePropertyMatches, scorePreview } from '../controllers/chatController.js';
+import { getChatAnalyticsSummary, getChatAnalyticsFunnel } from '../controllers/chatAnalyticsController.js';
 import {
   chatBodySchema,
   propertyMatchesSchema,
@@ -20,8 +21,8 @@ router.post('/property-matches', validateBody(propertyMatchesSchema), handleProp
 router.post('/score-preview', validateBody(scorePreviewSchema), scorePreview);
 router.get('/conversations', protect, stub);
 router.get('/conversations/:id/messages', protect, stub);
-router.get('/analytics/summary', protect, stub);
-router.get('/analytics/funnel', protect, stub);
+router.get('/analytics/summary', protect, getChatAnalyticsSummary);
+router.get('/analytics/funnel', protect, getChatAnalyticsFunnel);
 router.post('/referrals', protect, validateBody(referralCreateBodySchema), stub);
 router.get('/referrals', protect, stub);
 router.patch('/referrals/:id', protect, validateBody(referralUpdateBodySchema), stub);

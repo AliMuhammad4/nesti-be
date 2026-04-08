@@ -2,34 +2,29 @@ import User from '../../models/User.js';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
 import { emitNotification } from './workspaceSocket.js';
-import { createLeadCreatedNotification } from '../notifications/notificationService.js';
+import {
+  createLeadCreatedNotification,
+  createLeadLifecycleNotification,
+} from '../notifications/notificationService.js';
+import { recordLeadKpiEvent } from '../analytics/leadKpiService.js';
+import {
+  urgencyWindowLabel,
+  buildSpeedToLeadTip,
+  severityFromConversionPreview,
+  conversionPreviewBody,
+  primaryNextActionFromPreview,
+} from '../lead/leadExperienceContract.js';
 
 function envTruthy(value) {
   return ['1', 'true', 'yes'].includes(String(value ?? '').trim().toLowerCase());
 }
 
-function severityFromConversionPreview(preview) {
-  const lvl = preview?.alert?.level;
-  if (lvl === 'critical') return 'critical';
-  if (lvl === 'high') return 'high';
-  return 'info';
-}
-
-function buildSpeedToLeadTip(grade, preview) {
-  const mins = preview?.recommended_response_within_minutes;
-  const urgency = preview?.urgency;
-  if (urgency === 'immediate') return `Hot lead — respond within ${mins ?? 5} min to maximise conversion.`;
-  if (urgency === 'same_day') return `Warm lead — follow up within ${mins ?? 30} min while interest is high.`;
-  if (mins) return `Reach out within ${mins} min for best results.`;
-  return null;
-}
-
-function urgencyWindowLabel(preview) {
-  const mins = preview?.recommended_response_within_minutes;
-  if (!mins) return null;
-  if (mins < 60) return `${mins} min`;
-  return `${Math.round(mins / 60)} hr`;
-}
+const KPI_LIFECYCLE_TYPE_MAP = {
+  lead_lifecycle: 'lead_updated',
+  lead_updated: 'lead_updated',
+  appointment_booked: 'appointment_booked',
+  appointment_canceled: 'appointment_canceled',
+};
 
 export async function emitNewLeadCreatedNotification(ownerUserId, ctx) {
   let notification_id = null;
@@ -51,17 +46,11 @@ export async function emitNewLeadCreatedNotification(ownerUserId, ctx) {
     conversion_preview,
   } = ctx;
 
-  const body =
-    conversion_preview?.why_match_one_liner ||
-    conversion_preview?.why_one_liner ||
-    conversion_preview?.headline ||
-    'A new lead was captured from chat.';
-
   emitNotification(ownerUserId, {
     notification_id,
     notification_type: 'lead_created',
     title: `New ${String(persistedGrade || 'lead')} lead`,
-    body,
+    body: conversionPreviewBody(conversion_preview),
     severity: severityFromConversionPreview(conversion_preview),
     lead_match_id: String(newLeadMatch._id),
     lead_profile_id: newLeadMatch.lead_profile_id ? String(newLeadMatch.lead_profile_id) : null,
@@ -76,15 +65,57 @@ export async function emitNewLeadCreatedNotification(ownerUserId, ctx) {
     speed_to_lead_tip: buildSpeedToLeadTip(persistedGrade, conversion_preview),
     outcomes_headline: conversion_preview?.outcomes_headline ?? null,
     booking_cta: conversion_preview?.booking_cta ?? null,
-    primary_next_action: conversion_preview?.primary_next_action_id
-      ? {
-          id: conversion_preview.primary_next_action_id,
-          title: conversion_preview.primary_next_action_title,
-          follow_up_template: conversion_preview.primary_follow_up_template ?? null,
-        }
-      : null,
+    primary_next_action: primaryNextActionFromPreview(conversion_preview),
     action: { type: 'open_lead', lead_match_id: String(newLeadMatch._id) },
   });
+
+  try {
+    await recordLeadKpiEvent({
+      user_id: ownerUserId,
+      lead_match_id: newLeadMatch._id,
+      conversation_id: conversationId || null,
+      event_type: 'lead_created',
+      grade: persistedGrade || null,
+      appointment_status: appointment_status || null,
+      urgency: conversion_preview?.urgency ?? null,
+      metadata: {
+        score: Number(newLeadMatch.match_score ?? finalScore),
+        intent: socketIntent || null,
+      },
+    });
+  } catch (e) {
+    logger.warn('Lead KPI event write failed (lead_created)', { error: e.message });
+  }
+}
+
+export async function emitLeadLifecycleNotification(ownerUserId, payload) {
+  let notification_id = null;
+  try {
+    const doc = await createLeadLifecycleNotification(ownerUserId, payload);
+    notification_id = doc?._id ? String(doc._id) : null;
+  } catch (e) {
+    logger.warn('Lead-lifecycle notification persist failed', {
+      error: e.message,
+      user_id: String(ownerUserId),
+    });
+  }
+
+  emitNotification(ownerUserId, { notification_id, ...payload });
+
+  try {
+    await recordLeadKpiEvent({
+      user_id: ownerUserId,
+      lead_match_id: payload?.lead_match_id || null,
+      conversation_id: payload?.conversation_id || null,
+      event_type: KPI_LIFECYCLE_TYPE_MAP[payload?.notification_type] || payload?.notification_type || 'lead_updated',
+      grade: payload?.grade || null,
+      appointment_status: payload?.appointment_status || null,
+      urgency: payload?.urgency || null,
+      metadata: { severity: payload?.severity || null, title: payload?.title || null },
+    });
+  } catch (e) {
+    logger.warn('Lead KPI event write failed (lifecycle)', { error: e.message });
+  }
 }
 
 export async function sendNewLeadCreatedEmailIfEnabled(ownerUserId, ctx) {
@@ -95,11 +126,7 @@ export async function sendNewLeadCreatedEmailIfEnabled(ownerUserId, ctx) {
   }
 
   const { newLeadMatch, persistedGrade, conversion_preview } = ctx;
-  const summary =
-    conversion_preview?.why_match_one_liner ||
-    conversion_preview?.why_one_liner ||
-    conversion_preview?.headline ||
-    'A new lead was captured from chat.';
+  const summary = conversionPreviewBody(conversion_preview);
 
   try {
     const user = await User.findById(ownerUserId).select('email first_name').lean();

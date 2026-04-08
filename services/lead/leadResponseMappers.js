@@ -2,57 +2,62 @@ import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
+import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
 
 function professionalTypeFromMatch(leadMatch) {
   return leadMatch.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
 }
 
-export function mapLeadMatchToListRow(leadMatch, profile, convo, includeConversion) {
-  const profType = professionalTypeFromMatch(leadMatch);
-  const profileView = mapLeadProfileForApi(profile, profType);
-  const row = {
-    id: String(leadMatch._id),
-    professional_type: profType,
-    intent: profileView.intent,
-    lead_type: leadMatch.lead_type,
-    grade: leadMatch.lead_type?.split('_')[0] || null,
-    score: leadMatch.match_score,
-    status: leadMatch.match_status,
-    contact: profileView.contact,
-    property: profileView.property,
-    qualification: profileView.qualification,
-    appointment_status: resolveAppointmentStatus(leadMatch.match_status, convo.calendly_booking_status),
-    embed_token: leadMatch.compatibility_factors?.embed_token || null,
-    session_id: leadMatch.compatibility_factors?.session_id || convo.session_id || null,
-    conversation_id: String(leadMatch.conversation_id || ''),
-    created_at: leadMatch.createdAt,
-    updated_at: leadMatch.updatedAt,
-  };
-  if (includeConversion) {
-    row.conversion = buildLeadConversionPack({
-      leadMatch,
-      leadProfile: profile && profile._id ? profile : null,
-      conversation: convo && convo._id ? convo : null,
-    });
-  }
-  return row;
+function buildSpecificFacts(profileView, leadMatch) {
+  const facts = [];
+  const score = leadMatch?.match_score;
+  const p = profileView?.property || {};
+  const q = profileView?.qualification || {};
+  if (score != null) facts.push(`Lead score ${Number(score)}/100`);
+  if (p.budget) facts.push(`Budget/price: ${p.budget}`);
+  if (p.timeline) facts.push(`Timeline: ${p.timeline}`);
+  if (p.location || p.address) facts.push(`Area: ${p.location || p.address}`);
+  if (q?.mortgage_timeline) facts.push(`Mortgage timeline: ${q.mortgage_timeline}`);
+  if (q?.pre_approval_status) facts.push(`Financing: ${q.pre_approval_status}`);
+  if (q?.transaction_stage) facts.push(`Transaction stage: ${q.transaction_stage}`);
+  return facts;
 }
 
-export function mapLeadMatchToDetail(leadMatch, profile, convo, includeConversion) {
-  const profType = professionalTypeFromMatch(leadMatch);
-  const profileView = mapLeadProfileForApi(profile, profType);
-  const lead = {
+function buildExperienceBlocks(conversion, grade, profileView, leadMatch) {
+  const facts = buildSpecificFacts(profileView, leadMatch);
+  return {
+    decision_support: buildDecisionSupport(conversion, grade, facts),
+    trust: buildLeadTrust({
+      contact: profileView.contact,
+      property: { ...profileView.property, intent: profileView.intent },
+      qualification: profileView.qualification,
+      icpFit: leadMatch.icp_fit || null,
+    }),
+    conversion_funnel: buildFunnelTelemetry(conversion),
+  };
+}
+
+function buildConversion(leadMatch, profile, convo) {
+  return buildLeadConversionPack({
+    leadMatch,
+    leadProfile: profile && profile._id ? profile : null,
+    conversation: convo && convo._id ? convo : null,
+  });
+}
+
+function leadCore(leadMatch, profileView, convo) {
+  const grade = leadMatch.lead_type?.split('_')[0] || null;
+  return {
     id: String(leadMatch._id),
-    professional_type: profType,
+    professional_type: null,
     intent: profileView.intent,
     lead_type: leadMatch.lead_type,
-    grade: leadMatch.lead_type?.split('_')[0] || null,
+    grade,
     score: leadMatch.match_score,
     status: leadMatch.match_status,
     contact: profileView.contact,
     property: profileView.property,
     qualification: profileView.qualification,
-    icp_fit: leadMatch.icp_fit || null,
     appointment_status: resolveAppointmentStatus(leadMatch.match_status, convo?.calendly_booking_status),
     embed_token: leadMatch.compatibility_factors?.embed_token || null,
     session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,
@@ -60,38 +65,52 @@ export function mapLeadMatchToDetail(leadMatch, profile, convo, includeConversio
     created_at: leadMatch.createdAt,
     updated_at: leadMatch.updatedAt,
   };
-  if (includeConversion) {
-    lead.conversion = buildLeadConversionPack({
-      leadMatch,
-      leadProfile: profile && profile._id ? profile : null,
-      conversation: convo && convo._id ? convo : null,
-    });
-  }
+}
+
+export function mapLeadMatchToListRow(leadMatch, profile, convo, includeConversion) {
+  const profType = professionalTypeFromMatch(leadMatch);
+  const profileView = mapLeadProfileForApi(profile, profType);
+  const conversion = buildConversion(leadMatch, profile, convo);
+  const grade = leadMatch.lead_type?.split('_')[0] || null;
+  const row = {
+    ...leadCore(leadMatch, profileView, convo),
+    professional_type: profType,
+    ...buildExperienceBlocks(conversion, grade, profileView, leadMatch),
+  };
+  if (includeConversion) row.conversion = conversion;
+  return row;
+}
+
+export function mapLeadMatchToDetail(leadMatch, profile, convo, includeConversion) {
+  const profType = professionalTypeFromMatch(leadMatch);
+  const profileView = mapLeadProfileForApi(profile, profType);
+  const conversion = buildConversion(leadMatch, profile, convo);
+  const grade = leadMatch.lead_type?.split('_')[0] || null;
+  const lead = {
+    ...leadCore(leadMatch, profileView, convo),
+    professional_type: profType,
+    icp_fit: leadMatch.icp_fit || null,
+    ...buildExperienceBlocks(conversion, grade, profileView, leadMatch),
+  };
+  if (includeConversion) lead.conversion = conversion;
   return lead;
 }
 
 export function mapLeadMatchUnderProfile(leadMatch, profile, convo) {
   const profType = profile?.ownership?.professional_type || PROFESSIONAL_TYPE.AGENT;
   const profileView = mapLeadProfileForApi(profile, profType);
+  const conversion = buildLeadConversionPack({
+    leadMatch,
+    leadProfile: profile,
+    conversation: convo && convo._id ? convo : null,
+  });
+  const grade = leadMatch.lead_type?.split('_')[0] || null;
+
   return {
-    id: String(leadMatch._id),
+    ...leadCore(leadMatch, profileView, convo),
     professional_type: leadMatch.compatibility_factors?.professional_type || profType,
-    intent: profileView.intent,
-    lead_type: leadMatch.lead_type,
-    grade: leadMatch.lead_type?.split('_')[0] || null,
-    score: leadMatch.match_score,
-    status: leadMatch.match_status,
-    appointment_status: resolveAppointmentStatus(leadMatch.match_status, convo.calendly_booking_status),
     icp_fit: leadMatch.icp_fit || null,
-    embed_token: leadMatch.compatibility_factors?.embed_token || null,
-    session_id: leadMatch.compatibility_factors?.session_id || convo.session_id || null,
-    conversation_id: String(leadMatch.conversation_id || ''),
-    created_at: leadMatch.createdAt,
-    updated_at: leadMatch.updatedAt,
-    conversion: buildLeadConversionPack({
-      leadMatch,
-      leadProfile: profile,
-      conversation: convo && convo._id ? convo : null,
-    }),
+    ...buildExperienceBlocks(conversion, grade, profileView, leadMatch),
+    conversion,
   };
 }

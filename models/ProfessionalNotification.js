@@ -29,6 +29,12 @@ const professionalNotificationSchema = new mongoose.Schema(
     score: { type: Number, default: null },
     intent: { type: String, default: null },
     appointment_status: { type: String, default: null },
+    urgency: { type: String, default: null },
+    urgency_window: { type: String, default: null },
+    speed_to_lead_tip: { type: String, default: null },
+    outcomes_headline: { type: String, default: null },
+    booking_cta: { type: String, default: null },
+    primary_next_action: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

@@ -2,6 +2,9 @@ import ChatConversation from '../../models/ChatConversation.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
+import { mapLeadProfileForApi } from '../lead/leadProfileFormat.js';
+import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from '../lead/leadExperienceContract.js';
 
 const getTemperatureLabel = (grade, professionalType) => {
   if (professionalType === PROFESSIONAL_TYPE.LAWYER) {
@@ -152,5 +155,40 @@ export const getLeadInsights = async ({ userId, conversationId }) => {
     data: { actions: nextSteps },
   });
 
-  return { success: true, insights };
+  const profileView = mapLeadProfileForApi(profile || {}, professionalType);
+  const conversion = leadMatch
+    ? buildLeadConversionPack({
+        leadMatch,
+        leadProfile: profile || null,
+        conversation,
+      })
+    : null;
+  const specificFacts = [
+    score != null ? `Lead score ${Number(score)}/100` : null,
+    profileView?.property?.budget ? `Budget/price: ${profileView.property.budget}` : null,
+    profileView?.property?.timeline ? `Timeline: ${profileView.property.timeline}` : null,
+    profileView?.property?.location || profileView?.property?.address
+      ? `Area: ${profileView.property.location || profileView.property.address}`
+      : null,
+  ].filter(Boolean);
+
+  return {
+    success: true,
+    insights,
+    decision_support: buildDecisionSupport(conversion, grade, specificFacts),
+    trust: buildLeadTrust({
+      contact: profileView?.contact || {},
+      property: { ...(profileView?.property || {}), intent: profileView?.intent || null },
+      qualification: profileView?.qualification || null,
+      icpFit: leadMatch?.icp_fit || null,
+    }),
+    conversion_funnel: buildFunnelTelemetry(conversion),
+    empty_state:
+      insights.length === 0
+        ? {
+            reason: 'No lead insight data is available for this conversation yet.',
+            action: 'Continue qualifying the lead to generate explanation and next-action guidance.',
+          }
+        : null,
+  };
 };

@@ -22,6 +22,12 @@ import {
   mapLeadMatchToDetail,
   mapLeadMatchUnderProfile,
 } from './leadResponseMappers.js';
+import {
+  buildCollectionEmptyState,
+  buildDecisionSupport,
+  buildFunnelTelemetry,
+  buildLeadTrust,
+} from './leadExperienceContract.js';
 
 export const getLeads = async (req, res, next) => {
   try {
@@ -48,6 +54,7 @@ export const getLeads = async (req, res, next) => {
       return res.json({
         success: true,
         leads: [],
+        empty_state: buildCollectionEmptyState('leads'),
         pagination: buildPaginationMeta({ page, limit, total: 0 }),
       });
     }
@@ -74,6 +81,7 @@ export const getLeads = async (req, res, next) => {
     return res.json({
       success: true,
       leads,
+      empty_state: null,
       pagination: buildPaginationMeta({ page, limit, total }),
     });
   } catch (error) {
@@ -151,6 +159,10 @@ export const getLeadProfiles = async (req, res, next) => {
         return res.json({
           success: true,
           lead_profiles: [],
+          empty_state: {
+            reason: `No lead profiles match icp_tier=${icpTier}.`,
+            action: 'Try a different ICP tier or review ICP settings to widen matches.',
+          },
           pagination: buildPaginationMeta({ page, limit, total: 0 }),
         });
       }
@@ -183,6 +195,13 @@ export const getLeadProfiles = async (req, res, next) => {
     return res.json({
       success: true,
       lead_profiles,
+      empty_state:
+        lead_profiles.length === 0
+          ? {
+              reason: 'No lead profiles found yet.',
+              action: 'Capture new leads or remove filters to populate this view.',
+            }
+          : null,
       pagination: buildPaginationMeta({ page, limit, total }),
     });
   } catch (error) {
@@ -223,6 +242,10 @@ export const getLeadsByProfileId = async (req, res, next) => {
       success: true,
       profile_id: String(profile._id),
       leads,
+      empty_state:
+        leads.length === 0
+          ? buildCollectionEmptyState('profile_leads')
+          : null,
       pagination: buildPaginationMeta({ page, limit, total }),
     });
   } catch (error) {
@@ -244,6 +267,10 @@ export const getLeadConversation = async (req, res, next) => {
         lead_id: id,
         conversation_id: null,
         messages: [],
+        empty_state: {
+          reason: 'No conversation thread exists for this lead yet.',
+          action: 'Start outreach from the lead card and message history will appear here.',
+        },
         pagination: buildPaginationMeta({ page, limit, total: 0 }),
       });
     }
@@ -266,6 +293,13 @@ export const getLeadConversation = async (req, res, next) => {
       lead_id: id,
       conversation_id: String(leadMatch.conversation_id),
       messages: conversationMessages,
+      empty_state:
+        conversationMessages.length === 0
+          ? {
+              reason: 'Conversation thread is created but has no messages yet.',
+              action: 'Send the first outreach message to activate this thread.',
+            }
+          : null,
       pagination: buildPaginationMeta({ page, limit, total }),
     });
   } catch (error) {
@@ -306,10 +340,6 @@ export const deleteLeadById = async (req, res, next) => {
   }
 };
 
-/**
- * GET /api/leads/:id/property-matches
- * Buy lead → seller CRM matches; sell lead → buyer pipeline matches. Includes conversion pack.
- */
 export const getLeadPropertyMatches = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -319,12 +349,10 @@ export const getLeadPropertyMatches = async (req, res, next) => {
     if (!mongoose.Types.ObjectId.isValid(leadMatchId)) {
       return res.status(400).json({ success: false, message: 'Invalid lead id' });
     }
-
     const leadMatch = await LeadMatch.findOne({ _id: leadMatchId, user_id: userId }).lean();
     if (!leadMatch) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
-
     if (!leadMatch.lead_profile_id) {
       return res.status(200).json({
         success: true,
@@ -332,9 +360,12 @@ export const getLeadPropertyMatches = async (req, res, next) => {
         property_matches_context: null,
         conversion: null,
         message: 'No lead profile attached to this lead yet.',
+        empty_state: {
+          reason: 'Property matching requires a lead profile.',
+          action: 'Complete lead qualification fields (intent, budget, location, timeline) to enable matches.',
+        },
       });
     }
-
     const leadProfile = await LeadProfile.findById(leadMatch.lead_profile_id).lean();
     if (!leadProfile) {
       return res.status(200).json({
@@ -343,12 +374,14 @@ export const getLeadPropertyMatches = async (req, res, next) => {
         property_matches_context: null,
         conversion: null,
         message: 'Lead profile not found.',
+        empty_state: {
+          reason: 'Lead profile data is missing for this lead.',
+          action: 'Re-run qualification or reconnect this lead to a valid profile.',
+        },
       });
     }
-
     const isBuyer = /buy/i.test(leadProfile.intent || leadMatch.lead_type || '');
     const context = isBuyer ? 'buy' : 'sell';
-
     const [property_matches, conversation] = await Promise.all([
       isBuyer
         ? getBuyerPropertyMatches({ userId, leadProfile, signals: {} })
@@ -359,14 +392,12 @@ export const getLeadPropertyMatches = async (req, res, next) => {
             .lean()
         : Promise.resolve(null),
     ]);
-
     const conversion = buildLeadConversionPack({
       leadMatch,
       leadProfile,
       conversation,
       intent: context,
     });
-
     return res.json({
       success: true,
       lead_id: String(leadMatch._id),
@@ -375,6 +406,45 @@ export const getLeadPropertyMatches = async (req, res, next) => {
       property_matches_context: context,
       match_count: property_matches.length,
       conversion,
+      decision_support: buildDecisionSupport(
+        conversion,
+        leadMatch.lead_type?.split('_')[0] || null,
+        [
+          leadMatch?.match_score != null ? `Lead score ${Number(leadMatch.match_score)}/100` : null,
+          leadProfile?.property?.budget || leadProfile?.property?.expected_price
+            ? `Budget/price: ${leadProfile?.property?.budget || leadProfile?.property?.expected_price}`
+            : null,
+          leadProfile?.property?.timeline ? `Timeline: ${leadProfile.property.timeline}` : null,
+          leadProfile?.property?.location || leadProfile?.property?.address
+            ? `Area: ${leadProfile.property.location || leadProfile.property.address}`
+            : null,
+        ].filter(Boolean),
+      ),
+      trust: buildLeadTrust({
+        contact: {
+          full_name: leadProfile?.identity?.full_name || null,
+          email: leadProfile?.identity?.email || null,
+          phone: leadProfile?.identity?.phone || null,
+        },
+        property: {
+          intent: leadProfile?.intent || context,
+          location: leadProfile?.property?.location || null,
+          address: leadProfile?.property?.address || null,
+          budget:
+            leadProfile?.property?.budget ||
+            leadProfile?.property?.expected_price ||
+            leadProfile?.budget_profile?.latest_budget_text ||
+            null,
+          timeline: leadProfile?.property?.timeline || null,
+        },
+        qualification: leadProfile?.qualification || null,
+        icpFit: leadMatch?.icp_fit || null,
+      }),
+      conversion_funnel: buildFunnelTelemetry(conversion),
+      empty_state:
+        property_matches.length === 0
+          ? buildCollectionEmptyState('property_matches', { intent: context })
+          : null,
       pagination: buildPaginationMeta({ page, limit, total: property_matches.length }),
     });
   } catch (error) {

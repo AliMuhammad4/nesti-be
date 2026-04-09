@@ -2,8 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
-import nodemailer from 'nodemailer';
-import dns from 'node:dns';
+import postmark from 'postmark';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import dotenv from 'dotenv';
@@ -64,64 +63,27 @@ app.get('/lawyer', (req, res) => {
 
 app.get('/api/health/smtp', async (req, res) => {
   try {
-    const port = Number(process.env.EMAIL_PORT) || 587;
-    const requireTls = process.env.EMAIL_REQUIRE_TLS === 'true';
-    const connectTimeoutMs = Number(process.env.SMTP_HEALTH_CONNECTION_TIMEOUT_MS) || 8000;
-    const greetingTimeoutMs = Number(process.env.SMTP_HEALTH_GREETING_TIMEOUT_MS) || 8000;
-    const socketTimeoutMs = Number(process.env.SMTP_HEALTH_SOCKET_TIMEOUT_MS) || 10000;
-
-    if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    if (!process.env.POSTMARK_SERVER_TOKEN || !process.env.POSTMARK_FROM_EMAIL) {
       return res.status(500).json({
         success: false,
-        message: 'Missing SMTP config: EMAIL_HOST, EMAIL_USER, or EMAIL_PASS',
+        message: 'Missing Postmark config: POSTMARK_SERVER_TOKEN or POSTMARK_FROM_EMAIL',
       });
     }
-    const originalHost = process.env.EMAIL_HOST;
-    const resolvedIpv4Hosts = await dns.promises.resolve4(originalHost);
-    if (!resolvedIpv4Hosts?.length) {
-      return res.status(500).json({
-        success: false,
-        message: `Could not resolve IPv4 address for ${originalHost}`,
-      });
-    }
-    const smtpHost = resolvedIpv4Hosts[0];
 
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port,
-      secure: port === 465,
-      requireTLS: requireTls,
-      family: 4,
-      tls: { servername: originalHost },
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-      connectionTimeout: connectTimeoutMs,
-      greetingTimeout: greetingTimeoutMs,
-      socketTimeout: socketTimeoutMs,
-    });
+    const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
+    const server = await client.getServer();
 
-    await transporter.verify();
     return res.json({
       success: true,
-      message: 'SMTP connection verified successfully',
-      host: originalHost,
-      resolvedHost: smtpHost,
-      port,
-      secure: port === 465,
-      requireTLS: requireTls,
-      timeouts: {
-        connectionTimeout: connectTimeoutMs,
-        greetingTimeout: greetingTimeoutMs,
-        socketTimeout: socketTimeoutMs,
-      },
+      message: 'Postmark connection verified successfully',
+      serverName: server?.Name,
+      postmarkFromEmail: process.env.POSTMARK_FROM_EMAIL,
     });
   } catch (error) {
-    logger.error(`SMTP health check failed: ${error.message}`);
+    logger.error(`Postmark health check failed: ${error.message}`);
     return res.status(500).json({
       success: false,
-      message: 'SMTP verification failed',
+      message: 'Postmark verification failed',
       error: error.message,
     });
   }

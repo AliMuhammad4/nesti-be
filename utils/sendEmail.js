@@ -4,11 +4,17 @@ import logger from './logger.js';
 const sendEmail = async (options) => {
   try {
     const port = Number(process.env.EMAIL_PORT) || 587;
+    const requireTls = process.env.EMAIL_REQUIRE_TLS === 'true';
+    if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      throw new Error('Missing SMTP config: EMAIL_HOST, EMAIL_USER, or EMAIL_PASS');
+    }
+
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
       port,
       secure: port === 465,
-      requireTLS: port === 587,
+      requireTLS: requireTls,
+      family: 4,
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,

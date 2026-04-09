@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
+import nodemailer from 'nodemailer';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import dotenv from 'dotenv';
@@ -58,6 +59,52 @@ app.get('/mortgage-broker', (req, res) => {
 });
 app.get('/lawyer', (req, res) => {
   res.sendFile(path.join(__dirname, 'lawyer.html'));
+});
+
+app.get('/api/health/smtp', async (req, res) => {
+  try {
+    const port = Number(process.env.EMAIL_PORT) || 587;
+    const requireTls = process.env.EMAIL_REQUIRE_TLS === 'true';
+
+    if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      return res.status(500).json({
+        success: false,
+        message: 'Missing SMTP config: EMAIL_HOST, EMAIL_USER, or EMAIL_PASS',
+      });
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port,
+      secure: port === 465,
+      requireTLS: requireTls,
+      family: 4,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+      connectionTimeout: 60_000,
+      greetingTimeout: 30_000,
+      socketTimeout: 60_000,
+    });
+
+    await transporter.verify();
+    return res.json({
+      success: true,
+      message: 'SMTP connection verified successfully',
+      host: process.env.EMAIL_HOST,
+      port,
+      secure: port === 465,
+      requireTLS: requireTls,
+    });
+  } catch (error) {
+    logger.error(`SMTP health check failed: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'SMTP verification failed',
+      error: error.message,
+    });
+  }
 });
 
 // Routes

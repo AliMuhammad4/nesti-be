@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
+import postmark from 'postmark';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import dotenv from 'dotenv';
@@ -59,6 +60,34 @@ app.get('/mortgage-broker', (req, res) => {
 });
 app.get('/lawyer', (req, res) => {
   res.sendFile(path.join(__dirname, 'lawyer.html'));
+});
+
+app.get('/api/health/smtp', async (req, res) => {
+  try {
+    if (!process.env.POSTMARK_SERVER_TOKEN || !process.env.POSTMARK_FROM_EMAIL) {
+      return res.status(500).json({
+        success: false,
+        message: 'Missing Postmark config: POSTMARK_SERVER_TOKEN or POSTMARK_FROM_EMAIL',
+      });
+    }
+
+    const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
+    const server = await client.getServer();
+
+    return res.json({
+      success: true,
+      message: 'Postmark connection verified successfully',
+      serverName: server?.Name,
+      postmarkFromEmail: process.env.POSTMARK_FROM_EMAIL,
+    });
+  } catch (error) {
+    logger.error(`Postmark health check failed: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Postmark verification failed',
+      error: error.message,
+    });
+  }
 });
 
 // Routes

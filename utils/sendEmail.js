@@ -1,28 +1,36 @@
-import nodemailer from 'nodemailer';
+import postmark from 'postmark';
 import logger from './logger.js';
 
 const sendEmail = async (options) => {
   try {
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: process.env.EMAIL_PORT,
-      secure: process.env.EMAIL_PORT === '465',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+    if (!process.env.POSTMARK_SERVER_TOKEN || !process.env.POSTMARK_FROM_EMAIL) {
+      throw new Error('Missing Postmark config: POSTMARK_SERVER_TOKEN or POSTMARK_FROM_EMAIL');
+    }
 
-    const mailOptions = {
-      from: `"Nesti" <${process.env.EMAIL_USER}>`,
-      to: options.email,
-      subject: options.subject,
-      text: options.message,
-      html: options.htmlMessage || `<p>${options.message}</p>`,
-    };
+    const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
+    const from = process.env.POSTMARK_FROM_EMAIL;
+    const to = options.email;
+    const messageStream = options.messageStream || 'outbound';
 
-    const info = await transporter.sendMail(mailOptions);
-    logger.info(`Message sent: ${info.messageId}`);
+    const response =
+      options.templateAlias || options.templateId
+        ? await client.sendEmailWithTemplate({
+            From: from,
+            To: to,
+            TemplateAlias: options.templateAlias,
+            TemplateId: options.templateId,
+            TemplateModel: options.templateModel || {},
+            MessageStream: messageStream,
+          })
+        : await client.sendEmail({
+            From: from,
+            To: to,
+            Subject: options.subject,
+            TextBody: options.message,
+            HtmlBody: options.htmlMessage || `<p>${options.message}</p>`,
+            MessageStream: messageStream,
+          });
+    logger.info(`Message sent via Postmark: ${response.MessageID}`);
 
     return { success: true };
   } catch (error) {

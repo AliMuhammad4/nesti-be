@@ -28,6 +28,27 @@ import {
   buildFunnelTelemetry,
   buildLeadTrust,
 } from './leadExperienceContract.js';
+import { recordLeadViewIfNeeded } from '../analytics/leadKpiService.js';
+
+export const recordLeadView = async (req, res, next) => {
+  try {
+    const userId = req.user._id;
+    const { id } = req.params;
+    const leadMatch = await LeadMatch.findOne({ _id: id, user_id: userId }).lean();
+    if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    const result = await recordLeadViewIfNeeded({
+      user_id: userId,
+      lead_match_id: leadMatch._id,
+      conversation_id: leadMatch.conversation_id || null,
+      grade: leadMatch.lead_type?.split('_')[0] || null,
+      metadata: { match_status: leadMatch.match_status },
+    });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return next(error);
+  }
+};
 
 export const getLeads = async (req, res, next) => {
   try {

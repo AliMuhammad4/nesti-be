@@ -7,10 +7,16 @@ const nurtureLogSchema = new mongoose.Schema({
     ref: 'User',
     required: true,
   },
+  lead_match_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'LeadMatch',
+    default: null,
+    index: true,
+  },
   conversation_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ChatConversation',
-    required: true,
+    default: null,
   },
   to_email: {
     type: String,

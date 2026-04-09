@@ -1,9 +1,5 @@
-import { Joi, passthrough } from './common.js';
-import {
-  nurtureLogCreateSchema,
-  referralCreateSchema,
-  referralUpdateSchema,
-} from './opsSchemas.js';
+import { Joi, objectId, passthrough } from './common.js';
+import { referralCreateSchema, referralUpdateSchema } from './opsSchemas.js';
 
 export const chatBodySchema = Joi.object({
   id: Joi.string().optional(),
@@ -40,9 +36,37 @@ export const referralUpdateBodySchema = referralUpdateSchema.fork(
   (s) => s.optional()
 );
 
-export const nurtureSendBodySchema = nurtureLogCreateSchema.fork(
-  ['user_id', 'conversation_id', 'to_email', 'subject', 'body'],
-  (s) => s.optional()
-);
+export const nurtureDraftBodySchema = Joi.object({
+  lead_match_id: objectId.optional(),
+  lead_profile_id: objectId.optional(),
+  goal: Joi.string().trim().max(500).allow('', null),
+  tone: Joi.string().trim().max(100).allow('', null),
+})
+  .xor('lead_match_id', 'lead_profile_id')
+  .messages({ 'object.xor': 'Provide exactly one of lead_match_id or lead_profile_id' });
+
+export const nurtureRefineBodySchema = Joi.object({
+  lead_match_id: objectId.optional(),
+  lead_profile_id: objectId.optional(),
+  subject: Joi.string().trim().max(200).required(),
+  body: Joi.string().trim().max(8000).required(),
+  instruction: Joi.string().trim().max(2000).required(),
+})
+  .xor('lead_match_id', 'lead_profile_id')
+  .messages({ 'object.xor': 'Provide exactly one of lead_match_id or lead_profile_id' });
+
+export const nurtureSendBodySchema = Joi.object({
+  lead_match_id: objectId.optional(),
+  lead_profile_id: objectId.optional(),
+  conversation_id: objectId.optional(),
+  to_email: Joi.string().email().allow('', null),
+  subject: Joi.string().trim().max(200).required(),
+  body: Joi.string().trim().max(8000).required(),
+  body_html: Joi.string().trim().max(20000).allow('', null),
+  /** When true (default), HTML email appends styled property cards from server-fetched matches. */
+  include_property_cards: Joi.boolean().optional(),
+})
+  .xor('lead_match_id', 'lead_profile_id')
+  .messages({ 'object.xor': 'Provide exactly one of lead_match_id or lead_profile_id' });
 
 export const calculatorSchema = passthrough;

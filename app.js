@@ -66,6 +66,9 @@ app.get('/api/health/smtp', async (req, res) => {
   try {
     const port = Number(process.env.EMAIL_PORT) || 587;
     const requireTls = process.env.EMAIL_REQUIRE_TLS === 'true';
+    const connectTimeoutMs = Number(process.env.SMTP_HEALTH_CONNECTION_TIMEOUT_MS) || 8000;
+    const greetingTimeoutMs = Number(process.env.SMTP_HEALTH_GREETING_TIMEOUT_MS) || 8000;
+    const socketTimeoutMs = Number(process.env.SMTP_HEALTH_SOCKET_TIMEOUT_MS) || 10000;
 
     if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       return res.status(500).json({
@@ -73,31 +76,46 @@ app.get('/api/health/smtp', async (req, res) => {
         message: 'Missing SMTP config: EMAIL_HOST, EMAIL_USER, or EMAIL_PASS',
       });
     }
+    const originalHost = process.env.EMAIL_HOST;
+    const resolvedIpv4Hosts = await dns.promises.resolve4(originalHost);
+    if (!resolvedIpv4Hosts?.length) {
+      return res.status(500).json({
+        success: false,
+        message: `Could not resolve IPv4 address for ${originalHost}`,
+      });
+    }
+    const smtpHost = resolvedIpv4Hosts[0];
 
     const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
+      host: smtpHost,
       port,
       secure: port === 465,
       requireTLS: requireTls,
       family: 4,
-      lookup: (hostname, options, callback) => dns.lookup(hostname, { family: 4 }, callback),
+      tls: { servername: originalHost },
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
       },
-      connectionTimeout: 60_000,
-      greetingTimeout: 30_000,
-      socketTimeout: 60_000,
+      connectionTimeout: connectTimeoutMs,
+      greetingTimeout: greetingTimeoutMs,
+      socketTimeout: socketTimeoutMs,
     });
 
     await transporter.verify();
     return res.json({
       success: true,
       message: 'SMTP connection verified successfully',
-      host: process.env.EMAIL_HOST,
+      host: originalHost,
+      resolvedHost: smtpHost,
       port,
       secure: port === 465,
       requireTLS: requireTls,
+      timeouts: {
+        connectionTimeout: connectTimeoutMs,
+        greetingTimeout: greetingTimeoutMs,
+        socketTimeout: socketTimeoutMs,
+      },
     });
   } catch (error) {
     logger.error(`SMTP health check failed: ${error.message}`);

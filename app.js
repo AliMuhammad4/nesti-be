@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
 import nodemailer from 'nodemailer';
+import dns from 'node:dns';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import dotenv from 'dotenv';
@@ -79,6 +80,7 @@ app.get('/api/health/smtp', async (req, res) => {
       secure: port === 465,
       requireTLS: requireTls,
       family: 4,
+      lookup: (hostname, options, callback) => dns.lookup(hostname, { family: 4 }, callback),
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,

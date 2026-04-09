@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import dns from 'node:dns';
 import logger from './logger.js';
 
 const sendEmail = async (options) => {
@@ -13,8 +14,9 @@ const sendEmail = async (options) => {
       host: process.env.EMAIL_HOST,
       port,
       secure: port === 465,
-      requireTLS: port === 587,
+      requireTLS: requireTls,
       family: 4,
+      lookup: (hostname, options, callback) => dns.lookup(hostname, { family: 4 }, callback),
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,

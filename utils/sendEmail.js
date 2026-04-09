@@ -13,7 +13,7 @@ const sendEmail = async (options) => {
       host: process.env.EMAIL_HOST,
       port,
       secure: port === 465,
-      requireTLS: requireTls,
+      requireTLS: port === 587,
       family: 4,
       auth: {
         user: process.env.EMAIL_USER,

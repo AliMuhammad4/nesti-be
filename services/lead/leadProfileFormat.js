@@ -92,7 +92,11 @@ export function mapLeadProfileForApi(profile, profType) {
 }
 
 export function formatLeadProfileSummary(profile, options = {}) {
-  const { appointment_status: appointmentStatusOpt } = options;
+  const {
+    appointment_status: appointmentStatusOpt,
+    nurture_consultation_booked: nurtureConsultationBookedOpt,
+    omit_ownership: omitOwnership,
+  } = options;
   const profType = profile?.ownership?.professional_type || PROFESSIONAL_TYPE.AGENT;
   const profileView = mapLeadProfileForApi(profile, profType);
   const ownership = profile.ownership || {};
@@ -126,7 +130,34 @@ export function formatLeadProfileSummary(profile, options = {}) {
     if (sLast && lLast && sLast === lLast) {
       delete lifecycle.last_seen_at;
     }
+    const lInq = lifecycle.last_inquiry_at != null ? new Date(lifecycle.last_inquiry_at).toISOString() : null;
+    if (sLast && lInq && sLast === lInq) {
+      delete lifecycle.last_inquiry_at;
+    }
   } catch {
+  }
+
+  try {
+    if (profile.createdAt && lifecycle.first_seen_at) {
+      const dt = Math.abs(new Date(profile.createdAt).getTime() - new Date(lifecycle.first_seen_at).getTime());
+      if (dt < 2000) {
+        delete lifecycle.first_seen_at;
+      }
+    }
+  } catch {
+  }
+
+  if (Object.keys(intent_summary).length) {
+    const buyM = Number(stats.buy_matches ?? 0);
+    const sellM = Number(stats.sell_matches ?? 0);
+    const clientM = Number(stats.client_matches ?? 0);
+    const sameIntentCounts =
+      Number(intent_summary.buy_count ?? 0) === buyM &&
+      Number(intent_summary.sell_count ?? 0) === sellM &&
+      Number(intent_summary.client_count ?? 0) === clientM;
+    if (sameIntentCounts) {
+      intent_summary = {};
+    }
   }
 
   const out = {
@@ -136,7 +167,6 @@ export function formatLeadProfileSummary(profile, options = {}) {
     contact: dedupeContactForSummary(profileView.contact),
     property,
     qualification: profileView.qualification,
-    ownership: ownershipRest,
     lifecycle,
     ...(Object.keys(intent_summary).length ? { intent_summary } : {}),
     ...(Object.keys(budget_profile).length ? { budget_profile } : {}),
@@ -148,6 +178,14 @@ export function formatLeadProfileSummary(profile, options = {}) {
 
   if (appointmentStatusOpt != null) {
     out.appointment_status = appointmentStatusOpt;
+  }
+
+  if (nurtureConsultationBookedOpt != null) {
+    out.nurture_consultation_booked = Boolean(nurtureConsultationBookedOpt);
+  }
+
+  if (!omitOwnership) {
+    out.ownership = ownershipRest;
   }
 
   return out;

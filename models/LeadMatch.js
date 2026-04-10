@@ -60,4 +60,7 @@ const leadMatchSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+leadMatchSchema.index({ user_id: 1, 'icp_fit.fit_tier': 1, lead_profile_id: 1 });
+leadMatchSchema.index({ user_id: 1, lead_profile_id: 1 });
+
 export default mongoose.model('LeadMatch', leadMatchSchema);

@@ -318,7 +318,7 @@ Use the data:
 - Financing/pre-approval: state it once, factually (e.g. "With financing already in place…")—not celebratory.
 - If calendly_booking_status is "booked", acknowledge briefly; do not push scheduling (the platform adds it).
 - Respect professional_type: mortgage = financing readiness; lawyer = transaction stage without legal advice; agent = listings/search/showings.
-- Property matches: when property_matches_email.listings has items, do NOT spell out each home's beds, baths, price, and address in long prose—the send template adds a formatted "Homes matched to your search" section with cards and links. In body_text, give a short criteria recap and one line such as "I've matched a few homes below for you to review" or ask which direction to prioritize; avoid duplicating specs that will appear in those cards. If listings is empty, do not invent properties.
+- Property matches: when property_matches_email.listings has items, the send template may add formatted cards—do not paste long MLS-style blocks or repeat every field. You **must** still name **each listing's asking price** in body_text when the listing's price field is present in listing data (format clearly, e.g. $50,000), for up to the first 3 listings; one short clause per home (price + location or match_headline) is enough. When the lead has budget_numbers or property.budget, explicitly connect listing price to their range (e.g. "within your budget" or "just above/below your range—worth a look") using only provided numbers. For 4+ listings, give a tight summary plus price **range** across those listings if inferable, otherwise say prices are in the matched homes below. If listings is empty, do not invent properties.
 
 Structure:
 - Subject: specific, professional (market + intent), no clickbait.
@@ -334,7 +334,7 @@ const SYSTEM_REFINE = `You refine nurture emails to the same standard as draft g
 
 Keep main message only—no scheduling links, no closings, no contact block. The platform appends scheduling and signature.
 
-Improve wording and flow; if property_matches_email has listings, avoid repeating per-listing specs (cards are added on send)—keep prose high-level; plain-text listing URLs only in body_text if needed.
+Improve wording and flow; if property_matches_email has listings, keep prose compact but **retain or add each listing's asking price** when present (up to 3 homes), and any budget tie-in—cards on send are supplemental, not a substitute for price in the letter.
 
 Output only JSON: { "subject", "body_text", "body_html" } with p, br, strong only in body_html (no <a>).`;
 

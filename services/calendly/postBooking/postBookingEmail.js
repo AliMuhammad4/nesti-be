@@ -50,7 +50,9 @@ export function escapeHtml(s) {
 export const EMAIL_LINK_STYLE =
   'color:#1d4ed8;text-decoration:underline;font-weight:500;';
 
-export function matchesToHtml(matches, contextLabel) {
+
+export function matchesToHtml(matches, contextLabel, options = {}) {
+  const includeContextHeading = options.includeContextHeading !== false;
   if (!matches?.length) {
     return `<p style="margin:0 0 12px;color:#475569;font-size:14px;line-height:1.5;">No matching properties are on file at this time. Your agent will follow up with tailored options.</p>`;
   }
@@ -72,9 +74,12 @@ export function matchesToHtml(matches, contextLabel) {
       </tr>`;
     })
     .join('');
+  const heading =
+    includeContextHeading && contextLabel
+      ? `<p style="margin:0 0 10px;font-size:13px;font-weight:600;color:#0f172a;letter-spacing:0.02em;">${escapeHtml(contextLabel)}</p>\n    `
+      : '';
   return `
-    <p style="margin:0 0 10px;font-size:13px;font-weight:600;color:#0f172a;letter-spacing:0.02em;">${escapeHtml(contextLabel)}</p>
-    <table role="presentation" style="border-collapse:collapse;width:100%;max-width:640px;margin:0 0 4px;">
+    ${heading}<table role="presentation" style="border-collapse:collapse;width:100%;max-width:640px;margin:0 0 4px;">
       <thead><tr>
         <th style="${th}">Property</th>
         <th style="${th}">Score</th>

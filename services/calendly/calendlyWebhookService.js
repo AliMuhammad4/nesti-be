@@ -5,6 +5,10 @@ import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
 import logger from '../../utils/logger.js';
 import { runPostBookingAutomations } from './postBookingAutomations.js';
+import {
+  markRecentNurtureLogBooked,
+  clearRecentNurtureLogMeetingBooked,
+} from '../nurture/nurtureMeetingBookingSync.js';
 import { buildWorkspaceLeadConversionPreview } from '../conversion/buildLeadConversionPack.js';
 import { emitLeadLifecycleNotification } from '../realtime/leadCreatedNotify.js';
 import {
@@ -126,6 +130,13 @@ async function syncChatConversationCalendly(conversationObjectId, { status, setB
   await ChatConversation.findByIdAndUpdate(conversationObjectId, { $set });
 }
 
+async function resolveAgentUserIdForNurture(lead, conversationId) {
+  if (lead?.user_id) return lead.user_id;
+  if (!conversationId) return null;
+  const conv = await ChatConversation.findById(conversationId).select('user_id').lean();
+  return conv?.user_id || null;
+}
+
 function buildLeadNotificationBase(lead, conversationId, preview) {
   return {
     lead_match_id: lead._id,
@@ -216,6 +227,22 @@ export async function processCalendlyWebhook(body) {
       });
     }
 
+    const nurtureAgentUserId = await resolveAgentUserIdForNurture(lead, conversationId);
+    let bookedViaNurture = false;
+    if (nurtureAgentUserId && (email || conversationId || lead?._id)) {
+      try {
+        const syncResult = await markRecentNurtureLogBooked({
+          userId: nurtureAgentUserId,
+          leadMatchId: lead?._id || null,
+          conversationId,
+          inviteeEmail: email,
+        });
+        bookedViaNurture = syncResult.updated === true;
+      } catch (e) {
+        logger.error(`nurture meeting_booked sync: ${e.message}`);
+      }
+    }
+
     if (lead?.user_id && lead?._id) {
       const convForPreview = conversationId
         ? await ChatConversation.findById(conversationId)
@@ -230,11 +257,14 @@ export async function processCalendlyWebhook(body) {
       await emitLeadLifecycleNotification(lead.user_id, {
         ...buildLeadNotificationBase(lead, conversationId, preview),
         notification_type: 'appointment_booked',
-        title: 'Appointment booked',
-        body: preview.why_match_one_liner || 'Lead booked an appointment.',
+        title: bookedViaNurture ? 'Consultation booked via nurture email' : 'Appointment booked',
+        body: bookedViaNurture
+          ? `Your nurture email converted — ${preview.why_match_one_liner || 'lead booked a consultation.'}`
+          : preview.why_match_one_liner || 'Lead booked an appointment.',
         severity: severityFromConversionPreview(preview?.alert ? { alert: preview.alert } : null),
         intent: convForPreview?.intent || null,
         appointment_status: 'booked',
+        booked_via_nurture: bookedViaNurture,
         speed_to_lead_tip: preview?.urgency === 'immediate' ? 'Confirm appointment details now to reduce no-shows.' : null,
         booking_cta: preview?.booking_cta ?? null,
         primary_next_action: primaryNextActionFromPreview(preview),
@@ -305,6 +335,20 @@ export async function processCalendlyWebhook(body) {
         op:              'calendly.booking',
         conversation_id: String(conversationId),
       });
+    }
+
+    const nurtureAgentUserIdCanceled = await resolveAgentUserIdForNurture(lead, conversationId);
+    if (nurtureAgentUserIdCanceled && (email || conversationId || lead?._id)) {
+      try {
+        await clearRecentNurtureLogMeetingBooked({
+          userId: nurtureAgentUserIdCanceled,
+          leadMatchId: lead?._id || null,
+          conversationId,
+          inviteeEmail: email,
+        });
+      } catch (e) {
+        logger.error(`nurture meeting_booked clear: ${e.message}`);
+      }
     }
 
     if (lead?.user_id && lead?._id) {

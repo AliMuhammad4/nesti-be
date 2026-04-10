@@ -38,7 +38,16 @@ const nurtureLogSchema = new mongoose.Schema({
     type: String,
     enum: NURTURE_LOG_STATUSES,
     default: 'sent',
-  }
+  },
+  meeting_booked: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+  meeting_booked_at: {
+    type: Date,
+    default: null,
+  },
 }, { timestamps: true });
 
 export default mongoose.model('NurtureLog', nurtureLogSchema);

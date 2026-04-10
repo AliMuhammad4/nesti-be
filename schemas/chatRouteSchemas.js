@@ -61,12 +61,27 @@ export const nurtureSendBodySchema = Joi.object({
   conversation_id: objectId.optional(),
   to_email: Joi.string().email().allow('', null),
   subject: Joi.string().trim().max(200).required(),
-  body: Joi.string().trim().max(8000).required(),
+  /** Plain text; draft/refine responses use body_text — accept either for send. */
+  body: Joi.string().trim().max(8000).allow('', null),
+  body_text: Joi.string().trim().max(8000).allow('', null),
   body_html: Joi.string().trim().max(20000).allow('', null),
   /** When true (default), HTML email appends styled property cards from server-fetched matches. */
   include_property_cards: Joi.boolean().optional(),
 })
   .xor('lead_match_id', 'lead_profile_id')
+  .custom((value, helpers) => {
+    const fromBody = value.body != null && String(value.body).trim() !== '' ? String(value.body).trim() : '';
+    const fromBodyText =
+      value.body_text != null && String(value.body_text).trim() !== ''
+        ? String(value.body_text).trim()
+        : '';
+    const merged = fromBody || fromBodyText;
+    if (!merged) {
+      return helpers.error('any.custom', { message: '"body" or "body_text" is required' });
+    }
+    const { body_text: _bt, ...rest } = value;
+    return { ...rest, body: merged };
+  }, 'nurture send body')
   .messages({ 'object.xor': 'Provide exactly one of lead_match_id or lead_profile_id' });
 
 export const calculatorSchema = passthrough;

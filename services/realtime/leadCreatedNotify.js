@@ -24,6 +24,7 @@ const KPI_LIFECYCLE_TYPE_MAP = {
   lead_updated: 'lead_updated',
   appointment_booked: 'appointment_booked',
   appointment_canceled: 'appointment_canceled',
+  nurture_appointment_booked: 'appointment_booked',
 };
 
 export async function emitNewLeadCreatedNotification(ownerUserId, ctx) {
@@ -111,7 +112,11 @@ export async function emitLeadLifecycleNotification(ownerUserId, payload) {
       grade: payload?.grade || null,
       appointment_status: payload?.appointment_status || null,
       urgency: payload?.urgency || null,
-      metadata: { severity: payload?.severity || null, title: payload?.title || null },
+      metadata: {
+        severity: payload?.severity || null,
+        title: payload?.title || null,
+        booked_via_nurture: payload?.booked_via_nurture ?? false,
+      },
     });
   } catch (e) {
     logger.warn('Lead KPI event write failed (lifecycle)', { error: e.message });

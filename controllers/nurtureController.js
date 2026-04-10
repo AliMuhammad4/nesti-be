@@ -315,7 +315,7 @@ export async function postNurtureSend(req, res, next) {
     if (customHtml) {
       htmlForSend = String(body_html).trim();
     } else {
-      const { professionalProfile } = await loadProfessionalNurtureMeta(
+      const { professionalProfile, signature, calendly_url: calendlyUrl } = await loadProfessionalNurtureMeta(
         req.user._id,
         bundle.leadMatch,
         req.user,
@@ -325,10 +325,19 @@ export async function postNurtureSend(req, res, next) {
         bundle.leadMatch,
         professionalProfile,
       );
+      const agentName =
+        String(signature?.display_name || '').trim() ||
+        String(professionalProfile?.full_name || '').trim() ||
+        [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
+        'Your agent';
       htmlForSend = composeNurtureEmailHtml({
         bodyPlain: body,
         listings: propertyMatches.listings || [],
         includePropertyCards: include_property_cards !== false,
+        agentName,
+        propertyMatchesContext: propertyMatches.context || null,
+        propertyMatchesNote: propertyMatches.note || null,
+        schedulingUrl: calendlyUrl || null,
       });
     }
 
@@ -387,6 +396,8 @@ function mapNurtureLogRow(r) {
     subject: r.subject,
     body: r.body,
     status: r.status,
+    meeting_booked: Boolean(r.meeting_booked),
+    meeting_booked_at: r.meeting_booked_at ? new Date(r.meeting_booked_at).toISOString() : null,
     sent_at: r.sent_at ? new Date(r.sent_at).toISOString() : null,
     created_at: r.createdAt ? new Date(r.createdAt).toISOString() : null,
   };

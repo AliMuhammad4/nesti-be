@@ -28,6 +28,9 @@ const calendarIntegrationSchema = new mongoose.Schema({
   calendly_slug: {
     type: String,
   },
+  calendly_user_uri: {
+    type: String,
+  },
   calendly_slug_mismatch: {
     type:    Boolean,
     default: false,

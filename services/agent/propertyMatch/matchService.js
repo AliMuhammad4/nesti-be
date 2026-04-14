@@ -14,6 +14,7 @@ import { locationOverlaps, rowMatchesSellerAddress } from './locationUtils.js';
 import {
   applyBuyerPreferenceFilter,
   buildBuyerScoringContext,
+  buildMatchedLeadSnapshot,
   mapBuyerMatchResult,
   mapMatchResults,
   parseBedrooms,
@@ -43,9 +44,10 @@ function sellerLeadProfileToRow(profile) {
   const beds = parseInt(String(profile.property?.bedrooms || ''), 10);
   const baths = parseFloat(String(profile.property?.bathrooms || ''));
   const typeLabel = (profile.property?.property_type || 'Property').trim();
+  const sellerName = String(profile.identity?.full_name || '').trim();
   return {
     _id: `lead:${String(profile._id)}`,
-    title: typeLabel,
+    title: sellerName ? `${sellerName} · ${typeLabel}` : typeLabel,
     address: addr,
     location: loc || addr,
     price,
@@ -55,6 +57,13 @@ function sellerLeadProfileToRow(profile) {
     image_url: '',
     listing_url: '',
     summary: '',
+    matched_contact: {
+      full_name: profile.identity?.full_name || null,
+      email: profile.identity?.email || null,
+      phone: profile.identity?.phone || null,
+    },
+    matched_lead: buildMatchedLeadSnapshot(profile),
+    lead_profile_id: String(profile._id),
   };
 }
 

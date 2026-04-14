@@ -55,6 +55,38 @@ const queuePasswordResetEmail = (email, otp) => {
   });
 };
 
+function normalizeProfessionalProfile(profileDoc) {
+  const p = profileDoc || {};
+  return {
+    ...p,
+    full_name: p.full_name || '',
+    website: p.website || '',
+    company_name: p.company_name || '',
+    certificates: Array.isArray(p.certificates) ? p.certificates : [],
+    phone: p.phone || '',
+    location: p.location || '',
+    target_neighborhoods: p.target_neighborhoods || '',
+    experience: p.experience || '',
+    license_number: p.license_number || '',
+    social_media: p.social_media || '',
+    transaction_volume: p.transaction_volume || '',
+    avg_sale_price: p.avg_sale_price || '',
+    response_time: p.response_time || '',
+    availability: p.availability || '',
+    support_level: p.support_level || '',
+    negotiation_style: p.negotiation_style || '',
+    sales_approach: p.sales_approach || '',
+    energy_style: p.energy_style || '',
+    personality_tag: p.personality_tag || '',
+    awards: p.awards || '',
+    specializations: Array.isArray(p.specializations) ? p.specializations : [],
+    communication_channels: Array.isArray(p.communication_channels) ? p.communication_channels : [],
+    preferred_clients: Array.isArray(p.preferred_clients) ? p.preferred_clients : [],
+    calendly_link: p.calendly_link || '',
+    bio: p.bio || '',
+  };
+}
+
 export const signupService = async (payload) => {
   const { email, password, first_name, last_name, role } = payload;
 
@@ -195,6 +227,8 @@ export const profileService = async (user) => {
       success: true,
       user: {
         name: `${user.first_name} ${user.last_name}`,
+        first_name: user.first_name,
+        last_name: user.last_name,
         email: user.email,
         role: user.role,
         accountStatus: user.account_status,
@@ -204,9 +238,42 @@ export const profileService = async (user) => {
       },
       professionalProfile: professionalProfile
         ? {
-            ...professionalProfile,
+            ...normalizeProfessionalProfile(professionalProfile),
             has_icp_configured: hasIcpConfigured,
           }
+        : null,
+    },
+  };
+};
+
+export const publicProfileService = async (email) => {
+  if (!email || !String(email).trim()) {
+    return { status: 400, body: { success: false, message: 'Please provide a valid email' } };
+  }
+
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail }).lean();
+  if (!user) {
+    return { status: 404, body: { success: false, message: 'User not found' } };
+  }
+
+  const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id })
+    .select('-property_match_scoring')
+    .lean();
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      user: {
+        name: `${user.first_name || ''} ${user.last_name || ''}`.trim(),
+        first_name: user.first_name || '',
+        last_name: user.last_name || '',
+        email: user.email,
+        role: user.role,
+      },
+      professionalProfile: professionalProfile
+        ? normalizeProfessionalProfile(professionalProfile)
         : null,
     },
   };
@@ -255,7 +322,7 @@ export const forgotPasswordService = async ({ email }) => {
     status: 200,
     body: {
       success: true,
-      message: 'If an account with that email exists, a reset OTP has been sent',
+      message: 'A reset code has been sent to your email.',
     },
   };
 };

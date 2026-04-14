@@ -64,16 +64,14 @@ function nurtureLeadIdsResponse(bundle) {
   };
 }
 
-const PRO_NURTURE_SELECT =
-  'professional_type full_name phone calendly_link mortgage_calendly_link_hot mortgage_calendly_link_warm mortgage_calendly_link_early';
+const PRO_NURTURE_SELECT = 'professional_type full_name phone calendly_link';
 
 function resolveProfessionalCalendlyUrl(professionalProfile, leadMatch) {
   if (!professionalProfile) return '';
   const flowRole =
     leadMatch?.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
-  const grade = String(leadMatch?.lead_type || '').split('_')[0] || null;
   if (flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
-    return resolveMortgageCalendlyUrl(professionalProfile, grade);
+    return resolveMortgageCalendlyUrl(professionalProfile);
   }
   return String(professionalProfile.calendly_link || '').trim();
 }

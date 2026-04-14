@@ -16,7 +16,8 @@ export function supportsPropertyMatches(flow) {
 
 export const usesMortgageAffordabilitySnapshot = isBroker;
 
-export const usesTieredMortgageCalendly = isBroker;
+/** Kept for callers; mortgage Calendly is a single `calendly_link`, not per lead tier. */
+export const usesTieredMortgageCalendly = false;
 
 export function leadClassificationUsesIntent(flow) {
   return isAgent(flow);
@@ -26,9 +27,9 @@ export function usesFixedBuyIntentForLeadMatch(flow) {
   return isBroker(flow) || flow?.flowRole === PROFESSIONAL_TYPE.LAWYER;
 }
 
-export function resolveCalendlyUrlForFlow(flow, professionalProfile, leadGrade) {
+export function resolveCalendlyUrlForFlow(flow, professionalProfile) {
   if (isBroker(flow)) {
-    return resolveMortgageCalendlyUrl(professionalProfile, leadGrade);
+    return resolveMortgageCalendlyUrl(professionalProfile);
   }
   return (professionalProfile?.calendly_link || '').trim();
 }

@@ -9,13 +9,31 @@ function mergedContact(leadMatch, leadProfile) {
   const fromProfile = leadProfile?.identity;
   const email = String(fromProfile?.email || fromMatch?.email || '').trim();
   const phone = String(fromProfile?.phone || fromMatch?.phone || '').trim();
+  const fullName = String(fromProfile?.full_name || fromMatch?.full_name || fromProfile?.name || '').trim();
+  const bestTime = fromProfile?.best_time_to_contact || fromMatch?.best_time_to_contact || null;
+  const preferred =
+    leadProfile?.contact_preferences?.preferred_contact_method ||
+    fromMatch?.preferred_contact_method ||
+    null;
   return {
     has_email: !!email,
     has_phone: !!phone,
-    preferred_contact_method:
-      leadProfile?.contact_preferences?.preferred_contact_method ||
-      fromMatch?.preferred_contact_method ||
-      null,
+    email: email || null,
+    phone: phone || null,
+    full_name: fullName || null,
+    preferred_contact_method: preferred,
+    best_time_to_contact: bestTime,
+  };
+}
+
+function mergedProperty(leadMatch, leadProfile) {
+  const fromProfile = leadProfile?.property_requirements || leadProfile?.property || {};
+  const fromMatch = leadMatch?.compatibility_factors?.property || {};
+  return {
+    location: fromProfile.location || fromProfile.area || fromMatch.location || null,
+    budget: fromProfile.budget || fromMatch.budget || null,
+    timeline: fromProfile.timeline || fromMatch.timeline || null,
+    area: fromProfile.location || fromProfile.area || fromMatch.location || null,
   };
 }
 
@@ -122,6 +140,7 @@ function buildLeadConversionCore({
   const profType = resolveProfType(leadMatch, leadProfile);
   const intent = intentOverride || resolveIntent(leadProfile, conversation);
   const contact = mergedContact(leadMatch, leadProfile);
+  const property = mergedProperty(leadMatch, leadProfile);
   const appointmentStatus = resolveAppointmentStatus(
     leadMatch?.match_status,
     conversation?.calendly_booking_status,
@@ -136,6 +155,14 @@ function buildLeadConversionCore({
     has_email: contact.has_email,
     preferred_contact_method: contact.preferred_contact_method,
     minutes_since_visitor_activity: speed.minutes_since_visitor_activity,
+    // Personalization context for follow-up templates
+    full_name: contact.full_name,
+    contact_name: contact.full_name,
+    best_time_to_contact: contact.best_time_to_contact,
+    location: property.location,
+    area: property.area,
+    budget: property.budget,
+    timeline: property.timeline,
   });
   const match_story = buildMatchStory({ leadMatch, conversation, intent });
   const alerts = buildAlerts(grade, appointmentStatus, speed);

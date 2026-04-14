@@ -9,7 +9,7 @@ import { getBuyerPropertyMatches, getBuyerMatchesForSellerProperty } from '../ag
 import { parsePageLimitPagination, buildPaginationMeta, PAGINATION_PRESETS } from '../../utils/pagination.js';
 import { truthyQueryFlag, includeConversionInLeadDetail } from './leadQueryUtils.js';
 import { mapLeadMatchToListRow, mapLeadMatchToDetail, mapLeadMatchUnderProfile } from './leadResponseMappers.js';
-import { buildCollectionEmptyState, buildFunnelTelemetry } from './leadExperienceContract.js';
+import { buildCollectionEmptyState } from './leadExperienceContract.js';
 import { formatLeadProfileSummary } from './leadProfileFormat.js';
 import { buildAppointmentStatusByProfileIds } from './leadAppointmentStatus.js';
 import { buildNurtureConsultationBookedFromEmailByProfileIds } from './leadNurtureBookingStatus.js';
@@ -23,7 +23,6 @@ import {
   enrichAndFormatProfiles,
   ICP_TIERS,
 } from './leadProfileHelpers.js';
-import { buildPropertyMatchTrust, buildPropertyMatchDecisionSupport } from './leadPropertyMatchHelpers.js';
 
 // ─── Lead match controllers ───────────────────────────────────────────────────
 
@@ -219,6 +218,90 @@ export const getLeadsByProfileId = async (req, res, next) => {
 
 // ─── Property matches controller ─────────────────────────────────────────────
 
+function professionalSummaryFromUser(user = {}) {
+  const first = String(user?.first_name || '').trim();
+  const last = String(user?.last_name || '').trim();
+  const fullName = [first, last].filter(Boolean).join(' ').trim() || null;
+  return {
+    id: user?._id ? String(user._id) : null,
+    name: fullName,
+    email: user?.email || null,
+    role: user?.role || null,
+    is_verified: user?.is_verified ?? null,
+  };
+}
+
+function pickMatchedLeadForResponse(ml) {
+  if (!ml || typeof ml !== 'object') return null;
+  const out = {
+    intent: ml.intent ?? null,
+    preferred_contact_method: ml.preferred_contact_method ?? null,
+    best_time_to_contact: ml.best_time_to_contact ?? null,
+    property_location: ml.property_location ?? null,
+    property_budget: ml.property_budget ?? null,
+    property_timeline: ml.property_timeline ?? null,
+    property_type: ml.property_type ?? null,
+    bedrooms: ml.bedrooms ?? null,
+    bathrooms: ml.bathrooms ?? null,
+    mortgage_status: ml.mortgage_status ?? null,
+    realtor_status: ml.realtor_status ?? null,
+    motivation_reason: ml.motivation_reason ?? null,
+    viewing_readiness: ml.viewing_readiness ?? null,
+    living_situation: ml.living_situation ?? null,
+    urgency_readiness: ml.urgency_readiness ?? null,
+  };
+  const has = Object.values(out).some((v) => v != null && v !== '');
+  return has ? out : null;
+}
+
+/** Merge scorer row fields into matched_lead so the API only exposes one shape (no duplicate top-level listing fields). */
+function mergeRowIntoMatchedLead(match = {}) {
+  const base = match.matched_lead && typeof match.matched_lead === 'object' ? { ...match.matched_lead } : {};
+  if (!base.property_location && match.location) base.property_location = match.location;
+  if (!base.property_type && match.property_type) base.property_type = match.property_type;
+  if ((base.bedrooms == null || base.bedrooms === '') && match.bedrooms != null && match.bedrooms !== '') {
+    base.bedrooms = String(match.bedrooms);
+  }
+  if ((base.bathrooms == null || base.bathrooms === '') && match.bathrooms != null && match.bathrooms !== '') {
+    base.bathrooms = String(match.bathrooms);
+  }
+  if (!base.property_budget) {
+    if (match.budget_display) base.property_budget = match.budget_display;
+    else if (match.price != null && match.price !== '') base.property_budget = String(match.price);
+  }
+  if (!base.mortgage_status && match.financing_status_code) base.mortgage_status = match.financing_status_code;
+  return pickMatchedLeadForResponse(base);
+}
+
+function enrichPropertyMatch(match = {}) {
+  const factors = Array.isArray(match?.reasons_for_matching) && match.reasons_for_matching.length
+    ? match.reasons_for_matching.filter(Boolean)
+    : Array.isArray(match?.match_reasons)
+      ? match.match_reasons.filter(Boolean)
+      : [];
+  const mc = match.matched_contact && typeof match.matched_contact === 'object' ? match.matched_contact : null;
+  const mergedLead = mergeRowIntoMatchedLead(match);
+  return {
+    id: match?.id || null,
+    title: match?.title || null,
+    match_score: match?.match_score ?? null,
+    match_headline: match?.match_headline || null,
+    source: match?.source || null,
+    reasons_for_matching: factors,
+    matched_contact: mc
+      ? {
+          full_name: mc.full_name || mc.fullName || null,
+          email: mc.email || null,
+          phone: mc.phone || null,
+        }
+      : null,
+    matched_lead: mergedLead,
+    lead_profile_id:
+      match?.lead_profile_id ||
+      (String(match?.id || '').startsWith('lead:') ? String(match.id).slice(5) : null),
+  };
+}
+
 export const getLeadPropertyMatches = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
@@ -249,17 +332,31 @@ export const getLeadPropertyMatches = async (req, res, next) => {
 
     const conversion = buildLeadConversionPack({ leadMatch, leadProfile, conversation, intent: context });
 
+    const matchesPaginated = property_matches.slice(skip, skip + limit).map(enrichPropertyMatch);
+
     return res.json({
       success: true,
       lead_id: String(leadMatch._id),
-      intent: context,
-      property_matches: property_matches.slice(skip, skip + limit),
-      property_matches_context: context,
+      user_name: professionalSummaryFromUser(req.user)?.name || null,
+      property_matches: matchesPaginated,
       match_count: property_matches.length,
-      conversion,
-      decision_support: buildPropertyMatchDecisionSupport(conversion, leadMatch, leadProfile),
-      trust: buildPropertyMatchTrust(leadProfile, context),
-      conversion_funnel: buildFunnelTelemetry(conversion),
+      next_steps: {
+        primary_action: {
+          id: conversion?.primary_action?.id || null,
+          title: conversion?.primary_action?.title || null,
+          channel: conversion?.primary_action?.channel || null,
+          suggested_first_message:
+            conversion?.primary_action?.follow_up_template || null,
+        },
+        secondary_actions: Array.isArray(conversion?.secondary_actions)
+          ? conversion.secondary_actions.map((a) => ({
+              id: a?.id || null,
+              title: a?.title || null,
+              priority: a?.priority || null,
+            }))
+          : [],
+        booking_cta: conversion?.outcome?.booking_cta || null,
+      },
       empty_state: property_matches.length === 0 ? buildCollectionEmptyState('property_matches', { intent: context }) : null,
       pagination: buildPaginationMeta({ page, limit, total: property_matches.length }),
     });

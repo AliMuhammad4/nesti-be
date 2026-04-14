@@ -20,6 +20,9 @@ const professionalProfileSchema = new mongoose.Schema({
   website: {
     type: String,
   },
+  company_name: {
+    type: String,
+  },
   certificates: [
     {
       type: String,
@@ -37,16 +40,58 @@ const professionalProfileSchema = new mongoose.Schema({
   experience: {
     type: String,
   },
+  license_number: {
+    type: String,
+  },
+  social_media: {
+    type: String,
+  },
+  transaction_volume: {
+    type: String,
+  },
+  avg_sale_price: {
+    type: String,
+  },
+  response_time: {
+    type: String,
+  },
+  availability: {
+    type: String,
+  },
+  support_level: {
+    type: String,
+  },
+  negotiation_style: {
+    type: String,
+  },
+  sales_approach: {
+    type: String,
+  },
+  energy_style: {
+    type: String,
+  },
+  personality_tag: {
+    type: String,
+  },
+  awards: {
+    type: String,
+  },
+  specializations: [
+    {
+      type: String,
+    },
+  ],
+  communication_channels: [
+    {
+      type: String,
+    },
+  ],
+  preferred_clients: [
+    {
+      type: String,
+    },
+  ],
   calendly_link: {
-    type: String,
-  },
-  mortgage_calendly_link_hot: {
-    type: String,
-  },
-  mortgage_calendly_link_warm: {
-    type: String,
-  },
-  mortgage_calendly_link_early: {
     type: String,
   },
   bio: {

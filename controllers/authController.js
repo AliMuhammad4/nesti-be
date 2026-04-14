@@ -3,6 +3,7 @@ import {
   verifyEmailService,
   loginService,
   profileService,
+  publicProfileService,
   changePasswordService,
   forgotPasswordService,
   verifyResetOtpService,
@@ -100,7 +101,13 @@ const resetPassword = async (req, res, next) => {
 
 const google = stub;
 const googleSignup = stub;
-const publicProfile = stub;
+const publicProfile = async (req, res, next) => {
+  try {
+    send(res, await publicProfileService(req.query.email));
+  } catch (error) {
+    next(error);
+  }
+};
 const checkEmail = stub;
 const resendVerification = stub;
 

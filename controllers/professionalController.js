@@ -7,6 +7,38 @@ import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import IcpProfile from '../models/IcpProfile.js';
 
+function normalizeProfessionalProfile(profileDoc) {
+  const p = profileDoc ? (typeof profileDoc.toObject === 'function' ? profileDoc.toObject() : profileDoc) : {};
+  return {
+    ...p,
+    full_name: p.full_name || '',
+    website: p.website || '',
+    company_name: p.company_name || '',
+    certificates: Array.isArray(p.certificates) ? p.certificates : [],
+    phone: p.phone || '',
+    location: p.location || '',
+    target_neighborhoods: p.target_neighborhoods || '',
+    experience: p.experience || '',
+    license_number: p.license_number || '',
+    social_media: p.social_media || '',
+    transaction_volume: p.transaction_volume || '',
+    avg_sale_price: p.avg_sale_price || '',
+    response_time: p.response_time || '',
+    availability: p.availability || '',
+    support_level: p.support_level || '',
+    negotiation_style: p.negotiation_style || '',
+    sales_approach: p.sales_approach || '',
+    energy_style: p.energy_style || '',
+    personality_tag: p.personality_tag || '',
+    awards: p.awards || '',
+    specializations: Array.isArray(p.specializations) ? p.specializations : [],
+    communication_channels: Array.isArray(p.communication_channels) ? p.communication_channels : [],
+    preferred_clients: Array.isArray(p.preferred_clients) ? p.preferred_clients : [],
+    calendly_link: p.calendly_link || '',
+    bio: p.bio || '',
+  };
+}
+
 const ICP_ROLE_FIELDS = Object.freeze({
   agent: ['client_types', 'price_range', 'property_types', 'service_areas', 'timeline_preference'],
   mortgage_broker: ['loan_types', 'credit_range_preference', 'income_preference', 'loan_size_range'],
@@ -64,7 +96,7 @@ export const getMyProfessionalProfile = async (req, res, next) => {
         email: user.email,
         role: user.role,
       },
-      professionalProfile: profile,
+      professionalProfile: normalizeProfessionalProfile(profile),
     });
   } catch (error) {
     next(error);
@@ -79,10 +111,23 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       location,
       target_neighborhoods,
       experience,
+      license_number,
+      social_media,
+      company_name,
+      transaction_volume,
+      avg_sale_price,
+      response_time,
+      availability,
+      support_level,
+      negotiation_style,
+      sales_approach,
+      energy_style,
+      personality_tag,
+      awards,
+      specializations,
+      communication_channels,
+      preferred_clients,
       calendly_link,
-      mortgage_calendly_link_hot,
-      mortgage_calendly_link_warm,
-      mortgage_calendly_link_early,
       bio,
       website,
       certificates,
@@ -127,10 +172,25 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (location !== undefined) update.location = location;
     if (target_neighborhoods !== undefined) update.target_neighborhoods = target_neighborhoods;
     if (experience !== undefined) update.experience = experience;
+    if (license_number !== undefined) update.license_number = license_number;
+    if (social_media !== undefined) update.social_media = social_media;
+    if (company_name !== undefined) update.company_name = company_name;
+    if (transaction_volume !== undefined) update.transaction_volume = transaction_volume;
+    if (avg_sale_price !== undefined) update.avg_sale_price = avg_sale_price;
+    if (response_time !== undefined) update.response_time = response_time;
+    if (availability !== undefined) update.availability = availability;
+    if (support_level !== undefined) update.support_level = support_level;
+    if (negotiation_style !== undefined) update.negotiation_style = negotiation_style;
+    if (sales_approach !== undefined) update.sales_approach = sales_approach;
+    if (energy_style !== undefined) update.energy_style = energy_style;
+    if (personality_tag !== undefined) update.personality_tag = personality_tag;
+    if (awards !== undefined) update.awards = awards;
+    if (specializations !== undefined) update.specializations = specializations;
+    if (communication_channels !== undefined) update.communication_channels = communication_channels;
+    if (preferred_clients !== undefined) update.preferred_clients = preferred_clients;
+
+    // Single Calendly URL for all users.
     if (calendly_link !== undefined) update.calendly_link = calendly_link;
-    if (mortgage_calendly_link_hot !== undefined) update.mortgage_calendly_link_hot = mortgage_calendly_link_hot;
-    if (mortgage_calendly_link_warm !== undefined) update.mortgage_calendly_link_warm = mortgage_calendly_link_warm;
-    if (mortgage_calendly_link_early !== undefined) update.mortgage_calendly_link_early = mortgage_calendly_link_early;
     if (bio !== undefined) update.bio = bio;
     if (website !== undefined) update.website = website;
     if (certificates !== undefined) update.certificates = certificates;
@@ -141,10 +201,7 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
     );
     if (
-      calendly_link !== undefined ||
-      mortgage_calendly_link_hot !== undefined ||
-      mortgage_calendly_link_warm !== undefined ||
-      mortgage_calendly_link_early !== undefined
+      calendly_link !== undefined
     ) {
       try {
         await refreshCalendlySlugMismatchForUser(userId);
@@ -161,7 +218,7 @@ export const upsertProfessionalProfile = async (req, res, next) => {
         email: user.email,
         role: user.role,
       },
-      profile,
+      profile: normalizeProfessionalProfile(profile),
     });
   } catch (error) {
     next(error);

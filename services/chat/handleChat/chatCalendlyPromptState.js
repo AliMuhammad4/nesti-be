@@ -9,7 +9,7 @@ import {
 import { getLastAssistantExtractedData, withCalendlyConversationTracking } from './chatEmbedUtils.js';
 
 export function resolveCalendlyLinksForVisitor(flow, professionalProfile, leadGrade, conversation) {
-  const calendlyLinkTrimmed = resolveCalendlyUrlForFlow(flow, professionalProfile, leadGrade);
+  const calendlyLinkTrimmed = resolveCalendlyUrlForFlow(flow, professionalProfile);
   const calendlyLinkForVisitor =
     calendlyLinkTrimmed && conversation?._id
       ? withCalendlyConversationTracking(calendlyLinkTrimmed, conversation._id)

@@ -5,6 +5,29 @@ import {
   parseMaxBudget,
 } from './parsing.js';
 
+/** Slim CRM fields for the matched LeadProfile (other party), surfaced on property-matches API. */
+export function buildMatchedLeadSnapshot(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  const q = profile.qualification?.agent || {};
+  return {
+    intent: profile.intent || null,
+    preferred_contact_method: profile.contact_preferences?.preferred_contact_method || null,
+    best_time_to_contact: profile.contact_preferences?.best_time_to_contact || null,
+    property_location: profile.property?.location || null,
+    property_budget: profile.property?.budget || profile.property?.expected_price || null,
+    property_timeline: profile.property?.timeline || null,
+    property_type: profile.property?.property_type || null,
+    bedrooms: profile.property?.bedrooms || null,
+    bathrooms: profile.property?.bathrooms || null,
+    mortgage_status: q.mortgage_status || null,
+    realtor_status: q.realtor_status || null,
+    motivation_reason: q.motivation_reason || null,
+    viewing_readiness: q.viewing_readiness || null,
+    living_situation: q.living_situation || null,
+    urgency_readiness: q.urgency_readiness || null,
+  };
+}
+
 export const parseBedrooms = (profile, signals) => {
   const b = profile?.property?.bedrooms ?? signals?.beds;
   if (b == null || b === '') return null;
@@ -103,6 +126,7 @@ export const mapMatchResults = (picked, maxDisplayScore, source = 'seller_lead')
   picked.map(({ row, score, reasons }) => {
     const id = String(row._id);
     const resolvedSource = id.startsWith('nesti:') ? 'agent_profile' : source;
+    const mc = row.matched_contact && typeof row.matched_contact === 'object' ? row.matched_contact : null;
     return {
       id,
       title: row.title,
@@ -119,6 +143,15 @@ export const mapMatchResults = (picked, maxDisplayScore, source = 'seller_lead')
       match_headline: resolveMatchHeadline(reasons, resolvedSource),
       match_reasons: reasons,
       source: resolvedSource,
+      matched_contact: mc
+        ? {
+            full_name: mc.full_name || null,
+            email: mc.email || null,
+            phone: mc.phone || null,
+          }
+        : null,
+      lead_profile_id: row.lead_profile_id || null,
+      matched_lead: row.matched_lead && typeof row.matched_lead === 'object' ? row.matched_lead : null,
     };
   });
 
@@ -190,9 +223,14 @@ export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { 
   if (financingLabel) displayParts.push(financingLabel);
 
   const mappedReasons = buyerMatchReasonsForSellerView(reasons, listingBedrooms);
+  const buyerName = String(profile.identity?.full_name || '').trim();
+  const title =
+    buyerName ||
+    [type, loc].filter(Boolean).join(' · ') ||
+    'Buyer match';
   const out = {
     id: String(profile._id),
-    title: 'Buyer inquiry',
+    title,
     location: loc || undefined,
     price: price != null && Number.isFinite(price) && price > 0 ? price : null,
     financing_status: financingLabel,
@@ -204,6 +242,13 @@ export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { 
     match_headline: resolveMatchHeadline(reasons, 'buyer_lead'),
     match_reasons: mappedReasons,
     source: 'buyer_lead',
+    matched_contact: {
+      full_name: profile.identity?.full_name || null,
+      email: profile.identity?.email || null,
+      phone: profile.identity?.phone || null,
+    },
+    lead_profile_id: String(profile._id),
+    matched_lead: buildMatchedLeadSnapshot(profile),
   };
 
   if (Number.isFinite(baths)) out.bathrooms = baths;

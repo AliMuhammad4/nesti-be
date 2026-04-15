@@ -196,7 +196,7 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
   const quality =
     finalScore >= 80 ? 'hot'
     : finalScore >= 60 ? 'warm'
-    : finalScore >= 40 ? 'lukewarm'
+    : finalScore >= 40 ? 'interested'
     : 'cold';
 
   return {

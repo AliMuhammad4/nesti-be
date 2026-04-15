@@ -38,8 +38,19 @@ import {
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
+import { buildLeadRecapMarkdownLines, injectLeadRecapIntoReply } from './utils/leadRecapMarkdown.js';
 
 export { flowTypeForConversation, recomputeSignalsForPropertyMatches } from './handleChat/index.js';
+
+function normalizePersistedGradeByScore(grade, score) {
+  const normalizedGrade = String(grade || '').toLowerCase();
+  const normalizedScore = Number(score);
+  if (normalizedGrade === 'warm' && Number.isFinite(normalizedScore) && normalizedScore >= 40 && normalizedScore < 60) {
+    return 'interested';
+  }
+  return normalizedGrade || grade;
+}
+
 export const handlePropertyMatchesService = async ({
   id: sessionId,
   embedToken,
@@ -306,9 +317,20 @@ export const handleChatService = async ({
     return { status: 500, body: { success: false, message: 'AI service unavailable. Please try again.' } };
   }
 
+  const recapLines = buildLeadRecapMarkdownLines({
+    form: storedForm,
+    contact: contactInfo,
+    extracted: parsedAiDetails,
+    intent: aiIntent,
+  });
+  const finalReply =
+    recapLines.length > 0 ? injectLeadRecapIntoReply(aiReply, recapLines) : aiReply;
+
   const finalScore = leadScore;
-  const finalGrade = flow.bestGrade(leadGrade, conversation.lead_grade || 'unscored');
-  const persistedGrade = flow.getPersistedGrade(finalGrade);
+  const finalGradeRaw = flow.bestGrade(leadGrade, conversation.lead_grade || 'unscored');
+  const finalGrade = normalizePersistedGradeByScore(finalGradeRaw, finalScore);
+  const persistedGradeRaw = flow.getPersistedGrade(finalGrade);
+  const persistedGrade = normalizePersistedGradeByScore(persistedGradeRaw, finalScore);
   const finalClass = classifyLeadForFlow(flow, finalGrade, aiIntent);
   const persistedClass = classifyLeadForFlow(flow, persistedGrade, aiIntent);
 
@@ -316,7 +338,7 @@ export const handleChatService = async ({
     conversation_id: conversation._id,
     session_id: sessionId,
     role: 'assistant',
-    content: aiReply,
+    content: finalReply,
     agent_type: effectiveWidgetType,
     intent: aiIntent,
     channel: normalizedChannel,
@@ -387,16 +409,50 @@ export const handleChatService = async ({
     emotionalState,
     mortgageBrokerSnapshotQual,
     mortgageBrokerSnapshotSignals,
+    extractedData: parsedAiDetails,
   });
 
   return {
     status: 200,
     body: {
       success: true,
-      reply: aiReply,
+      reply: finalReply,
       session_id: sessionId,
       visitor_id: visitor.uuid,
       meta: responseMeta,
+    },
+  };
+};
+
+export const clearChatSessionService = async (sessionId) => {
+  const normalizedSessionId = String(sessionId || '').trim();
+  if (!normalizedSessionId) {
+    return { status: 400, body: { success: false, message: 'session id is required' } };
+  }
+
+  const conversation = await ChatConversation.findOne({ session_id: normalizedSessionId });
+  if (!conversation) {
+    return {
+      status: 200,
+      body: {
+        success: true,
+        message: 'Session already cleared',
+        session_id: normalizedSessionId,
+      },
+    };
+  }
+
+  await Promise.all([
+    ChatMessage.deleteMany({ conversation_id: conversation._id }),
+    ChatConversation.deleteOne({ _id: conversation._id }),
+  ]);
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Conversation cleared successfully',
+      session_id: normalizedSessionId,
     },
   };
 };

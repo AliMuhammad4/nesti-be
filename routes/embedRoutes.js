@@ -60,6 +60,7 @@ const resolveEmbed = async (req, res, next) => {
       isValid: true,
       userId: embed.user_id,
       widget_role: embed.widget_role ?? null,
+      widget_settings: embed.widget_settings || {},
     });
   } catch (error) {
     next(error);

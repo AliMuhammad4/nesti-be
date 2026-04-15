@@ -1,4 +1,4 @@
-import { handleChatService, handlePropertyMatchesService } from '../services/chat/chatService.js';
+import { handleChatService, handlePropertyMatchesService, clearChatSessionService } from '../services/chat/chatService.js';
 import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageBroker/mortgageAffordabilityFromLead.js';
 import { scoreLead, scoreMortgageBrokerLead, scoreLawyerLead } from '../services/chat/scoring/index.js';
 import { PROFESSIONAL_TYPE } from '../constants/roles.js';
@@ -273,5 +273,15 @@ export const scorePreview = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+export const clearChatSession = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await clearChatSessionService(id);
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    return next(error);
   }
 };

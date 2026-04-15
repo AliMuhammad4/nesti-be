@@ -117,7 +117,7 @@ export const agentFlow = {
     return out;
   },
 
-  getPersistedGrade: (finalGrade) => finalGrade === 'lukewarm' ? 'warm' : finalGrade,
+  getPersistedGrade: (finalGrade) => finalGrade,
 
   getLeadClassification: (finalGrade, aiIntent) => buildLeadClass(finalGrade, aiIntent),
 

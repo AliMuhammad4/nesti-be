@@ -131,13 +131,18 @@ async function loadSellerInventoryRows(userId, excludeLeadProfileIds, inventoryL
   return out;
 }
 
-async function loadBuyerLeadProfiles(userId, excludeLeadProfileIds, limit = 40) {
+/**
+ * One candidate per buyer-side LeadMatch row (same as leads list), not deduped by lead_profile_id.
+ * Duplicate conversations often share one profile — seller matching should still surface each lead row.
+ */
+async function loadBuyerLeadMatchCandidates(userId, excludeLeadProfileIds, limit = 40) {
   const exclude = new Set(excludeLeadProfileIds.filter(Boolean).map(String));
-  const seen = new Set();
   const out = [];
+  const profileIdsTouched = new Set();
+
   const matchDocs = await LeadMatch.find({
     user_id: userId,
-    lead_type: { $regex: '_buyer$' },
+    lead_type: { $regex: '_(buyer|client)$' },
     lead_profile_id: { $ne: null },
   })
     .sort({ createdAt: -1 })
@@ -145,18 +150,50 @@ async function loadBuyerLeadProfiles(userId, excludeLeadProfileIds, limit = 40) 
     .select('lead_profile_id')
     .lean();
 
-  const orderedIds = [
-    ...new Set(matchDocs.map((m) => String(m.lead_profile_id)).filter((id) => id && mongoose.Types.ObjectId.isValid(id))),
-  ].filter((id) => !exclude.has(id));
+  const pairs = [];
+  for (const m of matchDocs) {
+    const pid = String(m.lead_profile_id);
+    if (!mongoose.Types.ObjectId.isValid(pid) || exclude.has(pid)) continue;
+    pairs.push({ leadMatchId: m._id, profileId: pid });
+  }
 
-  if (orderedIds.length) {
-    const oids = orderedIds.map((id) => new mongoose.Types.ObjectId(id));
-    const profiles = await LeadProfile.find({ _id: { $in: oids }, intent: 'buy' }).lean();
+  if (pairs.length) {
+    const uniqueProfileIds = [...new Set(pairs.map((x) => x.profileId))];
+    const profiles = await LeadProfile.find({
+      _id: { $in: uniqueProfileIds.map((id) => new mongoose.Types.ObjectId(id)) },
+      intent: 'buy',
+    }).lean();
     const byId = new Map(profiles.map((p) => [String(p._id), p]));
-    for (const id of orderedIds) {
+
+    for (const { leadMatchId, profileId } of pairs) {
       if (out.length >= limit) break;
-      const p = byId.get(id);
-      if (p && !seen.has(id)) { seen.add(id); out.push(p); }
+      const p = byId.get(profileId);
+      if (!p) continue;
+      out.push({ profile: p, leadMatchId: String(leadMatchId) });
+      profileIdsTouched.add(profileId);
+    }
+  }
+
+  if (out.length < limit) {
+    const ownerQuery = {
+      intent: 'buy',
+      $or: [{ 'ownership.user_id': userId }, { owner_user_id: userId }],
+    };
+    if (profileIdsTouched.size) {
+      ownerQuery._id = {
+        $nin: [...profileIdsTouched].map((id) => new mongoose.Types.ObjectId(id)),
+      };
+    }
+    const moreProfiles = await LeadProfile.find(ownerQuery)
+      .sort({ updatedAt: -1 })
+      .limit(Math.max(limit * 2, 40))
+      .lean();
+    for (const p of moreProfiles) {
+      if (out.length >= limit) break;
+      const id = String(p._id);
+      if (exclude.has(id) || profileIdsTouched.has(id)) continue;
+      profileIdsTouched.add(id);
+      out.push({ profile: p, leadMatchId: null });
     }
   }
 
@@ -206,11 +243,11 @@ const emptyPropertyMatchesMeta = () => ({
 });
 
 async function leadProfileForAgentIntent({ conversationId, userId, intent }) {
-  const suffix = intent === 'sell' ? '_seller$' : '_buyer$';
+  const pattern = intent === 'sell' ? '_seller$' : '_(buyer|client)$';
   const lm = await LeadMatch.findOne({
     conversation_id: conversationId,
     user_id:         userId,
-    lead_type:       new RegExp(suffix),
+    lead_type:       new RegExp(pattern),
   })
     .select('lead_profile_id')
     .lean();
@@ -302,10 +339,7 @@ export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {
   const scored = scoreRowsForBuyer(rows, ctx, b);
   const pool = applyBuyerPreferenceFilter(scored, ctx);
   const sorted = pool.sort((a, c) => c.score - a.score);
-  const minPick = b.pickMinScore;
-  const aboveThreshold = sorted.filter((x) => x.score > minPick);
-  const picked = aboveThreshold.length ? aboveThreshold : sorted.slice(0, cfg.maxMatches);
-  return mapMatchResults(picked.slice(0, cfg.maxMatches), cfg.maxDisplayScore);
+  return mapMatchResults(sorted, cfg.maxDisplayScore);
 }
 
 export async function getBuyerMatchesForSellerProperty({ userId, leadProfile, signals = {} }) {
@@ -316,31 +350,28 @@ export async function getBuyerMatchesForSellerProperty({ userId, leadProfile, si
   if (!sellerRow) {
     return [];
   }
-  const buyerProfiles = await loadBuyerLeadProfiles(userId, [leadProfile._id], cfg.inventoryLimit);
-  if (!buyerProfiles.length) {
+  const candidates = await loadBuyerLeadMatchCandidates(userId, [leadProfile._id], cfg.inventoryLimit);
+  if (!candidates.length) {
     return [];
   }
   const b = cfg.buyer;
   const scored = [];
-  for (const bp of buyerProfiles) {
+  for (const { profile: bp, leadMatchId } of candidates) {
     const ctx = buildBuyerScoringContext(bp, {});
     const loc = String(ctx.leadLocation || '').trim();
     if (loc && !locationOverlaps(loc, sellerRow.location, sellerRow.address)) {
       continue;
     }
     const [s] = scoreRowsForBuyer([sellerRow], ctx, b);
-    scored.push({ profile: bp, score: s.score, reasons: s.reasons });
+    scored.push({ profile: bp, leadMatchId, score: s.score, reasons: s.reasons });
   }
 
   const sorted = scored.sort((a, c) => c.score - a.score);
-  const minPick = b.pickMinScore;
-  const aboveThreshold = sorted.filter((x) => x.score > minPick);
-  const picked = (aboveThreshold.length ? aboveThreshold : sorted.slice(0, cfg.maxMatches))
-    .slice(0, cfg.maxMatches);
 
-  return picked.map(({ profile, score, reasons }) =>
+  return sorted.map(({ profile, leadMatchId, score, reasons }) =>
     mapBuyerMatchResult(profile, score, reasons, cfg.maxDisplayScore, {
       listingBedrooms: sellerRow.bedrooms || null,
+      leadMatchId,
     })
   );
 }
@@ -391,7 +422,6 @@ export async function getSellerComparableMatches({
   );
   const sellerPicks = sellerScored
     .filter((p) => p.score > s.pickMinScore)
-    .sort((a, c) => c.score - a.score)
-    .slice(0, cfg.maxMatches);
+    .sort((a, c) => c.score - a.score);
   return mapMatchResults(sellerPicks, cfg.maxDisplayScore, 'seller_lead');
 }

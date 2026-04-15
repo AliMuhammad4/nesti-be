@@ -183,7 +183,7 @@ export function buyerMatchReasonsForSellerView(reasons, listingBedrooms) {
   });
 }
 
-export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { listingBedrooms } = {}) {
+export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { listingBedrooms, leadMatchId } = {}) {
   const loc = (profile.property?.location || profile.property?.address || '').trim();
   const beds = parseInt(String(profile.property?.bedrooms || ''), 10);
   const baths = parseFloat(String(profile.property?.bathrooms || ''));
@@ -229,7 +229,7 @@ export function mapBuyerMatchResult(profile, score, reasons, maxDisplayScore, { 
     [type, loc].filter(Boolean).join(' · ') ||
     'Buyer match';
   const out = {
-    id: String(profile._id),
+    id: leadMatchId != null && String(leadMatchId).trim() ? String(leadMatchId) : String(profile._id),
     title,
     location: loc || undefined,
     price: price != null && Number.isFinite(price) && price > 0 ? price : null,

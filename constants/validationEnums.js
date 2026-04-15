@@ -1,17 +1,20 @@
 export const CHAT_INTENTS = ['buy', 'sell'];
 export const CHAT_MESSAGE_ROLES = ['user', 'assistant'];
-export const LEAD_GRADES = ['hot', 'warm', 'cold', 'unscored'];
-export const LEAD_QUALITY_LEVELS = ['hot', 'warm', 'cold'];
+export const LEAD_GRADES = ['hot', 'warm', 'interested', 'cold', 'unscored'];
+export const LEAD_QUALITY_LEVELS = ['hot', 'warm', 'interested', 'cold'];
 
 export const LEAD_TYPES = [
   'hot_buyer',
   'warm_buyer',
+  'interested_buyer',
   'cold_buyer',
   'hot_seller',
   'warm_seller',
+  'interested_seller',
   'cold_seller',
   'hot_client',
   'warm_client',
+  'interested_client',
   'cold_client',
   'unknown',
 ];
@@ -19,21 +22,27 @@ export const LEAD_TYPES = [
 export const LEAD_CLASSIFICATIONS = [
   'Hot Buyer',
   'Warm Buyer',
+  'Interested Buyer',
   'Cold Buyer',
   'Hot Seller',
   'Warm Seller',
+  'Interested Seller',
   'Cold Seller',
   'Hot Lead',
   'Warm Lead',
+  'Interested Lead',
   'Cold Lead',
   'Hot Mortgage Lead',
   'Warm Mortgage Lead',
+  'Interested Mortgage Lead',
   'Cold Mortgage Lead',
   'Hot Lawyer Lead',
   'Warm Lawyer Lead',
+  'Interested Lawyer Lead',
   'Cold Lawyer Lead',
   'Hot Lawyer Client',
   'Warm Lawyer Client',
+  'Interested Lawyer Client',
   'Cold Lawyer Client',
   'unclassified',
 ];

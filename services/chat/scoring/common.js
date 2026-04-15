@@ -3,7 +3,7 @@ const KNOWN_CITIES = [
   'lahore', 'karachi', 'islamabad', 'clifton', 'dha', 'london',
   'dubai', 'new york', 'miami', 'los angeles', 'chicago', 'toronto',
 ];
-export const GRADE_ORDER = { hot: 4, warm: 3, lukewarm: 2, cold: 1, unscored: 0 };
+export const GRADE_ORDER = { hot: 4, warm: 3, interested: 2, cold: 1, unscored: 0 };
 export const extractSignals = (message = '') => {
   const text = String(message || '').toLowerCase();
   let timeline = null;
@@ -80,7 +80,7 @@ export const buildLeadType = (grade, intent) =>
   `${grade}_${intent === 'sell' ? 'seller' : 'buyer'}`;
 export const buildMortgageBrokerLeadType = (grade) => `${grade}_client`;
 export const buildLeadClassification = (grade, intent) => {
-  const g = grade.charAt(0).toUpperCase() + grade.slice(1);
+  const label = grade.charAt(0).toUpperCase() + grade.slice(1);
   const i = intent === 'sell' ? 'Seller' : 'Buyer';
-  return `${g} ${i}`;
+  return `${label} ${i}`;
 };

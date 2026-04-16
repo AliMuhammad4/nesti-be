@@ -8,7 +8,6 @@ import { buildWorkspaceLeadConversionPreview } from '../../conversion/buildLeadC
 import { emitWorkspaceLeadEvent } from '../../realtime/workspaceSocket.js';
 import {
   emitNewLeadCreatedNotification,
-  emitLeadLifecycleNotification,
   sendNewLeadCreatedEmailIfEnabled,
 } from '../../realtime/leadCreatedNotify.js';
 import { buildLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
@@ -297,51 +296,6 @@ export async function syncLeadMatchAfterTurn({
       profile_fields_updated: profileQualFieldCount > 0,
       conversion_preview,
     });
-
-    if (profileQualFieldCount > 0 || persistedGrade === 'hot' || persistedGrade === 'warm') {
-      await emitLeadLifecycleNotification(userId, {
-        notification_type: 'lead_lifecycle',
-        title: persistedGrade === 'hot' ? 'Hot lead activity updated' : 'Lead activity updated',
-        body:
-          conversion_preview?.why_match_one_liner ||
-          conversion_preview?.headline ||
-          'Lead details were updated and may require follow-up.',
-        severity:
-          conversion_preview?.alert?.level === 'critical'
-            ? 'critical'
-            : conversion_preview?.alert?.level === 'high'
-              ? 'high'
-              : 'info',
-        lead_match_id: String(existingLeadMatch._id),
-        lead_profile_id: fresh?.lead_profile_id ? String(fresh.lead_profile_id) : null,
-        conversation_id: fresh?.conversation_id ? String(fresh.conversation_id) : null,
-        session_id: sessionId || null,
-        grade: persistedGrade,
-        score: Number(fresh?.match_score ?? finalScore),
-        intent: socketIntent,
-        appointment_status,
-        urgency: conversion_preview?.urgency ?? null,
-        urgency_window: conversion_preview?.recommended_response_within_minutes
-          ? conversion_preview.recommended_response_within_minutes < 60
-            ? `${conversion_preview.recommended_response_within_minutes} min`
-            : `${Math.round(conversion_preview.recommended_response_within_minutes / 60)} hr`
-          : null,
-        speed_to_lead_tip:
-          conversion_preview?.urgency === 'immediate'
-            ? 'Respond now to protect conversion momentum.'
-            : null,
-        outcomes_headline: conversion_preview?.outcomes_headline ?? null,
-        booking_cta: conversion_preview?.booking_cta ?? null,
-        primary_next_action: conversion_preview?.primary_next_action_id
-          ? {
-              id: conversion_preview.primary_next_action_id,
-              title: conversion_preview.primary_next_action_title,
-              follow_up_template: conversion_preview.primary_follow_up_template ?? null,
-            }
-          : null,
-        action: { type: 'open_lead', lead_match_id: String(existingLeadMatch._id) },
-      });
-    }
   } catch (e) {
     logger.warn('Workspace lead event (update) failed', { error: e.message });
   }

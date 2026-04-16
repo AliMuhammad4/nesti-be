@@ -3,6 +3,7 @@ import { protect, ensureAgentOrMortgageBroker } from '../middleware/authMiddlewa
 import {
   getNotificationsForUser,
   getUnreadNotificationCount,
+  getNotificationById,
   markNotificationRead,
   markAllNotificationsRead,
 } from '../services/notifications/notificationService.js';
@@ -31,6 +32,20 @@ router.patch('/read-all', protect, ensureAgentOrMortgageBroker, async (req, res)
     const result = await markAllNotificationsRead(req.user._id);
     res.json({ success: true, ...result });
   } catch (e) {
+    res.status(500).json({ success: false, message: e.message || 'Server error' });
+  }
+});
+router.get('/:id', protect, ensureAgentOrMortgageBroker, async (req, res) => {
+  try {
+    const n = await getNotificationById(req.user._id, req.params.id);
+    if (!n) {
+      return res.status(404).json({ success: false, message: 'Notification not found' });
+    }
+    res.json({ success: true, notification: n });
+  } catch (e) {
+    if (e.name === 'BSONError' || e.name === 'CastError') {
+      return res.status(400).json({ success: false, message: 'Invalid notification id' });
+    }
     res.status(500).json({ success: false, message: e.message || 'Server error' });
   }
 });

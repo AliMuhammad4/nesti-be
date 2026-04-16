@@ -8,11 +8,31 @@ let io = null;
 function userRoom(userId) {
   return `user:${String(userId)}`;
 }
+
+function normalizeHandshakeToken(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  let t = raw.trim();
+  if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
+  return t || null;
+}
 function parseOrigins() {
   const raw = process.env.CLIENT_ORIGIN || process.env.SOCKET_CORS_ORIGIN || '';
   if (!raw.trim()) return true;
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (process.env.NODE_ENV !== 'production') {
+    const devDefaults = [
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://localhost:3001',
+      'http://127.0.0.1:3001',
+    ];
+    for (const o of devDefaults) {
+      if (!list.includes(o)) list.push(o);
+    }
+  }
+  return list;
 }
+
 export function initWorkspaceSocket(httpServer) {
   if (io) return io;
   io = new Server(httpServer, {
@@ -24,11 +44,10 @@ export function initWorkspaceSocket(httpServer) {
   });
   io.use(async (socket, next) => {
     try {
-      const token =
-        socket.handshake.auth?.token ||
-        socket.handshake.query?.token ||
-        null;
-      if (!token || typeof token !== 'string') {
+      const token = normalizeHandshakeToken(
+        socket.handshake.auth?.token || socket.handshake.query?.token || null
+      );
+      if (!token) {
         return next(new Error('auth_required'));
       }
       const decoded = jwt.verify(token, JWT_SECRET);
@@ -49,9 +68,16 @@ export function initWorkspaceSocket(httpServer) {
       schema: 1,
       user_id: uid,
     });
-    logger.debug('Workspace socket connected', { user_id: uid });
+    logger.info('Workspace socket connected', {
+      user_id: uid,
+      socket_id: socket.id,
+      transport: socket.conn?.transport?.name,
+    });
+    socket.on('disconnect', (reason) => {
+      logger.debug('Workspace socket disconnected', { user_id: uid, reason });
+    });
   });
-  logger.info('Workspace Socket.IO initialized');
+  logger.info('Workspace Socket.IO initialized on path /socket.io');
   return io;
 }
 export function getWorkspaceIo() {
@@ -59,7 +85,13 @@ export function getWorkspaceIo() {
 }
 
 export function emitWorkspaceLeadEvent(ownerUserId, payload) {
-  if (!io || !ownerUserId) return;
+  if (!io || !ownerUserId) {
+    logger.warn('emitWorkspaceLeadEvent skipped (no io or user)', {
+      has_io: !!io,
+      owner_user_id: ownerUserId ? String(ownerUserId) : null,
+    });
+    return;
+  }
   const room = userRoom(ownerUserId);
   const body = {
     schema: 1,
@@ -67,10 +99,22 @@ export function emitWorkspaceLeadEvent(ownerUserId, payload) {
     ...payload,
   };
   io.to(room).emit('workspace:lead', body);
+  logger.info('Socket emit workspace:lead', {
+    user_id: String(ownerUserId),
+    room,
+    kind: payload?.kind ?? null,
+    lead_match_id: payload?.lead_match_id ?? null,
+  });
 }
 
 export function emitNotification(ownerUserId, payload) {
-  if (!io || !ownerUserId) return;
+  if (!io || !ownerUserId) {
+    logger.warn('emitNotification skipped (no io or user)', {
+      has_io: !!io,
+      owner_user_id: ownerUserId ? String(ownerUserId) : null,
+    });
+    return;
+  }
   const room = userRoom(ownerUserId);
   const body = {
     schema: 1,
@@ -78,4 +122,10 @@ export function emitNotification(ownerUserId, payload) {
     ...payload,
   };
   io.to(room).emit('notifications:item', body);
+  logger.info('Socket emit notifications:item', {
+    user_id: String(ownerUserId),
+    room,
+    notification_type: payload?.notification_type ?? null,
+    title: payload?.title ? String(payload.title).slice(0, 80) : null,
+  });
 }

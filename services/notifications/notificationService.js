@@ -173,6 +173,13 @@ export async function getUnreadNotificationCount(userId) {
   return ProfessionalNotification.countDocuments({ user_id: uid, read_at: null });
 }
 
+export async function getNotificationById(userId, notificationId) {
+  const uid = new mongoose.Types.ObjectId(String(userId));
+  const nid = new mongoose.Types.ObjectId(String(notificationId));
+  const doc = await ProfessionalNotification.findOne({ _id: nid, user_id: uid }).lean();
+  return toDto(doc);
+}
+
 export async function markNotificationRead(userId, notificationId) {
   const uid = new mongoose.Types.ObjectId(String(userId));
   const nid = new mongoose.Types.ObjectId(String(notificationId));

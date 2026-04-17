@@ -56,6 +56,8 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
   const booked = byType.appointment_booked || 0;
   const canceled = byType.appointment_canceled || 0;
   const updated = byType.lead_updated || 0;
+  const views = byType.lead_viewed || 0;
+  const nurtureEmails = byType.nurture_email_sent || 0;
 
   return {
     window_days: parseDays(days),
@@ -63,6 +65,8 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
       events: totalEvents,
       leads_created: created,
       leads_updated: updated,
+      lead_views: views,
+      nurture_emails_sent: nurtureEmails,
       appointments_booked: booked,
       appointments_canceled: canceled,
     },
@@ -140,6 +144,71 @@ export async function getLeadKpiEventsForLead(userId, leadMatchId, { days = 30, 
     window_days: parseDays(days),
     events: items.map(serializeKpiEvent),
   };
+}
+
+/** Daily buckets (UTC) for dashboard charts. */
+export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
+  const d = parseDays(days);
+  const uid = new mongoose.Types.ObjectId(String(userId));
+  const since = sinceDate(days);
+  const rows = await LeadKpiEvent.aggregate([
+    { $match: { user_id: uid, occurred_at: { $gte: since } } },
+    {
+      $group: {
+        _id: {
+          day: { $dateToString: { format: '%Y-%m-%d', date: '$occurred_at', timezone: 'UTC' } },
+        },
+        lead_created: {
+          $sum: { $cond: [{ $eq: ['$event_type', 'lead_created'] }, 1, 0] },
+        },
+        lead_viewed: {
+          $sum: { $cond: [{ $eq: ['$event_type', 'lead_viewed'] }, 1, 0] },
+        },
+        lead_updated: {
+          $sum: { $cond: [{ $eq: ['$event_type', 'lead_updated'] }, 1, 0] },
+        },
+        appointment_booked: {
+          $sum: { $cond: [{ $eq: ['$event_type', 'appointment_booked'] }, 1, 0] },
+        },
+        nurture_email_sent: {
+          $sum: { $cond: [{ $eq: ['$event_type', 'nurture_email_sent'] }, 1, 0] },
+        },
+      },
+    },
+    { $sort: { '_id.day': 1 } },
+    {
+      $project: {
+        _id: 0,
+        date: '$_id.day',
+        lead_created: 1,
+        lead_viewed: 1,
+        lead_updated: 1,
+        appointment_booked: 1,
+        nurture_email_sent: 1,
+      },
+    },
+  ]);
+
+  const byDay = new Map(rows.map((r) => [r.date, r]));
+  const series = [];
+  for (let i = d - 1; i >= 0; i -= 1) {
+    const dt = new Date();
+    dt.setUTCHours(0, 0, 0, 0);
+    dt.setUTCDate(dt.getUTCDate() - i);
+    const key = dt.toISOString().slice(0, 10);
+    const row = byDay.get(key);
+    series.push({
+      date: key,
+      label: `${String(dt.getUTCMonth() + 1).padStart(2, '0')}/${String(dt.getUTCDate()).padStart(2, '0')}`,
+      lead_created: row?.lead_created || 0,
+      lead_viewed: row?.lead_viewed || 0,
+      lead_updated: row?.lead_updated || 0,
+      appointment_booked: row?.appointment_booked || 0,
+      nurture_email_sent: row?.nurture_email_sent || 0,
+    });
+  }
+
+  return { window_days: d, series };
 }
 
 export async function getLeadKpiFunnel(userId, { days = 30 } = {}) {

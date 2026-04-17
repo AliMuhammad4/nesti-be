@@ -26,6 +26,19 @@ import {
 
 // ─── Lead match controllers ───────────────────────────────────────────────────
 
+async function resolveLeadPropertyMatchCount({ userId, leadMatch, leadProfile }) {
+  try {
+    if (!leadMatch || !leadProfile) return 0;
+    const isBuyer = /buy/i.test(leadProfile.intent || leadMatch.lead_type || '');
+    const matches = isBuyer
+      ? await getBuyerPropertyMatches({ userId, leadProfile, signals: {} })
+      : await getBuyerMatchesForSellerProperty({ userId, leadProfile, signals: {} });
+    return Array.isArray(matches) ? matches.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export const recordLeadView = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
@@ -72,8 +85,23 @@ export const getLeads = async (req, res, next) => {
     const profileById = new Map(profiles.map((p) => [String(p._id), p]));
     const convoById   = new Map(conversations.map((c) => [String(c._id), c]));
 
-    const leads = leadMatches.map((m) =>
-      mapLeadMatchToListRow(m, profileById.get(String(m.lead_profile_id)) || {}, convoById.get(String(m.conversation_id)) || {}, truthyQueryFlag(q.include_conversion)),
+    const leads = await Promise.all(
+      leadMatches.map(async (m) => {
+        const profile = profileById.get(String(m.lead_profile_id)) || null;
+        const conversation = convoById.get(String(m.conversation_id)) || {};
+        const row = mapLeadMatchToListRow(
+          m,
+          profile || {},
+          conversation,
+          truthyQueryFlag(q.include_conversion),
+        );
+        const matchCount = await resolveLeadPropertyMatchCount({
+          userId,
+          leadMatch: m,
+          leadProfile: profile,
+        });
+        return { ...row, match_count: matchCount };
+      }),
     );
     return res.json({ success: true, leads, empty_state: null, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (err) { return next(err); }

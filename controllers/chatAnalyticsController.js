@@ -3,6 +3,7 @@ import LeadMatch from '../models/LeadMatch.js';
 import {
   getLeadKpiSummary,
   getLeadKpiFunnel,
+  getLeadKpiTimeseries,
   getLeadKpiEventsForLead,
 } from '../services/analytics/leadKpiService.js';
 
@@ -21,6 +22,16 @@ export async function getChatAnalyticsFunnel(req, res, next) {
     const days = req.query.days;
     const funnel = await getLeadKpiFunnel(req.user._id, { days });
     return res.json({ success: true, funnel });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function getChatAnalyticsTimeseries(req, res, next) {
+  try {
+    const days = req.query.days;
+    const timeseries = await getLeadKpiTimeseries(req.user._id, { days });
+    return res.json({ success: true, ...timeseries });
   } catch (error) {
     return next(error);
   }

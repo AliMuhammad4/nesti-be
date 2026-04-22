@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
@@ -11,9 +12,11 @@ import { truthyQueryFlag, includeConversionInLeadDetail } from './leadQueryUtils
 import { mapLeadMatchToListRow, mapLeadMatchToDetail, mapLeadMatchUnderProfile } from './leadResponseMappers.js';
 import { buildCollectionEmptyState } from './leadExperienceContract.js';
 import { formatLeadProfileSummary } from './leadProfileFormat.js';
-import { buildAppointmentStatusByProfileIds } from './leadAppointmentStatus.js';
+import { buildAppointmentMongoFilter, buildAppointmentStatusByProfileIds } from './leadAppointmentStatus.js';
 import { buildNurtureConsultationBookedFromEmailByProfileIds } from './leadNurtureBookingStatus.js';
 import { recordLeadViewIfNeeded } from '../analytics/leadKpiService.js';
+import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
+import { AGENT_NOTES_MAX_ENTRIES, isTerminalMatchStatus } from '../../utils/leadMatchStatus.js';
 import {
   ownerQuery,
   skipAppointmentStatusFromQuery,
@@ -42,6 +45,9 @@ async function resolveLeadPropertyMatchCount({ userId, leadMatch, leadProfile })
 export const recordLeadView = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead id' });
+    }
     const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId }).lean();
     if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
     const result = await recordLeadViewIfNeeded({
@@ -60,18 +66,28 @@ export const getLeads = async (req, res, next) => {
     const { _id: userId } = req.user;
     const q = req.query || {};
     const { page, limit, skip } = parsePageLimitPagination(q, PAGINATION_PRESETS.leadList);
-    const { embedToken, intent, grade, status } = q;
+    const { embedToken, intent, grade, status, appointment, pipeline } = q;
 
     const match = { user_id: userId };
-    if (status)    match.match_status = status;
+    const pipelineNorm = String(pipeline || '').trim().toLowerCase();
+    if (status) {
+      match.match_status = status;
+    } else if (pipelineNorm === 'active') {
+      match.match_status = { $nin: ['converted', 'closed_lost'] };
+    } else if (pipelineNorm === 'closed') {
+      match.match_status = { $in: ['converted', 'closed_lost'] };
+    }
     if (grade)     match.lead_type = new RegExp(`^${grade}_`);
     if (intent === 'buy' || intent === 'sell')
       match.lead_type = new RegExp(`${intent === 'sell' ? 'seller' : '(buyer|client)'}$`);
     if (embedToken) match['compatibility_factors.embed_token'] = embedToken;
 
+    const apptFilter = await buildAppointmentMongoFilter(userId, appointment);
+    const query = apptFilter ? { $and: [match, apptFilter] } : match;
+
     const [total, leadMatches] = await Promise.all([
-      LeadMatch.countDocuments(match),
-      LeadMatch.find(match).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      LeadMatch.countDocuments(query),
+      LeadMatch.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
     ]);
 
     if (!total) return res.json({ success: true, leads: [], empty_state: buildCollectionEmptyState('leads'), pagination: buildPaginationMeta({ page, limit, total: 0 }) });
@@ -107,9 +123,119 @@ export const getLeads = async (req, res, next) => {
   } catch (err) { return next(err); }
 };
 
+function assertMatchStatusTransition(prevStatus, nextStatus) {
+  if (prevStatus === nextStatus) return;
+  if (isTerminalMatchStatus(prevStatus)) {
+    if (isTerminalMatchStatus(nextStatus)) return;
+    if (nextStatus !== 'nurturing' && nextStatus !== 'new') {
+      const err = new Error('Closed leads can only be reopened to Nurturing or New');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+}
+
+export const updateLeadMatch = async (req, res, next) => {
+  try {
+    const { _id: userId } = req.user;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead id' });
+    }
+    const { match_status: nextStatus, note } = req.body;
+    const trimmedNote = typeof note === 'string' ? note.trim() : '';
+    const hasNote = trimmedNote.length > 0;
+    const hasStatus = nextStatus !== undefined;
+    if (!hasStatus && !hasNote) {
+      return res.status(400).json({ success: false, message: 'Provide match_status and/or a non-empty note' });
+    }
+
+    const lead = await LeadMatch.findOne({ _id: req.params.id, user_id: userId });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    const prevStatus = lead.match_status;
+    if (hasStatus) assertMatchStatusTransition(prevStatus, nextStatus);
+
+    let dirty = false;
+    const statusChanged = hasStatus && nextStatus !== prevStatus;
+    if (statusChanged) {
+      lead.match_status = nextStatus;
+      dirty = true;
+    }
+
+    const factors =
+      lead.compatibility_factors && typeof lead.compatibility_factors === 'object'
+        ? { ...lead.compatibility_factors }
+        : {};
+    const existing = Array.isArray(factors.agent_notes) ? [...factors.agent_notes] : [];
+    const authorLabel =
+      [req.user.first_name, req.user.last_name].filter(Boolean).join(' ').trim() || null;
+    const now = new Date().toISOString();
+    let notesAppended = false;
+
+    if (statusChanged && !hasNote) {
+      const readable = (s) => ({ new: 'New', nurturing: 'Nurturing', converted: 'Closed — won', closed_lost: 'Closed — lost', consult_booked: 'Consult booked', showing_booked: 'Showing booked' }[s] || s);
+      existing.push({
+        id: crypto.randomUUID(),
+        text: `Status changed from ${readable(prevStatus)} to ${readable(nextStatus)}`,
+        created_at: now,
+        author_user_id: userId,
+        author_label: authorLabel,
+        system: true,
+      });
+      notesAppended = true;
+    }
+
+    if (hasNote) {
+      existing.push({
+        id: crypto.randomUUID(),
+        text: trimmedNote.slice(0, 8000),
+        created_at: now,
+        author_user_id: userId,
+        author_label: authorLabel,
+      });
+      notesAppended = true;
+    }
+
+    if (notesAppended) {
+      factors.agent_notes = existing.slice(-AGENT_NOTES_MAX_ENTRIES);
+      lead.compatibility_factors = factors;
+      dirty = true;
+    }
+
+    if (dirty) {
+      if (notesAppended) lead.markModified('compatibility_factors');
+      await lead.save();
+      emitWorkspaceLeadEvent(userId, {
+        kind: 'lead_updated',
+        lead_match_id: String(lead._id),
+        match_status: lead.match_status,
+      });
+    }
+
+    const leadMatch = await LeadMatch.findOne({ _id: lead._id, user_id: userId }).lean();
+    const [profile, convo] = await Promise.all([
+      leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
+      leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
+    ]);
+    return res.json({
+      success: true,
+      conversation_id: leadMatch.conversation_id ? String(leadMatch.conversation_id) : null,
+      lead: mapLeadMatchToDetail(leadMatch, profile, convo, includeConversionInLeadDetail(req.query || {})),
+    });
+  } catch (err) {
+    if (err.statusCode === 400) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    return next(err);
+  }
+};
+
 export const getLeadById = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead id' });
+    }
     const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId }).lean();
     if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
     const [profile, convo] = await Promise.all([
@@ -127,6 +253,9 @@ export const getLeadById = async (req, res, next) => {
 export const getLeadConversation = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead id' });
+    }
     const { page, limit, skip } = parsePageLimitPagination(req.query || {}, PAGINATION_PRESETS.leadList);
     const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId }).lean();
     if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
@@ -155,6 +284,9 @@ export const getLeadConversation = async (req, res, next) => {
 export const deleteLeadById = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead id' });
+    }
     const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId });
     if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
 

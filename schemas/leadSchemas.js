@@ -22,6 +22,12 @@ export const leadMatchCreateSchema = Joi.object({
 
 export const leadMatchUpdateSchema = leadMatchCreateSchema.fork(['user_id'], (s) => s.optional());
 
+/** Agent PATCH /api/leads/:id — only status and/or note; no arbitrary compatibility_factors writes. */
+export const leadAgentPatchSchema = Joi.object({
+  match_status: Joi.string().valid(...MATCH_STATUSES).optional(),
+  note: Joi.string().max(8000).allow('').optional(),
+}).min(1);
+
 export const leadProfileCreateSchema = Joi.object({
   intent: Joi.string().valid(...CHAT_INTENTS).required(),
   ownership: Joi.object({

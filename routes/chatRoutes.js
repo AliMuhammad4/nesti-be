@@ -7,6 +7,7 @@ import {
   getChatAnalyticsSummary,
   getChatAnalyticsFunnel,
   getChatAnalyticsTimeseries,
+  getChatAnalyticsLeadTrends,
   getLeadKpiTimeline,
 } from '../controllers/chatAnalyticsController.js';
 import {
@@ -38,6 +39,7 @@ router.get('/conversations/:id/messages', protect, stub);
 router.get('/analytics/summary', protect, ensureAgentOrMortgageBroker, getChatAnalyticsSummary);
 router.get('/analytics/funnel', protect, ensureAgentOrMortgageBroker, getChatAnalyticsFunnel);
 router.get('/analytics/timeseries', protect, ensureAgentOrMortgageBroker, getChatAnalyticsTimeseries);
+router.get('/analytics/lead-trends', protect, ensureAgentOrMortgageBroker, getChatAnalyticsLeadTrends);
 router.get(
   '/analytics/lead/:lead_match_id/events',
   protect,

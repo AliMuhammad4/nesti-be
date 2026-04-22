@@ -5,6 +5,7 @@ import {
   getLeadKpiFunnel,
   getLeadKpiTimeseries,
   getLeadKpiEventsForLead,
+  getLeadIntentAndBudgetTrends,
 } from '../services/analytics/leadKpiService.js';
 
 export async function getChatAnalyticsSummary(req, res, next) {
@@ -32,6 +33,16 @@ export async function getChatAnalyticsTimeseries(req, res, next) {
     const days = req.query.days;
     const timeseries = await getLeadKpiTimeseries(req.user._id, { days });
     return res.json({ success: true, ...timeseries });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function getChatAnalyticsLeadTrends(req, res, next) {
+  try {
+    const days = req.query.days;
+    const trends = await getLeadIntentAndBudgetTrends(req.user._id, { days });
+    return res.json({ success: true, ...trends });
   } catch (error) {
     return next(error);
   }

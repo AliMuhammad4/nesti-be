@@ -8,6 +8,26 @@ function professionalTypeFromMatch(leadMatch) {
   return leadMatch.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
 }
 
+function formatAgentNotesForApi(cf) {
+  const raw = cf?.agent_notes;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((n) => n && typeof n === 'object' && typeof n.text === 'string')
+    .map((n) => ({
+      id: n.id != null ? String(n.id) : null,
+      text: n.text,
+      created_at: n.created_at || null,
+      author_user_id: n.author_user_id != null ? String(n.author_user_id) : null,
+      author_label: n.author_label || null,
+      ...(n.system ? { system: true } : {}),
+    }))
+    .sort((a, b) => {
+      const ta = new Date(a.created_at || 0).getTime();
+      const tb = new Date(b.created_at || 0).getTime();
+      return tb - ta;
+    });
+}
+
 function buildSpecificFacts(profileView, leadMatch) {
   const facts = [];
   const score = leadMatch?.match_score;
@@ -64,6 +84,7 @@ function leadCore(leadMatch, profileView, convo) {
     conversation_id: String(leadMatch.conversation_id || ''),
     created_at: leadMatch.createdAt,
     updated_at: leadMatch.updatedAt,
+    agent_notes: formatAgentNotesForApi(leadMatch.compatibility_factors),
   };
 }
 

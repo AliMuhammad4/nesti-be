@@ -1,6 +1,72 @@
 import LeadMatch from '../../models/LeadMatch.js';
 import ChatConversation from '../../models/ChatConversation.js';
-import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
+import {
+  resolveAppointmentStatus,
+  MATCH_STATUSES_MEETING_BOOKED,
+} from '../../utils/resolveAppointmentStatus.js';
+
+/** Query values for GET /api/leads?appointment= */
+export const LEAD_LIST_APPOINTMENT_QUERY = ['all', 'booked', 'canceled', 'not_booked'];
+
+/**
+ * Mongo fragment for leads list appointment filter (combined with $and on base match).
+ * @param {import('mongoose').Types.ObjectId} userObjectId
+ * @param {string} [appointment]
+ * @returns {Promise<object|null>} filter object or null when no extra filter
+ */
+export async function buildAppointmentMongoFilter(userObjectId, appointment) {
+  const a = String(appointment || 'all').trim().toLowerCase();
+  if (!a || a === 'all' || !LEAD_LIST_APPOINTMENT_QUERY.includes(a)) return null;
+
+  const uid = userObjectId;
+
+  if (a === 'booked') {
+    const bookedConvIds = await ChatConversation.find({
+      user_id: uid,
+      calendly_booking_status: 'booked',
+    }).distinct('_id');
+    return {
+      $or: [
+        { match_status: { $in: MATCH_STATUSES_MEETING_BOOKED } },
+        { conversation_id: { $in: bookedConvIds } },
+      ],
+    };
+  }
+
+  if (a === 'canceled') {
+    const canceledConvIds = await ChatConversation.find({
+      user_id: uid,
+      calendly_booking_status: 'canceled',
+    }).distinct('_id');
+    return { conversation_id: { $in: canceledConvIds } };
+  }
+
+  if (a === 'not_booked') {
+    const bookedConvIds = await ChatConversation.find({
+      user_id: uid,
+      calendly_booking_status: 'booked',
+    }).distinct('_id');
+    const canceledConvIds = await ChatConversation.find({
+      user_id: uid,
+      calendly_booking_status: 'canceled',
+    }).distinct('_id');
+    const exclude = [...bookedConvIds, ...canceledConvIds];
+    return {
+      $and: [
+        { match_status: { $nin: MATCH_STATUSES_MEETING_BOOKED } },
+        {
+          $or: [
+            { conversation_id: null },
+            { conversation_id: { $exists: false } },
+            { conversation_id: { $nin: exclude } },
+          ],
+        },
+      ],
+    };
+  }
+
+  return null;
+}
 
 export async function buildAppointmentStatusByProfileIds(userObjectId, profileIds) {
   const map = new Map();

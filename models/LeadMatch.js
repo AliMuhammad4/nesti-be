@@ -36,6 +36,8 @@ const leadMatchSchema = new mongoose.Schema(
       enum: MATCH_STATUSES,
       default: 'new',
     },
+    /** Mixed bag: contact, calendly, session, embed_token, etc.
+     * `agent_notes`: append-only `[{ id, text, created_at, author_user_id, author_label? }]` (cap in service). */
     compatibility_factors: {
       type: mongoose.Schema.Types.Mixed,
       default: {},

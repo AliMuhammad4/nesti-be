@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import LeadKpiEvent from '../../models/LeadKpiEvent.js';
+import LeadMatch from '../../models/LeadMatch.js';
 
 function parseDays(days) {
   const n = Number(days);
@@ -170,6 +171,9 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
         appointment_booked: {
           $sum: { $cond: [{ $eq: ['$event_type', 'appointment_booked'] }, 1, 0] },
         },
+        appointment_canceled: {
+          $sum: { $cond: [{ $eq: ['$event_type', 'appointment_canceled'] }, 1, 0] },
+        },
         nurture_email_sent: {
           $sum: { $cond: [{ $eq: ['$event_type', 'nurture_email_sent'] }, 1, 0] },
         },
@@ -184,6 +188,7 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
         lead_viewed: 1,
         lead_updated: 1,
         appointment_booked: 1,
+        appointment_canceled: 1,
         nurture_email_sent: 1,
       },
     },
@@ -204,11 +209,121 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
       lead_viewed: row?.lead_viewed || 0,
       lead_updated: row?.lead_updated || 0,
       appointment_booked: row?.appointment_booked || 0,
+      appointment_canceled: row?.appointment_canceled || 0,
       nurture_email_sent: row?.nurture_email_sent || 0,
     });
   }
 
   return { window_days: d, series };
+}
+
+/**
+ * Daily buckets of lead intent (buyers vs sellers) and budget averages, grouped by the
+ * day the LeadMatch was created. Joins the matching LeadProfile for intent + structured
+ * budget. Produces one row per UTC day in the window, with zero-fill for empty days.
+ */
+export async function getLeadIntentAndBudgetTrends(userId, { days = 30 } = {}) {
+  const d = parseDays(days);
+  const uid = new mongoose.Types.ObjectId(String(userId));
+  const since = sinceDate(days);
+
+  const rows = await LeadMatch.aggregate([
+    { $match: { user_id: uid, createdAt: { $gte: since } } },
+    {
+      $lookup: {
+        from: 'leadprofiles',
+        localField: 'lead_profile_id',
+        foreignField: '_id',
+        as: 'profile',
+      },
+    },
+    { $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+        intent_resolved: {
+          $let: {
+            vars: {
+              // Prefer profile intent, fall back to lead_type derivation ("buyer_lead" etc.)
+              profIntent: { $ifNull: ['$profile.intent', null] },
+              typeIntent: {
+                $switch: {
+                  branches: [
+                    {
+                      case: { $regexMatch: { input: { $ifNull: ['$lead_type', ''] }, regex: /buyer|client/i } },
+                      then: 'buy',
+                    },
+                    {
+                      case: { $regexMatch: { input: { $ifNull: ['$lead_type', ''] }, regex: /seller/i } },
+                      then: 'sell',
+                    },
+                  ],
+                  default: 'unknown',
+                },
+              },
+            },
+            in: { $ifNull: ['$$profIntent', '$$typeIntent'] },
+          },
+        },
+        budget_min: { $ifNull: ['$profile.budget_profile.min_budget', null] },
+        budget_max: { $ifNull: ['$profile.budget_profile.max_budget', null] },
+      },
+    },
+    {
+      $addFields: {
+        budget_point: {
+          $cond: [
+            { $and: [{ $ne: ['$budget_min', null] }, { $ne: ['$budget_max', null] }] },
+            { $divide: [{ $add: ['$budget_min', '$budget_max'] }, 2] },
+            { $cond: [{ $ne: ['$budget_max', null] }, '$budget_max', '$budget_min'] },
+          ],
+        },
+      },
+    },
+    {
+      $group: {
+        _id: '$day',
+        buyers: {
+          $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ['$intent_resolved', ''] }, regex: /buy|client/i } }, 1, 0] },
+        },
+        sellers: {
+          $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ['$intent_resolved', ''] }, regex: /sell/i } }, 1, 0] },
+        },
+        budget_sum: {
+          $sum: { $cond: [{ $ne: ['$budget_point', null] }, '$budget_point', 0] },
+        },
+        budget_count: {
+          $sum: { $cond: [{ $ne: ['$budget_point', null] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+
+  const byDay = new Map(rows.map((r) => [r._id, r]));
+  const intent = [];
+  const budget = [];
+  for (let i = d - 1; i >= 0; i -= 1) {
+    const dt = new Date();
+    dt.setUTCHours(0, 0, 0, 0);
+    dt.setUTCDate(dt.getUTCDate() - i);
+    const key = dt.toISOString().slice(0, 10);
+    const label = `${String(dt.getUTCMonth() + 1).padStart(2, '0')}/${String(dt.getUTCDate()).padStart(2, '0')}`;
+    const row = byDay.get(key);
+    intent.push({
+      date: key,
+      label,
+      buyers: row?.buyers || 0,
+      sellers: row?.sellers || 0,
+    });
+    budget.push({
+      date: key,
+      label,
+      budget_avg: row && row.budget_count > 0 ? Math.round(row.budget_sum / row.budget_count) : 0,
+      sample_size: row?.budget_count || 0,
+    });
+  }
+
+  return { window_days: d, intent, budget };
 }
 
 export async function getLeadKpiFunnel(userId, { days = 30 } = {}) {

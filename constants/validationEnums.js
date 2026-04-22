@@ -47,7 +47,14 @@ export const LEAD_CLASSIFICATIONS = [
   'unclassified',
 ];
 
-export const MATCH_STATUSES = ['new', 'consult_booked', 'showing_booked', 'nurturing', 'converted'];
+export const MATCH_STATUSES = [
+  'new',
+  'consult_booked',
+  'showing_booked',
+  'nurturing',
+  'converted',
+  'closed_lost',
+];
 export const ACCOUNT_STATUSES = ['free_trial', 'active', 'expired', 'canceled'];
 export const SUBSCRIPTION_TIERS = ['starter', 'pro', 'enterprise'];
 export const CALENDAR_PROVIDERS = ['google', 'calendly'];

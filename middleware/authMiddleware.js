@@ -29,25 +29,6 @@ const protect = async (req, res, next) => {
   }
 };
 
-const ensureAccountStatus = async (req, res, next) => {
-  if (!req.user) {
-    return res.status(401).json({ success: false, message: 'Not authenticated' });
-  }
-  // Lazy evaluation of free trial
-  if (req.user.account_status === 'free_trial' && req.user.trial_ends_at) {
-    if (new Date() > new Date(req.user.trial_ends_at)) {
-      req.user.account_status = 'expired';
-      await req.user.save();
-    }
-  }
-
-  if (req.user.account_status === 'expired') {
-    return res.status(403).json({ success: false, message: 'Account expired. Please upgrade.' });
-  }
-
-  next();
-};
-
 const ensureAgent = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
@@ -68,4 +49,4 @@ const ensureAgentOrMortgageBroker = async (req, res, next) => {
   next();
 };
 
-export { protect, ensureAccountStatus, ensureAgent, ensureAgentOrMortgageBroker };
+export { protect, ensureAgent, ensureAgentOrMortgageBroker };

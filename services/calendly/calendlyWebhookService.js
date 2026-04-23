@@ -7,6 +7,11 @@ import CalendarIntegration from '../../models/CalendarIntegration.js';
 import logger from '../../utils/logger.js';
 import { runPostBookingAutomations } from './postBookingAutomations.js';
 import { markRecentNurtureLogBooked, clearRecentNurtureLogMeetingBooked } from '../nurture/nurtureMeetingBookingSync.js';
+import {
+  upsertBookedAppointmentFromCalendly,
+  markWorkspaceAppointmentCanceled,
+} from '../calendar/workspaceAppointmentService.js';
+import { extractScheduledEventStartDate } from './calendlyPayloadUtils.js';
 import { buildWorkspaceLeadConversionPreview } from '../conversion/buildLeadConversionPack.js';
 import { emitLeadLifecycleNotification } from '../realtime/leadCreatedNotify.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
@@ -64,11 +69,13 @@ function extractCalendlyOwnerUri(payload) {
 }
 
 function calendlyMeta(eventName, payload) {
+  const startDate = extractScheduledEventStartDate(payload);
   return {
     calendly_event:       eventName,
     calendly_updated_at:  new Date().toISOString(),
     calendly_invitee_uri: payload?.uri || null,
     calendly_event_uri:   typeof payload?.event === 'string' ? payload.event : payload?.event?.uri || null,
+    ...(startDate ? { calendly_event_start: startDate.toISOString() } : {}),
   };
 }
 
@@ -117,6 +124,26 @@ function resolveConversationId(lead, trackingUtm) {
   if (lead?.conversation_id) return lead.conversation_id;
   if (trackingUtm && mongoose.Types.ObjectId.isValid(trackingUtm)) return new mongoose.Types.ObjectId(trackingUtm);
   return null;
+}
+
+/** Shared invitee resolution for created + canceled webhooks. */
+async function resolveInviteeMatchContext(email, trackingUtm, ownerUserIdFromCalendly) {
+  let { lead: match, matchedVia } = await findLeadForBooking(email, trackingUtm, ownerUserIdFromCalendly);
+  if (!match && ownerUserIdFromCalendly && trackingUtm && mongoose.Types.ObjectId.isValid(String(trackingUtm))) {
+    const byConvo = await LeadMatch.findOne({
+      conversation_id: new mongoose.Types.ObjectId(String(trackingUtm)),
+      ...ownerFilter(ownerUserIdFromCalendly),
+    });
+    if (byConvo) {
+      match = byConvo;
+      matchedVia = 'conversation_id_utm';
+    }
+  }
+  return {
+    match,
+    matchedVia,
+    conversationId: resolveConversationId(match, trackingUtm),
+  };
 }
 
 async function resolveOwnerUserIdForNurture(lead, conversationId) {
@@ -205,24 +232,20 @@ async function emitCancelNotification(lead, conversationId) {
 // ─── Event handlers ───────────────────────────────────────────────────────────
 
 async function handleInviteeCreated({ email, trackingUtm, ownerUserIdFromCalendly, payload, emailDomain }) {
-  let { lead: match, matchedVia } = await findLeadForBooking(email, trackingUtm, ownerUserIdFromCalendly);
-  if (!match && ownerUserIdFromCalendly && trackingUtm && mongoose.Types.ObjectId.isValid(String(trackingUtm))) {
-    const byConvo = await LeadMatch.findOne({
-      conversation_id: new mongoose.Types.ObjectId(String(trackingUtm)),
-      ...ownerFilter(ownerUserIdFromCalendly),
-    });
-    if (byConvo) {
-      match = byConvo;
-      matchedVia = 'conversation_id_utm';
-    }
-  }
-  const conversationId = resolveConversationId(match, trackingUtm);
+  const { match, matchedVia, conversationId } = await resolveInviteeMatchContext(
+    email,
+    trackingUtm,
+    ownerUserIdFromCalendly,
+  );
+
+  const meta = calendlyMeta('invitee.created', payload);
+  const scheduledStart = extractScheduledEventStartDate(payload);
 
   if (match) {
     if (!isTerminalMatchStatus(match.match_status)) {
       match.match_status = 'consult_booked';
     }
-    match.compatibility_factors = { ...match.compatibility_factors, calendly: calendlyMeta('invitee.created', payload) };
+    match.compatibility_factors = { ...match.compatibility_factors, calendly: meta };
     match.markModified('compatibility_factors');
     await match.save();
     emitWorkspaceLeadEvent(match.user_id, {
@@ -231,30 +254,56 @@ async function handleInviteeCreated({ email, trackingUtm, ownerUserIdFromCalendl
       match_status: match.match_status,
       source: 'calendly.invitee.created',
     });
-    logger.info('Calendly invitee.created: updated LeadMatch', { op: 'calendly.booking', leadMatchId: String(match._id), conversation_id: conversationId ? String(conversationId) : null, matched_via: matchedVia, email_domain: emailDomain });
+    logger.info('Calendly invitee.created: updated LeadMatch', { op: 'calendly.booking', leadMatchId: String(match._id), matched_via: matchedVia, email_domain: emailDomain });
   } else {
     logger.info('Calendly invitee.created: no LeadMatch', { op: 'calendly.booking', email_domain: emailDomain, utm_content: trackingUtm || null });
   }
 
   if (conversationId) {
     await syncConversationCalendly(conversationId, 'booked', true);
-    logger.info('Calendly invitee.created: conversation marked booked', { op: 'calendly.booking', conversation_id: String(conversationId) });
   }
 
   const nurtureUserId = await resolveOwnerUserIdForNurture(match, conversationId);
   let bookedViaNurture = false;
+  let nurtureLogId = null;
   if (nurtureUserId && (email || conversationId || match?._id)) {
     try {
-      const r = await markRecentNurtureLogBooked({ userId: nurtureUserId, leadMatchId: match?._id || null, conversationId, inviteeEmail: email });
+      const r = await markRecentNurtureLogBooked({
+        userId: nurtureUserId,
+        leadMatchId: match?._id || null,
+        leadProfileId: match?.lead_profile_id || null,
+        conversationId,
+        inviteeEmail: email,
+        calendlyScheduledStartIso: scheduledStart ? scheduledStart.toISOString() : null,
+      });
       bookedViaNurture = r.updated === true;
+      nurtureLogId = r.nurture_log_id || null;
     } catch (e) { logger.error(`nurture meeting_booked sync: ${e.message}`); }
+  }
+
+  const appointmentUserId = match?.user_id || nurtureUserId;
+  if (appointmentUserId && match?._id) {
+    try {
+      await upsertBookedAppointmentFromCalendly({
+        userId: appointmentUserId,
+        leadMatchId: match._id,
+        leadProfileId: match.lead_profile_id || null,
+        conversationId,
+        payloadCalendlyMeta: meta,
+        bookedViaNurture,
+        nurtureLogId,
+        inviteeEmail: email,
+        scheduledStart,
+      });
+    } catch (e) {
+      logger.error(`workspace appointment upsert: ${e.message}`);
+    }
   }
 
   await emitBookingNotification(match, conversationId, bookedViaNurture);
 
-  const ownerUserId = match?.user_id || (conversationId ? (await ChatConversation.findById(conversationId).select('user_id').lean())?.user_id : null);
+  const ownerUserId = match?.user_id || nurtureUserId;
   if (conversationId && ownerUserId && email) {
-    logger.info('Calendly invitee.created: scheduling post-booking automations', { op: 'calendly.booking', conversation_id: String(conversationId), user_id: String(ownerUserId), lead_match_id: match?._id ? String(match._id) : null });
     setImmediate(() =>
       runPostBookingAutomations({ conversationId, userId: ownerUserId, inviteeEmail: email, inviteeUri: payload?.uri || null, leadMatchId: match?._id || null })
         .catch((e) => logger.error(`postBooking automations: ${e.message}`))
@@ -273,18 +322,11 @@ async function handleInviteeCreated({ email, trackingUtm, ownerUserIdFromCalendl
 }
 
 async function handleInviteeCanceled({ email, trackingUtm, ownerUserIdFromCalendly, payload, emailDomain }) {
-  let { lead: match, matchedVia } = await findLeadForBooking(email, trackingUtm, ownerUserIdFromCalendly);
-  if (!match && ownerUserIdFromCalendly && trackingUtm && mongoose.Types.ObjectId.isValid(String(trackingUtm))) {
-    const byConvo = await LeadMatch.findOne({
-      conversation_id: new mongoose.Types.ObjectId(String(trackingUtm)),
-      ...ownerFilter(ownerUserIdFromCalendly),
-    });
-    if (byConvo) {
-      match = byConvo;
-      matchedVia = 'conversation_id_utm';
-    }
-  }
-  const conversationId = resolveConversationId(match, trackingUtm);
+  const { match, matchedVia, conversationId } = await resolveInviteeMatchContext(
+    email,
+    trackingUtm,
+    ownerUserIdFromCalendly,
+  );
 
   if (conversationId) {
     const conv = await ChatConversation.findById(conversationId).select('calendly_booking_status').lean();
@@ -335,10 +377,32 @@ async function handleInviteeCanceled({ email, trackingUtm, ownerUserIdFromCalend
   }
 
   const nurtureUserId = await resolveOwnerUserIdForNurture(match, conversationId);
+  const cancelUserId = match?.user_id || nurtureUserId;
+
   if (nurtureUserId && (email || conversationId || match?._id)) {
     try {
-      await clearRecentNurtureLogMeetingBooked({ userId: nurtureUserId, leadMatchId: match?._id || null, conversationId, inviteeEmail: email });
+      await clearRecentNurtureLogMeetingBooked({
+        userId: nurtureUserId,
+        leadMatchId: match?._id || null,
+        leadProfileId: match?.lead_profile_id || null,
+        conversationId,
+        inviteeEmail: email,
+      });
     } catch (e) { logger.error(`nurture meeting_booked clear: ${e.message}`); }
+  }
+
+  if (cancelUserId) {
+    try {
+      await markWorkspaceAppointmentCanceled({
+        userId: cancelUserId,
+        inviteeUri: payload?.uri || null,
+        leadMatchId: match?._id || null,
+        conversationId,
+        inviteeEmail: email,
+      });
+    } catch (e) {
+      logger.error(`workspace appointment cancel: ${e.message}`);
+    }
   }
 
   await emitCancelNotification(match, conversationId);
@@ -400,12 +464,26 @@ export async function applyCalendlyCancellationToLeadForUser(leadMatchId, userId
     await syncConversationCalendly(conversationId, 'canceled', false);
   }
 
+  const inviteeUri = payload?.uri || payload?.calendly_invitee_uri || null;
+  try {
+    await markWorkspaceAppointmentCanceled({
+      userId,
+      inviteeUri,
+      leadMatchId: lead._id,
+      conversationId,
+      inviteeEmail: email,
+    });
+  } catch (e) {
+    logger.error(`workspace appointment cancel (api): ${e.message}`);
+  }
+
   const nurtureUserId = await resolveOwnerUserIdForNurture(lead, conversationId);
   if (nurtureUserId && (email || conversationId || lead?._id)) {
     try {
       await clearRecentNurtureLogMeetingBooked({
         userId: nurtureUserId,
         leadMatchId: lead?._id || null,
+        leadProfileId: lead?.lead_profile_id || null,
         conversationId,
         inviteeEmail: email,
       });

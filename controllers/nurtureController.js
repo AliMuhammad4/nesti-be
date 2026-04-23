@@ -18,6 +18,7 @@ import {
 } from '../services/nurture/nurtureEmailOpenAi.js';
 import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurturePropertyMatchesContext.js';
 import { composeNurtureEmailHtml } from '../services/nurture/nurtureEmailTemplate.js';
+import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
 
 async function loadLeadBundle(userId, leadMatchId) {
   if (!mongoose.Types.ObjectId.isValid(leadMatchId)) return null;
@@ -36,6 +37,17 @@ async function loadLeadBundle(userId, leadMatchId) {
   return { leadMatch, profile, conversation };
 }
 
+/** Latest LeadMatch for this user + profile (same sort as nurture draft/send). */
+async function findLatestLeadMatchForProfileLean(userId, leadProfileId) {
+  if (!mongoose.Types.ObjectId.isValid(String(leadProfileId))) return null;
+  return LeadMatch.findOne({
+    user_id:         userId,
+    lead_profile_id: new mongoose.Types.ObjectId(String(leadProfileId)),
+  })
+    .sort({ last_contact_at: -1, updatedAt: -1, createdAt: -1 })
+    .lean();
+}
+
 /**
  * Resolve nurture bundle by LeadMatch id or by LeadProfile id (latest match for this professional).
  */
@@ -44,12 +56,7 @@ async function loadLeadBundleForNurture(userId, { lead_match_id, lead_profile_id
     return loadLeadBundle(userId, lead_match_id);
   }
   if (lead_profile_id && mongoose.Types.ObjectId.isValid(String(lead_profile_id))) {
-    const leadMatch = await LeadMatch.findOne({
-      user_id:         userId,
-      lead_profile_id: new mongoose.Types.ObjectId(lead_profile_id),
-    })
-      .sort({ last_contact_at: -1, updatedAt: -1, createdAt: -1 })
-      .lean();
+    const leadMatch = await findLatestLeadMatchForProfileLean(userId, lead_profile_id);
     if (!leadMatch) return null;
     return loadLeadBundle(userId, String(leadMatch._id));
   }
@@ -144,9 +151,11 @@ function resolveConversationId(bodyConversationId, leadMatch) {
 }
 
 function nurtureLogPayload({ userId, leadMatch, convId, recipient, subject, body, status }) {
+  const leadProfileId = leadMatch?.lead_profile_id || null;
   return {
     user_id: userId,
     lead_match_id: leadMatch._id,
+    lead_profile_id: leadProfileId,
     conversation_id: convId,
     to_email: recipient,
     subject,
@@ -247,11 +256,12 @@ export async function postNurtureRefine(req, res, next) {
       });
     }
 
-    const { calendly_url, signature, professionalProfile } = await loadProfessionalNurtureMeta(
+    const { calendly_url: calRaw, signature, professionalProfile } = await loadProfessionalNurtureMeta(
       req.user._id,
       bundle.leadMatch,
       req.user,
     );
+    const calendly_url = withNestiNurtureCalendlyTracking(calRaw, bundle.leadMatch?.conversation_id);
     const bodyForAi = stripServerAppendedNurturePlainFooter(body, calendly_url, signature);
     const propertyMatches = await nurturePropertyMatchesSnapshot(
       req.user._id,
@@ -313,11 +323,12 @@ export async function postNurtureSend(req, res, next) {
     if (customHtml) {
       htmlForSend = String(body_html).trim();
     } else {
-      const { professionalProfile, signature, calendly_url: calendlyUrl } = await loadProfessionalNurtureMeta(
+      const { professionalProfile, signature, calendly_url: calRaw } = await loadProfessionalNurtureMeta(
         req.user._id,
         bundle.leadMatch,
         req.user,
       );
+      const calendlyUrl = withNestiNurtureCalendlyTracking(calRaw, bundle.leadMatch?.conversation_id);
       const propertyMatches = await nurturePropertyMatchesSnapshot(
         req.user._id,
         bundle.leadMatch,
@@ -389,7 +400,11 @@ function mapNurtureLogRow(r) {
   return {
     id: String(r._id),
     lead_match_id: r.lead_match_id ? String(r.lead_match_id) : null,
+    lead_profile_id: r.lead_profile_id ? String(r.lead_profile_id) : null,
     conversation_id: r.conversation_id ? String(r.conversation_id) : null,
+    calendly_scheduled_start: r.calendly_scheduled_start
+      ? new Date(r.calendly_scheduled_start).toISOString()
+      : null,
     to_email: r.to_email,
     subject: r.subject,
     body: r.body,
@@ -404,10 +419,42 @@ function mapNurtureLogRow(r) {
 export async function getNurtureLogs(req, res, next) {
   try {
     const { page, limit, skip } = parsePageLimitPagination(req.query || {}, PAGINATION_PRESETS.leadList);
-    const leadMatchId = req.query.lead_match_id;
+    const qp = req.query || {};
+    const leadMatchIdRaw = qp.lead_match_id;
+    const leadProfileIdRaw = qp.lead_profile_id;
+    const explicitMatch = Object.prototype.hasOwnProperty.call(qp, 'lead_match_id');
+    const explicitProfile = Object.prototype.hasOwnProperty.call(qp, 'lead_profile_id');
+
     const q = { user_id: req.user._id };
-    if (leadMatchId && mongoose.Types.ObjectId.isValid(leadMatchId)) {
-      q.lead_match_id = new mongoose.Types.ObjectId(leadMatchId);
+
+    if (explicitMatch) {
+      const s = leadMatchIdRaw != null ? String(leadMatchIdRaw).trim() : '';
+      if (!s || !mongoose.Types.ObjectId.isValid(s)) {
+        return res.json({
+          success: true,
+          items: [],
+          pagination: buildPaginationMeta({ page, limit, total: 0 }),
+        });
+      }
+      q.lead_match_id = new mongoose.Types.ObjectId(s);
+    } else if (explicitProfile) {
+      const s = leadProfileIdRaw != null ? String(leadProfileIdRaw).trim() : '';
+      if (!s || !mongoose.Types.ObjectId.isValid(s)) {
+        return res.json({
+          success: true,
+          items: [],
+          pagination: buildPaginationMeta({ page, limit, total: 0 }),
+        });
+      }
+      const leadMatch = await findLatestLeadMatchForProfileLean(req.user._id, s);
+      if (!leadMatch) {
+        return res.json({
+          success: true,
+          items: [],
+          pagination: buildPaginationMeta({ page, limit, total: 0 }),
+        });
+      }
+      q.lead_match_id = leadMatch._id;
     }
 
     const [total, rows] = await Promise.all([

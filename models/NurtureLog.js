@@ -13,6 +13,17 @@ const nurtureLogSchema = new mongoose.Schema({
     default: null,
     index: true,
   },
+  lead_profile_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'LeadProfile',
+    default: null,
+    index: true,
+  },
+  /** Calendly-scheduled start when webhook marks meeting_booked (ISO-aligned Date). */
+  calendly_scheduled_start: {
+    type: Date,
+    default: null,
+  },
   conversation_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ChatConversation',

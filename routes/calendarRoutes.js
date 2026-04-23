@@ -10,7 +10,7 @@ import {
 } from '../schemas/calendarRouteSchemas.js';
 import CalendarIntegration from '../models/CalendarIntegration.js';
 import LeadMatch from '../models/LeadMatch.js';
-import { resolveAppointmentStatus } from '../utils/resolveAppointmentStatus.js';
+import WorkspaceAppointment from '../models/WorkspaceAppointment.js';
 import { cancelCalendlyScheduledEvent } from '../services/calendly/cancelCalendlyBooking.js';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
 import ChatConversation from '../models/ChatConversation.js';
@@ -347,29 +347,36 @@ const cancelCalendlyBookingHandler = async (req, res, next) => {
     const lead = await LeadMatch.findOne({ _id: leadMatchId, user_id: userId }).lean();
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    let conv = null;
-    if (lead.conversation_id) {
-      conv = await ChatConversation.findById(lead.conversation_id).lean();
-    }
-    const appt = resolveAppointmentStatus(lead.match_status, conv?.calendly_booking_status);
-    if (appt !== 'booked') {
+    const wsAppt = await WorkspaceAppointment.findOne({
+      user_id: userId,
+      lead_match_id: leadMatchId,
+      status: 'booked',
+    })
+      .sort({ recorded_at: -1 })
+      .select('calendly_event_uri calendly_invitee_uri')
+      .lean();
+
+    const storedCal = lead.compatibility_factors?.calendly || {};
+    const eventUri = wsAppt?.calendly_event_uri || storedCal.calendly_event_uri;
+    const inviteeUri = wsAppt?.calendly_invitee_uri || storedCal.calendly_invitee_uri;
+
+    if (!wsAppt && !storedCal.calendly_event_uri) {
       return res.status(400).json({
         success: false,
         message: 'This lead does not have an active booked appointment.',
       });
     }
 
-    const storedCal = lead.compatibility_factors?.calendly;
-    if (!storedCal?.calendly_event_uri && !storedCal?.calendly_invitee_uri) {
+    if (!eventUri && !inviteeUri) {
       return res.status(400).json({
         success: false,
-        message:
-          'No Calendly booking metadata on this lead. Cancel in Calendly or wait for a booking made through Nesti.',
+        message: 'No Calendly booking metadata found. Cancel in Calendly directly.',
       });
     }
 
+    const cancelMeta = { calendly_event_uri: eventUri, calendly_invitee_uri: inviteeUri };
     const reason = String(req.body.reason || '').trim().slice(0, 500);
-    await cancelCalendlyScheduledEvent(req.calendlyInteg.access_token, storedCal, reason || undefined);
+    await cancelCalendlyScheduledEvent(req.calendlyInteg.access_token, cancelMeta, reason || undefined);
 
     const apply = await applyCalendlyCancellationToLeadForUser(leadMatchId, userId, { payload: storedCal });
     if (!apply.ok) {

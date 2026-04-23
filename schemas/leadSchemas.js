@@ -6,6 +6,15 @@ import {
 } from '../constants/validationEnums.js';
 import { Joi, anyObj, isoDate, leadType, objectId, str } from './common.js';
 
+const icpFitSchema = Joi.object({
+  fit_score: Joi.number().allow(null),
+  fit_tier: Joi.string()
+    .valid('perfect_match', 'good_match', 'low_match')
+    .allow(null, ''),
+  matched_factors: Joi.array().items(Joi.string()).default([]),
+  missing_factors: Joi.array().items(Joi.string()).default([]),
+});
+
 export const leadMatchCreateSchema = Joi.object({
   user_id: objectId.required(),
   professional_profile_id: objectId.allow(null),
@@ -14,6 +23,7 @@ export const leadMatchCreateSchema = Joi.object({
   conversation_id: objectId,
   match_score: Joi.number().default(0),
   match_status: Joi.string().valid(...MATCH_STATUSES).default('new'),
+  icp_fit: icpFitSchema.optional(),
   compatibility_factors: anyObj.default({}),
   contact_count: Joi.number().integer().min(0).default(0),
   first_contact_at: isoDate,
@@ -113,6 +123,7 @@ export const leadAttributionCreateSchema = Joi.object({
   source: str.default('chatbot'),
   converted: Joi.boolean().default(false),
   lead_profile_id: objectId.allow(null),
+  lead_match_id: objectId.allow(null),
   session_id: str,
   ip_address: str,
   user_agent: str,

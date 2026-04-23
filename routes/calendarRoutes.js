@@ -21,6 +21,7 @@ import { applyCalendlyOAuthAlignment, calendlyWebhookAlignmentMeta } from '../se
 import { listCalendlyWebhookSubscriptions, registerCalendlyInviteeWebhook } from '../services/calendly/registerInviteeWebhook.js';
 import { applyCalendlyCancellationToLeadForUser, processCalendlyWebhook } from '../services/calendly/calendlyWebhookService.js';
 import { calendlyWebhookErrorKind, userFacingCalendlyRegisterError } from '../utils/calendlyWebhookErrors.js';
+import { listBookedAppointmentsForUser } from '../services/calendar/calendarBookingsService.js';
 
 const router = express.Router();
 
@@ -256,9 +257,14 @@ const getCalendarStatus = async (req, res) => {
   return res.json({ success: true, status: rows });
 };
 
-const getBookings = (_req, res) => res.json({
-  success: true, bookings: [], message: 'Not implemented — use GET /api/calendar/status and OAuth tokens in CalendarIntegration',
-});
+const getBookings = async (req, res, next) => {
+  try {
+    const bookings = await listBookedAppointmentsForUser(req.user._id);
+    return res.json({ success: true, bookings });
+  } catch (e) {
+    return next(e);
+  }
+};
 
 const registerWebhookSubscription = async (req, res) => {
   const webhookUrl = resolveWebhookUrl(req.body);

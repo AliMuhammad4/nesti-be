@@ -324,6 +324,9 @@ export async function createValidatedLeadAttribution(payload) {
     ...payload,
     lead_profile_id: toIdString(payload.lead_profile_id),
   };
+  if (payload.lead_match_id != null) {
+    candidate.lead_match_id = toIdString(payload.lead_match_id);
+  }
   const validated = validateOrThrow(leadAttributionCreateSchema, candidate, 'LeadAttribution');
   return LeadAttribution.create(validated);
 }

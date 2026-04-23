@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
+import logger from '../../utils/logger.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
 import ChatConversation from '../../models/ChatConversation.js';
@@ -17,6 +18,10 @@ import { buildNurtureConsultationBookedFromEmailByProfileIds } from './leadNurtu
 import { recordLeadViewIfNeeded } from '../analytics/leadKpiService.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
 import { AGENT_NOTES_MAX_ENTRIES, isTerminalMatchStatus } from '../../utils/leadMatchStatus.js';
+import {
+  recomputeLeadProfileLifecycle,
+  syncLeadAttributionForMatchStatus,
+} from './leadMatchFollowUpSync.js';
 import {
   ownerQuery,
   skipAppointmentStatusFromQuery,
@@ -155,64 +160,105 @@ export const updateLeadMatch = async (req, res, next) => {
     const prevStatus = lead.match_status;
     if (hasStatus) assertMatchStatusTransition(prevStatus, nextStatus);
 
-    let dirty = false;
     const statusChanged = hasStatus && nextStatus !== prevStatus;
-    if (statusChanged) {
-      lead.match_status = nextStatus;
-      dirty = true;
-    }
-
-    const factors =
-      lead.compatibility_factors && typeof lead.compatibility_factors === 'object'
-        ? { ...lead.compatibility_factors }
-        : {};
-    const existing = Array.isArray(factors.agent_notes) ? [...factors.agent_notes] : [];
     const authorLabel =
       [req.user.first_name, req.user.last_name].filter(Boolean).join(' ').trim() || null;
+    const authorUserIdStr = userId != null ? String(userId) : null;
     const now = new Date().toISOString();
-    let notesAppended = false;
+    const notesToPush = [];
 
     if (statusChanged && !hasNote) {
       const readable = (s) => ({ new: 'New', nurturing: 'Nurturing', converted: 'Closed — won', closed_lost: 'Closed — lost', consult_booked: 'Consult booked', showing_booked: 'Showing booked' }[s] || s);
-      existing.push({
+      notesToPush.push({
         id: crypto.randomUUID(),
         text: `Status changed from ${readable(prevStatus)} to ${readable(nextStatus)}`,
         created_at: now,
-        author_user_id: userId,
+        author_user_id: authorUserIdStr,
         author_label: authorLabel,
         system: true,
       });
-      notesAppended = true;
     }
 
     if (hasNote) {
-      existing.push({
+      notesToPush.push({
         id: crypto.randomUUID(),
         text: trimmedNote.slice(0, 8000),
         created_at: now,
-        author_user_id: userId,
+        author_user_id: authorUserIdStr,
         author_label: authorLabel,
       });
-      notesAppended = true;
     }
 
-    if (notesAppended) {
-      factors.agent_notes = existing.slice(-AGENT_NOTES_MAX_ENTRIES);
-      lead.compatibility_factors = factors;
-      dirty = true;
+    const mongoUpdate = {};
+    if (statusChanged) mongoUpdate.$set = { match_status: nextStatus };
+    if (notesToPush.length) {
+      mongoUpdate.$push = {
+        'compatibility_factors.agent_notes': {
+          $each: notesToPush,
+          $slice: -AGENT_NOTES_MAX_ENTRIES,
+        },
+      };
     }
 
+    const dirty = Object.keys(mongoUpdate).length > 0;
     if (dirty) {
-      if (notesAppended) lead.markModified('compatibility_factors');
-      await lead.save();
+      let updatedOk = false;
+      try {
+        const result = await LeadMatch.updateOne({ _id: lead._id, user_id: userId }, mongoUpdate);
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ success: false, message: 'Lead not found' });
+        }
+        updatedOk = true;
+      } catch (mongoErr) {
+        logger.warn('LeadMatch updateOne failed; falling back to document save', {
+          leadId: String(lead._id),
+          error: mongoErr.message,
+        });
+        try {
+          if (statusChanged) lead.match_status = nextStatus;
+          if (notesToPush.length) {
+            const factors =
+              lead.compatibility_factors && typeof lead.compatibility_factors === 'object'
+                ? { ...lead.compatibility_factors }
+                : {};
+            const existing = Array.isArray(factors.agent_notes) ? [...factors.agent_notes] : [];
+            for (const n of notesToPush) existing.push(n);
+            factors.agent_notes = existing.slice(-AGENT_NOTES_MAX_ENTRIES);
+            lead.compatibility_factors = factors;
+            lead.markModified('compatibility_factors');
+          }
+          await lead.save();
+          updatedOk = true;
+        } catch (saveErr) {
+          logger.error('LeadMatch save fallback failed', { leadId: String(lead._id), error: saveErr.message });
+          throw saveErr;
+        }
+      }
+
+      if (updatedOk && statusChanged) {
+        try {
+          await syncLeadAttributionForMatchStatus(lead, nextStatus);
+          if (lead.lead_profile_id) {
+            await recomputeLeadProfileLifecycle(userId, lead.lead_profile_id);
+          }
+        } catch (syncErr) {
+          logger.warn('Lead follow-up sync failed (attribution/lifecycle); lead update kept', {
+            leadId: String(lead._id),
+            error: syncErr.message,
+          });
+        }
+      }
       emitWorkspaceLeadEvent(userId, {
         kind: 'lead_updated',
         lead_match_id: String(lead._id),
-        match_status: lead.match_status,
+        match_status: statusChanged ? nextStatus : prevStatus,
       });
     }
 
     const leadMatch = await LeadMatch.findOne({ _id: lead._id, user_id: userId }).lean();
+    if (!leadMatch) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
     const [profile, convo] = await Promise.all([
       leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
       leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,

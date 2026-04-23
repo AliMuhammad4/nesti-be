@@ -383,6 +383,7 @@ export const createLeadRecords = async ({
     source:          'chatbot',
     converted:       false,
     lead_profile_id: leadProfile._id,
+    lead_match_id:   leadMatch._id,
     session_id:      sessionId,
     ip_address:      clientIp  || '',
     user_agent:      userAgent || '',

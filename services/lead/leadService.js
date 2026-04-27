@@ -32,6 +32,16 @@ import {
   ICP_TIERS,
 } from './leadProfileHelpers.js';
 
+/** Attach profile-level nurture consultation flag (NurtureLog meeting_booked) to lead detail payloads. */
+async function enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail) {
+  if (!profile?._id || !leadDetail) return leadDetail;
+  const nurtureMap = await buildNurtureConsultationBookedFromEmailByProfileIds(userId, [profile._id]);
+  return {
+    ...leadDetail,
+    nurture_consultation_booked: nurtureMap.get(String(profile._id)) ?? false,
+  };
+}
+
 // ─── Lead match controllers ───────────────────────────────────────────────────
 
 async function resolveLeadPropertyMatchCount({ userId, leadMatch, leadProfile }) {
@@ -106,6 +116,12 @@ export const getLeads = async (req, res, next) => {
     const profileById = new Map(profiles.map((p) => [String(p._id), p]));
     const convoById   = new Map(conversations.map((c) => [String(c._id), c]));
 
+    const uniqueProfileKeys = [...new Set(profileIds.map((id) => String(id)))];
+    const nurtureBookedByProfile =
+      uniqueProfileKeys.length > 0
+        ? await buildNurtureConsultationBookedFromEmailByProfileIds(userId, uniqueProfileKeys)
+        : new Map();
+
     const leads = await Promise.all(
       leadMatches.map(async (m) => {
         const profile = profileById.get(String(m.lead_profile_id)) || null;
@@ -121,7 +137,9 @@ export const getLeads = async (req, res, next) => {
           leadMatch: m,
           leadProfile: profile,
         });
-        return { ...row, match_count: matchCount };
+        const pid = m.lead_profile_id ? String(m.lead_profile_id) : '';
+        const nurture_consultation_booked = pid ? nurtureBookedByProfile.get(pid) ?? false : false;
+        return { ...row, match_count: matchCount, nurture_consultation_booked };
       }),
     );
     return res.json({ success: true, leads, empty_state: null, pagination: buildPaginationMeta({ page, limit, total }) });
@@ -263,10 +281,17 @@ export const updateLeadMatch = async (req, res, next) => {
       leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
       leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
     ]);
+    const leadDetail = mapLeadMatchToDetail(
+      leadMatch,
+      profile,
+      convo,
+      includeConversionInLeadDetail(req.query || {}),
+    );
+    const leadPayload = await enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail);
     return res.json({
       success: true,
       conversation_id: leadMatch.conversation_id ? String(leadMatch.conversation_id) : null,
-      lead: mapLeadMatchToDetail(leadMatch, profile, convo, includeConversionInLeadDetail(req.query || {})),
+      lead: leadPayload,
     });
   } catch (err) {
     if (err.statusCode === 400) {
@@ -288,10 +313,17 @@ export const getLeadById = async (req, res, next) => {
       leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
       leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
     ]);
+    const leadDetail = mapLeadMatchToDetail(
+      leadMatch,
+      profile,
+      convo,
+      includeConversionInLeadDetail(req.query || {}),
+    );
+    const lead = await enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail);
     return res.json({
       success: true,
       conversation_id: leadMatch.conversation_id ? String(leadMatch.conversation_id) : null,
-      lead: mapLeadMatchToDetail(leadMatch, profile, convo, includeConversionInLeadDetail(req.query || {})),
+      lead,
     });
   } catch (err) { return next(err); }
 };

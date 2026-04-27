@@ -216,12 +216,94 @@ async function listLegacyBookedAppointments(uid) {
   return bookings;
 }
 
+/**
+ * One row per NurtureLog with a scheduled time (same lead can book multiple slots).
+ * Skips times already represented in `existingRows` (minute-level dedupe vs lead_match_id).
+ */
+async function listNurtureLogSupplementRows(uid, existingRows) {
+  const existingKeys = new Set();
+  for (const r of existingRows) {
+    if (!r?.lead_match_id || !r?.starts_at) continue;
+    const t = new Date(r.starts_at).getTime();
+    if (!Number.isFinite(t)) continue;
+    existingKeys.add(`${r.lead_match_id}|${Math.floor(t / 60000)}`);
+  }
+
+  const logs = await NurtureLog.find({
+    user_id: uid,
+    meeting_booked: true,
+    calendly_scheduled_start: { $ne: null },
+  })
+    .select('lead_match_id conversation_id calendly_scheduled_start')
+    .sort({ calendly_scheduled_start: -1 })
+    .limit(800)
+    .lean();
+
+  if (!logs.length) return [];
+
+  const matchIds = [...new Set(logs.map((l) => l.lead_match_id).filter(Boolean).map(String))];
+  const leads = matchIds.length
+    ? await LeadMatch.find({ _id: { $in: toOidArray(matchIds) }, user_id: uid }).select(LEAD_FIELDS).lean()
+    : [];
+  const leadMap = new Map(leads.map((l) => [String(l._id), l]));
+
+  const profileIds = collectIds(leads, 'lead_profile_id');
+  const convIds = [
+    ...new Set([
+      ...collectIds(leads, 'conversation_id'),
+      ...logs.map((l) => l.conversation_id).filter(Boolean).map(String),
+    ]),
+  ];
+  const { profileMap, convMap } = await loadProfileAndConvMaps(profileIds, convIds);
+
+  const rows = [];
+  for (const log of logs) {
+    const lm = log.lead_match_id ? String(log.lead_match_id) : '';
+    if (!lm || !leadMap.has(lm)) continue;
+
+    const start = parseValidDate(log.calendly_scheduled_start);
+    if (!start) continue;
+
+    const bucket = `${lm}|${Math.floor(start.getTime() / 60000)}`;
+    if (existingKeys.has(bucket)) continue;
+    existingKeys.add(bucket);
+
+    const lead = leadMap.get(lm);
+    const convId = log.conversation_id
+      ? String(log.conversation_id)
+      : lead.conversation_id
+        ? String(lead.conversation_id)
+        : null;
+    const conv = convId ? convMap.get(convId) : null;
+    if (conv?.calendly_booking_status === 'canceled') continue;
+
+    const profileId = lead.lead_profile_id ? String(lead.lead_profile_id) : null;
+    const profile = profileId ? profileMap.get(profileId) : null;
+
+    const row = buildCalendarBookingRow({
+      leadMatchId: lm,
+      conversationId: convId,
+      matchStatus: lead.match_status || 'consult_booked',
+      startsAt: start,
+      profile,
+      conv,
+      calFromLead: lead.compatibility_factors?.calendly,
+      workspaceAppointment: { booked_via_nurture: true },
+    });
+    row.nurture_log_id = String(log._id);
+    rows.push(row);
+  }
+
+  return rows;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
  * Booked appointments for a user's calendar / dashboard.
  * Primary: `WorkspaceAppointment` collection.
  * Legacy fill-in: historical leads that don't yet have a stored document.
+ * Supplement: every NurtureLog `meeting_booked` + `calendly_scheduled_start` (multi-booking per lead).
  */
 export async function listBookedAppointmentsForUser(userId) {
   const uid = new mongoose.Types.ObjectId(String(userId));
@@ -232,5 +314,8 @@ export async function listBookedAppointmentsForUser(userId) {
     (b) => b.lead_match_id && !coveredMatchIds.has(b.lead_match_id),
   );
 
-  return sortBookingsByStartDesc([...collectionRows, ...legacyFiltered]);
+  const merged = [...collectionRows, ...legacyFiltered];
+  const fromNurtureLogs = await listNurtureLogSupplementRows(uid, merged);
+
+  return sortBookingsByStartDesc([...merged, ...fromNurtureLogs]);
 }

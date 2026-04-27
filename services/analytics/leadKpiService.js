@@ -60,6 +60,21 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
   const views = byType.lead_viewed || 0;
   const nurtureEmails = byType.nurture_email_sent || 0;
 
+  const [cohortAgg] = await LeadMatch.aggregate([
+    { $match: { user_id: uid, createdAt: { $gte: since } } },
+    {
+      $group: {
+        _id: null,
+        leads_in_window: { $sum: 1 },
+        closed_won_in_window: {
+          $sum: { $cond: [{ $eq: ['$match_status', 'converted'] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+  const leadsInWindow = cohortAgg?.leads_in_window ?? 0;
+  const closedWonInWindow = cohortAgg?.closed_won_in_window ?? 0;
+
   return {
     window_days: parseDays(days),
     totals: {
@@ -70,8 +85,13 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
       nurture_emails_sent: nurtureEmails,
       appointments_booked: booked,
       appointments_canceled: canceled,
+      leads_closed_won: closedWonInWindow,
+      leads_in_window_for_conversion: leadsInWindow,
     },
     conversion_rates: {
+      /** Leads with `match_status === 'converted'` ÷ LeadMatches created in the window (CRM win rate). */
+      closed_won_from_created:
+        leadsInWindow > 0 ? Number((closedWonInWindow / leadsInWindow).toFixed(3)) : 0,
       booked_from_created: created > 0 ? Number((booked / created).toFixed(3)) : 0,
       canceled_from_booked: booked > 0 ? Number((canceled / booked).toFixed(3)) : 0,
     },

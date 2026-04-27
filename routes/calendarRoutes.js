@@ -16,7 +16,15 @@ import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
 import ChatConversation from '../models/ChatConversation.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import logger from '../utils/logger.js';
-import { buildCalendlyAuthorizeUrl, createCalendlyOAuthState, exchangeCalendlyAuthorizationCode, fetchCalendlyAccountLabel, fetchCalendlyUserResource, parseCalendlyOAuthState } from '../services/calendly/oauthService.js';
+import {
+  buildCalendlyAuthorizeUrl,
+  createCalendlyOAuthState,
+  exchangeCalendlyAuthorizationCode,
+  fetchCalendlyAccountLabel,
+  fetchCalendlyUserResource,
+  parseCalendlyOAuthState,
+  refreshCalendlyAccessToken,
+} from '../services/calendly/oauthService.js';
 import { applyCalendlyOAuthAlignment, calendlyWebhookAlignmentMeta } from '../services/calendly/calendlyAlignmentService.js';
 import { listCalendlyWebhookSubscriptions, registerCalendlyInviteeWebhook } from '../services/calendly/registerInviteeWebhook.js';
 import { applyCalendlyCancellationToLeadForUser, processCalendlyWebhook } from '../services/calendly/calendlyWebhookService.js';
@@ -57,10 +65,43 @@ async function loadEmbed(req, res, next) {
   next();
 }
 
+/** Refresh OAuth token this many ms before Calendly expiry so cancel/webhooks don’t hit 401. */
+const CALENDLY_REFRESH_SKEW_MS = 5 * 60 * 1000;
+
 async function requireCalendlyConnected(req, res, next) {
   const userId = req.embed ? req.embed.user_id : req.user._id;
-  const integ = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' });
+  let integ = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' });
   if (!integ?.access_token) return res.status(400).json({ success: false, message: 'Connect Calendly (OAuth) first.' });
+
+  const expiresAt = integ.expires_at ? new Date(integ.expires_at).getTime() : 0;
+  const staleOrUnknownExpiry = !expiresAt || expiresAt < Date.now() + CALENDLY_REFRESH_SKEW_MS;
+  if (staleOrUnknownExpiry && integ.refresh_token) {
+    try {
+      const tokens = await refreshCalendlyAccessToken(integ.refresh_token);
+      const accessToken = tokens.access_token;
+      const newRefresh = tokens.refresh_token || integ.refresh_token;
+      const newExpires = new Date(Date.now() + (Number(tokens.expires_in) || 7200) * 1000);
+      integ = await CalendarIntegration.findOneAndUpdate(
+        { _id: integ._id },
+        { $set: { access_token: accessToken, refresh_token: newRefresh, expires_at: newExpires } },
+        { new: true },
+      );
+      logger.info('Calendar API: Calendly access token refreshed', { op: 'calendar.calendly.refresh', user_id: String(userId) });
+    } catch (e) {
+      logger.warn(`Calendly token refresh: ${e.message}`);
+      return res.status(401).json({
+        success: false,
+        message:
+          'Calendly connection expired. Open Settings and disconnect, then connect Calendly again (or wait a moment and retry).',
+      });
+    }
+  } else if (staleOrUnknownExpiry && !integ.refresh_token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Calendly access expired and no refresh token is stored. Connect Calendly again in Settings.',
+    });
+  }
+
   req.calendlyInteg = integ;
   next();
 }

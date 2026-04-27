@@ -79,6 +79,7 @@ function leadCore(leadMatch, profileView, convo) {
     property: profileView.property,
     qualification: profileView.qualification,
     appointment_status: resolveAppointmentStatus(leadMatch.match_status, convo?.calendly_booking_status),
+    calendly_booking_status: convo?.calendly_booking_status || null,
     embed_token: leadMatch.compatibility_factors?.embed_token || null,
     session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,
     conversation_id: String(leadMatch.conversation_id || ''),

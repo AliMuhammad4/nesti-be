@@ -54,19 +54,34 @@ function buildPersonalizedEmailTemplate(ctx) {
   return `${nameGreet},\n\nThanks for reaching out about ${topic}${context ? ' ' + context : ''}. Based on what you shared, I've put together a few thoughts that might be helpful.\n\nI'd love to connect for a quick 15-minute call — would [day/time 1] or [day/time 2] work? If not, feel free to book directly at [your booking link].\n\nLooking forward to helping you find the right fit.\n\n[Your name]`;
 }
 
+function offerMeetingChatPhrase(ctx) {
+  const prof = ctx.professional_type;
+  if (prof === PROFESSIONAL_TYPE.LAWYER) return 'about your matter';
+  if (prof === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return 'about your financing plans';
+  return 'about your search';
+}
+
 function buildOfferMeetingSlotsTemplate(ctx) {
   const name = firstName(ctx);
   const context = contextLine(ctx);
   const nameGreet = name ? `Hi ${name}` : 'Hi';
   const timing = timePhrase(ctx.best_time_to_contact);
   const timeLine = timing ? ` I know you're usually available ${timing} — I'll keep that in mind.` : '';
-  return `${nameGreet} — thanks for the chat${context ? ' about your search ' + context : ''}. I'd love to connect for a quick call.\n\nWould any of these work for you?\n• [Day 1, time]\n• [Day 2, time]\n• [Day 3, time]\n\nOr grab a slot directly: [your booking link].${timeLine}`;
+  const intro = context ? ` ${offerMeetingChatPhrase(ctx)} ${context}` : '';
+  return `${nameGreet} — thanks for the chat${intro}. I'd love to connect for a quick call.\n\nWould any of these work for you?\n• [Day 1, time]\n• [Day 2, time]\n• [Day 3, time]\n\nOr grab a slot directly: [your booking link].${timeLine}`;
 }
 
 function buildSmsWithSlotsTemplate(ctx) {
   const name = firstName(ctx);
   const nameGreet = name ? `Hi ${name}` : 'Hi';
-  return `${nameGreet}! Following up on your home search. Happy to connect — available [Day] at [time] or [Day] at [time]. Book here: [link]`;
+  const prof = ctx.professional_type;
+  const focus =
+    prof === PROFESSIONAL_TYPE.LAWYER
+      ? 'your real estate matter'
+      : prof === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+        ? 'your mortgage timeline'
+        : 'your home search';
+  return `${nameGreet}! Following up on ${focus}. Happy to connect — available [Day] at [time] or [Day] at [time]. Book here: [link]`;
 }
 
 function buildConfirmAppointmentTemplate(ctx) {

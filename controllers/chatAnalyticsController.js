@@ -41,7 +41,8 @@ export async function getChatAnalyticsTimeseries(req, res, next) {
 export async function getChatAnalyticsLeadTrends(req, res, next) {
   try {
     const days = req.query.days;
-    const trends = await getLeadIntentAndBudgetTrends(req.user._id, { days });
+    const viewerRole = req.user?.role ?? null;
+    const trends = await getLeadIntentAndBudgetTrends(req.user._id, { days, viewerRole });
     return res.json({ success: true, ...trends });
   } catch (error) {
     return next(error);

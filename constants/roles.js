@@ -32,10 +32,11 @@ export function isValidProfessionalType(value) {
 }
 
 export function resolveFlowTypeFromLegacySignals({ normalizedAgentType, professionalProfile }) {
-  const professionalType = professionalProfile?.professional_type || PROFESSIONAL_TYPE.AGENT;
   if (normalizedAgentType === WIDGET_AGENT_TYPE.BROKER) return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
   if (normalizedAgentType === WIDGET_AGENT_TYPE.LAWYER) return PROFESSIONAL_TYPE.LAWYER;
-  return professionalType;
+  const pt = professionalProfile?.professional_type;
+  if (pt && isValidProfessionalType(pt)) return pt;
+  return PROFESSIONAL_TYPE.AGENT;
 }
 
 export function professionalTypeToWidgetAgentType(flowType) {

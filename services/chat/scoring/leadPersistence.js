@@ -7,6 +7,7 @@ import {
   leadMatchCreateSchema,
   leadProfileCreateSchema,
 } from '../../../schemas/leadSchemas.js';
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 
 const JOI_OPTIONS = {
   abortEarly: false,
@@ -79,6 +80,39 @@ function dedupeKey({ userId, professionalType, email, phone }) {
 function parseBudgetRange(value) {
   const txt = String(value || '').trim();
   if (!txt) return { min: null, max: null, confidence: 'low' };
+  const normalized = txt.toLowerCase().replace(/\s+/g, '_');
+  const parseTokenAmount = (token) => {
+    const m = String(token || '').match(/^(\d+(?:\.\d+)?)(k|m)?$/i);
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n)) return null;
+    const unit = String(m[2] || '').toLowerCase();
+    if (unit === 'k') return Math.round(n * 1_000);
+    if (unit === 'm') return Math.round(n * 1_000_000);
+    return Math.round(n);
+  };
+  const toAmountFromRegex = (re) => {
+    const m = normalized.match(re);
+    if (!m) return null;
+    return parseTokenAmount(`${m[1]}${m[2] || ''}`);
+  };
+
+  // Common intake enums from lawyer/mortgage flows
+  const plusAmount = toAmountFromRegex(/^(\d+(?:\.\d+)?)(k|m)?_plus$/i);
+  if (plusAmount != null) return { min: plusAmount, max: plusAmount, confidence: 'high' };
+
+  const underAmount = toAmountFromRegex(/^under_(\d+(?:\.\d+)?)(k|m)?$/i);
+  if (underAmount != null) return { min: underAmount, max: underAmount, confidence: 'high' };
+
+  const rangeMatch = normalized.match(/^(\d+(?:\.\d+)?)(k|m)?_(\d+(?:\.\d+)?)(k|m)?$/i);
+  if (rangeMatch) {
+    const a = parseTokenAmount(`${rangeMatch[1]}${rangeMatch[2] || ''}`);
+    const b = parseTokenAmount(`${rangeMatch[3]}${rangeMatch[4] || ''}`);
+    if (a != null && b != null) {
+      return { min: Math.min(a, b), max: Math.max(a, b), confidence: 'high' };
+    }
+  }
+
   const nums = txt
     .replace(/,/g, '')
     .match(/\d+(\.\d+)?/g)
@@ -103,9 +137,13 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
   const parsedBudget = parseBudgetRange(budgetText);
   const profType = professionalType || payload.ownership?.professional_type || 'agent';
   const primaryIntent = profType === 'agent' ? payload.intent || 'unknown' : 'client';
+  const defaultIntent =
+    profType === PROFESSIONAL_TYPE.LAWYER || profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+      ? 'unspecified'
+      : 'buy';
 
   return {
-    intent: payload.intent || 'buy',
+    intent: payload.intent || defaultIntent,
     ownership: {
       user_id: toIdString(userId),
       professional_type: profType,
@@ -335,12 +373,14 @@ export async function bumpLeadProfileStats(leadProfileId, intent = 'buy', leadTy
   const inc = { 'stats.total_matches': 1 };
   inc['stats.total_inquiries'] = 1;
   inc['stats.total_sessions'] = 1;
+  const lt = String(leadType || '');
+  const isClientLead = /_client$/.test(lt);
   if (intent === 'sell') inc['stats.sell_matches'] = 1;
-  else if (/_client$/.test(String(leadType || ''))) inc['stats.client_matches'] = 1;
-  else inc['stats.buy_matches'] = 1;
+  else if (isClientLead) inc['stats.client_matches'] = 1;
+  else if (intent !== 'unspecified') inc['stats.buy_matches'] = 1;
   if (intent === 'sell') inc['intent_summary.sell_count'] = 1;
-  else if (/_client$/.test(String(leadType || ''))) inc['intent_summary.client_count'] = 1;
-  else inc['intent_summary.buy_count'] = 1;
+  else if (isClientLead) inc['intent_summary.client_count'] = 1;
+  else if (intent !== 'unspecified') inc['intent_summary.buy_count'] = 1;
 
   await LeadProfile.findByIdAndUpdate(leadProfileId, {
     $inc: inc,

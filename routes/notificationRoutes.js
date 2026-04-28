@@ -1,5 +1,9 @@
 import express from 'express';
-import { protect, ensureAgentOrMortgageBroker } from '../middleware/authMiddleware.js';
+import {
+  protect,
+  ensureAgentOrMortgageBroker,
+  requireCompleteProfessionalProfile,
+} from '../middleware/authMiddleware.js';
 import {
   getNotificationsForUser,
   getUnreadNotificationCount,
@@ -8,7 +12,7 @@ import {
   markAllNotificationsRead,
 } from '../services/notifications/notificationService.js';
 const router = express.Router();
-router.get('/unread-count', protect, ensureAgentOrMortgageBroker, async (req, res) => {
+router.get('/unread-count', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, async (req, res) => {
   try {
     const count = await getUnreadNotificationCount(req.user._id);
     res.json({ success: true, unread_count: count });
@@ -16,7 +20,7 @@ router.get('/unread-count', protect, ensureAgentOrMortgageBroker, async (req, re
     res.status(500).json({ success: false, message: e.message || 'Server error' });
   }
 });
-router.get('/', protect, ensureAgentOrMortgageBroker, async (req, res) => {
+router.get('/', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, async (req, res) => {
   try {
     const limit = req.query.limit;
     const offset = req.query.offset;
@@ -27,7 +31,7 @@ router.get('/', protect, ensureAgentOrMortgageBroker, async (req, res) => {
     res.status(500).json({ success: false, message: e.message || 'Server error' });
   }
 });
-router.patch('/read-all', protect, ensureAgentOrMortgageBroker, async (req, res) => {
+router.patch('/read-all', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, async (req, res) => {
   try {
     const result = await markAllNotificationsRead(req.user._id);
     res.json({ success: true, ...result });
@@ -35,7 +39,7 @@ router.patch('/read-all', protect, ensureAgentOrMortgageBroker, async (req, res)
     res.status(500).json({ success: false, message: e.message || 'Server error' });
   }
 });
-router.get('/:id', protect, ensureAgentOrMortgageBroker, async (req, res) => {
+router.get('/:id', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, async (req, res) => {
   try {
     const n = await getNotificationById(req.user._id, req.params.id);
     if (!n) {
@@ -49,7 +53,7 @@ router.get('/:id', protect, ensureAgentOrMortgageBroker, async (req, res) => {
     res.status(500).json({ success: false, message: e.message || 'Server error' });
   }
 });
-router.patch('/:id/read', protect, ensureAgentOrMortgageBroker, async (req, res) => {
+router.patch('/:id/read', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, async (req, res) => {
   try {
     const updated = await markNotificationRead(req.user._id, req.params.id);
     if (!updated) {

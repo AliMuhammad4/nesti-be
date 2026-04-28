@@ -1,6 +1,6 @@
 import logger from '../../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
-import { mergeSignals } from './common.js';
+import { mergeSignals, buildLawyerLeadType } from './common.js';
 import {
   bumpLeadProfileStats,
   createValidatedLeadAttribution,
@@ -11,7 +11,6 @@ import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 const LAWYER_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestLawyerGrade = (a, b) =>
   (LAWYER_GRADE_ORDER[a] || 0) >= (LAWYER_GRADE_ORDER[b] || 0) ? a : b;
-const buildLawyerLeadType = (grade) => `${grade}_client`;
 export const deriveLawyerQualificationFromText = (text = '') => {
   const t = String(text || '').toLowerCase();
   const out = {};
@@ -182,7 +181,7 @@ export const createLawyerLeadRecords = async ({
 
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
-      intent: 'buy',
+      intent: 'unspecified',
       identity: {
         full_name: contactInfo.name || 'Unknown',
         email: contactInfo.email || '',
@@ -242,7 +241,7 @@ export const createLawyerLeadRecords = async ({
       session_id:      sessionId,
       embed_token:     embedToken,
       agent_type:      conversation.agent_type,
-      intent:          'buy',
+      intent:          'unspecified',
       lead_grade:      leadGrade,
       message_snippet: messageSnippet,
       contact:         contactInfo,
@@ -276,7 +275,7 @@ export const createLawyerLeadRecords = async ({
     initial_quality: leadGrade,
   });
 
-  await bumpLeadProfileStats(leadProfile._id, 'buy', leadType);
+  await bumpLeadProfileStats(leadProfile._id, 'unspecified', leadType);
 
   logger.info(`Lawyer lead created: ${leadType} | score: ${leadScore} | conversation: ${conversation._id}`);
 

@@ -1,9 +1,17 @@
+import mongoose from 'mongoose';
 import LeadMatch from '../../models/LeadMatch.js';
 import ChatConversation from '../../models/ChatConversation.js';
+import WorkspaceAppointment from '../../models/WorkspaceAppointment.js';
 import {
   resolveAppointmentStatus,
   MATCH_STATUSES_MEETING_BOOKED,
 } from '../../utils/resolveAppointmentStatus.js';
+
+function toOidArray(ids) {
+  return [...new Set((ids || []).map((id) => String(id)).filter(Boolean))]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+}
 
 /** Query values for GET /api/leads?appointment= */
 export const LEAD_LIST_APPOINTMENT_QUERY = ['all', 'booked', 'canceled', 'not_booked'];
@@ -25,12 +33,19 @@ export async function buildAppointmentMongoFilter(userObjectId, appointment) {
       user_id: uid,
       calendly_booking_status: 'booked',
     }).distinct('_id');
-    return {
-      $or: [
-        { match_status: { $in: MATCH_STATUSES_MEETING_BOOKED } },
-        { conversation_id: { $in: bookedConvIds } },
-      ],
-    };
+    /** Lawyer/embed paths can have WorkspaceAppointment before ChatConversation is synced. */
+    const wsRows = await WorkspaceAppointment.find({ user_id: uid, status: 'booked' })
+      .select('lead_match_id conversation_id')
+      .lean();
+    const convOr = toOidArray([
+      ...bookedConvIds,
+      ...wsRows.map((r) => r.conversation_id).filter(Boolean),
+    ]);
+    const leadOr = toOidArray(wsRows.map((r) => r.lead_match_id).filter(Boolean));
+    const orClause = [{ match_status: { $in: MATCH_STATUSES_MEETING_BOOKED } }];
+    if (convOr.length) orClause.push({ conversation_id: { $in: convOr } });
+    if (leadOr.length) orClause.push({ _id: { $in: leadOr } });
+    return { $or: orClause };
   }
 
   if (a === 'canceled') {
@@ -50,19 +65,29 @@ export async function buildAppointmentMongoFilter(userObjectId, appointment) {
       user_id: uid,
       calendly_booking_status: 'canceled',
     }).distinct('_id');
-    const exclude = [...bookedConvIds, ...canceledConvIds];
-    return {
-      $and: [
-        { match_status: { $nin: MATCH_STATUSES_MEETING_BOOKED } },
-        {
-          $or: [
-            { conversation_id: null },
-            { conversation_id: { $exists: false } },
-            { conversation_id: { $nin: exclude } },
-          ],
-        },
-      ],
-    };
+    const wsBooked = await WorkspaceAppointment.find({ user_id: uid, status: 'booked' })
+      .select('lead_match_id conversation_id')
+      .lean();
+    const exclude = toOidArray([
+      ...bookedConvIds,
+      ...canceledConvIds,
+      ...wsBooked.map((r) => r.conversation_id).filter(Boolean),
+    ]);
+    const excludeLeadIds = toOidArray(wsBooked.map((r) => r.lead_match_id).filter(Boolean));
+    const andClauses = [
+      { match_status: { $nin: MATCH_STATUSES_MEETING_BOOKED } },
+      {
+        $or: [
+          { conversation_id: null },
+          { conversation_id: { $exists: false } },
+          { conversation_id: { $nin: exclude } },
+        ],
+      },
+    ];
+    if (excludeLeadIds.length) {
+      andClauses.push({ _id: { $nin: excludeLeadIds } });
+    }
+    return { $and: andClauses };
   }
 
   return null;

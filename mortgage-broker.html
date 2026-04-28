@@ -211,7 +211,8 @@
     <div id="fileOpenWarning" class="file-open-warning">
       This page was opened as a <strong>file</strong> (<code>file://</code>). Use <code>http://localhost:5000/mortgage-broker</code> with your server running, or set API URL to <code>http://localhost:5000/api/chat</code>.
     </div>
-    <div>Paste an <code>embedToken</code> from a mortgage broker embed. Use <code>http://localhost:5000/mortgage-broker</code> (or this file served by the API) so the chat API URL resolves correctly.</div>
+    <div>Paste an <code>embedToken</code> from a mortgage broker embed (<code>POST /api/embed/generate</code> with <code>widget_role: mortgage_broker</code> or an account that is a broker). Use <code>http://localhost:5000/mortgage-broker</code> (or this file served by the API) so the chat API URL resolves correctly.</div>
+    <p class="hint" style="margin-top:6px;font-size:11px;opacity:.95;"><strong>Production:</strong> use the Next.js app at <code>https://YOUR-SITE/chatbot/&lt;token&gt;</code> or <code>&lt;script src="https://YOUR-SITE/chatbot/widget.js?token=…"&gt;&lt;/script&gt;</code> — the UI picks mortgage styling from the embed’s <code>widget_role</code>.</p>
     <div class="config-row">
       <label>Embed token</label>
       <input id="embedTokenInput" type="text" placeholder="token from /api/embed/generate" />

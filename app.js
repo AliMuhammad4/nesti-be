@@ -20,9 +20,11 @@ import calendarRoutes from './routes/calendarRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
 import calendlyWebhookRoutes from './routes/calendlyWebhookRoutes.js';
 import propertyMatchScoringRoutes from './routes/agent/propertyMatchScoringRoutes.js';
+import { configureCloudinary } from './services/media/cloudinaryClient.js';
 
 // Load env
 dotenv.config();
+configureCloudinary();
 
 const app = express();
 

@@ -40,6 +40,21 @@ function propertyTypeFromProfile(profile) {
   return null;
 }
 
+function professionalTypeFromProfile(profile) {
+  const pt = profile?.ownership?.professional_type;
+  if (pt != null && String(pt).trim()) return String(pt).trim();
+  return null;
+}
+
+function qualificationFromProfile(profile) {
+  const q = profile?.qualification || {};
+  return {
+    agent: q.agent || {},
+    mortgage_broker: q.mortgage_broker || {},
+    lawyer: q.lawyer || {},
+  };
+}
+
 function contactFromProfile(profile, inviteeEmailFallback) {
   const identity = profile?.identity || {};
   return {
@@ -81,15 +96,17 @@ export function buildCalendarBookingRow({
   );
 
   const row = {
-    lead_match_id: String(leadMatchId),
+    lead_match_id: leadMatchId != null && String(leadMatchId).trim() ? String(leadMatchId) : null,
     conversation_id: conversationId ? String(conversationId) : null,
     starts_at: startsAt ? startsAt.toISOString() : null,
     title: appointmentTitle(matchStatus, bookedViaNurture),
     match_status: matchStatus,
     cancelable_via_calendly: cancelableViaCalendly,
     contact: contactFromProfile(profile, inviteeEmailFallback),
+    professional_type: professionalTypeFromProfile(profile),
     property_type: propertyTypeFromProfile(profile),
     intent: intentFromProfileAndConv(profile, conv),
+    qualification: qualificationFromProfile(profile),
   };
 
   if (workspaceAppointment?._id) {

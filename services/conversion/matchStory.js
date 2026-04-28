@@ -10,6 +10,11 @@ function normalizeReasons(conversation) {
 function gradeIntentHeadline(grade, intent) {
   const g = String(grade || 'warm').toLowerCase();
   const i = String(intent || 'buy').toLowerCase();
+  if (i === 'unspecified') {
+    if (g === 'hot') return 'High-intent lead — prioritize outreach';
+    if (g === 'warm') return 'Engaged lead — confirm needs and book next step';
+    return 'Early-stage lead — nurture with light, helpful follow-up';
+  }
   if (g === 'hot') {
     return i === 'sell' ? 'High-intent seller — prioritize outreach' : 'High-intent buyer — prioritize outreach';
   }
@@ -23,6 +28,42 @@ function buildWhyStrongMatch({ grade, intent, tier, score, strengths, signalBull
   const i = String(intent || 'buy').toLowerCase();
   const tierLabel = tier ? String(tier).replace(/_/g, ' ') : null;
   let one_liner = '';
+  if (i === 'unspecified') {
+    if (tier === 'perfect_match' && (g === 'hot' || g === 'warm')) {
+      one_liner = `Strong ideal-client fit${score != null ? ` (${score}/100)` : ''} plus ${g === 'hot' ? 'high' : 'solid'} engagement — treat as a priority conversation, not a nurture-only lead.`;
+    } else if (tier === 'good_match' && (g === 'hot' || g === 'warm')) {
+      one_liner = `Good ICP alignment with clear engagement — confirm the one or two gaps below, then move to a booked call.`;
+    } else if (g === 'hot') {
+      one_liner =
+        'High-intent lead — respond fast and steer toward a concrete next step (call or consultation).';
+    } else if (g === 'warm') {
+      one_liner =
+        'Engaged lead — qualify quickly and offer times before interest cools.';
+    } else if (signalBullets.length) {
+      one_liner = 'Signals from the chat support continued qualification; lead with relevance to what they already shared.';
+    } else if (tier === 'low_match') {
+      one_liner = 'Weaker ICP match — still worth a light triage: one message to confirm fit before investing deep time.';
+    } else {
+      one_liner = 'Early-stage — lead with helpful education and a soft ask for a short call when timing feels right.';
+    }
+    const actionable_takeawaysUnspec = [];
+    if (signalBullets[0]) {
+      actionable_takeawaysUnspec.push(`Reference in outreach: “${signalBullets[0].slice(0, 120)}${signalBullets[0].length > 120 ? '…' : ''}”`);
+    }
+    for (const s of strengths.slice(0, 2)) {
+      actionable_takeawaysUnspec.push(`Lean on ${s.title.toLowerCase()}: ${s.detail}`);
+    }
+    if (!actionable_takeawaysUnspec.length && tierLabel && score != null) {
+      actionable_takeawaysUnspec.push(`Use ICP fit (${score}/100, ${tierLabel}) to open: explain why you are a strong fit for their situation.`);
+    }
+    if (actionable_takeawaysUnspec.length < 2 && (g === 'hot' || g === 'warm')) {
+      actionable_takeawaysUnspec.push('Lead with one calendar or phone offer in the first touch — avoid long questionnaires.');
+    }
+    return {
+      one_liner,
+      actionable_takeaways: actionable_takeawaysUnspec.slice(0, 4),
+    };
+  }
   if (tier === 'perfect_match' && (g === 'hot' || g === 'warm')) {
     one_liner = `Strong ideal-client fit${score != null ? ` (${score}/100)` : ''} plus ${g === 'hot' ? 'high' : 'solid'} intent — treat as a priority conversation, not a nurture-only lead.`;
   } else if (tier === 'good_match' && (g === 'hot' || g === 'warm')) {

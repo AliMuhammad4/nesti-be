@@ -95,6 +95,8 @@ export const getMyProfessionalProfile = async (req, res, next) => {
         last_name: user.last_name,
         email: user.email,
         role: user.role,
+        profile_image: user.profile_image || null,
+        cover_image: user.cover_image || null,
       },
       professionalProfile: normalizeProfessionalProfile(profile),
     });
@@ -154,6 +156,18 @@ export const upsertProfessionalProfile = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'last_name cannot be empty' });
       }
       user.last_name = s;
+      userSaved = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'profile_image')) {
+      const v = body.profile_image;
+      user.profile_image =
+        v != null && String(v).trim() !== '' ? String(v).trim().slice(0, 2048) : null;
+      userSaved = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'cover_image')) {
+      const v = body.cover_image;
+      user.cover_image =
+        v != null && String(v).trim() !== '' ? String(v).trim().slice(0, 2048) : null;
       userSaved = true;
     }
     if (userSaved) {
@@ -217,6 +231,8 @@ export const upsertProfessionalProfile = async (req, res, next) => {
         last_name: user.last_name,
         email: user.email,
         role: user.role,
+        profile_image: user.profile_image || null,
+        cover_image: user.cover_image || null,
       },
       profile: normalizeProfessionalProfile(profile),
     });

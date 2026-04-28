@@ -14,13 +14,23 @@ export function agentDisplayName(ctx) {
 }
 export async function loadLeadProfileForConversation({ conversationId, userId, intent }) {
   const suffix = intent === 'sell' ? '_seller$' : '(buyer|client)$';
-  const lm = await LeadMatch.findOne({
+  let lm = await LeadMatch.findOne({
     conversation_id: conversationId,
     user_id:         userId,
     lead_type:       new RegExp(suffix),
   })
     .select('lead_profile_id')
     .lean();
+  /**
+   * Lawyer/mortgage leads use `*_client` types; regex above covers `client`. If lead_type ever
+   * diverges (e.g. legacy rows), fall back to the thread’s latest LeadMatch — same as Calendly embed resolution.
+   */
+  if (!lm?.lead_profile_id) {
+    lm = await LeadMatch.findOne({ conversation_id: conversationId, user_id: userId })
+      .sort({ last_contact_at: -1, updatedAt: -1 })
+      .select('lead_profile_id')
+      .lean();
+  }
   if (!lm?.lead_profile_id) return null;
   return LeadProfile.findById(lm.lead_profile_id).lean();
 }

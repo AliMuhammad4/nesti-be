@@ -80,8 +80,9 @@ export function buildMortgageBrokerPromptMainTemplate({
 }) {
   const deferCalendlySection = deferCalendlyLink
     ? `
-BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META):
+BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + reply turn):
 - Do NOT include any Calendly, scheduling, or meeting URL in your visible reply yet.
+- On the first assistant reply after intake, briefly recap what they shared, ask them to confirm or correct, and add 1–2 concise follow-ups before any scheduling talk.
 - Ask qualification questions one at a time. Before any booking link, you MUST have asked and captured question 10: preferred way for ${name} to contact them (phone/text/email/WhatsApp/video/in-person) AND best time (morning/afternoon/evening/anytime). Reflect both in META as preferred_contact_method and best_time_to_contact.
 - If those two fields are still empty in META, your next question should work toward question 10 — do not paste or invent URLs.
 - You may say a scheduling link will be shared after preferences are confirmed; keep tone warm and concise.

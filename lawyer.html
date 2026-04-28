@@ -209,7 +209,8 @@
     <div id="fileOpenWarning" class="file-open-warning">
       This page was opened as a <strong>file</strong> (<code>file://</code>). Use <code>http://localhost:5000/lawyer</code> with your server running, or set API URL to <code>http://localhost:5000/api/chat</code>.
     </div>
-    <div>Paste an <code>embedToken</code> from a lawyer's embed to start.</div>
+    <div>Paste an <code>embedToken</code> from a lawyer embed (<code>POST /api/embed/generate</code> with <code>widget_role: lawyer</code> or a lawyer account).</div>
+    <p class="hint" style="margin-top:6px;font-size:11px;opacity:.95;"><strong>Production:</strong> use <code>https://YOUR-SITE/chatbot/&lt;token&gt;</code> or <code>chatbot/widget.js?token=…</code> — legal-themed header/copy comes from <code>widget_role</code> on the embed document.</p>
     <div class="config-row">
       <label>Embed token</label>
       <input id="embedTokenInput" type="text" placeholder="token from /api/embed/generate" />

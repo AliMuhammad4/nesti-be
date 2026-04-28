@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import ChatConversation from '../../models/ChatConversation.js';
 import ChatMessage from '../../models/ChatMessage.js';
 import ChatbotEmbedUrl from '../../models/ChatbotEmbedUrl.js';
+import LeadMatch from '../../models/LeadMatch.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import logger from '../../utils/logger.js';
 import {
@@ -10,9 +11,10 @@ import {
 } from './utils/normalizationUtils.js';
 import {
   resolveVisitor,
-  extractContactFromMessage,
-  mergeContact,
   accumulateContactInfo,
+  buildUserMessageContactMeta,
+  coerceContactIdentityFields,
+  hasIdentityContact,
 } from './utils/contactUtils.js';
 import { mergeFormContactData } from './utils/mergeFormContactData.js';
 import { mergeSignals, extractSignals } from './scoring/index.js';
@@ -20,6 +22,7 @@ import { getFlowForRole } from './flows/getFlowForRole.js';
 import {
   supportsPropertyMatches,
   classifyLeadForFlow,
+  usesFixedBuyIntentForLeadMatch,
 } from './flows/flowRoleMeta.js';
 import {
   isValidProfessionalType,
@@ -160,8 +163,10 @@ export const handleChatService = async ({
   const flow = getFlowForRole(flowType);
   const canCreateLeads = Boolean(flow?.flowRole);
 
-  const intent =
-    formContact?.intent === 'sell' || formContact?.intent === 'buy'
+  const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow);
+  const intent = nonAgentBuyerSellerIntent
+    ? 'unspecified'
+    : formContact?.intent === 'sell' || formContact?.intent === 'buy'
       ? formContact.intent
       : classifyIntentFromKeywords(trimmedMessage);
 
@@ -188,19 +193,14 @@ export const handleChatService = async ({
     await conversation.save();
   }
 
-  const regexContact = extractContactFromMessage(trimmedMessage);
-  const currentContact = mergeContact(regexContact, {
-    name: formContact?.name || null,
-    email: formContact?.email ? formContact.email.toLowerCase() : null,
-    phone: formContact?.phone || null,
-    address: formContact?.address || null,
-  });
-
+  // Same intake shape as `lawyer.html`: request `formContact` merged onto stored `form_data` for every turn.
   const mergedFormContact = mergeFormContactData(
     conversation.form_data && typeof conversation.form_data === 'object' ? conversation.form_data : {},
     formContact && typeof formContact === 'object' ? formContact : {},
   );
   const storedForm = mergedFormContact;
+
+  const currentContact = buildUserMessageContactMeta(trimmedMessage, mergedFormContact);
   const formSignals = flow.getFormSignals(storedForm);
   const formQualification = flow.getFormQualification(storedForm);
 
@@ -221,7 +221,7 @@ export const handleChatService = async ({
   });
 
   let contactInfo = await accumulateContactInfo(conversation._id, currentContact);
-  const hasContact = Boolean(contactInfo.email || contactInfo.phone || contactInfo.name);
+  let hasContact = hasIdentityContact(contactInfo);
 
   const allUserMessages = await ChatMessage.find({
     conversation_id: conversation._id,
@@ -265,7 +265,8 @@ export const handleChatService = async ({
     isAutomatedBookingEnabled,
     calendlyLinkForVisitor,
     storedForm,
-    history
+    history,
+    interactionCount
   );
 
   const systemPromptOptions = await buildFlowSystemPromptOptions({
@@ -317,6 +318,9 @@ export const handleChatService = async ({
     return { status: 500, body: { success: false, message: 'AI service unavailable. Please try again.' } };
   }
 
+  coerceContactIdentityFields(contactInfo);
+  hasContact = hasIdentityContact(contactInfo);
+
   const recapLines = buildLeadRecapMarkdownLines({
     form: storedForm,
     contact: contactInfo,
@@ -340,7 +344,7 @@ export const handleChatService = async ({
     role: 'assistant',
     content: finalReply,
     agent_type: effectiveWidgetType,
-    intent: aiIntent,
+    intent: nonAgentBuyerSellerIntent ? 'unspecified' : aiIntent,
     channel: normalizedChannel,
     lead_score: finalScore,
     lead_grade: persistedGrade,
@@ -356,7 +360,7 @@ export const handleChatService = async ({
     },
   });
 
-  conversation.intent = aiIntent;
+  conversation.intent = nonAgentBuyerSellerIntent ? 'unspecified' : aiIntent;
   conversation.lead_score = finalScore;
   conversation.lead_grade = persistedGrade;
   conversation.lead_classification = persistedClass;
@@ -438,6 +442,29 @@ export const clearChatSessionService = async (sessionId) => {
         success: true,
         message: 'Session already cleared',
         session_id: normalizedSessionId,
+      },
+    };
+  }
+
+  const hasCrmLead = await LeadMatch.exists({ conversation_id: conversation._id });
+  if (hasCrmLead) {
+    /**
+     * Widget "Start new request" / clear must not delete the thread that LeadMatch points to,
+     * or GET /api/leads/:id/conversation shows an empty transcript forever. The client already
+     * rotates session_id; leaving this conversation + messages intact preserves CRM history.
+     */
+    logger.info('Chat clear: skipped delete — conversation linked to LeadMatch', {
+      op: 'chat.clear',
+      session_id: normalizedSessionId,
+      conversation_id: String(conversation._id),
+    });
+    return {
+      status: 200,
+      body: {
+        success: true,
+        message: 'Session reset for the widget; lead chat history kept for your workspace.',
+        session_id: normalizedSessionId,
+        lead_history_preserved: true,
       },
     };
   }

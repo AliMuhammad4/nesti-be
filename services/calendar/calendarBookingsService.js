@@ -63,14 +63,36 @@ async function listCollectionAppointments(uid) {
   if (!apptDocs.length) return { rows: [], coveredMatchIds: new Set() };
 
   const matchIds = collectIds(apptDocs, 'lead_match_id');
+  const orphanConvIds = [
+    ...new Set(
+      apptDocs
+        .filter((a) => !a.lead_match_id && a.conversation_id)
+        .map((a) => String(a.conversation_id)),
+    ),
+  ];
   const leads = matchIds.length
     ? await LeadMatch.find({ _id: { $in: toOidArray(matchIds) } }).select(LEAD_FIELDS).lean()
     : [];
+  const orphanLeads = orphanConvIds.length
+    ? await LeadMatch.find({
+        user_id: uid,
+        conversation_id: { $in: toOidArray(orphanConvIds) },
+      })
+        .select(LEAD_FIELDS)
+        .lean()
+    : [];
   const leadMap = new Map(leads.map((l) => [String(l._id), l]));
+  const leadByConversationId = new Map(
+    orphanLeads.map((l) => [String(l.conversation_id), l]),
+  );
 
   const profileIds = new Set(collectIds(apptDocs, 'lead_profile_id'));
   const convIds = new Set(collectIds(apptDocs, 'conversation_id'));
   for (const l of leads) {
+    if (l.lead_profile_id) profileIds.add(String(l.lead_profile_id));
+    if (l.conversation_id) convIds.add(String(l.conversation_id));
+  }
+  for (const l of orphanLeads) {
     if (l.lead_profile_id) profileIds.add(String(l.lead_profile_id));
     if (l.conversation_id) convIds.add(String(l.conversation_id));
   }
@@ -81,12 +103,22 @@ async function listCollectionAppointments(uid) {
   const coveredMatchIds = new Set();
 
   for (const a of apptDocs) {
-    const lm = a.lead_match_id ? String(a.lead_match_id) : null;
-    if (!lm) continue;
-    coveredMatchIds.add(lm);
+    let lm = a.lead_match_id ? String(a.lead_match_id) : null;
+    let lead = lm ? leadMap.get(lm) : null;
+    if (!lead && a.conversation_id) {
+      const byConvo = leadByConversationId.get(String(a.conversation_id));
+      if (byConvo) {
+        lead = byConvo;
+        lm = String(lead._id);
+        leadMap.set(lm, lead);
+      }
+    }
 
-    const lead = leadMap.get(lm);
     const convId = String(a.conversation_id || lead?.conversation_id || '');
+    if (!lm && !convId) continue;
+
+    if (lm) coveredMatchIds.add(lm);
+
     const conv = convId ? convMap.get(convId) : null;
 
     const profileId = String(a.lead_profile_id || lead?.lead_profile_id || '');
@@ -97,7 +129,7 @@ async function listCollectionAppointments(uid) {
         leadMatchId: lm,
         conversationId: convId || null,
         matchStatus: lead?.match_status || 'consult_booked',
-        startsAt: firstValidDate(a.scheduled_start, a.recorded_at),
+        startsAt: firstValidDate(a.scheduled_start, a.recorded_at, a.createdAt, a.updatedAt),
         profile,
         conv,
         calFromLead: lead?.compatibility_factors?.calendly,
@@ -198,6 +230,7 @@ async function listLegacyBookedAppointments(uid) {
       cal?.calendly_event_start,
       nurtureStartByMatch.get(String(lead._id)),
       countedInKpi ? kpiOccurredByMatch.get(String(lead._id)) : null,
+      lead.updatedAt,
     );
 
     bookings.push(

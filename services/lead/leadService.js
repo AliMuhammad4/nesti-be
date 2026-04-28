@@ -6,6 +6,7 @@ import LeadProfile from '../../models/LeadProfile.js';
 import ChatConversation from '../../models/ChatConversation.js';
 import LeadAttribution from '../../models/LeadAttribution.js';
 import ChatMessage from '../../models/ChatMessage.js';
+import WorkspaceAppointment from '../../models/WorkspaceAppointment.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { getBuyerPropertyMatches, getBuyerMatchesForSellerProperty } from '../agent/propertyMatch/matchService.js';
 import { parsePageLimitPagination, buildPaginationMeta, PAGINATION_PRESETS } from '../../utils/pagination.js';
@@ -31,6 +32,58 @@ import {
   enrichAndFormatProfiles,
   ICP_TIERS,
 } from './leadProfileHelpers.js';
+import { PROFESSIONAL_TYPE, USER_ROLE } from '../../constants/roles.js';
+
+/** Lead rows where WorkspaceAppointment exists as booked (Calendly) but ChatConversation was not synced. */
+async function leadMatchIdsWithBookedWorkspaceAppointment(userId, leadMatchObjectIds) {
+  const ids = (leadMatchObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+  if (!ids.length) return new Set();
+  const rows = await WorkspaceAppointment.find({
+    user_id: userId,
+    lead_match_id: { $in: ids },
+    status: 'booked',
+  })
+    .select('lead_match_id')
+    .lean();
+  return new Set(rows.map((r) => String(r.lead_match_id)));
+}
+
+/** Booked Calendly rows keyed by chat thread (covers orphan upserts where lead_match_id was null initially). */
+async function conversationIdsWithBookedWorkspaceAppointment(userId, conversationObjectIds) {
+  const ids = (conversationObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+  if (!ids.length) return new Set();
+  const rows = await WorkspaceAppointment.find({
+    user_id: userId,
+    status: 'booked',
+    conversation_id: { $in: ids },
+  })
+    .select('conversation_id')
+    .lean();
+  return new Set(rows.map((r) => (r.conversation_id ? String(r.conversation_id) : '')).filter(Boolean));
+}
+
+function mergeConvoWithWorkspaceBooking(
+  conversation,
+  leadMatchId,
+  leadConversationId,
+  bookedLeadIdSet,
+  bookedConversationIdSet,
+) {
+  const c = conversation && typeof conversation === 'object' ? conversation : {};
+  const convoKey = c._id ? String(c._id) : leadConversationId ? String(leadConversationId) : null;
+  const leadBooked = leadMatchId && bookedLeadIdSet.has(String(leadMatchId));
+  const convoBooked = convoKey && bookedConversationIdSet.has(convoKey);
+  if ((leadBooked || convoBooked) && !c.calendly_booking_status) {
+    return { ...c, calendly_booking_status: 'booked' };
+  }
+  return c;
+}
+
+/** Buyer/seller `intent` is only for agent dashboards; omit for other roles. */
+function leadMapperOptsFromRequest(req) {
+  const includeIntentField = req.user?.role === USER_ROLE.AGENT;
+  return { includeIntentField };
+}
 
 /** Attach profile-level nurture consultation flag (NurtureLog meeting_booked) to lead detail payloads. */
 async function enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail) {
@@ -47,6 +100,11 @@ async function enrichLeadDetailWithProfileConsultation(userId, profile, leadDeta
 async function resolveLeadPropertyMatchCount({ userId, leadMatch, leadProfile }) {
   try {
     if (!leadMatch || !leadProfile) return 0;
+    const prof =
+      leadProfile?.ownership?.professional_type ||
+      leadMatch?.compatibility_factors?.professional_type ||
+      PROFESSIONAL_TYPE.AGENT;
+    if (prof !== PROFESSIONAL_TYPE.AGENT) return 0;
     const isBuyer = /buy/i.test(leadProfile.intent || leadMatch.lead_type || '');
     const matches = isBuyer
       ? await getBuyerPropertyMatches({ userId, leadProfile, signals: {} })
@@ -79,6 +137,9 @@ export const recordLeadView = async (req, res, next) => {
 export const getLeads = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
+    const userRole = req.user?.role;
+    const includePropertyMatchCounts =
+      userRole === USER_ROLE.AGENT || userRole === USER_ROLE.ADMIN;
     const q = req.query || {};
     const { page, limit, skip } = parsePageLimitPagination(q, PAGINATION_PRESETS.leadList);
     const { embedToken, intent, grade, status, appointment, pipeline } = q;
@@ -122,21 +183,40 @@ export const getLeads = async (req, res, next) => {
         ? await buildNurtureConsultationBookedFromEmailByProfileIds(userId, uniqueProfileKeys)
         : new Map();
 
+    const workspaceBookedLeadIds = await leadMatchIdsWithBookedWorkspaceAppointment(
+      userId,
+      leadMatches.map((m) => m._id),
+    );
+    const workspaceBookedConversationIds = await conversationIdsWithBookedWorkspaceAppointment(
+      userId,
+      convoIds,
+    );
+
     const leads = await Promise.all(
       leadMatches.map(async (m) => {
         const profile = profileById.get(String(m.lead_profile_id)) || null;
-        const conversation = convoById.get(String(m.conversation_id)) || {};
+        const rawConvo = convoById.get(String(m.conversation_id)) || {};
+        const conversation = mergeConvoWithWorkspaceBooking(
+          rawConvo,
+          m._id,
+          m.conversation_id,
+          workspaceBookedLeadIds,
+          workspaceBookedConversationIds,
+        );
         const row = mapLeadMatchToListRow(
           m,
           profile || {},
           conversation,
           truthyQueryFlag(q.include_conversion),
+          leadMapperOptsFromRequest(req),
         );
-        const matchCount = await resolveLeadPropertyMatchCount({
-          userId,
-          leadMatch: m,
-          leadProfile: profile,
-        });
+        const matchCount = includePropertyMatchCounts
+          ? await resolveLeadPropertyMatchCount({
+              userId,
+              leadMatch: m,
+              leadProfile: profile,
+            })
+          : 0;
         const pid = m.lead_profile_id ? String(m.lead_profile_id) : '';
         const nurture_consultation_booked = pid ? nurtureBookedByProfile.get(pid) ?? false : false;
         return { ...row, match_count: matchCount, nurture_consultation_booked };
@@ -277,15 +357,27 @@ export const updateLeadMatch = async (req, res, next) => {
     if (!leadMatch) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
-    const [profile, convo] = await Promise.all([
+    const [profile, convo, workspaceBookedIds, workspaceBookedConvIds] = await Promise.all([
       leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
       leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
+      leadMatchIdsWithBookedWorkspaceAppointment(userId, [leadMatch._id]),
+      leadMatch.conversation_id
+        ? conversationIdsWithBookedWorkspaceAppointment(userId, [leadMatch.conversation_id])
+        : Promise.resolve(new Set()),
     ]);
+    const mergedConvo = mergeConvoWithWorkspaceBooking(
+      convo || {},
+      leadMatch._id,
+      leadMatch.conversation_id,
+      workspaceBookedIds,
+      workspaceBookedConvIds,
+    );
     const leadDetail = mapLeadMatchToDetail(
       leadMatch,
       profile,
-      convo,
+      mergedConvo,
       includeConversionInLeadDetail(req.query || {}),
+      leadMapperOptsFromRequest(req),
     );
     const leadPayload = await enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail);
     return res.json({
@@ -309,15 +401,27 @@ export const getLeadById = async (req, res, next) => {
     }
     const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId }).lean();
     if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
-    const [profile, convo] = await Promise.all([
+    const [profile, convo, workspaceBookedIds, workspaceBookedConvIds] = await Promise.all([
       leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
       leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
+      leadMatchIdsWithBookedWorkspaceAppointment(userId, [leadMatch._id]),
+      leadMatch.conversation_id
+        ? conversationIdsWithBookedWorkspaceAppointment(userId, [leadMatch.conversation_id])
+        : Promise.resolve(new Set()),
     ]);
+    const mergedConvo = mergeConvoWithWorkspaceBooking(
+      convo || {},
+      leadMatch._id,
+      leadMatch.conversation_id,
+      workspaceBookedIds,
+      workspaceBookedConvIds,
+    );
     const leadDetail = mapLeadMatchToDetail(
       leadMatch,
       profile,
-      convo,
+      mergedConvo,
       includeConversionInLeadDetail(req.query || {}),
+      leadMapperOptsFromRequest(req),
     );
     const lead = await enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail);
     return res.json({
@@ -343,17 +447,33 @@ export const getLeadConversation = async (req, res, next) => {
     }
 
     const convFilter = { conversation_id: leadMatch.conversation_id };
-    const [total, messages] = await Promise.all([
+    const [convoExists, total, messages] = await Promise.all([
+      ChatConversation.exists({ _id: leadMatch.conversation_id }),
       ChatMessage.countDocuments(convFilter),
       ChatMessage.find(convFilter).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
     ]);
     const conversationMessages = messages.map((m) => ({ id: String(m._id), role: m.role, content: m.content, intent: m.intent || null, created_at: m.createdAt }));
+    let emptyState = null;
+    if (conversationMessages.length === 0) {
+      if (!convoExists) {
+        emptyState = {
+          reason:
+            'The chat thread record was removed (for example, the visitor reset the chat before this fix, which deleted the conversation while the lead stayed in CRM). New widget chats create a new thread.',
+          action: 'Reference compatibility/session metadata on the lead, or continue outreach from here; transcript cannot be recovered.',
+        };
+      } else {
+        emptyState = {
+          reason: 'Conversation thread is created but has no messages yet.',
+          action: 'Send the first outreach message to activate this thread.',
+        };
+      }
+    }
     return res.json({
       success: true,
       lead_id: req.params.id,
       conversation_id: String(leadMatch.conversation_id),
       messages: conversationMessages,
-      empty_state: conversationMessages.length === 0 ? { reason: 'Conversation thread is created but has no messages yet.', action: 'Send the first outreach message to activate this thread.' } : null,
+      empty_state: emptyState,
       pagination: buildPaginationMeta({ page, limit, total }),
     });
   } catch (err) { return next(err); }
@@ -443,12 +563,44 @@ export const getLeadsByProfileId = async (req, res, next) => {
     const profile = await LeadProfile.findOne({ _id: profileId, ...ownerQuery(userId) }).lean();
     if (!profile) return res.status(404).json({ success: false, message: 'Lead profile not found' });
 
-    const listMatch = { user_id: userId, lead_profile_id: profileId };
-    const [total, leadMatches] = await Promise.all([LeadMatch.countDocuments(listMatch), LeadMatch.find(listMatch).sort({ createdAt: -1 }).skip(skip).limit(limit).lean()]);
+    const refLeadIds = Array.isArray(profile.lead_refs)
+      ? profile.lead_refs
+          .filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)))
+          .map((id) => new mongoose.Types.ObjectId(String(id)))
+      : [];
+    const listMatch = {
+      user_id: userId,
+      $or: [
+        { lead_profile_id: profile._id },
+        ...(refLeadIds.length ? [{ _id: { $in: refLeadIds } }] : []),
+      ],
+    };
+    const [total, leadMatches] = await Promise.all([
+      LeadMatch.countDocuments(listMatch),
+      LeadMatch.find(listMatch).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    ]);
 
     const convoIds = leadMatches.map((m) => m.conversation_id).filter(Boolean);
     const convoById = new Map((await ChatConversation.find({ _id: { $in: convoIds } }).lean()).map((c) => [String(c._id), c]));
-    const leads = leadMatches.map((m) => mapLeadMatchUnderProfile(m, profile, convoById.get(String(m.conversation_id)) || {}));
+    const workspaceBookedLeadIds = await leadMatchIdsWithBookedWorkspaceAppointment(
+      userId,
+      leadMatches.map((m) => m._id),
+    );
+    const workspaceBookedConversationIds = await conversationIdsWithBookedWorkspaceAppointment(
+      userId,
+      convoIds,
+    );
+    const leads = leadMatches.map((m) => {
+      const raw = convoById.get(String(m.conversation_id)) || {};
+      const convo = mergeConvoWithWorkspaceBooking(
+        raw,
+        m._id,
+        m.conversation_id,
+        workspaceBookedLeadIds,
+        workspaceBookedConversationIds,
+      );
+      return mapLeadMatchUnderProfile(m, profile, convo, leadMapperOptsFromRequest(req));
+    });
 
     return res.json({ success: true, profile_id: String(profile._id), leads, empty_state: leads.length === 0 ? buildCollectionEmptyState('profile_leads') : null, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (err) { return next(err); }
@@ -560,15 +712,33 @@ export const getLeadPropertyMatches = async (req, res, next) => {
       return res.json({ success: true, property_matches: [], property_matches_context: null, conversion: null, message: 'Lead profile not found.', empty_state: { reason: 'Lead profile data is missing for this lead.', action: 'Re-run qualification or reconnect this lead to a valid profile.' } });
     }
 
-    const isBuyer = /buy/i.test(leadProfile.intent || leadMatch.lead_type || '');
-    const context = isBuyer ? 'buy' : 'sell';
+    const prof =
+      leadProfile?.ownership?.professional_type ||
+      leadMatch?.compatibility_factors?.professional_type ||
+      PROFESSIONAL_TYPE.AGENT;
 
-    const [property_matches, conversation] = await Promise.all([
-      isBuyer ? getBuyerPropertyMatches({ userId, leadProfile, signals: {} }) : getBuyerMatchesForSellerProperty({ userId, leadProfile, signals: {} }),
-      leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).select('calendly_booking_status lead_reasons last_interaction_at intent').lean() : null,
-    ]);
+    const conversation = leadMatch.conversation_id
+      ? await ChatConversation.findById(leadMatch.conversation_id)
+          .select('calendly_booking_status lead_reasons last_interaction_at intent')
+          .lean()
+      : null;
 
-    const conversion = buildLeadConversionPack({ leadMatch, leadProfile, conversation, intent: context });
+    let property_matches = [];
+    let context = 'buy';
+    if (prof === PROFESSIONAL_TYPE.AGENT) {
+      const isBuyer = /buy/i.test(leadProfile.intent || leadMatch.lead_type || '');
+      context = isBuyer ? 'buy' : 'sell';
+      property_matches = isBuyer
+        ? await getBuyerPropertyMatches({ userId, leadProfile, signals: {} })
+        : await getBuyerMatchesForSellerProperty({ userId, leadProfile, signals: {} });
+    }
+
+    const conversion = buildLeadConversionPack({
+      leadMatch,
+      leadProfile,
+      conversation,
+      ...(prof === PROFESSIONAL_TYPE.AGENT ? { intent: context } : {}),
+    });
 
     const matchesPaginated = property_matches.slice(skip, skip + limit).map(enrichPropertyMatch);
 
@@ -595,7 +765,10 @@ export const getLeadPropertyMatches = async (req, res, next) => {
           : [],
         booking_cta: conversion?.outcome?.booking_cta || null,
       },
-      empty_state: property_matches.length === 0 ? buildCollectionEmptyState('property_matches', { intent: context }) : null,
+      empty_state:
+        property_matches.length === 0 && prof === PROFESSIONAL_TYPE.AGENT
+          ? buildCollectionEmptyState('property_matches', { intent: context })
+          : null,
       pagination: buildPaginationMeta({ page, limit, total: property_matches.length }),
     });
   } catch (err) { return next(err); }

@@ -22,11 +22,30 @@ export function shouldDeferCalendlyLink(
   isAutomatedBookingEnabled,
   calendlyLinkForVisitor,
   storedForm,
-  history
+  history,
+  interactionCount = 0
 ) {
   const lastAssistantExtracted = getLastAssistantExtractedData(history);
   const formContact = storedForm || {};
   const extracted = lastAssistantExtracted || {};
+  const isLawyerOrBroker =
+    flow?.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER ||
+    flow?.flowRole === PROFESSIONAL_TYPE.LAWYER;
+
+  /**
+   * Preflight often sends every field on the first POST; without this, deferral lifts immediately
+   * and the tier "exact prompt" forces Schedule Here on turn 1. Hold the URL until the visitor
+   * has sent at least one follow-up (confirm / correct / extra detail) so we recap + Q&A first.
+   */
+  if (
+    isLawyerOrBroker &&
+    isAutomatedBookingEnabled &&
+    Boolean(calendlyLinkForVisitor) &&
+    Number(interactionCount) < 2
+  ) {
+    return true;
+  }
+
   const lawyerHasReadinessSignals = (() => {
     if (flow.flowRole !== PROFESSIONAL_TYPE.LAWYER) return true;
     const transactionStage = String(
@@ -42,14 +61,14 @@ export function shouldDeferCalendlyLink(
   })();
 
   return (
-    (flow.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER || flow.flowRole === PROFESSIONAL_TYPE.LAWYER) &&
+    isLawyerOrBroker &&
     isAutomatedBookingEnabled &&
     Boolean(calendlyLinkForVisitor) &&
     (!lawyerHasReadinessSignals ||
-    !visitorHasPreferredContactPrefs({
-      formContact: storedForm,
-      lastAssistantExtracted,
-    }))
+      !visitorHasPreferredContactPrefs({
+        formContact: storedForm,
+        lastAssistantExtracted,
+      }))
   );
 }
 
@@ -86,7 +105,10 @@ export async function buildFlowSystemPromptOptions({
     postBookingChatChecklist: postBookingChatChecklistForPrompt,
   };
 
-  if (flow.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER || flow.flowRole === PROFESSIONAL_TYPE.LAWYER) {
+  if (
+    flow?.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER ||
+    flow?.flowRole === PROFESSIONAL_TYPE.LAWYER
+  ) {
     return { ...base, deferCalendlyLink };
   }
   return base;

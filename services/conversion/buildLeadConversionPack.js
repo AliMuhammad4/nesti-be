@@ -37,7 +37,14 @@ function mergedProperty(leadMatch, leadProfile) {
   };
 }
 
-function resolveIntent(leadProfile, conversation) {
+function resolveIntent(leadProfile, conversation, leadMatch) {
+  const prof =
+    leadMatch?.compatibility_factors?.professional_type ||
+    leadProfile?.ownership?.professional_type ||
+    PROFESSIONAL_TYPE.AGENT;
+  if (prof === PROFESSIONAL_TYPE.LAWYER || prof === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    return 'unspecified';
+  }
   const i = leadProfile?.intent ?? conversation?.intent;
   if (i === 'buy' || i === 'sell') return i;
   return 'buy';
@@ -107,7 +114,9 @@ function buildOutcomesFocus(grade, appointmentStatus, speed, intent) {
   else if (speed.within_sla === false && appt === 'not_booked') primary_outcome = 'recover_speed_to_lead';
   const headline =
     primary_outcome === 'book_next_meeting'
-      ? 'Primary goal: get a call or showing on the calendar — speed beats perfect notes.'
+      ? i === 'unspecified'
+        ? 'Primary goal: get a consultation on the calendar — speed beats perfect notes.'
+        : 'Primary goal: get a call or showing on the calendar — speed beats perfect notes.'
       : primary_outcome === 'recover_speed_to_lead'
         ? 'Primary goal: re-establish contact inside your SLA before the lead goes cold.'
         : primary_outcome === 'deliver_scheduled_meeting'
@@ -117,7 +126,9 @@ function buildOutcomesFocus(grade, appointmentStatus, speed, intent) {
     appt === 'not_booked' && (g === 'hot' || g === 'warm')
       ? i === 'sell'
         ? 'Offer a listing conversation or market walkthrough — anchor to a specific time.'
-        : 'Offer two concrete slots for a call or showing, or share your booking link.'
+        : i === 'unspecified'
+          ? 'Offer two concrete slots for a call or consultation, or share your booking link.'
+          : 'Offer two concrete slots for a call or showing, or share your booking link.'
       : appt === 'not_booked'
         ? 'When they reply, steer toward one short call before deep qualification.'
         : null;
@@ -138,7 +149,7 @@ function buildLeadConversionCore({
 }) {
   const grade = String(leadMatch?.lead_type || '').split('_')[0] || 'warm';
   const profType = resolveProfType(leadMatch, leadProfile);
-  const intent = intentOverride || resolveIntent(leadProfile, conversation);
+  const intent = intentOverride || resolveIntent(leadProfile, conversation, leadMatch);
   const contact = mergedContact(leadMatch, leadProfile);
   const property = mergedProperty(leadMatch, leadProfile);
   const appointmentStatus = resolveAppointmentStatus(

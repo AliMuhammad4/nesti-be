@@ -1,6 +1,6 @@
 import express from 'express';
 const router = express.Router();
-import { protect } from '../middleware/authMiddleware.js';
+import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { professionalUpsertBodySchema } from '../schemas/userProfileSchemas.js';
 import { ICP_SCHEMA_BY_ROLE } from '../schemas/icpSchemas.js';
@@ -10,6 +10,17 @@ import {
   getIdealClientProfile,
   saveIdealClientProfile,
 } from '../controllers/professionalController.js';
+import { postProfileImageUpload } from '../controllers/profileMediaController.js';
+import { uploadProfileImage } from '../middleware/uploadProfileImage.js';
+
+function runProfileUpload(req, res, next) {
+  uploadProfileImage.single('file')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ success: false, message: err.message || 'Invalid file upload' });
+    }
+    next();
+  });
+}
 
 function validateIcpByRole(req, res, next) {
   const role = req.user?.role;
@@ -30,12 +41,13 @@ function validateIcpByRole(req, res, next) {
 }
 
 router.get('/me', protect, getMyProfessionalProfile);
+router.post('/upload-image', protect, runProfileUpload, postProfileImageUpload);
 router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
 router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
 router.patch('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
 
-router.get('/icp', protect, getIdealClientProfile);
-router.post('/icp', protect, validateIcpByRole, saveIdealClientProfile);
-router.put('/icp', protect, validateIcpByRole, saveIdealClientProfile);
+router.get('/icp', protect, requireCompleteProfessionalProfile, getIdealClientProfile);
+router.post('/icp', protect, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
+router.put('/icp', protect, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
 
 export default router;

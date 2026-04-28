@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import LeadKpiEvent from '../../models/LeadKpiEvent.js';
 import LeadMatch from '../../models/LeadMatch.js';
+import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
 function parseDays(days) {
   const n = Number(days);
@@ -238,14 +239,111 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
 }
 
 /**
- * Daily buckets of lead intent (buyers vs sellers) and budget averages, grouped by the
+ * Lawyer workspace: daily counts by transaction_type on qualification.lawyer
+ * (purchase/refi/title vs home sale). Budget series unchanged (structured budget on profile).
+ */
+async function getLawyerIntentAndBudgetTrends(uid, d, since) {
+  const rows = await LeadMatch.aggregate([
+    { $match: { user_id: uid, createdAt: { $gte: since } } },
+    {
+      $lookup: {
+        from: 'leadprofiles',
+        localField: 'lead_profile_id',
+        foreignField: '_id',
+        as: 'profile',
+      },
+    },
+    { $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+        tx: { $ifNull: ['$profile.qualification.lawyer.transaction_type', ''] },
+        budget_min: { $ifNull: ['$profile.budget_profile.min_budget', null] },
+        budget_max: { $ifNull: ['$profile.budget_profile.max_budget', null] },
+      },
+    },
+    {
+      $addFields: {
+        budget_point: {
+          $cond: [
+            { $and: [{ $ne: ['$budget_min', null] }, { $ne: ['$budget_max', null] }] },
+            { $divide: [{ $add: ['$budget_min', '$budget_max'] }, 2] },
+            { $cond: [{ $ne: ['$budget_max', null] }, '$budget_max', '$budget_min'] },
+          ],
+        },
+      },
+    },
+    {
+      $group: {
+        _id: '$day',
+        purchase_side: {
+          $sum: {
+            $cond: [{ $in: ['$tx', ['home_purchase', 'refinance', 'title_transfer']] }, 1, 0],
+          },
+        },
+        sale_side: {
+          $sum: { $cond: [{ $eq: ['$tx', 'home_sale'] }, 1, 0] },
+        },
+        budget_sum: {
+          $sum: { $cond: [{ $ne: ['$budget_point', null] }, '$budget_point', 0] },
+        },
+        budget_count: {
+          $sum: { $cond: [{ $ne: ['$budget_point', null] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+
+  const byDay = new Map(rows.map((r) => [r._id, r]));
+  const intent = [];
+  const budget = [];
+  for (let i = d - 1; i >= 0; i -= 1) {
+    const dt = new Date();
+    dt.setUTCHours(0, 0, 0, 0);
+    dt.setUTCDate(dt.getUTCDate() - i);
+    const key = dt.toISOString().slice(0, 10);
+    const label = `${String(dt.getUTCMonth() + 1).padStart(2, '0')}/${String(dt.getUTCDate()).padStart(2, '0')}`;
+    const row = byDay.get(key);
+    intent.push({
+      date: key,
+      label,
+      purchase_side: row?.purchase_side || 0,
+      sale_side: row?.sale_side || 0,
+    });
+    budget.push({
+      date: key,
+      label,
+      budget_avg: row && row.budget_count > 0 ? Math.round(row.budget_sum / row.budget_count) : 0,
+      sample_size: row?.budget_count || 0,
+    });
+  }
+
+  return {
+    window_days: d,
+    intent_metric: 'lawyer_transaction',
+    intent,
+    budget,
+  };
+}
+
+/**
+ * Daily buckets of lead intent (buyers vs sellers for agents) and budget averages, grouped by the
  * day the LeadMatch was created. Joins the matching LeadProfile for intent + structured
  * budget. Produces one row per UTC day in the window, with zero-fill for empty days.
+ *
+ * For lawyer accounts, uses transaction_type on qualification.lawyer instead (purchase_side vs sale_side).
  */
-export async function getLeadIntentAndBudgetTrends(userId, { days = 30 } = {}) {
+export async function getLeadIntentAndBudgetTrends(userId, { days = 30, viewerRole = null } = {}) {
   const d = parseDays(days);
   const uid = new mongoose.Types.ObjectId(String(userId));
   const since = sinceDate(days);
+  const roleNorm = String(viewerRole || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (roleNorm === PROFESSIONAL_TYPE.LAWYER || roleNorm === 'lawyer') {
+    return getLawyerIntentAndBudgetTrends(uid, d, since);
+  }
 
   const rows = await LeadMatch.aggregate([
     { $match: { user_id: uid, createdAt: { $gte: since } } },
@@ -343,7 +441,7 @@ export async function getLeadIntentAndBudgetTrends(userId, { days = 30 } = {}) {
     });
   }
 
-  return { window_days: d, intent, budget };
+  return { window_days: d, intent_metric: 'buyer_seller', intent, budget };
 }
 
 export async function getLeadKpiFunnel(userId, { days = 30 } = {}) {

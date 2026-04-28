@@ -1,6 +1,7 @@
 import User from '../../models/User.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { USER_ROLE, USER_ROLE_VALUES } from '../../constants/roles.js';
+import { evaluateProfessionalProfileSetup } from '../../utils/professionalProfileSetup.js';
 import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
@@ -221,16 +222,30 @@ export const profileService = async (user) => {
     new Date() > new Date(user.trial_ends_at);
   const isExpired = user.account_status === 'expired' || trialExpired;
 
+  const profileSetup =
+    user.role === USER_ROLE.ADMIN
+      ? {
+          personal_complete: true,
+          business_complete: true,
+          is_complete: true,
+          missing_fields: [],
+        }
+      : evaluateProfessionalProfileSetup(user, professionalProfile);
+
   return {
     status: 200,
     body: {
       success: true,
+      // ICP is optional; gates use personal + business basics only (see requireCompleteProfessionalProfile).
+      profile_setup: { ...profileSetup, icp_is_separate_from_workspace_basics: true },
       user: {
         name: `${user.first_name} ${user.last_name}`,
         first_name: user.first_name,
         last_name: user.last_name,
         email: user.email,
         role: user.role,
+        profile_image: user.profile_image || null,
+        cover_image: user.cover_image || null,
         accountStatus: user.account_status,
         trialEndsAt: user.trial_ends_at,
         isExpired,

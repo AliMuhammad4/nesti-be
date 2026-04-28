@@ -42,4 +42,6 @@ export const professionalUpsertBodySchema = professionalProfileUpdateSchema
   .append({
     first_name: Joi.string().trim().min(1),
     last_name: Joi.string().trim().min(1),
+    profile_image: Joi.string().uri().max(2048).allow(null, ''),
+    cover_image: Joi.string().uri().max(2048).allow(null, ''),
   });

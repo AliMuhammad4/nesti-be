@@ -1,4 +1,4 @@
-export const CHAT_INTENTS = ['buy', 'sell'];
+export const CHAT_INTENTS = ['buy', 'sell', 'unspecified'];
 export const CHAT_MESSAGE_ROLES = ['user', 'assistant'];
 export const LEAD_GRADES = ['hot', 'warm', 'interested', 'cold', 'unscored'];
 export const LEAD_QUALITY_LEVELS = ['hot', 'warm', 'interested', 'cold'];

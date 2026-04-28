@@ -76,6 +76,34 @@ export function buildLeadRecapMarkdownLines({ form = {}, contact = {}, extracted
   add('Living situation', living);
   add('Ready to make an offer', urgency);
 
+  const proType = String(form.professionalType || '').toLowerCase();
+  if (proType === 'lawyer' || trimVal(form.transaction_stage) || trimVal(form.legal_services_needed)) {
+    add('Transaction stage', humanize(form.transaction_stage || extracted.transaction_stage));
+    add('Closing timeline', humanize(form.closing_timeline || extracted.closing_timeline));
+    add('Transaction type', humanize(form.transaction_type || extracted.transaction_type));
+    add('Property value', humanize(form.property_value || extracted.property_value));
+    add('Legal services needed', humanize(form.legal_services_needed || extracted.legal_services_needed));
+    add('Realtor involved', humanize(form.realtor_involved || extracted.realtor_involved));
+    add('First-time buyer', humanize(form.first_time_buyer || extracted.first_time_buyer));
+    add('Preferred contact', humanize(form.preferred_contact_method || extracted.preferred_contact_method));
+    add('Best time to contact', humanize(form.best_time_to_contact || extracted.best_time_to_contact));
+  }
+  if (
+    proType === 'mortgage_broker' ||
+    trimVal(form.mortgage_timeline) ||
+    trimVal(form.pre_approval_status)
+  ) {
+    add('Apply timeline', humanize(form.mortgage_timeline || extracted.mortgage_timeline));
+    add('Pre-approval status', humanize(form.pre_approval_status || extracted.pre_approval_status));
+    add('Credit range', humanize(form.credit_score_range || extracted.credit_score_range));
+    add('Employment', humanize(form.employment_status || extracted.employment_status));
+    add('Household income', humanize(form.household_income || extracted.household_income));
+    add('Down payment readiness', humanize(form.down_payment_readiness || extracted.down_payment_readiness));
+    add('Purchase purpose', humanize(form.purchase_purpose || extracted.purchase_purpose));
+    add('Preferred contact', humanize(form.preferred_contact_method || extracted.preferred_contact_method));
+    add('Best time to contact', humanize(form.best_time_to_contact || extracted.best_time_to_contact));
+  }
+
   return rows;
 }
 
@@ -112,8 +140,11 @@ export function injectLeadRecapIntoReply(reply, recapLines) {
   const looksLikeRecap =
     start !== -1 ||
     /(everything\s+correct|change\s+any\s+details|is\s+everything\s+correct)/i.test(raw) ||
-    /\b(here'?s|here is)\b.*\b(so far|gathered|recap)\b/i.test(raw) ||
-    /\bwhat\s+i\s+(have|'?ve)\s+so\s+far\b/i.test(raw);
+    /\b(here'?s|here is)\b.*\b(so far|gathered|recap|shared)\b/i.test(raw) ||
+    /\bwhat\s+i\s+(have|'?ve)\s+so\s+far\b/i.test(raw) ||
+    /\b(anything\s+(you'?d\s+)?like\s+to\s+(change|correct)|does\s+this\s+look\s+right|sound\s+right|confirm\s+(these\s+)?details)\b/i.test(
+      raw,
+    );
 
   if (!looksLikeRecap) return raw;
 

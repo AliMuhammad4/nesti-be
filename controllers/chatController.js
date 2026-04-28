@@ -133,7 +133,8 @@ export const scorePreview = async (req, res, next) => {
     const professionalType = req.body.professionalType || formContact.professionalType || PROFESSIONAL_TYPE.AGENT;
     const isMortgageBroker = professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER;
     const isLawyer = professionalType === PROFESSIONAL_TYPE.LAWYER;
-    const intent = formContact.intent || 'buy';
+    const intent =
+      isLawyer || isMortgageBroker ? 'unspecified' : formContact.intent || 'buy';
 
     const formSignals = isLawyer
       ? {

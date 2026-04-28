@@ -10,7 +10,7 @@ import {
   emitNewLeadCreatedNotification,
   sendNewLeadCreatedEmailIfEnabled,
 } from '../../realtime/leadCreatedNotify.js';
-import { buildLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
+import { buildLeadType, buildLawyerLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
 
@@ -20,7 +20,7 @@ function computeLeadTypeForMatch(flow, persistedGrade, aiIntent) {
     return buildMortgageBrokerLeadType(persistedGrade);
   }
   if (role === PROFESSIONAL_TYPE.LAWYER) {
-    return `${persistedGrade}_client`;
+    return buildLawyerLeadType(persistedGrade);
   }
   const intent = aiIntent === 'sell' ? 'sell' : 'buy';
   return buildLeadType(persistedGrade, intent);
@@ -99,15 +99,41 @@ export async function syncLeadMatchAfterTurn({
       })
     : null;
 
-  if (canCreateLeads && !existingLeadMatch && professionalProfile && hasContact) {
+  /**
+   * Agents need a ProfessionalProfile row (ICP, business context). Lawyers and mortgage brokers
+   * often embed the chatbot before finishing Settings; we still persist CRM leads when contact exists.
+   */
+  const profileRequiredForNewLead = flow?.flowRole === PROFESSIONAL_TYPE.AGENT;
+  const canPersistNewLead = hasContact && (!profileRequiredForNewLead || professionalProfile);
+
+  if (canCreateLeads && !existingLeadMatch && !canPersistNewLead) {
+    logger.warn('Chat service: lead not persisted (precheck)', {
+      op: 'chat.lead',
+      flow: flowType,
+      reason: !hasContact ? 'no_contact_identity' : 'agent_missing_professional_profile',
+      user_id: String(userId),
+      conversation_id: String(conversation._id),
+      session_id: sessionId,
+    });
+  }
+
+  if (canCreateLeads && !existingLeadMatch && canPersistNewLead) {
+    if (!professionalProfile && !profileRequiredForNewLead) {
+      logger.warn('Chat service: creating lawyer/broker lead without ProfessionalProfile — complete Settings for full ICP', {
+        op: 'chat.lead',
+        flow: flowType,
+        user_id: String(userId),
+        conversation_id: String(conversation._id),
+      });
+    }
     const derivedQual = flow.deriveQualificationFromText(conversationText);
     const mergedAiDetails = flow.getMergedAiDetails(parsedAiDetails, derivedQual);
 
     const newLeadMatch = await flow.createNewLead({
       conversation,
-      intent: usesFixedBuyIntentForLeadMatch(flow) ? 'buy' : aiIntent,
-      professionalProfileId: professionalProfile._id,
-      activeIcpProfileId: professionalProfile.active_icp_profile_id || null,
+      intent: usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent,
+      professionalProfileId: professionalProfile?._id || null,
+      activeIcpProfileId: professionalProfile?.active_icp_profile_id || null,
       leadScore: finalScore,
       leadGrade: persistedGrade,
       leadMeta,
@@ -138,7 +164,7 @@ export async function syncLeadMatchAfterTurn({
           .select('calendly_booking_status lead_reasons last_interaction_at intent')
           .lean();
         const appointment_status = resolveAppointmentStatus(newLeadMatch.match_status, convo?.calendly_booking_status);
-        const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'buy' : aiIntent;
+        const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent;
         const conversion_preview = buildWorkspaceLeadConversionPreview({
           leadMatch: newLeadMatch,
           conversation: convo || conversation,
@@ -274,7 +300,7 @@ export async function syncLeadMatchAfterTurn({
           .lean()
       : null;
     const appointment_status = resolveAppointmentStatus(fresh?.match_status, convo?.calendly_booking_status);
-    const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'buy' : aiIntent;
+    const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent;
     const conversion_preview = buildWorkspaceLeadConversionPreview({
       leadMatch: fresh || existingLeadMatch,
       conversation: convo || conversation,

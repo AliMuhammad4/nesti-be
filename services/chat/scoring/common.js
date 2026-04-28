@@ -76,9 +76,20 @@ export const mergeSignals = (base, patch) => ({
   area:             takeIfPresent(patch, base, 'area'),
   location:         takeIfPresent(patch, base, 'location'),
 });
+
+const VALID_LEAD_TYPE_GRADES = new Set(['hot', 'warm', 'interested', 'cold']);
+
+/** Maps chat grades (e.g. `unscored`) to a slug allowed by `leadMatchCreateSchema` / LEAD_TYPES. */
+export function normalizeGradeForLeadType(grade) {
+  const g = String(grade || '').toLowerCase().trim();
+  if (VALID_LEAD_TYPE_GRADES.has(g)) return g;
+  return 'cold';
+}
+
 export const buildLeadType = (grade, intent) =>
-  `${grade}_${intent === 'sell' ? 'seller' : 'buyer'}`;
-export const buildMortgageBrokerLeadType = (grade) => `${grade}_client`;
+  `${normalizeGradeForLeadType(grade)}_${intent === 'sell' ? 'seller' : 'buyer'}`;
+export const buildMortgageBrokerLeadType = (grade) => `${normalizeGradeForLeadType(grade)}_client`;
+export const buildLawyerLeadType = (grade) => `${normalizeGradeForLeadType(grade)}_client`;
 export const buildLeadClassification = (grade, intent) => {
   const label = grade.charAt(0).toUpperCase() + grade.slice(1);
   const i = intent === 'sell' ? 'Seller' : 'Buyer';

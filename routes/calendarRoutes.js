@@ -1,6 +1,6 @@
 import express from 'express';
 import mongoose from 'mongoose';
-import { protect } from '../middleware/authMiddleware.js';
+import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import {
   webhookSubscriptionBodySchema,
@@ -440,21 +440,22 @@ const cancelCalendlyBookingHandler = async (req, res, next) => {
 
 router.get('/connect/calendly/embed',                requireEmbedFeature, loadEmbed, connectCalendlyByEmbed);
 router.get('/status/embed',                          requireEmbedFeature, loadEmbed, getCalendarStatusByEmbed);
-router.post('/calendly/webhook-subscription',        protect, requireCalendlyConnected, validateBody(webhookSubscriptionBearerBodySchema), registerWebhookSubscription);
+router.post('/calendly/webhook-subscription',        protect, requireCompleteProfessionalProfile, requireCalendlyConnected, validateBody(webhookSubscriptionBearerBodySchema), registerWebhookSubscription);
 router.post('/calendly/webhook-subscription/embed',  requireEmbedFeature, loadEmbed, requireCalendlyConnected, validateBody(webhookSubscriptionBodySchema), registerWebhookSubscriptionEmbed);
 router.get('/calendly/webhook-subscriptions/embed',  requireDevFeature, loadEmbed, requireCalendlyConnected, listWebhooksEmbed);
 router.post('/calendly/simulate-invitee-created/embed', requireDevFeature, loadEmbed, validateBody(simulateInviteeBodySchema), simulateInviteeCreatedEmbed);
 router.post(
   '/calendly/cancel-booking',
   protect,
+  requireCompleteProfessionalProfile,
   requireCalendlyConnected,
   validateBody(calendlyCancelBookingBodySchema),
   cancelCalendlyBookingHandler
 );
-router.get('/connect/:provider',                     protect, requireCalendlyProvider, connectCalendar);
+router.get('/connect/:provider',                     protect, requireCompleteProfessionalProfile, requireCalendlyProvider, connectCalendar);
 router.get('/callback/:provider',                    requireCalendlyProvider, callbackCalendar);
-router.get('/status',                                protect, getCalendarStatus);
-router.get('/bookings',                              protect, getBookings);
-router.delete('/disconnect/:provider',               protect, requireCalendlyProvider, disconnectCalendar);
+router.get('/status',                                protect, requireCompleteProfessionalProfile, getCalendarStatus);
+router.get('/bookings',                              protect, requireCompleteProfessionalProfile, getBookings);
+router.delete('/disconnect/:provider',               protect, requireCompleteProfessionalProfile, requireCalendlyProvider, disconnectCalendar);
 
 export default router;

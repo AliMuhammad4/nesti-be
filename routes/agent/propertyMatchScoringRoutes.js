@@ -1,5 +1,9 @@
 import express from 'express';
-import { protect, ensureAgent } from '../../middleware/authMiddleware.js';
+import {
+  protect,
+  ensureAgent,
+  requireCompleteProfessionalProfile,
+} from '../../middleware/authMiddleware.js';
 import {
   getMyPropertyMatchScoring,
   putMyPropertyMatchScoring,
@@ -7,7 +11,7 @@ import {
 
 const router = express.Router();
 
-router.get('/', protect, ensureAgent, getMyPropertyMatchScoring);
-router.put('/', protect, ensureAgent, putMyPropertyMatchScoring);
+router.get('/', protect, requireCompleteProfessionalProfile, ensureAgent, getMyPropertyMatchScoring);
+router.put('/', protect, requireCompleteProfessionalProfile, ensureAgent, putMyPropertyMatchScoring);
 
 export default router;

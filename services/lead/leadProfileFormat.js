@@ -27,10 +27,45 @@ function hasStructuredBudgetRange(bp) {
   );
 }
 
+function mapPropertyForApi(profile, profType) {
+  const p = profile || {};
+  const budget =
+    p.property?.budget || p.property?.expected_price || p.budget_profile?.latest_budget_text || null;
+  const timeline =
+    profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+      ? p.property?.timeline || p.qualification?.mortgage_broker?.mortgage_timeline || null
+      : p.property?.timeline || null;
+
+  const slim = {
+    location: p.property?.location || null,
+    address: p.property?.address || null,
+    budget,
+    timeline,
+  };
+
+  if (profType !== PROFESSIONAL_TYPE.AGENT) {
+    return slim;
+  }
+
+  return {
+    ...slim,
+    bedrooms: p.property?.bedrooms || null,
+    bathrooms: p.property?.bathrooms || null,
+    square_footage: p.property?.square_footage || null,
+    property_type: p.property?.property_type || null,
+    must_have_features: p.property?.must_have_features || null,
+    parking_required: p.property?.parking_required || null,
+    backyard_needed: p.property?.backyard_needed || null,
+    school_district_important: p.property?.school_district_important || null,
+  };
+}
+
 export function mapLeadProfileForApi(profile, profType) {
   const p = profile || {};
+  const hideBuyerSellerIntent =
+    profType === PROFESSIONAL_TYPE.LAWYER || profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER;
   return {
-    intent: p.intent || null,
+    intent: hideBuyerSellerIntent ? null : p.intent || null,
     contact: {
       full_name: p.identity?.full_name || null,
       email: p.identity?.email || null,
@@ -40,20 +75,7 @@ export function mapLeadProfileForApi(profile, profType) {
       preferred_contact_method: p.contact_preferences?.preferred_contact_method || null,
       best_time_to_contact: p.contact_preferences?.best_time_to_contact || null,
     },
-    property: {
-      location: p.property?.location || null,
-      address: p.property?.address || null,
-      budget: p.property?.budget || p.property?.expected_price || p.budget_profile?.latest_budget_text || null,
-      timeline: p.property?.timeline || p.qualification?.mortgage_broker?.mortgage_timeline || null,
-      bedrooms: p.property?.bedrooms || null,
-      bathrooms: p.property?.bathrooms || null,
-      square_footage: p.property?.square_footage || null,
-      property_type: p.property?.property_type || null,
-      must_have_features: p.property?.must_have_features || null,
-      parking_required: p.property?.parking_required || null,
-      backyard_needed: p.property?.backyard_needed || null,
-      school_district_important: p.property?.school_district_important || null,
-    },
+    property: mapPropertyForApi(p, profType),
     qualification:
       profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
         ? {
@@ -106,8 +128,10 @@ export function formatLeadProfileSummary(profile, options = {}) {
   const propBudgetStr = String(profileView.property?.budget || '').trim();
   const latestText = String(rawBp.latest_budget_text || '').trim();
   const budget_profile = { ...rawBp };
+  const isTokenBudgetText = /(?:^|_)(plus|under|k|m)(?:_|$)/i.test(latestText);
   if (latestText && propBudgetStr && latestText === propBudgetStr) {
-    delete budget_profile.latest_budget_text;
+    // Keep enum-style budget text (e.g. 1m_plus) so frontend can render "$1M+" instead of "$1".
+    if (!isTokenBudgetText) delete budget_profile.latest_budget_text;
   }
 
   const property = { ...profileView.property };

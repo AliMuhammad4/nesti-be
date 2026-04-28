@@ -15,11 +15,17 @@ export function withNestiNurtureCalendlyTracking(calendlyUrl, conversationId) {
   }
   try {
     const u = new URL(base);
-    if (!u.searchParams.get('utm_content')) u.searchParams.set('utm_content', raw);
-    if (!u.searchParams.get('utm_source')) u.searchParams.set('utm_source', 'nesti_nurture');
+    // Always overwrite tracking so reused/shared Calendly URLs cannot leak stale
+    // utm_content and incorrectly map webhook bookings to another user's thread.
+    u.searchParams.set('utm_content', raw);
+    u.searchParams.set('utm_source', 'nesti_nurture');
     return u.toString();
   } catch {
-    const sep = base.includes('?') ? '&' : '?';
-    return `${base}${sep}utm_content=${encodeURIComponent(raw)}&utm_source=${encodeURIComponent('nesti_nurture')}`;
+    const [urlOnly, queryString] = base.split('?');
+    const params = new URLSearchParams(queryString || '');
+    params.set('utm_content', raw);
+    params.set('utm_source', 'nesti_nurture');
+    const qs = params.toString();
+    return qs ? `${urlOnly}?${qs}` : urlOnly;
   }
 }

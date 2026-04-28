@@ -218,7 +218,7 @@ export const createMortgageLeadRecords = async ({
 
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
-      intent: 'buy',
+      intent: 'unspecified',
       identity: {
         full_name: contactInfo.name || 'Unknown',
         email: contactInfo.email || '',
@@ -282,7 +282,7 @@ export const createMortgageLeadRecords = async ({
       session_id:      sessionId,
       embed_token:     embedToken,
       agent_type:      conversation.agent_type,
-      intent:          'buy',
+      intent:          'unspecified',
       lead_grade:      leadGrade,
       message_snippet: messageSnippet,
       contact:         contactInfo,
@@ -316,7 +316,7 @@ export const createMortgageLeadRecords = async ({
     initial_quality: leadGrade,
   });
 
-  await bumpLeadProfileStats(leadProfile._id, 'buy', leadType);
+  await bumpLeadProfileStats(leadProfile._id, 'unspecified', leadType);
 
   logger.info(`Mortgage lead created: ${leadType} | score: ${leadScore} | conversation: ${conversation._id}`);
 

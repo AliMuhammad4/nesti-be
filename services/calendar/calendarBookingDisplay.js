@@ -43,6 +43,12 @@ function propertyTypeFromProfile(profile) {
 function professionalTypeFromProfile(profile) {
   const pt = profile?.ownership?.professional_type;
   if (pt != null && String(pt).trim()) return String(pt).trim();
+  const q = profile?.qualification || {};
+  if (q?.lawyer && typeof q.lawyer === 'object' && Object.keys(q.lawyer).length) return 'lawyer';
+  if (q?.mortgage_broker && typeof q.mortgage_broker === 'object' && Object.keys(q.mortgage_broker).length) {
+    return 'mortgage_broker';
+  }
+  if (q?.agent && typeof q.agent === 'object' && Object.keys(q.agent).length) return 'agent';
   return null;
 }
 

@@ -40,4 +40,6 @@ export function buildPaginationMeta({ page, limit, total }) {
 export const PAGINATION_PRESETS = {
   leadList: { defaultLimit: 20, maxLimit: 100 },
   propertyMatches: { defaultLimit: 10, maxLimit: 100 },
+  /** Referrals table (inbound/outbound tabs). */
+  referralsList: { defaultLimit: 10, maxLimit: 100 },
 };

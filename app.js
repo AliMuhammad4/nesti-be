@@ -11,6 +11,7 @@ import logger from './utils/logger.js';
 import authRoutes from './routes/authRoutes.js';
 import embedRoutes from './routes/embedRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
+import referralRoutes from './routes/referralRoutes.js';
 import leadRoutes from './routes/leadRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
@@ -96,6 +97,7 @@ app.get('/api/health/smtp', async (req, res) => {
 app.use('/auth', authRoutes);
 app.use('/api/embed', embedRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/referrals', referralRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/ai', aiRoutes);

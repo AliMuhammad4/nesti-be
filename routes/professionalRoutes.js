@@ -9,6 +9,8 @@ import {
   upsertProfessionalProfile,
   getIdealClientProfile,
   saveIdealClientProfile,
+  listProfessionalsByRole,
+  getProfessionalById,
 } from '../controllers/professionalController.js';
 import { postProfileImageUpload } from '../controllers/profileMediaController.js';
 import { uploadProfileImage } from '../middleware/uploadProfileImage.js';
@@ -41,6 +43,8 @@ function validateIcpByRole(req, res, next) {
 }
 
 router.get('/me', protect, getMyProfessionalProfile);
+router.get('/list', protect, listProfessionalsByRole);
+router.get('/:id', protect, getProfessionalById);
 router.post('/upload-image', protect, runProfileUpload, postProfileImageUpload);
 router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
 router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);

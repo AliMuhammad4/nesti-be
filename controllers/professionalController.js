@@ -1,6 +1,6 @@
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import User from '../models/User.js';
-import { isValidProfessionalType } from '../constants/roles.js';
+import { isValidProfessionalType, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { refreshCalendlySlugMismatchForUser } from '../services/calendly/calendlyAlignmentService.js';
 import { scoreLeadAgainstIcp } from '../services/lead/icpScoringService.js';
 import LeadMatch from '../models/LeadMatch.js';
@@ -348,6 +348,200 @@ export const saveIdealClientProfile = async (req, res, next) => {
       ideal_client_profile: toIdealClientProfileResponse(icpProfile),
       active_icp_profile_id: icpProfile._id,
       leads_rescored: rescored,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const listProfessionalsByRole = async (req, res, next) => {
+  try {
+    const roleRaw = String(req.query.role || '').trim().toLowerCase();
+    const role = roleRaw && PROFESSIONAL_TYPE_VALUES.includes(roleRaw) ? roleRaw : null;
+    const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '12'), 10) || 12, 1), 100);
+    const search = String(req.query.search || '').trim();
+
+    const currentUserId = req.user?._id ? String(req.user._id) : null;
+    const userFilter = role
+      ? { role }
+      : { role: { $in: PROFESSIONAL_TYPE_VALUES } };
+
+    if (currentUserId) {
+      userFilter._id = { $ne: req.user._id };
+    }
+
+    if (search) {
+      const re = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      userFilter.$or = [{ first_name: re }, { last_name: re }, { email: re }];
+    }
+
+    const total = await User.countDocuments(userFilter);
+    const users = await User.find(userFilter)
+      .select('first_name last_name email role profile_image cover_image createdAt updatedAt')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    const userIds = users.map((u) => u._id);
+    const profiles = userIds.length
+      ? await ProfessionalProfile.find({ user_id: { $in: userIds } })
+          .select('user_id professional_type full_name company_name phone location website calendly_link')
+          .lean()
+      : [];
+    const profileByUser = new Map(profiles.map((p) => [String(p.user_id), p]));
+    const leadStatsRows = userIds.length
+      ? await LeadMatch.aggregate([
+          { $match: { user_id: { $in: userIds } } },
+          {
+            $group: {
+              _id: '$user_id',
+              total_leads: { $sum: 1 },
+              total_deals: {
+                $sum: {
+                  $cond: [{ $eq: ['$match_status', 'converted'] }, 1, 0],
+                },
+              },
+            },
+          },
+        ])
+      : [];
+    const leadStatsByUser = new Map(
+      leadStatsRows.map((row) => [
+        String(row._id),
+        {
+          total_leads: Number(row.total_leads || 0),
+          total_deals: Number(row.total_deals || 0),
+        },
+      ])
+    );
+
+    const items = users.map((u) => {
+      const p = profileByUser.get(String(u._id)) || {};
+      const stats = leadStatsByUser.get(String(u._id)) || { total_leads: 0, total_deals: 0 };
+      const fullName =
+        String(p.full_name || '').trim() ||
+        [u.first_name, u.last_name].filter(Boolean).join(' ').trim() ||
+        '';
+      return {
+        id: String(u._id),
+        role: u.role,
+        email: u.email || '',
+        first_name: u.first_name || '',
+        last_name: u.last_name || '',
+        full_name: fullName,
+        profile_image: u.profile_image || null,
+        company_name: p.company_name || '',
+        phone: p.phone || '',
+        location: p.location || '',
+        website: p.website || '',
+        calendly_link: p.calendly_link || '',
+        professional_type: p.professional_type || u.role || null,
+        total_leads: stats.total_leads,
+        total_deals: stats.total_deals,
+        created_at: u.createdAt || null,
+      };
+    });
+
+    return res.json({
+      success: true,
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        total_pages: Math.max(Math.ceil(total / limit), 1),
+        has_prev_page: page > 1,
+        has_next_page: page * limit < total,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getProfessionalById = async (req, res, next) => {
+  try {
+    const userId = String(req.params.id || '').trim();
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'Missing professional id' });
+    }
+
+    const user = await User.findById(userId)
+      .select('first_name last_name email role profile_image cover_image createdAt updatedAt')
+      .lean();
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Professional not found' });
+    }
+
+    const profile = await ProfessionalProfile.findOne({ user_id: user._id })
+      .select(
+        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio',
+      )
+      .lean();
+
+    const fullName =
+      String(profile?.full_name || '').trim() ||
+      [user.first_name, user.last_name].filter(Boolean).join(' ').trim() ||
+      '';
+    const leadStats = await LeadMatch.aggregate([
+      { $match: { user_id: user._id } },
+      {
+        $group: {
+          _id: '$user_id',
+          total_leads: { $sum: 1 },
+          total_deals: {
+            $sum: {
+              $cond: [{ $eq: ['$match_status', 'converted'] }, 1, 0],
+            },
+          },
+        },
+      },
+    ]);
+    const stats = leadStats?.[0] || {};
+
+    return res.json({
+      success: true,
+      professional: {
+        id: String(user._id),
+        role: user.role,
+        email: user.email || '',
+        first_name: user.first_name || '',
+        last_name: user.last_name || '',
+        full_name: fullName,
+        profile_image: user.profile_image || null,
+        cover_image: user.cover_image || null,
+        professional_type: profile?.professional_type || user.role || null,
+        company_name: profile?.company_name || '',
+        phone: profile?.phone || '',
+        location: profile?.location || '',
+        website: profile?.website || '',
+        calendly_link: profile?.calendly_link || '',
+        bio: profile?.bio || '',
+        certificates: Array.isArray(profile?.certificates) ? profile.certificates : [],
+        target_neighborhoods: profile?.target_neighborhoods || '',
+        experience: profile?.experience || '',
+        license_number: profile?.license_number || '',
+        social_media: profile?.social_media || '',
+        transaction_volume: profile?.transaction_volume || '',
+        avg_sale_price: profile?.avg_sale_price || '',
+        response_time: profile?.response_time || '',
+        availability: profile?.availability || '',
+        support_level: profile?.support_level || '',
+        negotiation_style: profile?.negotiation_style || '',
+        sales_approach: profile?.sales_approach || '',
+        energy_style: profile?.energy_style || '',
+        personality_tag: profile?.personality_tag || '',
+        awards: profile?.awards || '',
+        specializations: Array.isArray(profile?.specializations) ? profile.specializations : [],
+        communication_channels: Array.isArray(profile?.communication_channels) ? profile.communication_channels : [],
+        preferred_clients: Array.isArray(profile?.preferred_clients) ? profile.preferred_clients : [],
+        total_leads: Number(stats.total_leads || 0),
+        total_deals: Number(stats.total_deals || 0),
+        created_at: user.createdAt || null,
+        updated_at: user.updatedAt || null,
+      },
     });
   } catch (error) {
     return next(error);

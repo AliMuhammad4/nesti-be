@@ -18,8 +18,6 @@ import {
   chatBodySchema,
   propertyMatchesSchema,
   scorePreviewSchema,
-  referralCreateBodySchema,
-  referralUpdateBodySchema,
   nurtureDraftBodySchema,
   nurtureRefineBodySchema,
   nurtureSendBodySchema,
@@ -31,7 +29,6 @@ import {
   postNurtureSend,
   getNurtureLogs,
 } from '../controllers/nurtureController.js';
-
 const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
 
 router.post('/', validateBody(chatBodySchema), handleChat);
@@ -74,21 +71,6 @@ router.get(
   requireCompleteProfessionalProfile,
   ensureAgentOrMortgageBroker,
   getLeadKpiTimeline,
-);
-router.post(
-  '/referrals',
-  protect,
-  requireCompleteProfessionalProfile,
-  validateBody(referralCreateBodySchema),
-  stub
-);
-router.get('/referrals', protect, requireCompleteProfessionalProfile, stub);
-router.patch(
-  '/referrals/:id',
-  protect,
-  requireCompleteProfessionalProfile,
-  validateBody(referralUpdateBodySchema),
-  stub
 );
 router.post(
   '/nurture/draft',

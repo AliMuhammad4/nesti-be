@@ -1,5 +1,5 @@
-import { Joi, objectId, passthrough } from './common.js';
-import { referralCreateSchema, referralUpdateSchema } from './opsSchemas.js';
+import { Joi, objectId, passthrough, str } from './common.js';
+import { REFERRAL_STATUSES } from '../constants/validationEnums.js';
 
 export const chatBodySchema = Joi.object({
   id: Joi.string().optional(),
@@ -26,15 +26,19 @@ export const scorePreviewSchema = Joi.object({
   formContact: Joi.object().unknown(true).optional(),
 }).unknown(true);
 
-export const referralCreateBodySchema = referralCreateSchema.fork(
-  ['user_id', 'target_user_id', 'conversation_id', 'target_vertical'],
-  (s) => s.optional()
-);
+/** Body from dashboard; user_id is taken from JWT server-side. */
+export const referralPostBodySchema = Joi.object({
+  target_user_id: objectId.required(),
+  conversation_id: objectId.required(),
+  target_vertical: Joi.string().trim().min(1).max(200).required(),
+  status: Joi.string().valid(...REFERRAL_STATUSES).optional(),
+  notes: str.optional(),
+});
 
-export const referralUpdateBodySchema = referralUpdateSchema.fork(
-  ['user_id', 'target_user_id', 'conversation_id', 'target_vertical'],
-  (s) => s.optional()
-);
+export const referralPatchBodySchema = Joi.object({
+  status: Joi.string().valid(...REFERRAL_STATUSES).optional(),
+  notes: str.optional(),
+});
 
 export const nurtureDraftBodySchema = Joi.object({
   lead_match_id: objectId.optional(),

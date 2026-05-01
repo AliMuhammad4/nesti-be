@@ -19,7 +19,8 @@ import {
 const KPI_APPOINTMENT_BOOKED = 'appointment_booked';
 const KPI_BOOKING_LOOKBACK_MS = 366 * 24 * 60 * 60 * 1000;
 const LEAD_FIELDS = '_id lead_profile_id conversation_id match_status compatibility_factors lead_type';
-const PROFILE_FIELDS = 'identity intent property.property_type';
+const PROFILE_FIELDS =
+  'identity intent ownership.professional_type property.property_type property.location property.address qualification';
 const CONV_FIELDS = 'calendly_booking_status calendly_booking_at intent';
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────

@@ -44,14 +44,14 @@ function validateIcpByRole(req, res, next) {
 
 router.get('/me', protect, getMyProfessionalProfile);
 router.get('/list', protect, listProfessionalsByRole);
-router.get('/:id', protect, getProfessionalById);
 router.post('/upload-image', protect, runProfileUpload, postProfileImageUpload);
-router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.patch('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-
 router.get('/icp', protect, requireCompleteProfessionalProfile, getIdealClientProfile);
 router.post('/icp', protect, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
 router.put('/icp', protect, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
+
+router.get('/:id', protect, getProfessionalById);
+router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.patch('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
 
 export default router;

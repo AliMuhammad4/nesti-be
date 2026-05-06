@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import LeadKpiEvent from '../../models/LeadKpiEvent.js';
 import LeadMatch from '../../models/LeadMatch.js';
+import Referral from '../../models/Referral.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
 function parseDays(days) {
@@ -61,20 +62,33 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
   const views = byType.lead_viewed || 0;
   const nurtureEmails = byType.nurture_email_sent || 0;
 
-  const [cohortAgg] = await LeadMatch.aggregate([
-    { $match: { user_id: uid, createdAt: { $gte: since } } },
-    {
-      $group: {
-        _id: null,
-        leads_in_window: { $sum: 1 },
-        closed_won_in_window: {
-          $sum: { $cond: [{ $eq: ['$match_status', 'converted'] }, 1, 0] },
+  const [cohortAgg, closedWonAgg] = await Promise.all([
+    LeadMatch.aggregate([
+      { $match: { user_id: uid, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          leads_in_window: { $sum: 1 },
+          closed_won_in_window: {
+            $sum: { $cond: [{ $eq: ['$match_status', 'converted'] }, 1, 0] },
+          },
         },
       },
-    },
+    ]),
+    LeadMatch.aggregate([
+      {
+        $match: {
+          user_id: uid,
+          updatedAt: { $gte: since },
+          match_status: 'converted',
+        },
+      },
+      { $group: { _id: null, deals_closed_won_in_window: { $sum: 1 } } },
+    ]),
   ]);
-  const leadsInWindow = cohortAgg?.leads_in_window ?? 0;
-  const closedWonInWindow = cohortAgg?.closed_won_in_window ?? 0;
+  const leadsInWindow = cohortAgg?.[0]?.leads_in_window ?? 0;
+  const closedWonCohort = cohortAgg?.[0]?.closed_won_in_window ?? 0;
+  const dealsClosedWonInWindow = closedWonAgg?.[0]?.deals_closed_won_in_window ?? 0;
 
   return {
     window_days: parseDays(days),
@@ -86,13 +100,15 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
       nurture_emails_sent: nurtureEmails,
       appointments_booked: booked,
       appointments_canceled: canceled,
-      leads_closed_won: closedWonInWindow,
+      // Count deals by when they were moved/kept in won during the selected window.
+      leads_closed_won: dealsClosedWonInWindow,
+      leads_closed_won_from_created_cohort: closedWonCohort,
       leads_in_window_for_conversion: leadsInWindow,
     },
     conversion_rates: {
       /** Leads with `match_status === 'converted'` ÷ LeadMatches created in the window (CRM win rate). */
       closed_won_from_created:
-        leadsInWindow > 0 ? Number((closedWonInWindow / leadsInWindow).toFixed(3)) : 0,
+        leadsInWindow > 0 ? Number((closedWonCohort / leadsInWindow).toFixed(3)) : 0,
       booked_from_created: created > 0 ? Number((booked / created).toFixed(3)) : 0,
       canceled_from_booked: booked > 0 ? Number((canceled / booked).toFixed(3)) : 0,
     },
@@ -215,7 +231,39 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
     },
   ]);
 
+  const referralRows = await Referral.aggregate([
+    {
+      $match: {
+        $or: [{ user_id: uid }, { target_user_id: uid }],
+        createdAt: { $gte: since },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+        },
+        inbound_referred: {
+          $sum: { $cond: [{ $eq: ['$target_user_id', uid] }, 1, 0] },
+        },
+        outbound_referred: {
+          $sum: { $cond: [{ $eq: ['$user_id', uid] }, 1, 0] },
+        },
+      },
+    },
+    { $sort: { '_id.day': 1 } },
+    {
+      $project: {
+        _id: 0,
+        date: '$_id.day',
+        inbound_referred: 1,
+        outbound_referred: 1,
+      },
+    },
+  ]);
+
   const byDay = new Map(rows.map((r) => [r.date, r]));
+  const referralsByDay = new Map(referralRows.map((r) => [r.date, r]));
   const series = [];
   for (let i = d - 1; i >= 0; i -= 1) {
     const dt = new Date();
@@ -223,6 +271,7 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
     dt.setUTCDate(dt.getUTCDate() - i);
     const key = dt.toISOString().slice(0, 10);
     const row = byDay.get(key);
+    const ref = referralsByDay.get(key);
     series.push({
       date: key,
       label: `${String(dt.getUTCMonth() + 1).padStart(2, '0')}/${String(dt.getUTCDate()).padStart(2, '0')}`,
@@ -232,6 +281,8 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
       appointment_booked: row?.appointment_booked || 0,
       appointment_canceled: row?.appointment_canceled || 0,
       nurture_email_sent: row?.nurture_email_sent || 0,
+      inbound_referred: ref?.inbound_referred || 0,
+      outbound_referred: ref?.outbound_referred || 0,
     });
   }
 

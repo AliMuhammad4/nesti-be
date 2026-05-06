@@ -97,6 +97,20 @@ async function enrichLeadDetailWithProfileConsultation(userId, profile, leadDeta
 
 // ─── Lead match controllers ───────────────────────────────────────────────────
 
+/**
+ * LeadMatch rows created for the *recipient* when they accept a referral set
+ * `compatibility_factors.referral_id`. Those should not show in GET /leads (own pipeline);
+ * the lead remains managed under Referrals.
+ */
+function excludeAcceptedReferralRecipientMatchesFilter() {
+  return {
+    $or: [
+      { 'compatibility_factors.referral_id': { $exists: false } },
+      { 'compatibility_factors.referral_id': null },
+    ],
+  };
+}
+
 async function resolveLeadPropertyMatchCount({ userId, leadMatch, leadProfile }) {
   try {
     if (!leadMatch || !leadProfile) return 0;
@@ -152,6 +166,9 @@ export const getLeads = async (req, res, next) => {
       match.match_status = { $nin: ['converted', 'closed_lost'] };
     } else if (pipelineNorm === 'closed') {
       match.match_status = { $in: ['converted', 'closed_lost'] };
+    } else if (pipelineNorm === 'referrals') {
+      /** UI uses GET /referrals?status=accepted; guard getLeads if this param is sent. */
+      match._id = { $in: [] };
     }
     if (grade)     match.lead_type = new RegExp(`^${grade}_`);
     if (intent === 'buy' || intent === 'sell')
@@ -159,7 +176,11 @@ export const getLeads = async (req, res, next) => {
     if (embedToken) match['compatibility_factors.embed_token'] = embedToken;
 
     const apptFilter = await buildAppointmentMongoFilter(userId, appointment);
-    const query = apptFilter ? { $and: [match, apptFilter] } : match;
+    /** Recipient LeadMatch rows created when a referral is accepted are tagged with `compatibility_factors.referral_id`; they must not appear in the main Leads list (only under Referrals / pipeline referral UI). */
+    const hideReferralRecipientLeads = excludeAcceptedReferralRecipientMatchesFilter();
+    const query = apptFilter
+      ? { $and: [match, apptFilter, hideReferralRecipientLeads] }
+      : { $and: [match, hideReferralRecipientLeads] };
 
     const [total, leadMatches] = await Promise.all([
       LeadMatch.countDocuments(query),

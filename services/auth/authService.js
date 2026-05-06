@@ -239,6 +239,8 @@ export const profileService = async (user) => {
       // ICP is optional; gates use personal + business basics only (see requireCompleteProfessionalProfile).
       profile_setup: { ...profileSetup, icp_is_separate_from_workspace_basics: true },
       user: {
+        id: String(user._id),
+        _id: String(user._id),
         name: `${user.first_name} ${user.last_name}`,
         first_name: user.first_name,
         last_name: user.last_name,

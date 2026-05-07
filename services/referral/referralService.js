@@ -5,8 +5,11 @@ import User from '../../models/User.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import ChatConversation from '../../models/ChatConversation.js';
 import LeadProfile from '../../models/LeadProfile.js';
+import WorkspaceAppointment from '../../models/WorkspaceAppointment.js';
 import logger from '../../utils/logger.js';
 import { REFERRAL_STATUSES } from '../../constants/validationEnums.js';
+import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
+import { buildNurtureConsultationBookedFromEmailByProfileIds } from '../lead/leadNurtureBookingStatus.js';
 import {
   notifyReferralAccepted,
   notifyReferralReceived,
@@ -86,6 +89,9 @@ function coerceListIntent(conversation, profile, leadMatch) {
     return !s || ['unspecified', 'unknown', 'n/a', 'na', 'none'].includes(s);
   };
 
+  const fromLt = intentFromLeadType(leadMatch?.lead_type);
+  if (fromLt) return fromLt;
+
   const convIntent = conversation?.intent;
   const profileIntent = profile?.intent;
 
@@ -96,9 +102,6 @@ function coerceListIntent(conversation, profile, leadMatch) {
     .trim()
     .toLowerCase();
   if (primary === 'buy' || primary === 'sell') return primary;
-
-  const fromLt = intentFromLeadType(leadMatch?.lead_type);
-  if (fromLt) return fromLt;
 
   const fromClass = intentFromClassification(conversation?.lead_classification);
   if (fromClass) return fromClass;
@@ -129,11 +132,11 @@ function buildListLeadSummary(sourceRoleRaw, profile, conversation, leadMatch) {
     .toLowerCase();
 
   let scoreRaw = profile?.scoring?.current_score;
-  if (scoreRaw === undefined || scoreRaw === null || scoreRaw === '') {
-    scoreRaw = conversation?.lead_score;
+  if (leadMatch?.match_score !== undefined && leadMatch?.match_score !== null && leadMatch?.match_score !== '') {
+    scoreRaw = leadMatch.match_score;
   }
   if (scoreRaw === undefined || scoreRaw === null || scoreRaw === '') {
-    scoreRaw = leadMatch?.match_score;
+    scoreRaw = conversation?.lead_score;
   }
 
   let leadScore =
@@ -242,7 +245,17 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
 
   const matchByPair = new Map();
   for (const m of matches) {
-    matchByPair.set(pairKeyReferral(m.user_id, m.conversation_id), m);
+    const key = pairKeyReferral(m.user_id, m.conversation_id);
+    const prev = matchByPair.get(key);
+    if (!prev) {
+      matchByPair.set(key, m);
+      continue;
+    }
+    const prevTs = new Date(prev.updatedAt || 0).getTime();
+    const currTs = new Date(m.updatedAt || 0).getTime();
+    if (currTs >= prevTs) {
+      matchByPair.set(key, m);
+    }
   }
 
   const profileIds = [...new Set(matches.map((m) => m.lead_profile_id).filter(Boolean))];
@@ -258,15 +271,75 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
   const conversations =
     convIds.length > 0
       ? await ChatConversation.find({ _id: { $in: convIds } })
-          .select('intent lead_score lead_grade lead_classification is_qualified emotional_state form_data')
+          .select(
+            'intent lead_score lead_grade lead_classification is_qualified emotional_state form_data calendly_booking_status',
+          )
           .lean()
       : [];
   const convById = new Map(conversations.map((c) => [String(c._id), c]));
+
+  const profileIdsForConsult = [
+    ...new Set(
+      matches
+        .map((m) => (m?.lead_profile_id ? String(m.lead_profile_id) : ''))
+        .filter(Boolean),
+    ),
+  ];
+  const nurtureBookedByProfile =
+    profileIdsForConsult.length > 0
+      ? await buildNurtureConsultationBookedFromEmailByProfileIds(viewerUserId, profileIdsForConsult)
+      : new Map();
 
   const viewerStr =
     viewerUserId != null && mongoose.Types.ObjectId.isValid(String(viewerUserId))
       ? String(viewerUserId)
       : '';
+
+  const viewerLeadMatchIds = viewerStr
+    ? [
+        ...new Set(
+          list
+            .map((r) => viewerLeadMatchFromMap(r, viewerStr, matchByPair))
+            .filter(Boolean)
+            .map((m) => String(m._id))
+            .filter(Boolean),
+        ),
+      ]
+    : [];
+  const viewerConversationIds = viewerStr
+    ? [
+        ...new Set(
+          list
+            .map((r) => (r?.conversation_id ? String(r.conversation_id) : ''))
+            .filter(Boolean),
+        ),
+      ]
+    : [];
+  const workspaceBookedRows =
+    viewerStr && (viewerLeadMatchIds.length > 0 || viewerConversationIds.length > 0)
+      ? await WorkspaceAppointment.find({
+          user_id: viewerUserId,
+          status: 'booked',
+          $or: [
+            ...(viewerLeadMatchIds.length > 0 ? [{ lead_match_id: { $in: viewerLeadMatchIds } }] : []),
+            ...(viewerConversationIds.length > 0
+              ? [{ conversation_id: { $in: viewerConversationIds } }]
+              : []),
+          ],
+        })
+          .select('lead_match_id conversation_id')
+          .lean()
+      : [];
+  const workspaceBookedLeadIds = new Set(
+    workspaceBookedRows
+      .map((r) => (r?.lead_match_id ? String(r.lead_match_id) : ''))
+      .filter(Boolean),
+  );
+  const workspaceBookedConversationIds = new Set(
+    workspaceBookedRows
+      .map((r) => (r?.conversation_id ? String(r.conversation_id) : ''))
+      .filter(Boolean),
+  );
 
   const items = [];
   for (const r of list) {
@@ -287,6 +360,28 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
 
     const profile = lm?.lead_profile_id ? profileById.get(String(lm.lead_profile_id)) : null;
     const conversation = cid ? convById.get(String(cid)) : null;
+    const viewerProfileId = viewerLm?.lead_profile_id
+      ? String(viewerLm.lead_profile_id)
+      : lm?.lead_profile_id
+        ? String(lm.lead_profile_id)
+        : '';
+    /**
+     * Referrals can share a conversation thread across users; `calendly_booking_status` on that
+     * thread may reflect the referrer's booking state. For list-row consult status we must use the
+     * viewer/referred user's own signals only.
+     */
+    let appointment_status = resolveAppointmentStatus(viewerLm?.match_status, null);
+    const viewerLeadMatchId = viewerLm?._id ? String(viewerLm._id) : '';
+    const conversationId = cid ? String(cid) : '';
+    if (
+      appointment_status !== 'booked' &&
+      (workspaceBookedLeadIds.has(viewerLeadMatchId) || workspaceBookedConversationIds.has(conversationId))
+    ) {
+      appointment_status = 'booked';
+    }
+    const nurture_consultation_booked = viewerProfileId
+      ? Boolean(nurtureBookedByProfile.get(viewerProfileId))
+      : false;
 
     const sourceRoleRaw = String(
       profile?.ownership?.professional_type ||
@@ -295,7 +390,7 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
     ).trim();
 
     let full_name = String(profile?.identity?.full_name || '').trim();
-    let email = String(profile?.identity?.email || '').trim();
+    let email = String(profile?.identity?.canonical_email || profile?.identity?.email || '').trim();
     if (!full_name && conversation?.form_data && typeof conversation.form_data === 'object') {
       const fd = conversation.form_data;
       full_name = String(fd.full_name || fd.name || '').trim();
@@ -314,6 +409,8 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
       ...base,
       lead_contact,
       lead_summary,
+      appointment_status,
+      nurture_consultation_booked,
       viewer_match_status,
       viewer_match_updated_at,
       target_match_status,
@@ -335,7 +432,9 @@ export async function buildReferralLeadDetailsResponse(referralLean, viewerUserI
   const sourceLeadMatch = await LeadMatch.findOne({
     user_id: referral.user_id,
     conversation_id: referral.conversation_id,
-  }).lean();
+  })
+    .sort({ updatedAt: -1 })
+    .lean();
 
   /** Recipient's row (created on accept). Required for target's pipeline PATCH/note APIs. */
   const refStatus = String(referral.status || '').trim().toLowerCase();
@@ -350,7 +449,9 @@ export async function buildReferralLeadDetailsResponse(referralLean, viewerUserI
     targetViewerLeadMatch = await LeadMatch.findOne({
       user_id: vOid,
       conversation_id: referral.conversation_id,
-    }).lean();
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
     // Accept via PATCH alone never called POST /process — no row yet; self-heal for GET /referrals/:id/lead
     if (!targetViewerLeadMatch && refStatus === 'accepted') {
       const ensured = await ensureTargetLeadMatchForReferral(referral);
@@ -419,6 +520,15 @@ export async function buildReferralLeadDetailsResponse(referralLean, viewerUserI
 
     if (leadProfile) {
       const profileDisplay = mapLeadProfileForApi(leadProfile, displayProfType);
+      const preferredEmail = String(
+        leadProfile?.identity?.canonical_email || leadProfile?.identity?.email || profileDisplay?.contact?.email || '',
+      ).trim();
+      if (mappedLead?.contact && preferredEmail) {
+        mappedLead.contact = {
+          ...mappedLead.contact,
+          email: preferredEmail,
+        };
+      }
       const pi =
         profileDisplay.intent != null && String(profileDisplay.intent).trim() !== ''
           ? profileDisplay.intent
@@ -606,6 +716,7 @@ export async function createReferralForUser(referrerUserId, body) {
     const inflight = await Referral.findOne({
       user_id: userId,
       conversation_id: convOid,
+      target_user_id: targetOid,
       status: { $in: ['pending', 'accepted'] },
     })
       .select('_id')
@@ -614,8 +725,7 @@ export async function createReferralForUser(referrerUserId, body) {
       return {
         ok: false,
         code: 409,
-        message:
-          'This lead already has an active referral (pending or accepted). Finish or reject it before sending another.',
+        message: 'This lead is already referred to this professional with an active status.',
         existing_referral_id: String(inflight._id),
       };
     }
@@ -646,8 +756,7 @@ export async function createReferralForUser(referrerUserId, body) {
       return {
         ok: false,
         code: 409,
-        message:
-          'This lead already has an active referral (pending or accepted). Finish or reject it before sending another.',
+        message: 'This lead is already referred to this professional with an active status.',
         duplicate: true,
       };
     }

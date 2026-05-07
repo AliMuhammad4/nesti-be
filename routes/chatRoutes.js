@@ -21,12 +21,14 @@ import {
   nurtureDraftBodySchema,
   nurtureRefineBodySchema,
   nurtureSendBodySchema,
+  nurturePreviewBodySchema,
   calculatorSchema,
 } from '../schemas/chatRouteSchemas.js';
 import {
   postNurtureDraft,
   postNurtureRefine,
   postNurtureSend,
+  postNurturePreview,
   getNurtureLogs,
 } from '../controllers/nurtureController.js';
 const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
@@ -87,6 +89,14 @@ router.post(
   ensureAgentOrMortgageBroker,
   validateBody(nurtureRefineBodySchema),
   postNurtureRefine,
+);
+router.post(
+  '/nurture/preview',
+  protect,
+  requireCompleteProfessionalProfile,
+  ensureAgentOrMortgageBroker,
+  validateBody(nurturePreviewBodySchema),
+  postNurturePreview,
 );
 router.post(
   '/nurture/send',

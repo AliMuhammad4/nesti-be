@@ -20,6 +20,35 @@ import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurtureP
 import { composeNurtureEmailHtml } from '../services/nurture/nurtureEmailTemplate.js';
 import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
 
+function normalizeProfessionalType(raw) {
+  const role = String(raw || '').trim().toLowerCase();
+  if (role === PROFESSIONAL_TYPE.LAWYER) return PROFESSIONAL_TYPE.LAWYER;
+  if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+  if (role === PROFESSIONAL_TYPE.AGENT) return PROFESSIONAL_TYPE.AGENT;
+  return null;
+}
+
+function resolveNurtureOperatingRole(leadMatch, referralContext, viewerRoleRaw) {
+  const isReferralNurture =
+    Boolean(referralContext) || Boolean(leadMatch?.compatibility_factors?.referral_id);
+  if (!isReferralNurture) {
+    return (
+      normalizeProfessionalType(leadMatch?.compatibility_factors?.professional_type) ||
+      PROFESSIONAL_TYPE.AGENT
+    );
+  }
+  const viewerRole = normalizeProfessionalType(viewerRoleRaw);
+  if (viewerRole) return viewerRole;
+  const action = normalizeProfessionalType(referralContext?.action_professional_role);
+  if (action) return action;
+  const target = normalizeProfessionalType(referralContext?.target_professional_role);
+  if (target) return target;
+  return (
+    normalizeProfessionalType(leadMatch?.compatibility_factors?.professional_type) ||
+    PROFESSIONAL_TYPE.AGENT
+  );
+}
+
 async function loadLeadBundle(userId, leadMatchId) {
   if (!mongoose.Types.ObjectId.isValid(leadMatchId)) return null;
   const leadMatch = await LeadMatch.findOne({ _id: leadMatchId, user_id: userId }).lean();
@@ -181,24 +210,50 @@ function resolveRecipientEmail(to_email, bundle) {
   return fromProfile || fromMatchContact || fromBody || null;
 }
 
-/** Draft/refine API responses expose plain text only; send may still accept optional body_html. */
-function nurtureDraftJsonResponse(draft) {
-  return { subject: draft.subject, body_text: draft.body_text };
+/** Draft/refine API responses expose plain text plus compact property-match preview for UI. */
+function nurtureDraftJsonResponse(draft, propertyMatches) {
+  const listings = Array.isArray(propertyMatches?.listings) ? propertyMatches.listings : [];
+  return {
+    subject: draft.subject,
+    body_text: draft.body_text,
+    property_matches_preview: listings.map((L, i) => ({
+      i: i + 1,
+      title: L?.title || null,
+      location: L?.location || L?.address || null,
+      price: L?.price != null ? Number(L.price) : null,
+      match_score: L?.match_score != null ? Number(L.match_score) : null,
+      source: L?.source || null,
+    })),
+    property_matches_count: listings.length,
+  };
 }
 
-async function nurturePropertyMatchesSnapshot(userId, leadMatch, professionalProfile) {
+async function nurturePropertyMatchesSnapshot(
+  userId,
+  leadMatch,
+  leadProfile,
+  professionalProfile,
+  referralContext = null,
+  viewerRoleRaw = null,
+) {
+  const isReferralNurture =
+    Boolean(referralContext) || Boolean(leadMatch?.compatibility_factors?.referral_id);
+  const operatingRole = resolveNurtureOperatingRole(leadMatch, referralContext, viewerRoleRaw);
   return loadPropertyMatchesForNurtureEmail({
     userId,
     conversationId: leadMatch?.conversation_id,
-    leadProfessionalType: leadMatch?.compatibility_factors?.professional_type,
+    leadProfessionalType: operatingRole,
     professionalProfile,
+    leadProfile: leadProfile || null,
+    leadMatch: leadMatch || null,
+    enableProfileFallback: isReferralNurture,
   });
 }
 
 export async function postNurtureDraft(req, res, next) {
   try {
     if (!process.env.OPENAI_API_KEY) return openAiUnavailable(res);
-    const { lead_match_id, lead_profile_id, goal, tone } = req.body;
+    const { lead_match_id, lead_profile_id, goal, tone, referral_context } = req.body;
     const bundle = await loadLeadBundleForNurture(req.user._id, {
       lead_match_id,
       lead_profile_id,
@@ -219,10 +274,18 @@ export async function postNurtureDraft(req, res, next) {
     const propertyMatches = await nurturePropertyMatchesSnapshot(
       req.user._id,
       bundle.leadMatch,
+      bundle.profile,
       professionalProfile,
+      referral_context || null,
+      req.user?.role || null,
     );
     const leadContext = buildLeadContext(bundle.leadMatch, bundle.profile, bundle.conversation, {
       property_matches: propertyMatches,
+      viewer_professional_role: req.user?.role || null,
+      is_referral_nurture: Boolean(
+        referral_context || bundle.leadMatch?.compatibility_factors?.referral_id,
+      ),
+      referral_context: referral_context || null,
     });
     const draftRaw = await generateDraft(leadContext, {
       goal,
@@ -233,7 +296,7 @@ export async function postNurtureDraft(req, res, next) {
       success: true,
       ...nurtureLeadIdsResponse(bundle),
       calendly_url: calendly_url || null,
-      draft: nurtureDraftJsonResponse(draft),
+      draft: nurtureDraftJsonResponse(draft, propertyMatches),
     });
   } catch (err) {
     return handleNurtureAiException(err, res, next, 'nurture draft');
@@ -243,7 +306,7 @@ export async function postNurtureDraft(req, res, next) {
 export async function postNurtureRefine(req, res, next) {
   try {
     if (!process.env.OPENAI_API_KEY) return openAiUnavailable(res);
-    const { lead_match_id, lead_profile_id, subject, body, instruction } = req.body;
+    const { lead_match_id, lead_profile_id, subject, body, instruction, referral_context } = req.body;
     const bundle = await loadLeadBundleForNurture(req.user._id, {
       lead_match_id,
       lead_profile_id,
@@ -266,10 +329,18 @@ export async function postNurtureRefine(req, res, next) {
     const propertyMatches = await nurturePropertyMatchesSnapshot(
       req.user._id,
       bundle.leadMatch,
+      bundle.profile,
       professionalProfile,
+      referral_context || null,
+      req.user?.role || null,
     );
     const leadContext = buildLeadContext(bundle.leadMatch, bundle.profile, bundle.conversation, {
       property_matches: propertyMatches,
+      viewer_professional_role: req.user?.role || null,
+      is_referral_nurture: Boolean(
+        referral_context || bundle.leadMatch?.compatibility_factors?.referral_id,
+      ),
+      referral_context: referral_context || null,
     });
     const draftRaw = await refineDraft(leadContext, { subject, body_text: bodyForAi }, instruction);
     const draft = finalizeNurtureDraftBody(draftRaw, { calendly_url, signature });
@@ -277,7 +348,7 @@ export async function postNurtureRefine(req, res, next) {
       success: true,
       ...nurtureLeadIdsResponse(bundle),
       calendly_url: calendly_url || null,
-      draft: nurtureDraftJsonResponse(draft),
+      draft: nurtureDraftJsonResponse(draft, propertyMatches),
     });
   } catch (err) {
     return handleNurtureAiException(err, res, next, 'nurture refine');
@@ -295,6 +366,7 @@ export async function postNurtureSend(req, res, next) {
       body,
       body_html,
       include_property_cards,
+      referral_context,
     } = req.body;
     const bundle = await loadLeadBundleForNurture(req.user._id, {
       lead_match_id,
@@ -332,21 +404,38 @@ export async function postNurtureSend(req, res, next) {
       const propertyMatches = await nurturePropertyMatchesSnapshot(
         req.user._id,
         bundle.leadMatch,
+        bundle.profile,
         professionalProfile,
+        referral_context || null,
+        req.user?.role || null,
       );
       const agentName =
         String(signature?.display_name || '').trim() ||
         String(professionalProfile?.full_name || '').trim() ||
         [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
         'Your agent';
+      const bodyForTemplate = stripServerAppendedNurturePlainFooter(body, calendlyUrl, signature);
+      const isReferralNurture =
+        Boolean(referral_context) || Boolean(bundle.leadMatch?.compatibility_factors?.referral_id);
+      const nurtureOperatingRole = resolveNurtureOperatingRole(
+        bundle.leadMatch,
+        referral_context || null,
+        req.user?.role || null,
+      );
+      const listingTableColumns =
+        isReferralNurture && nurtureOperatingRole === PROFESSIONAL_TYPE.AGENT
+          ? 'location_budget'
+          : 'score_notes';
       htmlForSend = composeNurtureEmailHtml({
-        bodyPlain: body,
+        bodyPlain: bodyForTemplate,
         listings: propertyMatches.listings || [],
         includePropertyCards: include_property_cards !== false,
         agentName,
         propertyMatchesContext: propertyMatches.context || null,
         propertyMatchesNote: propertyMatches.note || null,
         schedulingUrl: calendlyUrl || null,
+        signature,
+        listingTableColumns,
       });
     }
 
@@ -390,6 +479,98 @@ export async function postNurtureSend(req, res, next) {
       message: 'Email sent',
       to_email: recipient,
       ...nurtureLeadIdsResponse(bundle),
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function postNurturePreview(req, res, next) {
+  try {
+    const {
+      lead_match_id,
+      lead_profile_id,
+      conversation_id,
+      subject,
+      body,
+      body_html,
+      include_property_cards,
+      referral_context,
+    } = req.body;
+    const bundle = await loadLeadBundleForNurture(req.user._id, {
+      lead_match_id,
+      lead_profile_id,
+    });
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message:
+          'Lead not found. Use lead_match_id, or lead_profile_id with a LeadMatch linked to your account.',
+      });
+    }
+
+    const convId = resolveConversationId(conversation_id, bundle.leadMatch);
+    const customHtml = body_html != null && String(body_html).trim();
+    let htmlPreview;
+    let calendly_url = null;
+
+    if (customHtml) {
+      htmlPreview = String(body_html).trim();
+    } else {
+      const { professionalProfile, signature, calendly_url: calRaw } = await loadProfessionalNurtureMeta(
+        req.user._id,
+        bundle.leadMatch,
+        req.user,
+      );
+      const calendlyUrl = withNestiNurtureCalendlyTracking(calRaw, bundle.leadMatch?.conversation_id);
+      calendly_url = calendlyUrl || null;
+      const propertyMatches = await nurturePropertyMatchesSnapshot(
+        req.user._id,
+        bundle.leadMatch,
+        bundle.profile,
+        professionalProfile,
+        referral_context || null,
+        req.user?.role || null,
+      );
+      const agentName =
+        String(signature?.display_name || '').trim() ||
+        String(professionalProfile?.full_name || '').trim() ||
+        [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
+        'Your agent';
+      const bodyForTemplate = stripServerAppendedNurturePlainFooter(body, calendlyUrl, signature);
+      const isReferralNurture =
+        Boolean(referral_context) || Boolean(bundle.leadMatch?.compatibility_factors?.referral_id);
+      const nurtureOperatingRole = resolveNurtureOperatingRole(
+        bundle.leadMatch,
+        referral_context || null,
+        req.user?.role || null,
+      );
+      const listingTableColumns =
+        isReferralNurture && nurtureOperatingRole === PROFESSIONAL_TYPE.AGENT
+          ? 'location_budget'
+          : 'score_notes';
+      htmlPreview = composeNurtureEmailHtml({
+        bodyPlain: bodyForTemplate,
+        listings: propertyMatches.listings || [],
+        includePropertyCards: include_property_cards !== false,
+        agentName,
+        propertyMatchesContext: propertyMatches.context || null,
+        propertyMatchesNote: propertyMatches.note || null,
+        schedulingUrl: calendlyUrl || null,
+        signature,
+        listingTableColumns,
+      });
+    }
+
+    return res.json({
+      success: true,
+      ...nurtureLeadIdsResponse(bundle),
+      conversation_id: convId ? String(convId) : null,
+      calendly_url,
+      preview: {
+        subject: String(subject || '').trim() || null,
+        html: htmlPreview,
+      },
     });
   } catch (err) {
     return next(err);

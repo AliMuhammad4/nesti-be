@@ -5,6 +5,7 @@ import { evaluateProfessionalProfileSetup } from '../../utils/professionalProfil
 import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
+import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 
@@ -20,17 +21,39 @@ const tryVerifyJwt = (token) => {
 
 const randomOtp = () => Math.floor(10000 + Math.random() * 90000).toString();
 
+function brandOtpEmailHtml({ title, subtitle, otp, footerNote = '' }) {
+  const safeTitle = String(title || '').trim();
+  const safeSubtitle = String(subtitle || '').trim();
+  const safeOtp = String(otp || '').trim();
+  const safeFooter = String(footerNote || '').trim();
+  const content = `
+    <h1 style="margin:0 0 8px;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:22px;line-height:1.3;color:#2D3748;">${safeTitle}</h1>
+    <p style="margin:0 0 18px;font-size:14px;line-height:1.55;color:#4A5568;">${safeSubtitle}</p>
+    <div style="margin:0 0 18px;padding:14px 16px;border:1px solid #bdecc8;border-radius:10px;background:#f2fff6;text-align:center;">
+      <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${EMAIL_BRAND.primaryDark};margin-bottom:6px;">One-time password</div>
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;font-size:34px;font-weight:800;letter-spacing:0.18em;color:#1f8b3d;">${safeOtp}</div>
+    </div>
+    <p style="margin:0;font-size:13px;line-height:1.6;color:#718096;">
+      This code expires in <strong style="color:#2D3748;">10 minutes</strong>. ${safeFooter}
+    </p>`;
+  return renderBrandedEmailShell({
+    kicker: 'Nesti AI',
+    title: 'Account security',
+    innerHtml: content,
+    maxWidth: 560,
+  });
+}
+
 const queueSignupOtpEmail = ({ email, first_name, otp }) => {
   sendEmail({
     email,
     subject: 'Nesti AI - Verify Your Email',
     message: `Welcome to Nesti AI! Your email verification OTP is: ${otp}. It will expire in 10 minutes.`,
-    htmlMessage: `
-      <h1>Welcome to Nesti AI, ${first_name}!</h1>
-      <p>Thank you for signing up. Please use the following One-Time Password (OTP) to verify your email address:</p>
-      <h2 style="background: #f4f4f4; padding: 10px; display: inline-block; letter-spacing: 5px;">${otp}</h2>
-      <p>This code will expire in 10 minutes.</p>
-    `,
+    htmlMessage: brandOtpEmailHtml({
+      title: `Welcome to Nesti AI${first_name ? `, ${first_name}` : ''}!`,
+      subtitle: 'Use this OTP to verify your email address and complete your signup.',
+      otp,
+    }),
   }).then((result) => {
     if (!result.success) {
       logger.error(`Background OTP email failed to send to ${email}`);
@@ -43,12 +66,12 @@ const queuePasswordResetEmail = (email, otp) => {
     email,
     subject: 'Nesti AI - Password Reset OTP',
     message: `You requested a password reset. Your OTP is: ${otp}. It will expire in 10 minutes.`,
-    htmlMessage: `
-      <h1>Password Reset Request</h1>
-      <p>Use the following One-Time Password (OTP) to reset your password:</p>
-      <h2 style="background: #f4f4f4; padding: 10px; display: inline-block; letter-spacing: 5px;">${otp}</h2>
-      <p>This code will expire in 10 minutes. If you did not request this, you can safely ignore this email.</p>
-    `,
+    htmlMessage: brandOtpEmailHtml({
+      title: 'Password reset request',
+      subtitle: 'Use this OTP to continue resetting your password.',
+      otp,
+      footerNote: 'If you did not request this, you can safely ignore this email.',
+    }),
   }).then((result) => {
     if (!result.success) {
       logger.error(`Password reset email failed to send to ${email}`);
@@ -320,7 +343,8 @@ export const forgotPasswordService = async ({ email }) => {
     return { status: 400, body: { success: false, message: 'Please provide an email address' } };
   }
 
-  const user = await User.findOne({ email });
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail });
   if (!user) {
     return {
       status: 404,
@@ -352,7 +376,8 @@ export const verifyResetOtpService = async ({ email, otp }) => {
     };
   }
 
-  const user = await User.findOne({ email });
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail });
   if (!user || !user.reset_password_token || !user.reset_password_expires) {
     return { status: 400, body: { success: false, message: 'Invalid or expired OTP' } };
   }

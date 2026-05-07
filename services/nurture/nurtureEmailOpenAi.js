@@ -20,6 +20,14 @@ function profTypeFromLead(leadMatch) {
   return leadMatch?.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
 }
 
+function normalizeProfessionalType(raw) {
+  const role = String(raw || '').trim().toLowerCase();
+  if (role === PROFESSIONAL_TYPE.LAWYER) return PROFESSIONAL_TYPE.LAWYER;
+  if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+  if (role === PROFESSIONAL_TYPE.AGENT) return PROFESSIONAL_TYPE.AGENT;
+  return null;
+}
+
 function qualificationSlice(profile, profType) {
   const p = profile || {};
   if (profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
@@ -186,10 +194,24 @@ function normalizePropertyMatchesForContext(pm) {
 }
 
 /**
- * @param {{ property_matches?: { listings?: unknown[], context?: string | null, note?: string | null } }} [extras]
+ * @param {{
+ *   property_matches?: { listings?: unknown[], context?: string | null, note?: string | null },
+ *   referral_context?: {
+ *     source_professional_name?: string | null,
+ *     source_professional_role?: string | null,
+ *     referral_notes?: string | null,
+ *   } | null,
+ * }} [extras]
  */
 export function buildLeadContext(leadMatch, profile, conversation, extras = {}) {
-  const profType = profTypeFromLead(leadMatch);
+  const isReferralNurture =
+    Boolean(extras?.is_referral_nurture) || Boolean(extras?.referral_context);
+  const viewerRole = isReferralNurture
+    ? normalizeProfessionalType(extras?.viewer_professional_role)
+    : null;
+  const referralActionRole = normalizeProfessionalType(extras?.referral_context?.action_professional_role);
+  const referralTargetRole = normalizeProfessionalType(extras?.referral_context?.target_professional_role);
+  const profType = viewerRole || referralActionRole || referralTargetRole || profTypeFromLead(leadMatch);
   const grade = String(leadMatch?.lead_type || '').split('_')[0] || null;
   const prop = profile?.property || {};
   const bp = profile?.budget_profile || {};
@@ -282,6 +304,30 @@ export function buildLeadContext(leadMatch, profile, conversation, extras = {}) 
         }
       : null,
     property_matches_email: normalizePropertyMatchesForContext(extras.property_matches),
+    referral_context: extras.referral_context
+      ? {
+          source_professional_name:
+            extras.referral_context.source_professional_name != null
+              ? String(extras.referral_context.source_professional_name).trim() || null
+              : null,
+          source_professional_role:
+            extras.referral_context.source_professional_role != null
+              ? String(extras.referral_context.source_professional_role).trim() || null
+              : null,
+          target_professional_role:
+            extras.referral_context.target_professional_role != null
+              ? String(extras.referral_context.target_professional_role).trim() || null
+              : null,
+          action_professional_role:
+            extras.referral_context.action_professional_role != null
+              ? String(extras.referral_context.action_professional_role).trim() || null
+              : null,
+          referral_notes:
+            extras.referral_context.referral_notes != null
+              ? String(extras.referral_context.referral_notes).trim() || null
+              : null,
+        }
+      : null,
   };
 }
 
@@ -318,11 +364,28 @@ Use the data:
 - Financing/pre-approval: state it once, factually (e.g. "With financing already in place…")—not celebratory.
 - If calendly_booking_status is "booked", acknowledge briefly; do not push scheduling (the platform adds it).
 - Respect professional_type: mortgage = financing readiness; lawyer = transaction stage without legal advice; agent = listings/search/showings.
-- Property matches: when property_matches_email.listings has items, the send template may add formatted cards—do not paste long MLS-style blocks or repeat every field. You **must** still name **each listing's asking price** in body_text when the listing's price field is present in listing data (format clearly, e.g. $50,000), for up to the first 3 listings; one short clause per home (price + location or match_headline) is enough. When the lead has budget_numbers or property.budget, explicitly connect listing price to their range (e.g. "within your budget" or "just above/below your range—worth a look") using only provided numbers. For 4+ listings, give a tight summary plus price **range** across those listings if inferable, otherwise say prices are in the matched homes below. If listings is empty, do not invent properties.
+- Referral role override: when lead_context.referral_context.action_professional_role or target_professional_role is present, treat that as the operating role for tone and structure (not the source referrer's role).
+- If operating role is agent and listings exist, mention matched options aligned to budget range (within budget vs stretch) and guide next showing/search step.
+- If operating role is lawyer or mortgage broker, do not turn the email into an agent-style property pitch; keep to legal/financing progression and consultation framing.
+- Property matches: when property_matches_email.listings has items, the send template adds a formatted listings table below. In body_text, do NOT add bullet/list-style listing rows; write one short transition sentence that points to the matched listings below.
+- Never copy raw labels like "Strong buyer match", "Interested buyer", or any match_headline verbatim into the email body.
+- Do not output a "Matched options include:" section or any itemized listing bullets (including markdown bullets like "- ...", "* ...", "_ - ...", or bolded list rows).
+- Budget consistency is mandatory:
+  - If a listing is within budget, label it "within budget".
+  - If above budget, label it "above budget" or "stretch option" and add one brief reason only if supported.
+  - Never say "aligns with your criteria" and "above budget" in the same clause without qualification.
+  - If most options are above budget, acknowledge that clearly and propose a next step (adjust search/budget strategy).
+- If listings is empty, do not invent properties.
+- Referral leads: if lead_context.referral_context exists, acknowledge the referral naturally in 1 short clause (no over-thanking), and use referral_notes only as directional guidance. Do not expose private/internal phrasing verbatim; convert it into client-safe next steps.
 
 Structure:
 - Subject: specific, professional (market + intent), no clickbait.
-- Body: "Hi {first_name}," or "Hi there," then 2–3 compact paragraphs (3–5 sentences total when possible). Close with one decisive CTA (e.g. which home to prioritize, what to send next, or a single scheduling-oriented question)—avoid vague "let me know" / "I'd love to hear from you" unless there is no alternative.
+- Body order:
+  1) Greeting ("Hi {first_name}," or "Hi there,")
+  2) One context sentence (their goal + location/budget signal)
+  3) If listings exist: short "Matched options include:" block (up to 4 compact lines)
+  4) One action paragraph with a decisive CTA (what to prioritize / what to confirm next)
+- Keep body compact and scannable. Avoid long dense paragraphs.
 - Do NOT include: scheduling URLs, any sign-off, name, email, phone, or [Your Name]—the platform appends those.
 
 Compliance:
@@ -334,7 +397,14 @@ const SYSTEM_REFINE = `You refine nurture emails to the same standard as draft g
 
 Keep main message only—no scheduling links, no closings, no contact block. The platform appends scheduling and signature.
 
-Improve wording and flow; if property_matches_email has listings, keep prose compact but **retain or add each listing's asking price** when present (up to 3 homes), and any budget tie-in—cards on send are supplemental, not a substitute for price in the letter.
+Improve wording and flow with strict readability:
+- Respect operating role the same way as draft generation: if referral_context.action_professional_role or target_professional_role is present, that role controls style/structure.
+- Break oversized paragraphs into short blocks.
+- If property_matches_email has listings, keep one concise transition sentence and rely on the rendered table/cards for detailed rows.
+- Remove raw ranking labels (e.g., "Strong buyer match") and keep listing text factual.
+- Do not output "Matched options include:" or bullet listing rows in refined output (including markdown bullet formats).
+- Enforce budget consistency language ("within budget" vs "above budget/stretch"), and remove contradictory phrasing.
+- Cards on send are supplemental; text should preview, not duplicate the table/cards.
 
 Output only JSON: { "subject", "body_text", "body_html" } with p, br, strong only in body_html (no <a>).`;
 

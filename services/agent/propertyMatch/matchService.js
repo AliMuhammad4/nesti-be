@@ -321,7 +321,7 @@ export async function resolveAgentPropertyMatchesForChat({
   };
 }
 
-export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {} }) {
+async function computeBuyerInventoryMatches(userId, leadProfile, signals, relaxLocationIfEmpty) {
   let cfg = await getResolvedPropertyMatchScoring(userId);
   if (!cfg) cfg = getDefaultResolvedPropertyMatchScoring();
   if (!cfg) return [];
@@ -337,9 +337,24 @@ export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {
   const ctx = buildBuyerScoringContext(leadProfile, signals);
   const b = cfg.buyer;
   const scored = scoreRowsForBuyer(rows, ctx, b);
-  const pool = applyBuyerPreferenceFilter(scored, ctx);
+  let pool = applyBuyerPreferenceFilter(scored, ctx);
+  if (relaxLocationIfEmpty && pool.length === 0 && scored.length > 0) {
+    pool = scored;
+  }
   const sorted = pool.sort((a, c) => c.score - a.score);
   return mapMatchResults(sorted, cfg.maxDisplayScore);
+}
+
+export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {} }) {
+  return computeBuyerInventoryMatches(userId, leadProfile, signals, false);
+}
+
+/**
+ * Nurture / referral contexts: if the lead has a location, strict overlap can drop every row
+ * even though scored inventory exists — fall back to ranked inventory for best-effort picks.
+ */
+export async function getBuyerPropertyMatchesForNurture({ userId, leadProfile, signals = {} }) {
+  return computeBuyerInventoryMatches(userId, leadProfile, signals, true);
 }
 
 export async function getBuyerMatchesForSellerProperty({ userId, leadProfile, signals = {} }) {

@@ -3,6 +3,12 @@
  * consultation emails (see wrapComprehensiveEmail / matchesToHtml in postBookingEmail.js).
  */
 import { matchesToHtml } from '../calendly/postBooking/postBookingEmail.js';
+import {
+  EMAIL_BLUE_CTA_STYLE,
+  EMAIL_GREEN_CTA_STYLE,
+  EMAIL_LINK_STYLE,
+  renderBrandedEmailShell,
+} from '../email/emailTheme.js';
 
 const NURTURE_LISTINGS_SECTION_TITLE = 'Recommended listings';
 
@@ -35,10 +41,10 @@ function linkifyPlainChunk(text) {
       const normalized = trimUrlTrailingPunct(chunk);
       const href = hrefAttr(normalized);
       if (isCalendlyUrl(normalized)) {
-        return `<a href="${href}" style="display:inline-block;background:#006BFF;color:#ffffff !important;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:8px 0 4px 0;">Schedule a call</a>`;
+        return `<a href="${href}" style="${EMAIL_BLUE_CTA_STYLE}margin:8px 0 4px 0;">Schedule a call</a>`;
       }
       const label = escapeHtml(normalized);
-      return `<a href="${href}" style="color:#047857;text-decoration:underline;">${label}</a>`;
+      return `<a href="${href}" style="${EMAIL_LINK_STYLE}">${label}</a>`;
     }
     return escapeHtml(chunk);
   }).join('');
@@ -95,7 +101,7 @@ export function buildNurtureListingCardsHtml(listings) {
       const sum = L.summary ? escapeHtml(String(L.summary).slice(0, 220)) : '';
       const url = String(L.listing_url || '').trim();
       const btn = url
-        ? `<a href="${hrefAttr(url)}" style="display:inline-block;background:#047857;color:#ffffff !important;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;margin-top:10px;">View listing</a>`
+        ? `<a href="${hrefAttr(url)}" style="${EMAIL_GREEN_CTA_STYLE}padding:10px 18px;border-radius:6px;font-size:14px;margin-top:10px;">View listing</a>`
         : '';
 
       return `
@@ -147,9 +153,73 @@ export function plainBodyToHtmlFragment(plainBody) {
     .join('\n');
 }
 
+function stripMatchedOptionsBlock(plainBody) {
+  const raw = String(plainBody || '');
+  if (!raw.trim()) return '';
+  const normalized = raw.replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  const out = [];
+  let i = 0;
+  const isListingBullet = (value) => {
+    const s = String(value || '').trim();
+    if (!s) return false;
+    // Handles "- ...", "* ...", "_ - ...", "_* ..."
+    const normalized = s.replace(/^_+/, '').trim();
+    if (!/^[-*]\s+/.test(normalized)) return false;
+    const lower = normalized.toLowerCase();
+    return (
+      /\$[\d,]/.test(normalized) ||
+      /bed|bath|budget|stretch|area match|property type|lahore|karachi|islamabad/.test(lower)
+    );
+  };
+
+  while (i < lines.length) {
+    const line = String(lines[i] || '').trim();
+    if (/^matched options include\s*:/i.test(line)) {
+      i += 1;
+      while (i < lines.length) {
+        const bullet = String(lines[i] || '').trim();
+        if (isListingBullet(bullet)) {
+          i += 1;
+          continue;
+        }
+        if (!bullet) {
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    // Fallback cleanup: remove any contiguous listing-bullet block even without heading.
+    if (isListingBullet(line)) {
+      while (i < lines.length && isListingBullet(lines[i])) i += 1;
+      continue;
+    }
+    out.push(lines[i]);
+    i += 1;
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function stripInlineBookingCta(plainBody) {
+  const raw = String(plainBody || '');
+  if (!raw.trim()) return '';
+  const lines = raw.replace(/\r\n/g, '\n').split('\n');
+  const kept = lines.filter((line) => {
+    const s = String(line || '').trim().toLowerCase();
+    if (!s) return true;
+    if (s.includes('calendly.com')) return false;
+    if (/^book a time that works for you\s*:/.test(s)) return false;
+    if (/^schedule a (call|meeting)\b/.test(s)) return false;
+    return true;
+  });
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /**
  * Outer layout aligned with consultation / post-booking emails (gradient header + Nesti footer).
- * @param {{ schedulingUrl?: string | null }} [options]
+ * @param {{ schedulingUrl?: string | null, signature?: { display_name?: string | null, email?: string | null, phone?: string | null } | null }} [options]
  */
 export function wrapNurtureEmailShell(agentName, innerHtml, options = {}) {
   const name = String(agentName || 'Your agent').trim() || 'Your agent';
@@ -159,40 +229,45 @@ export function wrapNurtureEmailShell(agentName, innerHtml, options = {}) {
       : '';
   const scheduleBlock = schedulingUrl
     ? `<p style="margin:16px 0 0;font-size:14px;line-height:1.55;color:#334155;">To book an appointment with <strong>${escapeHtml(name)}</strong>, please select a time using the scheduling link below.</p>
-<p style="margin:12px 0 0;"><a href="${hrefAttr(schedulingUrl)}" style="display:inline-block;background:#006BFF;color:#ffffff !important;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">Schedule a meeting</a></p>`
+<p style="margin:12px 0 0;"><a href="${hrefAttr(schedulingUrl)}" style="${EMAIL_BLUE_CTA_STYLE}">Schedule a meeting</a></p>`
     : `<p style="margin:16px 0 0;font-size:13px;line-height:1.55;color:#64748b;">For next steps, reply to this email or contact <strong>${escapeHtml(name)}</strong> using the contact details shared in the message above.</p>`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
-<body style="margin:0;padding:0;background-color:#f1f5f9;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9;padding:28px 16px;">
-  <tr><td align="center">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e2e8f0;">
-      <tr><td style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);padding:22px 28px;">
-        <div style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#94a3b8;">Follow-up message</div>
-        <div style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:19px;font-weight:600;color:#f8fafc;margin-top:8px;line-height:1.25;">${escapeHtml(name)}</div>
-      </td></tr>
-      <tr><td style="padding:28px 28px 32px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;">
-        ${innerHtml}
-        <p style="margin:28px 0 0;font-size:12px;line-height:1.55;color:#64748b;border-top:1px solid #e2e8f0;padding-top:22px;">
-          This message was prepared by <strong>Nesti</strong> on behalf of your real estate professional.
-        </p>
-        ${scheduleBlock}
-      </td></tr>
-    </table>
-  </td></tr>
-</table>
-</body></html>`;
+  const sig = options.signature && typeof options.signature === 'object' ? options.signature : null;
+  const sigName =
+    sig?.display_name != null && String(sig.display_name).trim()
+      ? String(sig.display_name).trim()
+      : name;
+  const sigEmail =
+    sig?.email != null && String(sig.email).trim() ? String(sig.email).trim() : '';
+  const sigPhone =
+    sig?.phone != null && String(sig.phone).trim() ? String(sig.phone).trim() : '';
+  const signatureBlock = `
+    <p style="margin:18px 0 0;font-size:14px;line-height:1.55;color:#334155;">
+      Best regards,<br/>
+      <strong>${escapeHtml(sigName)}</strong>${sigEmail ? `<br/>${escapeHtml(sigEmail)}` : ''}${sigPhone ? `<br/>${escapeHtml(sigPhone)}` : ''}
+    </p>`;
+  return renderBrandedEmailShell({
+    kicker: 'Follow-up message',
+    title: escapeHtml(name),
+    innerHtml: `${innerHtml}
+      <p style="margin:28px 0 0;font-size:12px;line-height:1.55;color:#64748b;border-top:1px solid #e2e8f0;padding-top:22px;">
+        This message was prepared by <strong>Nesti</strong> on behalf of your real estate professional.
+      </p>
+      ${scheduleBlock}
+      ${signatureBlock}`,
+    maxWidth: 600,
+  });
 }
 
 function mapNurtureListingForMatchesTable(L) {
   if (!L || typeof L !== 'object') return null;
   const reasons = Array.isArray(L.match_reasons) ? L.match_reasons.filter(Boolean).map(String) : [];
-  const fromHeadline = L.match_headline ? [String(L.match_headline).trim()] : [];
+  const rawHeadline = L.match_headline ? String(L.match_headline).trim() : '';
+  const fromHeadline =
+    rawHeadline && !/strong buyer match|interested buyer/i.test(rawHeadline) ? [rawHeadline] : [];
   const match_reasons = reasons.length ? reasons : fromHeadline;
+  const propertyType = String(L.property_type || '').trim();
   return {
-    title: L.title || L.property_type || 'Property',
+    title: propertyType || 'Property',
     address: L.address || null,
     location: L.location || null,
     price: L.price,
@@ -203,7 +278,13 @@ function mapNurtureListingForMatchesTable(L) {
   };
 }
 
-function consultationStyleMatchesSectionHtml(listings, agentName, propertyMatchesContext, propertyMatchesNote) {
+function consultationStyleMatchesSectionHtml(
+  listings,
+  agentName,
+  propertyMatchesContext,
+  propertyMatchesNote,
+  listingTableColumns,
+) {
   const name = String(agentName || 'Your agent').trim() || 'Your agent';
   const rows = listings.map(mapNurtureListingForMatchesTable).filter(Boolean);
   if (!rows.length) return '';
@@ -216,11 +297,12 @@ function consultationStyleMatchesSectionHtml(listings, agentName, propertyMatche
       : `The listings below are matched to your stated preferences and are provided for your review with <strong>${escapeHtml(name)}</strong>.`;
   const divider =
     '<div style="height:1px;background:#e2e8f0;margin:26px 0;" role="separator"></div>';
+  const columnsMode = listingTableColumns === 'location_budget' ? 'location_budget' : 'default';
   return `${divider}
 <h2 style="font-size:15px;margin:0 0 14px;color:#0f172a;font-weight:600;letter-spacing:0.01em;">${escapeHtml(NURTURE_LISTINGS_SECTION_TITLE)}</h2>
 <div style="font-size:14px;line-height:1.55;color:#334155;">
   <p style="margin:0 0 14px;">${intro}</p>
-  ${matchesToHtml(rows, '', { includeContextHeading: false })}
+  ${matchesToHtml(rows, '', { includeContextHeading: false, columnsMode })}
   ${note ? `<p style="margin:14px 0 0;font-size:13px;line-height:1.5;color:#64748b;">${escapeHtml(note)}</p>` : ''}
 </div>`;
 }
@@ -234,10 +316,12 @@ function consultationStyleMatchesSectionHtml(listings, agentName, propertyMatche
  *   propertyMatchesContext?: string | null,
  *   propertyMatchesNote?: string | null,
  *   schedulingUrl?: string | null,
+ *   signature?: { display_name?: string | null, email?: string | null, phone?: string | null } | null,
+ *   listingTableColumns?: 'score_notes' | 'location_budget',
  * }} opts
  */
 export function composeNurtureEmailHtml(opts) {
-  const bodyPlain = opts.bodyPlain ?? '';
+  const bodyPlainRaw = opts.bodyPlain ?? '';
   const listings = Array.isArray(opts.listings) ? opts.listings : [];
   const includePropertyCards = opts.includePropertyCards !== false;
   const agentName =
@@ -245,7 +329,16 @@ export function composeNurtureEmailHtml(opts) {
       ? String(opts.agentName).trim()
       : 'Your agent';
 
+  let bodyPlain = bodyPlainRaw;
+  if (includePropertyCards && listings.length) {
+    bodyPlain = stripMatchedOptionsBlock(bodyPlain);
+  }
+  // Keep only one booking CTA in final HTML (footer schedule button).
+  bodyPlain = stripInlineBookingCta(bodyPlain);
   const bodyFrag = plainBodyToHtmlFragment(bodyPlain);
+  const listingTableColumns =
+    opts.listingTableColumns === 'location_budget' ? 'location_budget' : 'score_notes';
+
   const matchesSection =
     includePropertyCards && listings.length
       ? consultationStyleMatchesSectionHtml(
@@ -253,6 +346,7 @@ export function composeNurtureEmailHtml(opts) {
           agentName,
           opts.propertyMatchesContext || null,
           opts.propertyMatchesNote || null,
+          listingTableColumns,
         )
       : '';
 
@@ -266,7 +360,10 @@ ${matchesSection}`;
     opts.schedulingUrl != null && String(opts.schedulingUrl).trim()
       ? String(opts.schedulingUrl).trim()
       : '';
-  return wrapNurtureEmailShell(agentName, inner.trim(), { schedulingUrl });
+  return wrapNurtureEmailShell(agentName, inner.trim(), {
+    schedulingUrl,
+    signature: opts.signature || null,
+  });
 }
 
 /**

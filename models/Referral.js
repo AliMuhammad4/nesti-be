@@ -31,9 +31,9 @@ const referralSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-/** At most one in-flight outbound referral per referrer + conversation (pending/accepted). */
+/** At most one in-flight outbound referral per referrer + conversation + target (pending/accepted). */
 referralSchema.index(
-  { user_id: 1, conversation_id: 1 },
+  { user_id: 1, conversation_id: 1, target_user_id: 1 },
   {
     unique: true,
     partialFilterExpression: { status: { $in: ['pending', 'accepted'] } },

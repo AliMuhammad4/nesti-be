@@ -14,6 +14,7 @@ import {
   conversionPreviewBody,
   primaryNextActionFromPreview,
 } from '../lead/leadExperienceContract.js';
+import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
 
 function envTruthy(value) {
   return ['1', 'true', 'yes'].includes(String(value ?? '').trim().toLowerCase());
@@ -141,6 +142,18 @@ export async function sendNewLeadCreatedEmailIfEnabled(ownerUserId, ctx) {
       email: user.email,
       subject: `New ${persistedGrade} lead — Nesti`,
       message: `${summary}\n\nOpen your dashboard to follow up.\nLead ID: ${String(newLeadMatch._id)}`,
+      htmlMessage: renderBrandedEmailShell({
+        kicker: 'Nesti Workspace',
+        title: 'New lead alert',
+        maxWidth: 560,
+        innerHtml: `
+          <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#4A5568;">${summary}</p>
+          <div style="margin:0 0 14px;padding:12px 14px;border:1px solid #bdecc8;background:#f2fff6;border-radius:10px;">
+            <div style="font-size:12px;font-weight:700;color:${EMAIL_BRAND.primaryDark};letter-spacing:0.06em;text-transform:uppercase;">Lead ID</div>
+            <div style="margin-top:4px;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;color:#1f8b3d;">${String(newLeadMatch._id)}</div>
+          </div>
+          <p style="margin:0;font-size:13px;line-height:1.6;color:#718096;">Open your dashboard to review the lead and follow up quickly.</p>`,
+      }),
     });
     if (!result.success) {
       logger.warn('New lead email notification send failed', { lead_match_id: String(newLeadMatch._id) });

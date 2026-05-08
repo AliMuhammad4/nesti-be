@@ -13,6 +13,10 @@ import Visitor from './Visitor.js';
 import LeadAttribution from './LeadAttribution.js';
 import IcpProfile from './IcpProfile.js';
 import ProfessionalNotification from './ProfessionalNotification.js';
+import InviteLink from './InviteLink.js';
+import InviteAttribution from './InviteAttribution.js';
+import ReferralRewardEvent from './ReferralRewardEvent.js';
+import UserRewardBalance from './UserRewardBalance.js';
 export {
   User,
   ChatConversation,
@@ -29,4 +33,8 @@ export {
   LeadProfile,
   IcpProfile,
   ProfessionalNotification,
+  InviteLink,
+  InviteAttribution,
+  ReferralRewardEvent,
+  UserRewardBalance,
 };

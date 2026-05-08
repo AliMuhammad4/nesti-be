@@ -8,6 +8,8 @@ import {
   forgotPasswordService,
   verifyResetOtpService,
   resetPasswordService,
+  checkEmailService,
+  resendVerificationService,
 } from '../services/auth/authService.js';
 
 const send = (res, result) => {
@@ -29,6 +31,7 @@ const verifyEmail = async (req, res, next) => {
       await verifyEmailService({
         verificationToken: req.headers.authorization || req.headers.token,
         otp: req.body.otp,
+        invite_token: req.body.invite_token,
       })
     );
   } catch (error) {
@@ -108,8 +111,27 @@ const publicProfile = async (req, res, next) => {
     next(error);
   }
 };
-const checkEmail = stub;
-const resendVerification = stub;
+const checkEmail = async (req, res, next) => {
+  try {
+    send(res, await checkEmailService(req.body));
+  } catch (error) {
+    next(error);
+  }
+};
+
+const resendVerification = async (req, res, next) => {
+  try {
+    send(
+      res,
+      await resendVerificationService({
+        email: req.body?.email,
+        verification_token: req.body?.verification_token,
+      })
+    );
+  } catch (error) {
+    next(error);
+  }
+};
 
 export {
   signup,

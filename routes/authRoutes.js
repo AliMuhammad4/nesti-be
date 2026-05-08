@@ -11,6 +11,7 @@ import {
   verifyEmailSchema,
   googleAuthSchema,
   emailOnlySchema,
+  resendVerificationSchema,
 } from '../schemas/authSchemas.js';
 import {
   signup,
@@ -41,6 +42,6 @@ router.post('/forgot-password', validateBody(forgotPasswordSchema), forgotPasswo
 router.post('/reset-password', validateBody(resetPasswordSchema), resetPassword);
 router.post('/verify-reset-otp', validateBody(otpWithEmailSchema), verifyResetOtp);
 router.post('/check-email', validateBody(emailOnlySchema), checkEmail);
-router.post('/resend-verification', validateBody(emailOnlySchema), resendVerification);
+router.post('/resend-verification', validateBody(resendVerificationSchema), resendVerification);
 
 export default router;

@@ -6,11 +6,13 @@ export const signupSchema = Joi.object({
   first_name: Joi.string().min(1).required(),
   last_name: Joi.string().min(1).required(),
   role: Joi.string().optional(),
+  invite_token: Joi.string().min(12).optional(),
 });
 
 export const loginSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required(),
+  invite_token: Joi.string().min(12).optional(),
 });
 
 export const changePasswordSchema = Joi.object({
@@ -33,10 +35,16 @@ export const otpWithEmailSchema = Joi.object({
 
 export const verifyEmailSchema = Joi.object({
   otp: Joi.alternatives(Joi.string(), Joi.number()).required(),
+  invite_token: Joi.string().min(12).optional(),
 });
 
 export const googleAuthSchema = passthrough;
 
 export const emailOnlySchema = Joi.object({
   email: Joi.string().email().required(),
+});
+
+export const resendVerificationSchema = Joi.object({
+  email: Joi.string().email().required(),
+  verification_token: Joi.string().optional(),
 });

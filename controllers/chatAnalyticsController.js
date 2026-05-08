@@ -7,12 +7,16 @@ import {
   getLeadKpiEventsForLead,
   getLeadIntentAndBudgetTrends,
 } from '../services/analytics/leadKpiService.js';
+import { getInviteMetricsForUser } from '../services/referral/inviteService.js';
 
 export async function getChatAnalyticsSummary(req, res, next) {
   try {
     const days = req.query.days;
-    const summary = await getLeadKpiSummary(req.user._id, { days });
-    return res.json({ success: true, summary });
+    const [summary, referralGrowth] = await Promise.all([
+      getLeadKpiSummary(req.user._id, { days }),
+      getInviteMetricsForUser(req.user._id, { days }),
+    ]);
+    return res.json({ success: true, summary, referral_growth: referralGrowth });
   } catch (error) {
     return next(error);
   }

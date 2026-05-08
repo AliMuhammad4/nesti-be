@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
 import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
+import { finalizeInviteAttribution } from '../referral/inviteService.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 
@@ -112,7 +113,7 @@ function normalizeProfessionalProfile(profileDoc) {
 }
 
 export const signupService = async (payload) => {
-  const { email, password, first_name, last_name, role } = payload;
+  const { email, password, first_name, last_name, role, invite_token } = payload;
 
   if (!email || !password || !first_name || !last_name) {
     return { status: 400, body: { success: false, message: 'Please provide all required fields' } };
@@ -128,7 +129,7 @@ export const signupService = async (payload) => {
   queueSignupOtpEmail({ email, first_name, otp });
 
   const verificationToken = signJwt(
-    { email, password, first_name, last_name, role: assignedRole, otp },
+    { email, password, first_name, last_name, role: assignedRole, otp, invite_token: invite_token || '' },
     '10m'
   );
 
@@ -142,7 +143,7 @@ export const signupService = async (payload) => {
   };
 };
 
-export const verifyEmailService = async ({ verificationToken, otp }) => {
+export const verifyEmailService = async ({ verificationToken, otp, invite_token }) => {
   if (!verificationToken) {
     return {
       status: 401,
@@ -199,6 +200,23 @@ export const verifyEmailService = async ({ verificationToken, otp }) => {
     }
   }
 
+  const inviteTokenFromPayload = String(invite_token || decoded?.invite_token || '').trim();
+  if (inviteTokenFromPayload) {
+    try {
+      await finalizeInviteAttribution({
+        invite_token: inviteTokenFromPayload,
+        authenticated_user_id: user._id,
+        method: 'signup_verify_email',
+        path: '/auth/verify-email',
+      });
+    } catch (err) {
+      logger.warn('Invite attribution finalization failed after verify-email', {
+        user_id: String(user._id),
+        error: err?.message,
+      });
+    }
+  }
+
   return {
     status: 200,
     body: {
@@ -209,7 +227,7 @@ export const verifyEmailService = async ({ verificationToken, otp }) => {
   };
 };
 
-export const loginService = async ({ email, password }) => {
+export const loginService = async ({ email, password, invite_token }) => {
   const user = await User.findOne({ email });
 
   if (!user || !(await user.matchPassword(password))) {
@@ -223,6 +241,22 @@ export const loginService = async ({ email, password }) => {
   if (user.account_status === 'free_trial' && user.trial_ends_at && new Date() > new Date(user.trial_ends_at)) {
     user.account_status = 'expired';
     await user.save();
+  }
+
+  if (invite_token && String(invite_token).trim()) {
+    try {
+      await finalizeInviteAttribution({
+        invite_token: String(invite_token).trim(),
+        authenticated_user_id: user._id,
+        method: 'login',
+        path: '/auth/login',
+      });
+    } catch (err) {
+      logger.warn('Invite attribution finalization failed after login', {
+        user_id: String(user._id),
+        error: err?.message,
+      });
+    }
   }
 
   return {
@@ -315,6 +349,97 @@ export const publicProfileService = async (email) => {
       professionalProfile: professionalProfile
         ? normalizeProfessionalProfile(professionalProfile)
         : null,
+    },
+  };
+};
+
+export const checkEmailService = async ({ email }) => {
+  if (!email || !String(email).trim()) {
+    return { status: 400, body: { success: false, message: 'Please provide a valid email' } };
+  }
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const existing = await User.findOne({ email: normalizedEmail }).select('_id is_verified').lean();
+  return {
+    status: 200,
+    body: {
+      success: true,
+      exists: Boolean(existing),
+      is_verified: Boolean(existing?.is_verified),
+    },
+  };
+};
+
+export const resendVerificationService = async ({ email, verification_token }) => {
+  if (!email || !String(email).trim()) {
+    return { status: 400, body: { success: false, message: 'Please provide a valid email' } };
+  }
+
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const alreadyVerified = await User.findOne({ email: normalizedEmail }).select('_id').lean();
+  if (alreadyVerified) {
+    return {
+      status: 400,
+      body: { success: false, message: 'Account already verified. Please login.' },
+    };
+  }
+
+  if (!verification_token || !String(verification_token).trim()) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Verification session missing. Please sign up again.',
+      },
+    };
+  }
+
+  const verified = tryVerifyJwt(String(verification_token).trim());
+  if (!verified.ok) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Verification session expired or invalid. Please sign up again.',
+      },
+    };
+  }
+  const decoded = verified.payload || {};
+  if (String(decoded.email || '').toLowerCase().trim() !== normalizedEmail) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Verification session does not match this email. Please sign up again.',
+      },
+    };
+  }
+
+  const otp = randomOtp();
+  queueSignupOtpEmail({
+    email: normalizedEmail,
+    first_name: decoded.first_name || '',
+    otp,
+  });
+
+  const refreshedVerificationToken = signJwt(
+    {
+      email: normalizedEmail,
+      password: decoded.password,
+      first_name: decoded.first_name,
+      last_name: decoded.last_name,
+      role: decoded.role,
+      invite_token: decoded.invite_token || '',
+      otp,
+    },
+    '10m',
+  );
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'A new OTP has been sent to your email.',
+      verificationToken: refreshedVerificationToken,
     },
   };
 };

@@ -18,6 +18,7 @@ import {
 import { mapLeadMatchToDetail } from '../lead/leadResponseMappers.js';
 import { mapLeadProfileForApi } from '../lead/leadProfileFormat.js';
 import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../../constants/roles.js';
+import { awardReferralPoints, REFERRAL_REWARD_POINTS } from './rewardService.js';
 
 /** Shape profile/contact/property for API rows by referrer role (not viewer role). */
 export function displayProfessionalTypeFromRole(roleRaw) {
@@ -642,6 +643,15 @@ export async function processReferralForTarget(referral, targetUserId) {
     if (statusBeforeAccept !== 'accepted') {
       const targetUser = await User.findById(uid).select('first_name last_name full_name').lean();
       await notifyReferralAccepted(referral, targetUser || { _id: uid });
+      awardReferralPoints({
+        user_id: referral.user_id,
+        event_type: 'referral_accepted',
+        points_delta: REFERRAL_REWARD_POINTS.referral_accepted,
+        idempotency_key: `referral:accepted:${String(referral._id)}`,
+        source_model: 'Referral',
+        source_id: String(referral._id),
+        metadata: { accepted_by_user_id: String(uid) },
+      }).catch((e) => logger.warn('referral_accepted reward failed', { error: e?.message }));
     }
   } catch (e) {
     logger.warn('notifyReferralAccepted (process) failed', { error: e?.message });
@@ -748,6 +758,38 @@ export async function createReferralForUser(referrerUserId, body) {
       notifyReferralReceived(created).catch((e) =>
         logger.warn('notifyReferralReceived failed', { error: e?.message }),
       );
+      awardReferralPoints({
+        user_id: created.user_id?._id || created.user_id,
+        event_type: 'referral_created',
+        points_delta: REFERRAL_REWARD_POINTS.referral_created,
+        idempotency_key: `referral:created:${String(created._id)}`,
+        source_model: 'Referral',
+        source_id: String(created._id),
+        metadata: {
+          conversation_id: String(created.conversation_id || ''),
+          target_user_id: String(created.target_user_id?._id || created.target_user_id || ''),
+        },
+      }).catch((e) => logger.warn('referral_created reward failed', { error: e?.message }));
+
+      const sourceRole = String(created.user_id?.role || '').trim().toLowerCase();
+      const targetRole = String(created.target_user_id?.role || '').trim().toLowerCase();
+      if (
+        sourceRole &&
+        targetRole &&
+        sourceRole !== targetRole &&
+        PROFESSIONAL_TYPE_VALUES.includes(sourceRole) &&
+        PROFESSIONAL_TYPE_VALUES.includes(targetRole)
+      ) {
+        awardReferralPoints({
+          user_id: created.user_id?._id || created.user_id,
+          event_type: 'referral_cross_role_bonus',
+          points_delta: REFERRAL_REWARD_POINTS.referral_cross_role_bonus,
+          idempotency_key: `referral:cross-role:${String(created._id)}`,
+          source_model: 'Referral',
+          source_id: String(created._id),
+          metadata: { source_role: sourceRole, target_role: targetRole },
+        }).catch((e) => logger.warn('referral_cross_role_bonus reward failed', { error: e?.message }));
+      }
     }
 
     return { ok: true, referral: serializeReferral(created || referral) };
@@ -835,6 +877,15 @@ export async function patchReferralForUser(userId, referralId, { status, notes }
       const doc = updated || referral;
       if (newStatus === 'accepted' && isTarget) {
         await notifyReferralAccepted(doc, actor || { _id: userId });
+        awardReferralPoints({
+          user_id: doc.user_id?._id || doc.user_id,
+          event_type: 'referral_accepted',
+          points_delta: REFERRAL_REWARD_POINTS.referral_accepted,
+          idempotency_key: `referral:accepted:${String(doc._id)}`,
+          source_model: 'Referral',
+          source_id: String(doc._id),
+          metadata: { accepted_by_user_id: String(userId) },
+        }).catch((e) => logger.warn('referral_accepted reward failed', { error: e?.message }));
       } else if (newStatus === 'rejected') {
         await notifyReferralRejected(doc, userId, actor || { _id: userId });
       }

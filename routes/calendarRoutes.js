@@ -115,6 +115,29 @@ function resolveWebhookUrl(body) {
   return String(body?.webhookUrl || process.env.CALENDLY_WEBHOOK_TARGET_URL || '').trim();
 }
 
+function resolveWebhookUrlFromRequest(req) {
+  try {
+    const protoRaw =
+      String(req.get('x-forwarded-proto') || req.protocol || '')
+        .split(',')[0]
+        .trim()
+        .toLowerCase();
+    const proto = protoRaw === 'https' ? 'https' : protoRaw === 'http' ? 'http' : '';
+    const host = String(req.get('x-forwarded-host') || req.get('host') || '')
+      .split(',')[0]
+      .trim();
+    if (!proto || !host) return '';
+    const hostLower = host.toLowerCase();
+    // Calendly cannot deliver to localhost; only use derived URL when we have a public host (e.g. ngrok).
+    if (hostLower.includes('localhost') || hostLower.startsWith('127.0.0.1')) return '';
+    // Prefer https for public tunnels (ngrok).
+    if (proto !== 'https') return '';
+    return `${proto}://${host}/api/webhooks/calendly`;
+  } catch {
+    return '';
+  }
+}
+
 /**
  * When Calendly redirects the browser to the API callback, we should 302 to the web app
  * so users do not see raw JSON. Optional CALENDLY_OAUTH_SUCCESS_REDIRECT overrides;
@@ -242,7 +265,7 @@ const callbackCalendar = async (req, res) => {
 
     logger.info('Calendar API: Calendly OAuth connected', { op: 'calendar.calendly.callback', user_id: String(userId), account_email: accountLabel || null });
 
-    const whTarget = process.env.CALENDLY_WEBHOOK_TARGET_URL?.trim();
+    const whTarget = process.env.CALENDLY_WEBHOOK_TARGET_URL?.trim() || resolveWebhookUrlFromRequest(req);
     let webhook = { attempted: false, ok: null, url: null, alreadyExists: null, error: null, errorKind: null };
     if (whTarget) {
       webhook = { ...webhook, attempted: true, url: whTarget };
@@ -265,7 +288,7 @@ const callbackCalendar = async (req, res) => {
         logger.warn(`Calendar API: Calendly webhook auto-register failed — ${e.message}`);
       }
     } else {
-      logger.info('Calendar API: CALENDLY_WEBHOOK_TARGET_URL not set — skipping auto-registration');
+      logger.info('Calendar API: webhook target URL not resolved — skipping auto-registration');
     }
 
     const browserOk = resolveCalendlyOAuthSuccessBrowserRedirect();
@@ -308,7 +331,7 @@ const getBookings = async (req, res, next) => {
 };
 
 const registerWebhookSubscription = async (req, res) => {
-  const webhookUrl = resolveWebhookUrl(req.body);
+  const webhookUrl = resolveWebhookUrl(req.body) || resolveWebhookUrlFromRequest(req);
   try {
     if (!webhookUrl) return res.status(400).json({ success: false, message: 'Provide webhookUrl in body or set CALENDLY_WEBHOOK_TARGET_URL in .env' });
     const result = await registerCalendlyInviteeWebhook(req.calendlyInteg.access_token, webhookUrl);
@@ -325,7 +348,7 @@ const registerWebhookSubscription = async (req, res) => {
 };
 
 const registerWebhookSubscriptionEmbed = async (req, res) => {
-  const webhookUrl = resolveWebhookUrl(req.body);
+  const webhookUrl = resolveWebhookUrl(req.body) || resolveWebhookUrlFromRequest(req);
   try {
     if (!webhookUrl) return res.status(400).json({ success: false, message: 'webhookUrl required in body or set CALENDLY_WEBHOOK_TARGET_URL' });
     const result = await registerCalendlyInviteeWebhook(req.calendlyInteg.access_token, webhookUrl);

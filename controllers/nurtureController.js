@@ -271,6 +271,10 @@ export async function postNurtureDraft(req, res, next) {
       bundle.leadMatch,
       req.user,
     );
+    const trackedCalendlyUrl = withNestiNurtureCalendlyTracking(
+      calendly_url,
+      { conversationId: bundle.leadMatch?.conversation_id, ownerUserId: req.user._id },
+    );
     const propertyMatches = await nurturePropertyMatchesSnapshot(
       req.user._id,
       bundle.leadMatch,
@@ -291,11 +295,11 @@ export async function postNurtureDraft(req, res, next) {
       goal,
       tone,
     });
-    const draft = finalizeNurtureDraftBody(draftRaw, { calendly_url, signature });
+    const draft = finalizeNurtureDraftBody(draftRaw, { calendly_url: trackedCalendlyUrl, signature });
     return res.json({
       success: true,
       ...nurtureLeadIdsResponse(bundle),
-      calendly_url: calendly_url || null,
+      calendly_url: trackedCalendlyUrl || calendly_url || null,
       draft: nurtureDraftJsonResponse(draft, propertyMatches),
     });
   } catch (err) {
@@ -324,7 +328,10 @@ export async function postNurtureRefine(req, res, next) {
       bundle.leadMatch,
       req.user,
     );
-    const calendly_url = withNestiNurtureCalendlyTracking(calRaw, bundle.leadMatch?.conversation_id);
+    const calendly_url = withNestiNurtureCalendlyTracking(calRaw, {
+      conversationId: bundle.leadMatch?.conversation_id,
+      ownerUserId: req.user._id,
+    });
     const bodyForAi = stripServerAppendedNurturePlainFooter(body, calendly_url, signature);
     const propertyMatches = await nurturePropertyMatchesSnapshot(
       req.user._id,
@@ -400,7 +407,10 @@ export async function postNurtureSend(req, res, next) {
         bundle.leadMatch,
         req.user,
       );
-      const calendlyUrl = withNestiNurtureCalendlyTracking(calRaw, bundle.leadMatch?.conversation_id);
+      const calendlyUrl = withNestiNurtureCalendlyTracking(calRaw, {
+        conversationId: convId || bundle.leadMatch?.conversation_id,
+        ownerUserId: req.user._id,
+      });
       const propertyMatches = await nurturePropertyMatchesSnapshot(
         req.user._id,
         bundle.leadMatch,
@@ -522,7 +532,10 @@ export async function postNurturePreview(req, res, next) {
         bundle.leadMatch,
         req.user,
       );
-      const calendlyUrl = withNestiNurtureCalendlyTracking(calRaw, bundle.leadMatch?.conversation_id);
+      const calendlyUrl = withNestiNurtureCalendlyTracking(calRaw, {
+        conversationId: convId || bundle.leadMatch?.conversation_id,
+        ownerUserId: req.user._id,
+      });
       calendly_url = calendlyUrl || null;
       const propertyMatches = await nurturePropertyMatchesSnapshot(
         req.user._id,

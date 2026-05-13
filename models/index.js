@@ -17,6 +17,8 @@ import InviteLink from './InviteLink.js';
 import InviteAttribution from './InviteAttribution.js';
 import ReferralRewardEvent from './ReferralRewardEvent.js';
 import UserRewardBalance from './UserRewardBalance.js';
+import ProfessionalChatThread from './ProfessionalChatThread.js';
+import ProfessionalChatMessage from './ProfessionalChatMessage.js';
 export {
   User,
   ChatConversation,
@@ -37,4 +39,6 @@ export {
   InviteAttribution,
   ReferralRewardEvent,
   UserRewardBalance,
+  ProfessionalChatThread,
+  ProfessionalChatMessage,
 };

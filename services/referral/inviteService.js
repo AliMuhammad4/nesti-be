@@ -391,7 +391,14 @@ export async function finalizeInviteAttribution({
 
   const authUserId = new mongoose.Types.ObjectId(String(authenticated_user_id));
   if (String(invite.inviter_user_id) === String(authUserId)) {
-    return { ok: false, code: 400, message: 'Self referral is not allowed' };
+    // Common in dev (or when user previews their own invite link while logged in).
+    // Treat as a no-op so clients can clear stored invite tokens without retry loops.
+    return {
+      ok: true,
+      ignored: true,
+      ignored_reason: 'self_referral',
+      message: 'Invite attribution ignored (self referral)',
+    };
   }
   if (!invite.is_active || (invite.expires_at && new Date(invite.expires_at) < new Date())) {
     return { ok: false, code: 410, message: 'Invite has expired' };

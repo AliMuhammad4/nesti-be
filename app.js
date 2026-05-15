@@ -30,6 +30,9 @@ dotenv.config();
 configureCloudinary();
 
 const app = express();
+if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
 
 // HTTP Request Logging Middleware using Morgan and Winston
 const morganFormat = process.env.NODE_ENV === "production" ? "combined" : "dev";

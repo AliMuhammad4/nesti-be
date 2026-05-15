@@ -114,22 +114,23 @@ function normalizeProfessionalProfile(profileDoc) {
 
 export const signupService = async (payload) => {
   const { email, password, first_name, last_name, role, invite_token } = payload;
+  const normalizedEmail = String(email || '').toLowerCase().trim();
 
-  if (!email || !password || !first_name || !last_name) {
+  if (!normalizedEmail || !password || !first_name || !last_name) {
     return { status: 400, body: { success: false, message: 'Please provide all required fields' } };
   }
 
   const assignedRole = role && USER_ROLE_VALUES.includes(role) ? role : USER_ROLE.AGENT;
 
-  if (await User.findOne({ email })) {
+  if (await User.findOne({ email: normalizedEmail })) {
     return { status: 400, body: { success: false, message: 'User already exists' } };
   }
 
   const otp = randomOtp();
-  queueSignupOtpEmail({ email, first_name, otp });
+  queueSignupOtpEmail({ email: normalizedEmail, first_name, otp });
 
   const verificationToken = signJwt(
-    { email, password, first_name, last_name, role: assignedRole, otp, invite_token: invite_token || '' },
+    { email: normalizedEmail, password, first_name, last_name, role: assignedRole, otp, invite_token: invite_token || '' },
     '10m'
   );
 
@@ -177,16 +178,27 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
     };
   }
 
-  const user = await User.create({
-    email: decoded.email,
-    password: decoded.password,
-    first_name: decoded.first_name,
-    last_name: decoded.last_name,
-    role: decoded.role,
-    is_verified: true,
-    account_status: 'free_trial',
-    trial_ends_at: trialEndsAt,
-  });
+  let user;
+  try {
+    user = await User.create({
+      email: decoded.email,
+      password: decoded.password,
+      first_name: decoded.first_name,
+      last_name: decoded.last_name,
+      role: decoded.role,
+      is_verified: true,
+      account_status: 'free_trial',
+      trial_ends_at: trialEndsAt,
+    });
+  } catch (error) {
+    if (error?.code === 11000) {
+      return {
+        status: 400,
+        body: { success: false, message: 'Account already verified. Please login.' },
+      };
+    }
+    throw error;
+  }
 
   if (user.role !== USER_ROLE.ADMIN) {
     await ProfessionalProfile.create({

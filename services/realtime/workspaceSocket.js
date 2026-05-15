@@ -4,6 +4,7 @@ import User from '../../models/User.js';
 import ProfessionalChatThread from '../../models/ProfessionalChatThread.js';
 import ProfessionalChatMessage from '../../models/ProfessionalChatMessage.js';
 import logger from '../../utils/logger.js';
+import { normalizeAttachments, validateProChatAttachmentLimits } from '../../utils/proChatUtils.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 let io = null;
@@ -125,16 +126,29 @@ export function initWorkspaceSocket(httpServer) {
 
     socket.on('prochat:send', async (payload, ack) => {
       try {
-        const { thread_id, body, client_id } = payload || {};
+        const { thread_id, body, client_id, attachments } = payload || {};
         const text = String(body || '').trim();
-        if (!text) {
+        if (text.length > 5000) {
+          const err = new Error('message_too_long');
+          err.code = 'message_too_long';
+          throw err;
+        }
+        const attsRaw = Array.isArray(attachments) ? attachments : [];
+        if (!text && attsRaw.length < 1) {
           const err = new Error('empty_message');
           err.code = 'empty_message';
           throw err;
         }
-        if (text.length > 5000) {
-          const err = new Error('message_too_long');
-          err.code = 'message_too_long';
+        const atts = normalizeAttachments(attsRaw);
+        if (atts.length !== attsRaw.length) {
+          const err = new Error('invalid_attachments');
+          err.code = 'invalid_attachments';
+          throw err;
+        }
+        const attachmentLimit = validateProChatAttachmentLimits(atts);
+        if (!attachmentLimit.ok) {
+          const err = new Error(attachmentLimit.message);
+          err.code = attachmentLimit.code;
           throw err;
         }
         const { participants } = await assertThreadMembership(thread_id);
@@ -143,13 +157,14 @@ export function initWorkspaceSocket(httpServer) {
           sender_user_id: uid,
           client_id: client_id ? String(client_id).slice(0, 128) : null,
           body: text,
+          attachments: atts,
         });
         await ProfessionalChatThread.updateOne(
           { _id: thread_id },
           {
             $set: {
               last_message_at: msg.createdAt,
-              last_message_text: text.slice(0, 280),
+              last_message_text: text ? text.slice(0, 280) : (atts.length === 1 ? 'Attachment' : 'Attachments'),
               last_message_sender_id: uid,
             },
           }
@@ -167,6 +182,7 @@ export function initWorkspaceSocket(httpServer) {
           sender_user_id: String(uid),
           client_id: msg.client_id || null,
           body: msg.body,
+          attachments: Array.isArray(msg.attachments) ? msg.attachments : [],
           created_at: msg.createdAt,
           sender: sender
             ? {

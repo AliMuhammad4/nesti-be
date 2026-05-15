@@ -86,7 +86,9 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
   const { includeIntentField = true } = opts;
   const grade = leadMatch.lead_type?.split('_')[0] || null;
   const appointmentDate =
-    leadMatch?.compatibility_factors?.calendly?.calendly_event_start || null;
+    leadMatch?.compatibility_factors?.calendly?.calendly_event_start ||
+    convo?.calendly_event_start ||
+    null;
   const core = {
     id: String(leadMatch._id),
     professional_type: null,

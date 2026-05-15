@@ -316,6 +316,7 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
         ),
       ]
     : [];
+  const now = new Date();
   const workspaceBookedRows =
     viewerStr && (viewerLeadMatchIds.length > 0 || viewerConversationIds.length > 0)
       ? await WorkspaceAppointment.find({
@@ -328,16 +329,20 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
               : []),
           ],
         })
-          .select('lead_match_id conversation_id')
+          .select('lead_match_id conversation_id scheduled_start')
           .lean()
       : [];
+  const workspaceUpcomingRows = workspaceBookedRows.filter((r) => {
+    const d = r?.scheduled_start ? new Date(r.scheduled_start) : null;
+    return d && !Number.isNaN(d.getTime()) && d.getTime() >= now.getTime();
+  });
   const workspaceBookedLeadIds = new Set(
-    workspaceBookedRows
+    workspaceUpcomingRows
       .map((r) => (r?.lead_match_id ? String(r.lead_match_id) : ''))
       .filter(Boolean),
   );
   const workspaceBookedConversationIds = new Set(
-    workspaceBookedRows
+    workspaceUpcomingRows
       .map((r) => (r?.conversation_id ? String(r.conversation_id) : ''))
       .filter(Boolean),
   );
@@ -371,7 +376,11 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
      * thread may reflect the referrer's booking state. For list-row consult status we must use the
      * viewer/referred user's own signals only.
      */
-    let appointment_status = resolveAppointmentStatus(viewerLm?.match_status, null);
+    let appointment_status = resolveAppointmentStatus(
+      viewerLm?.match_status,
+      null,
+      viewerLm?.compatibility_factors?.calendly?.calendly_event_start || null
+    );
     const viewerLeadMatchId = viewerLm?._id ? String(viewerLm._id) : '';
     const conversationId = cid ? String(cid) : '';
     if (

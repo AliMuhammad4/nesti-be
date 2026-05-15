@@ -85,6 +85,8 @@ function buildConversion(leadMatch, profile, convo) {
 function leadCore(leadMatch, profileView, convo, opts = {}) {
   const { includeIntentField = true } = opts;
   const grade = leadMatch.lead_type?.split('_')[0] || null;
+  const appointmentDate =
+    leadMatch?.compatibility_factors?.calendly?.calendly_event_start || null;
   const core = {
     id: String(leadMatch._id),
     professional_type: null,
@@ -95,7 +97,11 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     contact: profileView.contact,
     property: profileView.property,
     qualification: profileView.qualification,
-    appointment_status: resolveAppointmentStatus(leadMatch.match_status, convo?.calendly_booking_status),
+    appointment_status: resolveAppointmentStatus(
+      leadMatch.match_status,
+      convo?.calendly_booking_status,
+      appointmentDate
+    ),
     calendly_booking_status: convo?.calendly_booking_status || null,
     embed_token: leadMatch.compatibility_factors?.embed_token || null,
     session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,

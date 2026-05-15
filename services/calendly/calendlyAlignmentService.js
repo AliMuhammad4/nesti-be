@@ -11,9 +11,7 @@ export async function applyCalendlyOAuthAlignment(userId, accessToken) {
     resource?.slug ||
     (resource?.scheduling_url ? extractCalendlySlugFromLink(resource.scheduling_url) : null);
   if (slug) slug = String(slug).toLowerCase().trim() || null;
-  const profile = await ProfessionalProfile.findOne({ user_id: userId })
-    .select('calendly_link mortgage_calendly_link_hot mortgage_calendly_link_warm mortgage_calendly_link_early')
-    .lean();
+  const profile = await ProfessionalProfile.findOne({ user_id: userId }).select('calendly_link').lean();
   const linkSlug = extractCalendlySlugFromLink(primaryCalendlyLinkForAlignment(profile));
   const mismatch = Boolean(slug && linkSlug && slug !== linkSlug);
   const $set = { calendly_slug_mismatch: mismatch };
@@ -32,9 +30,7 @@ export async function refreshCalendlySlugMismatchForUser(userId) {
     .select('calendly_slug')
     .lean();
   if (!integ?.calendly_slug) return;
-  const profile = await ProfessionalProfile.findOne({ user_id: userId })
-    .select('calendly_link mortgage_calendly_link_hot mortgage_calendly_link_warm mortgage_calendly_link_early')
-    .lean();
+  const profile = await ProfessionalProfile.findOne({ user_id: userId }).select('calendly_link').lean();
   const linkSlug = extractCalendlySlugFromLink(primaryCalendlyLinkForAlignment(profile));
   const oauthSlug = String(integ.calendly_slug).toLowerCase();
   const mismatch = Boolean(linkSlug && oauthSlug && linkSlug !== oauthSlug);

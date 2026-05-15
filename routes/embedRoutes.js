@@ -1,11 +1,12 @@
 import express from 'express';
 const router = express.Router();
-import { protect } from '../middleware/authMiddleware.js';
+import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import crypto from 'crypto';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
-import { PROFESSIONAL_TYPE } from '../constants/roles.js';
+import User from '../models/User.js';
+import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { validateWidgetRoleAgainstProfile } from '../utils/embedWidgetRole.js';
 import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
 
@@ -55,11 +56,33 @@ const resolveEmbed = async (req, res, next) => {
   try {
     const embed = await ChatbotEmbedUrl.findOne({ token: req.params.token });
     if (!embed) return res.status(404).json({ success: false, message: 'Invalid embed token' });
+
+    const [user, prof] = await Promise.all([
+      User.findById(embed.user_id).select('first_name last_name profile_image').lean(),
+      ProfessionalProfile.findOne({ user_id: embed.user_id }).select('full_name professional_type').lean(),
+    ]);
+
+    const profileImage =
+      typeof user?.profile_image === 'string' && user.profile_image.trim() ? user.profile_image.trim() : null;
+    const hostDisplayName =
+      (typeof prof?.full_name === 'string' && prof.full_name.trim()) ||
+      [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim() ||
+      null;
+
+    const resolvedWidgetRole =
+      embed.widget_role ||
+      (prof?.professional_type && PROFESSIONAL_TYPE_VALUES.includes(prof.professional_type)
+        ? prof.professional_type
+        : null);
+
     res.json({
       success: true,
       isValid: true,
       userId: embed.user_id,
-      widget_role: embed.widget_role ?? null,
+      widget_role: resolvedWidgetRole,
+      widget_settings: embed.widget_settings || {},
+      profile_image: profileImage,
+      host_display_name: hostDisplayName,
     });
   } catch (error) {
     next(error);
@@ -105,10 +128,16 @@ const deleteEmbed = async (req, res, next) => {
   }
 };
 
-router.post('/generate', protect, validateBody(embedGenerateBodySchema), generateEmbedToken);
-router.get('/list', protect, listEmbeds);
+router.post(
+  '/generate',
+  protect,
+  requireCompleteProfessionalProfile,
+  validateBody(embedGenerateBodySchema),
+  generateEmbedToken
+);
+router.get('/list', protect, requireCompleteProfessionalProfile, listEmbeds);
 router.get('/resolve/:token', resolveEmbed);
-router.patch('/:id', protect, validateBody(embedPatchBodySchema), updateEmbed);
-router.delete('/:id', protect, deleteEmbed);
+router.patch('/:id', protect, requireCompleteProfessionalProfile, validateBody(embedPatchBodySchema), updateEmbed);
+router.delete('/:id', protect, requireCompleteProfessionalProfile, deleteEmbed);
 
 export default router;

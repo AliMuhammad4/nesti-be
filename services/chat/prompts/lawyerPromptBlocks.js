@@ -86,10 +86,11 @@ export function buildLawyerPromptMainTemplate({
 }) {
   const deferCalendlySection = deferCalendlyLink
     ? `
-BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META):
-- Do NOT include any Calendly or meeting URL in your visible reply yet.
-- Ask qualification questions one at a time. Before any booking link, capture question 9: preferred way for ${name} to contact them AND best time. Set preferred_contact_method and best_time_to_contact in META.
-- If those fields are empty in META, work toward question 9 before pasting URLs.
+BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + reply turn):
+- Do NOT include any Calendly or meeting URL in your visible reply yet (no "Schedule Here" or bare booking links).
+- This is often the visitor's first message after submitting the intake form: briefly mirror what they shared (bullet list is fine), ask whether anything should be corrected, and include 1–2 short follow-up questions that help ${name} prepare (not a sales push).
+- Ask qualification gaps one at a time if anything material is still missing. Before any booking link, capture question 9: preferred way for ${name} to contact them AND best time. Set preferred_contact_method and best_time_to_contact in META.
+- If those fields are empty in META, work toward question 9 before pasting URLs. You may say a scheduling link will appear after they confirm their details.
 `
     : '';
 

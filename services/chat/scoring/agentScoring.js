@@ -3,14 +3,17 @@
  */
 
 import logger from '../../../utils/logger.js';
+import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 
 import { extractSignals, mergeSignals, buildLeadType, buildLeadClassification, GRADE_ORDER } from './common.js';
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 import {
+  bumpLeadProfileStats,
   createValidatedLeadAttribution,
   createValidatedLeadMatch,
-  createValidatedLeadProfile,
+  createOrReuseLeadProfile,
 } from './leadPersistence.js';
+import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 
 export const bestGrade = (a, b) =>
   (GRADE_ORDER[a] || 0) >= (GRADE_ORDER[b] || 0) ? a : b;
@@ -193,7 +196,7 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
   const quality =
     finalScore >= 80 ? 'hot'
     : finalScore >= 60 ? 'warm'
-    : finalScore >= 40 ? 'lukewarm'
+    : finalScore >= 40 ? 'interested'
     : 'cold';
 
   return {
@@ -237,6 +240,7 @@ export const createLeadRecords = async ({
   conversation,
   intent,
   professionalProfileId,
+  activeIcpProfileId,
   leadScore,
   leadGrade,
   leadMeta,
@@ -285,44 +289,63 @@ export const createLeadRecords = async ({
   }
 
   const budgetBuy = intent === 'buy' ? buyerBudgetStr : '';
-  const leadProfile = await createValidatedLeadProfile({
-    intent,
-    full_name:        contactInfo.name    || 'Unknown',
-    email:            contactInfo.email   || '',
-    phone:            contactInfo.phone   || '',
-    property_address:
-      contactInfo.address ||
-      formContact?.address ||
-      aiDetails?.property_address ||
-      '',
-    location:         locCombined,
-    budget:           intent === 'buy' ? budgetBuy : '',
-    expected_price:   sellerPrice,
-    timeline:         signals.timeline    || '',
-    bedrooms:         formContact?.beds || aiDetails?.bedrooms || (signals.beds != null ? String(signals.beds) : ''),
-    bathrooms:        formContact?.baths || aiDetails?.bathrooms || (signals.baths != null ? String(signals.baths) : ''),
-    square_footage:   signals.area        || '',
-    property_type:    formContact?.property_type || aiDetails?.property_type || '',
-    must_have_features:      formContact?.must_have_features || aiDetails?.must_have_features || '',
-    parking_required:        formContact?.parking_required || aiDetails?.parking_required || '',
-    backyard_needed:         formContact?.backyard_needed || aiDetails?.backyard_needed || '',
-    school_district_important: formContact?.school_district_important || '',
-    preferred_contact_method: formContact?.preferred_contact_method || '',
-    best_time_to_contact:     formContact?.best_time_to_contact || '',
-    mortgage_status:
-      aiDetails?.mortgage_status ||
-      formContact?.mortgage_status ||
-      buyerFinancingFromBudget ||
-      financingFromSignal ||
-      '',
-    realtor_status:     formContact?.realtor_status || aiDetails?.realtor_status || '',
-    motivation_reason:  formContact?.motivation_reason || aiDetails?.motivation_reason || '',
-    viewing_readiness:  formContact?.viewing_readiness || aiDetails?.viewing_readiness || '',
-    living_situation:   formContact?.living_situation || aiDetails?.living_situation || '',
-    urgency_readiness:  formContact?.urgency_readiness || aiDetails?.urgency_readiness || '',
-    source:           'chatbot',
-    total_score:      leadScore,
+  const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
+    payload: {
+      intent,
+      identity: {
+        full_name: contactInfo.name || 'Unknown',
+        email: contactInfo.email || '',
+        phone: contactInfo.phone || '',
+      },
+      contact_preferences: {
+        preferred_contact_method: formContact?.preferred_contact_method || '',
+        best_time_to_contact: formContact?.best_time_to_contact || '',
+      },
+      property: {
+        address: contactInfo.address || formContact?.address || aiDetails?.property_address || '',
+        location: locCombined,
+        budget: intent === 'buy' ? budgetBuy : '',
+        expected_price: sellerPrice,
+        timeline: signals.timeline || '',
+        bedrooms: formContact?.beds || aiDetails?.bedrooms || (signals.beds != null ? String(signals.beds) : ''),
+        bathrooms: formContact?.baths || aiDetails?.bathrooms || (signals.baths != null ? String(signals.baths) : ''),
+        square_footage: signals.area || '',
+        property_type: formContact?.property_type || aiDetails?.property_type || '',
+        must_have_features: formContact?.must_have_features || aiDetails?.must_have_features || '',
+        parking_required: formContact?.parking_required || aiDetails?.parking_required || '',
+        backyard_needed: formContact?.backyard_needed || aiDetails?.backyard_needed || '',
+        school_district_important: formContact?.school_district_important || '',
+      },
+      qualification: {
+        agent: {
+          mortgage_status:
+            aiDetails?.mortgage_status ||
+            formContact?.mortgage_status ||
+            buyerFinancingFromBudget ||
+            financingFromSignal ||
+            '',
+          realtor_status: formContact?.realtor_status || aiDetails?.realtor_status || '',
+          motivation_reason: formContact?.motivation_reason || aiDetails?.motivation_reason || '',
+          viewing_readiness: formContact?.viewing_readiness || aiDetails?.viewing_readiness || '',
+          living_situation: formContact?.living_situation || aiDetails?.living_situation || '',
+          urgency_readiness: formContact?.urgency_readiness || aiDetails?.urgency_readiness || '',
+        },
+      },
+      source: 'chatbot',
+      total_score: leadScore,
+    },
+    userId,
+    professionalType: PROFESSIONAL_TYPE.AGENT,
+    contactInfo,
+    leadGrade,
   });
+
+  let icpFit = null;
+  try {
+    icpFit = await computeIcpFitForLead(leadProfile, userId, { reusedExisting, activeIcpProfileId });
+  } catch (err) {
+    logger.warn('ICP scoring failed, skipping', { error: err.message });
+  }
 
   const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
@@ -344,7 +367,15 @@ export const createLeadRecords = async ({
       message_snippet: messageSnippet,
       contact:         contactInfo,
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
+      professional_type: PROFESSIONAL_TYPE.AGENT,
+      repeat_visitor: reusedExisting,
     },
+    ...(icpFit ? { icp_fit: {
+      fit_score: icpFit.fit_score,
+      fit_tier: icpFit.fit_tier,
+      matched_factors: icpFit.matched_factors,
+      missing_factors: icpFit.missing_factors,
+    } } : {}),
   });
 
   await createValidatedLeadAttribution({
@@ -352,6 +383,7 @@ export const createLeadRecords = async ({
     source:          'chatbot',
     converted:       false,
     lead_profile_id: leadProfile._id,
+    lead_match_id:   leadMatch._id,
     session_id:      sessionId,
     ip_address:      clientIp  || '',
     user_agent:      userAgent || '',
@@ -359,6 +391,8 @@ export const createLeadRecords = async ({
     initial_score:   leadScore,
     initial_quality: leadGrade,
   });
+
+  await bumpLeadProfileStats(leadProfile._id, intent, leadType);
 
   logger.info(`Agent lead created: ${leadType} | score: ${leadScore} | conversation: ${conversation._id}`);
 

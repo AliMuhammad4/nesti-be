@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import logger from '../../../utils/logger.js';
 import { mergeSignals } from '../scoring/index.js';
 import { normalizeAiIntent } from '../utils/normalizationUtils.js';
+import { coerceContactIdentityFields } from '../utils/contactUtils.js';
 let _openaiClient = null;
 function getOpenAI() {
   if (!_openaiClient) {
@@ -51,6 +52,7 @@ export async function runChatOpenAiTurn({
   contactInfo.name = contactInfo.name || aiContact.full_name || null;
   contactInfo.email = contactInfo.email || (aiContact.email ? aiContact.email.toLowerCase() : null);
   contactInfo.phone = contactInfo.phone || aiContact.phone || null;
+  coerceContactIdentityFields(contactInfo);
 
   const parsedAiDetails = aiMeta.details || {};
 
@@ -69,7 +71,11 @@ export async function runChatOpenAiTurn({
   });
 
   let { leadScore, leadGrade, leadMeta } = aiEnhanced;
-  leadMeta.signals = mergeSignals(leadMeta.signals, flow.mergeSignalsForMeta(leadMeta.signals, parsedAiDetails));
+  if (!leadMeta || typeof leadMeta !== 'object') {
+    leadMeta = { signals: {}, qualified: false, lead_reasons: [] };
+  }
+  const baseSignals = leadMeta.signals && typeof leadMeta.signals === 'object' ? leadMeta.signals : {};
+  leadMeta.signals = mergeSignals(baseSignals, flow.mergeSignalsForMeta(baseSignals, parsedAiDetails));
 
   return {
     aiReply,

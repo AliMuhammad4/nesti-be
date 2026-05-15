@@ -53,11 +53,12 @@ export const agentFlow = {
   bestGrade,
 
   createNewLead: async (params) => {
-    const { conversation, intent, professionalProfileId, leadScore, leadGrade, leadMeta, sessionId, embedToken, clientIp, userAgent, referer, contactInfo, userId, messageSnippet, formContact, aiDetails } = params;
+    const { conversation, intent, professionalProfileId, activeIcpProfileId, leadScore, leadGrade, leadMeta, sessionId, embedToken, clientIp, userAgent, referer, contactInfo, userId, messageSnippet, formContact, aiDetails } = params;
     return createLeadRecords({
       conversation,
       intent,
       professionalProfileId,
+      activeIcpProfileId,
       leadScore,
       leadGrade,
       leadMeta,
@@ -116,7 +117,7 @@ export const agentFlow = {
     return out;
   },
 
-  getPersistedGrade: (finalGrade) => finalGrade === 'lukewarm' ? 'warm' : finalGrade,
+  getPersistedGrade: (finalGrade) => finalGrade,
 
   getLeadClassification: (finalGrade, aiIntent) => buildLeadClass(finalGrade, aiIntent),
 

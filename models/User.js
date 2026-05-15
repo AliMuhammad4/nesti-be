@@ -61,7 +61,17 @@ const userSchema = new mongoose.Schema({
   },
   reset_password_expires: {
     type: Date,
-  }
+  },
+  /** Public HTTPS URL (e.g. Cloudinary) for avatar in app shell / dashboard. */
+  profile_image: {
+    type: String,
+    default: null,
+  },
+  /** Public HTTPS URL for dashboard / marketing cover background. */
+  cover_image: {
+    type: String,
+    default: null,
+  },
 }, { timestamps: true });
 userSchema.pre('save', async function () {
   if (!this.isModified('password')) {

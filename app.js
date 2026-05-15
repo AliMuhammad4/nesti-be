@@ -11,7 +11,10 @@ import logger from './utils/logger.js';
 import authRoutes from './routes/authRoutes.js';
 import embedRoutes from './routes/embedRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
+import referralRoutes from './routes/referralRoutes.js';
+import inviteRoutes from './routes/inviteRoutes.js';
 import leadRoutes from './routes/leadRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
 import billingRoutes from './routes/billingRoutes.js';
 import professionalRoutes from './routes/professionalRoutes.js';
@@ -19,11 +22,17 @@ import calendarRoutes from './routes/calendarRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
 import calendlyWebhookRoutes from './routes/calendlyWebhookRoutes.js';
 import propertyMatchScoringRoutes from './routes/agent/propertyMatchScoringRoutes.js';
+import proChatRoutes from './routes/proChatRoutes.js';
+import { configureCloudinary } from './services/media/cloudinaryClient.js';
 
 // Load env
 dotenv.config();
+configureCloudinary();
 
 const app = express();
+if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
 
 // HTTP Request Logging Middleware using Morgan and Winston
 const morganFormat = process.env.NODE_ENV === "production" ? "combined" : "dev";
@@ -93,12 +102,16 @@ app.get('/api/health/smtp', async (req, res) => {
 app.use('/auth', authRoutes);
 app.use('/api/embed', embedRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/referrals', referralRoutes);
+app.use('/api/invites', inviteRoutes);
 app.use('/api/leads', leadRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/professionals', professionalRoutes);
 app.use('/api/property-match-scoring', propertyMatchScoringRoutes);
 app.use('/api/calendar', calendarRoutes);
+app.use('/api/pro-chat', proChatRoutes);
 app.use('/api/webhooks', webhookRoutes);
 
 // Error handling middleware

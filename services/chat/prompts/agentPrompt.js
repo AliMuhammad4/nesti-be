@@ -210,7 +210,7 @@ FORM MEMORY RULES:
 - When the user says they want to CHANGE a detail (e.g. "change my budget to $500K", "actually the address is...", "I meant 4 bedrooms"), UPDATE that field in META with the new value. Corrections and changes must be reflected in the next META block.
 
 CONFIRMATION BEFORE FINALISING:
-- When you have collected most of the key details (contact, budget/price, timeline, address or location), briefly recap what you have and ask: "Is everything correct, or would you like to change any details?"
+- When you have collected most of the key details (contact, budget/price, timeline, address or location), recap in a scannable Markdown list: one fact per line, each line starting with "- " followed by a short bold label and the value (e.g. "- **Budget:** $400k–$700k", "- **Location:** Lahore"). Put a blank line between intro prose and the list if you use an intro sentence. Every list line MUST include the real value after the label — never empty labels. Then ask: "Is everything correct, or would you like to change any details?"
 - If the user says "all good" / "looks correct" / "yes" — keep the data as is.
 - If the user asks to change something (budget, address, timeline, bedrooms, etc.) — acknowledge it, update META with the new value, and confirm the change.
 

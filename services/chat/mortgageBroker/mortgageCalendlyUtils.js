@@ -1,36 +1,15 @@
-
-const TIER_FIELDS = {
-  hot:   'mortgage_calendly_link_hot',
-  warm:  'mortgage_calendly_link_warm',
-  early: 'mortgage_calendly_link_early',
-};
-
-export function tierKeyForMortgageGrade(grade) {
-  if (grade === 'hot') return 'hot';
-  if (grade === 'warm') return 'warm';
-  return 'early';
-}
-export function resolveMortgageCalendlyUrl(profile, leadGrade) {
+/** Mortgage brokers use the same `calendly_link` as other roles (no per-tier URLs). */
+export function resolveMortgageCalendlyUrl(profile) {
   if (!profile) return '';
-  const tier = tierKeyForMortgageGrade(leadGrade || 'cold');
-  const specific = (profile[TIER_FIELDS[tier]] || '').trim();
-  const fallback = (profile.calendly_link || '').trim();
-  return specific || fallback;
+  return String(profile.calendly_link || '').trim();
 }
+
 export function hasMortgageCalendlyConfigured(profile) {
-  if (!profile) return false;
-  if ((profile.calendly_link || '').trim()) return true;
-  return Object.values(TIER_FIELDS).some((k) => (profile[k] || '').trim());
+  return Boolean(resolveMortgageCalendlyUrl(profile));
 }
+
 export function primaryCalendlyLinkForAlignment(profile) {
-  if (!profile) return '';
-  const main = (profile.calendly_link || '').trim();
-  if (main) return main;
-  for (const k of Object.values(TIER_FIELDS)) {
-    const u = (profile[k] || '').trim();
-    if (u) return u;
-  }
-  return '';
+  return resolveMortgageCalendlyUrl(profile);
 }
 
 export function visitorHasPreferredContactPrefs({ formContact, lastAssistantExtracted }) {

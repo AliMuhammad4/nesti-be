@@ -1,4 +1,4 @@
-import { handleChatService, handlePropertyMatchesService } from '../services/chat/chatService.js';
+import { handleChatService, handlePropertyMatchesService, clearChatSessionService } from '../services/chat/chatService.js';
 import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageBroker/mortgageAffordabilityFromLead.js';
 import { scoreLead, scoreMortgageBrokerLead, scoreLawyerLead } from '../services/chat/scoring/index.js';
 import { PROFESSIONAL_TYPE } from '../constants/roles.js';
@@ -87,7 +87,7 @@ export const handleChat = async (req, res, next) => {
 export const handlePropertyMatches = async (req, res, next) => {
   const startedAt = Date.now();
   try {
-    const { id, embedToken, visitorId, formContact } = req.body;
+    const { id, embedToken, visitorId, formContact, page, limit } = req.body;
     logger.info('Chat API: property-matches request', {
       op:          'chat.property_matches',
       session_id:  id || null,
@@ -100,6 +100,8 @@ export const handlePropertyMatches = async (req, res, next) => {
       embedToken,
       visitorId,
       formContact,
+      page,
+      limit,
     });
 
     const pm = result.body?.meta?.property_matches;
@@ -131,7 +133,8 @@ export const scorePreview = async (req, res, next) => {
     const professionalType = req.body.professionalType || formContact.professionalType || PROFESSIONAL_TYPE.AGENT;
     const isMortgageBroker = professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER;
     const isLawyer = professionalType === PROFESSIONAL_TYPE.LAWYER;
-    const intent = formContact.intent || 'buy';
+    const intent =
+      isLawyer || isMortgageBroker ? 'unspecified' : formContact.intent || 'buy';
 
     const formSignals = isLawyer
       ? {
@@ -271,5 +274,15 @@ export const scorePreview = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+export const clearChatSession = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await clearChatSessionService(id);
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    return next(error);
   }
 };

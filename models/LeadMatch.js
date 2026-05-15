@@ -36,9 +36,17 @@ const leadMatchSchema = new mongoose.Schema(
       enum: MATCH_STATUSES,
       default: 'new',
     },
+    /** Mixed bag: contact, calendly, session, embed_token, etc.
+     * `agent_notes`: append-only `[{ id, text, created_at, author_user_id, author_label? }]` (cap in service). */
     compatibility_factors: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
+    },
+    icp_fit: {
+      fit_score: { type: Number, default: null },
+      fit_tier: { type: String, enum: ['perfect_match', 'good_match', 'low_match', null], default: null },
+      matched_factors: [{ type: String }],
+      missing_factors: [{ type: String }],
     },
     contact_count: {
       type: Number,
@@ -53,5 +61,8 @@ const leadMatchSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+leadMatchSchema.index({ user_id: 1, 'icp_fit.fit_tier': 1, lead_profile_id: 1 });
+leadMatchSchema.index({ user_id: 1, lead_profile_id: 1 });
 
 export default mongoose.model('LeadMatch', leadMatchSchema);

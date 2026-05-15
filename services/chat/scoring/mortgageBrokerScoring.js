@@ -1,13 +1,14 @@
-import LeadProfile from '../../../models/LeadProfile.js';
 import logger from '../../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { mergeSignals, buildMortgageBrokerLeadType } from './common.js';
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 import {
+  bumpLeadProfileStats,
   createValidatedLeadAttribution,
   createValidatedLeadMatch,
-  createValidatedLeadProfile,
+  createOrReuseLeadProfile,
 } from './leadPersistence.js';
+import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 const MORTGAGE_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestMortgageGrade = (a, b) =>
   (MORTGAGE_GRADE_ORDER[a] || 0) >= (MORTGAGE_GRADE_ORDER[b] || 0) ? a : b;
@@ -44,7 +45,8 @@ export const deriveMortgageQualificationFromText = (text = '') => {
   else if (/5\s*[-–]\s*9|5.?9%|5 to 9 percent/i.test(t)) out.down_payment_readiness = '5_9';
   else if (/under 5|below 5%|less than 5/i.test(t)) out.down_payment_readiness = 'under_5';
   else if (/no savings|no down payment|no money saved|haven't saved/i.test(t)) out.down_payment_readiness = 'no_savings';
-  if (/primary residence|first home|primary home|main home/i.test(t)) out.purchase_purpose = 'primary_residence';
+  if (/refinanc|refi\b/i.test(t)) out.purchase_purpose = 'refinance';
+  else if (/primary residence|first home|primary home|main home/i.test(t)) out.purchase_purpose = 'primary_residence';
   else if (/investment|rental property|investment property/i.test(t)) out.purchase_purpose = 'investment';
   else if (/vacation|second home|cottage|vacation home/i.test(t)) out.purchase_purpose = 'vacation_home';
   if (/yes.*approved tomorrow|start house hunting immediately|immediately.*house hunt/i.test(t)) out.urgency_signal = 'yes';
@@ -140,6 +142,7 @@ export const scoreMortgageBrokerLead = ({
   let purposeScore = 0;
   const pp = fq.purchase_purpose;
   if (pp === 'primary_residence' || pp === 'investment') { purposeScore = 5; reasons.push('Purpose: ' + (pp === 'primary_residence' ? 'primary residence' : 'investment')); }
+  else if (pp === 'refinance') { purposeScore = 5; reasons.push('Purpose: refinance'); }
   else if (pp === 'vacation_home') { purposeScore = 3; reasons.push('Purpose: vacation home'); }
 
   let urgencyScore = 0;
@@ -194,6 +197,7 @@ export const createMortgageLeadRecords = async ({
   contactInfo,
   userId,
   professionalProfileId,
+  activeIcpProfileId,
   messageSnippet,
   formContact,
   aiDetails,
@@ -212,44 +216,56 @@ export const createMortgageLeadRecords = async ({
 
   const { budgetStr: mbBudgetStr } = partitionBuyerBudgetInputs(fq.budget, ai.budget);
 
-  const leadProfile = await createValidatedLeadProfile({
-    intent:                 'buy',
-    full_name:              contactInfo.name    || 'Unknown',
-    email:                  contactInfo.email   || '',
-    phone:                  contactInfo.phone   || '',
-    property_address:       addressVal,
-    location:               locationVal,
-    budget:                 mbBudgetStr || '',
-    expected_price:         '',
-    timeline:               fq.mortgage_timeline || ai.mortgage_timeline || '',
-    bedrooms:               bedroomsVal ? String(bedroomsVal) : '',
-    bathrooms:              bathroomsVal ? String(bathroomsVal) : '',
-    square_footage:         areaVal,
-    property_type:          '',
-    must_have_features:     '',
-    parking_required:       '',
-    backyard_needed:       '',
-    school_district_important: '',
-    preferred_contact_method: fq.preferred_contact_method || ai.preferred_contact_method || '',
-    best_time_to_contact:     fq.best_time_to_contact || ai.best_time_to_contact || '',
-    mortgage_status:         ai.pre_approval_status || fq.pre_approval_status || '',
-    realtor_status:         '',
-    motivation_reason:      '',
-    viewing_readiness:      '',
-    living_situation:       '',
-    urgency_readiness:      '',
-    mortgage_timeline:      ai.mortgage_timeline || fq.mortgage_timeline || '',
-    pre_approval_status:   ai.pre_approval_status || fq.pre_approval_status || '',
-    credit_score_range:     ai.credit_score_range || fq.credit_score_range || '',
-    employment_status:     ai.employment_status || fq.employment_status || '',
-    household_income:       ai.household_income || fq.household_income || '',
-    down_payment_readiness: ai.down_payment_readiness || fq.down_payment_readiness || '',
-    purchase_purpose:       ai.purchase_purpose || fq.purchase_purpose || '',
-    urgency_signal:         ai.urgency_signal || fq.urgency_signal || '',
-    mortgage_property_budget: fq.property_budget || ai.property_budget || '',
-    source:                 'chatbot',
-    total_score:            leadScore,
+  const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
+    payload: {
+      intent: 'unspecified',
+      identity: {
+        full_name: contactInfo.name || 'Unknown',
+        email: contactInfo.email || '',
+        phone: contactInfo.phone || '',
+      },
+      contact_preferences: {
+        preferred_contact_method: fq.preferred_contact_method || ai.preferred_contact_method || '',
+        best_time_to_contact: fq.best_time_to_contact || ai.best_time_to_contact || '',
+      },
+      property: {
+        address: addressVal,
+        location: locationVal,
+        budget: mbBudgetStr || '',
+        expected_price: '',
+        timeline: fq.mortgage_timeline || ai.mortgage_timeline || '',
+        bedrooms: bedroomsVal ? String(bedroomsVal) : '',
+        bathrooms: bathroomsVal ? String(bathroomsVal) : '',
+        square_footage: areaVal,
+      },
+      qualification: {
+        mortgage_broker: {
+          mortgage_timeline: ai.mortgage_timeline || fq.mortgage_timeline || '',
+          pre_approval_status: ai.pre_approval_status || fq.pre_approval_status || '',
+          credit_score_range: ai.credit_score_range || fq.credit_score_range || '',
+          employment_status: ai.employment_status || fq.employment_status || '',
+          household_income: ai.household_income || fq.household_income || '',
+          down_payment_readiness: ai.down_payment_readiness || fq.down_payment_readiness || '',
+          purchase_purpose: ai.purchase_purpose || fq.purchase_purpose || '',
+          urgency_signal: ai.urgency_signal || fq.urgency_signal || '',
+          property_budget: fq.property_budget || ai.property_budget || '',
+        },
+      },
+      source: 'chatbot',
+      total_score: leadScore,
+    },
+    userId,
+    professionalType: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
+    contactInfo,
+    leadGrade,
   });
+
+  let icpFit = null;
+  try {
+    icpFit = await computeIcpFitForLead(leadProfile, userId, { reusedExisting, activeIcpProfileId });
+  } catch (err) {
+    logger.warn('ICP scoring failed, skipping', { error: err.message });
+  }
 
   const leadMatch = await createValidatedLeadMatch({
     user_id:                 userId,
@@ -266,13 +282,24 @@ export const createMortgageLeadRecords = async ({
       session_id:      sessionId,
       embed_token:     embedToken,
       agent_type:      conversation.agent_type,
-      intent:          'buy',
+      intent:          'unspecified',
       lead_grade:      leadGrade,
       message_snippet: messageSnippet,
       contact:         contactInfo,
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
       professional_type: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
+      repeat_visitor: reusedExisting,
     },
+    ...(icpFit
+      ? {
+          icp_fit: {
+            fit_score: icpFit.fit_score,
+            fit_tier: icpFit.fit_tier,
+            matched_factors: icpFit.matched_factors,
+            missing_factors: icpFit.missing_factors,
+          },
+        }
+      : {}),
   });
 
   await createValidatedLeadAttribution({
@@ -280,6 +307,7 @@ export const createMortgageLeadRecords = async ({
     source:          'chatbot',
     converted:       false,
     lead_profile_id: leadProfile._id,
+    lead_match_id:   leadMatch._id,
     session_id:     sessionId,
     ip_address:     clientIp  || '',
     user_agent:     userAgent || '',
@@ -287,6 +315,8 @@ export const createMortgageLeadRecords = async ({
     initial_score:  leadScore,
     initial_quality: leadGrade,
   });
+
+  await bumpLeadProfileStats(leadProfile._id, 'unspecified', leadType);
 
   logger.info(`Mortgage lead created: ${leadType} | score: ${leadScore} | conversation: ${conversation._id}`);
 

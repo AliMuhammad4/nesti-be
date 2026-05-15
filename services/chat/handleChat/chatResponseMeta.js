@@ -4,6 +4,7 @@ import { calendlyWebhookAlignmentMeta } from '../../calendly/calendlyAlignmentSe
 import {
   getPostBookingChecklistForMeta,
   supportsPropertyMatches,
+  usesFixedBuyIntentForLeadMatch,
   usesMortgageAffordabilitySnapshot,
 } from '../flows/flowRoleMeta.js';
 import { buildMortgageAffordabilitySnapshot } from '../mortgageBroker/mortgageAffordabilityFromLead.js';
@@ -26,6 +27,7 @@ export async function buildChatResponseMeta({
   emotionalState,
   mortgageBrokerSnapshotQual,
   mortgageBrokerSnapshotSignals,
+  extractedData,
 }) {
   const property_matches_available = Boolean(supportsPropertyMatches(flow) && hasContact);
 
@@ -47,8 +49,11 @@ export async function buildChatResponseMeta({
         )
       : null;
 
+  const visitorFacingIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent;
+
   return {
-    intent: aiIntent,
+    intent: visitorFacingIntent,
+    ...(extractedData && typeof extractedData === 'object' ? { extracted_data: extractedData } : {}),
     lead_score: finalScore,
     lead_grade: finalGrade,
     lead_classification: finalClass,

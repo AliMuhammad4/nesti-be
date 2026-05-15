@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect } from '../middleware/authMiddleware.js';
+import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { passthrough } from '../schemas/common.js';
 import {
@@ -12,16 +12,27 @@ import {
 
 const router = express.Router();
 
-router.post('/professional/guidance', protect, getGuidance);
-router.get('/lead/insights/:conversation_id', protect, getInsights);
-router.get('/lead/questionnaire/:type', protect, getQuestionnaireHandler);
+router.post('/professional/guidance', protect, requireCompleteProfessionalProfile, getGuidance);
+router.get('/lead/insights/:conversation_id', protect, requireCompleteProfessionalProfile, getInsights);
+router.get('/lead/questionnaire/:type', protect, requireCompleteProfessionalProfile, getQuestionnaireHandler);
 router.post(
   '/lead/score-questionnaire',
   protect,
+  requireCompleteProfessionalProfile,
   validateBody(passthrough),
   scoreQuestionnaireHandler
 );
-router.get('/lead/toggle-automation/:conversation_id', protect, toggleAutomationHandler);
-router.post('/lead/toggle-automation/:conversation_id', protect, toggleAutomationHandler);
+router.get(
+  '/lead/toggle-automation/:conversation_id',
+  protect,
+  requireCompleteProfessionalProfile,
+  toggleAutomationHandler
+);
+router.post(
+  '/lead/toggle-automation/:conversation_id',
+  protect,
+  requireCompleteProfessionalProfile,
+  toggleAutomationHandler
+);
 
 export default router;

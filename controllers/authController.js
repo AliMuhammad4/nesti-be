@@ -3,10 +3,13 @@ import {
   verifyEmailService,
   loginService,
   profileService,
+  publicProfileService,
   changePasswordService,
   forgotPasswordService,
   verifyResetOtpService,
   resetPasswordService,
+  checkEmailService,
+  resendVerificationService,
 } from '../services/auth/authService.js';
 
 const send = (res, result) => {
@@ -28,6 +31,7 @@ const verifyEmail = async (req, res, next) => {
       await verifyEmailService({
         verificationToken: req.headers.authorization || req.headers.token,
         otp: req.body.otp,
+        invite_token: req.body.invite_token,
       })
     );
   } catch (error) {
@@ -100,9 +104,34 @@ const resetPassword = async (req, res, next) => {
 
 const google = stub;
 const googleSignup = stub;
-const publicProfile = stub;
-const checkEmail = stub;
-const resendVerification = stub;
+const publicProfile = async (req, res, next) => {
+  try {
+    send(res, await publicProfileService(req.query.email));
+  } catch (error) {
+    next(error);
+  }
+};
+const checkEmail = async (req, res, next) => {
+  try {
+    send(res, await checkEmailService(req.body));
+  } catch (error) {
+    next(error);
+  }
+};
+
+const resendVerification = async (req, res, next) => {
+  try {
+    send(
+      res,
+      await resendVerificationService({
+        email: req.body?.email,
+        verification_token: req.body?.verification_token,
+      })
+    );
+  } catch (error) {
+    next(error);
+  }
+};
 
 export {
   signup,

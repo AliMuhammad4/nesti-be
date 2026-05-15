@@ -16,7 +16,14 @@ export const getInsights = async (req, res, next) => {
     if (!result.success && result.status === 404) {
       return res.status(404).json({ success: false, message: result.message });
     }
-    res.json({ success: true, insights: result.insights });
+    res.json({
+      success: true,
+      insights: result.insights,
+      decision_support: result.decision_support ?? null,
+      trust: result.trust ?? null,
+      conversion_funnel: result.conversion_funnel ?? null,
+      empty_state: result.empty_state ?? null,
+    });
   } catch (error) {
     next(error);
   }

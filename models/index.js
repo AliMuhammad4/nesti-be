@@ -11,6 +11,14 @@ import CalendarIntegration from './CalendarIntegration.js';
 import LeadProfile from './LeadProfile.js';
 import Visitor from './Visitor.js';
 import LeadAttribution from './LeadAttribution.js';
+import IcpProfile from './IcpProfile.js';
+import ProfessionalNotification from './ProfessionalNotification.js';
+import InviteLink from './InviteLink.js';
+import InviteAttribution from './InviteAttribution.js';
+import ReferralRewardEvent from './ReferralRewardEvent.js';
+import UserRewardBalance from './UserRewardBalance.js';
+import ProfessionalChatThread from './ProfessionalChatThread.js';
+import ProfessionalChatMessage from './ProfessionalChatMessage.js';
 export {
   User,
   ChatConversation,
@@ -25,4 +33,12 @@ export {
   Visitor,
   LeadAttribution,
   LeadProfile,
+  IcpProfile,
+  ProfessionalNotification,
+  InviteLink,
+  InviteAttribution,
+  ReferralRewardEvent,
+  UserRewardBalance,
+  ProfessionalChatThread,
+  ProfessionalChatMessage,
 };

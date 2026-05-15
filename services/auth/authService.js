@@ -1,9 +1,12 @@
 import User from '../../models/User.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { USER_ROLE, USER_ROLE_VALUES } from '../../constants/roles.js';
+import { evaluateProfessionalProfileSetup } from '../../utils/professionalProfileSetup.js';
 import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
+import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
+import { finalizeInviteAttribution } from '../referral/inviteService.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 
@@ -19,17 +22,39 @@ const tryVerifyJwt = (token) => {
 
 const randomOtp = () => Math.floor(10000 + Math.random() * 90000).toString();
 
+function brandOtpEmailHtml({ title, subtitle, otp, footerNote = '' }) {
+  const safeTitle = String(title || '').trim();
+  const safeSubtitle = String(subtitle || '').trim();
+  const safeOtp = String(otp || '').trim();
+  const safeFooter = String(footerNote || '').trim();
+  const content = `
+    <h1 style="margin:0 0 8px;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:22px;line-height:1.3;color:#2D3748;">${safeTitle}</h1>
+    <p style="margin:0 0 18px;font-size:14px;line-height:1.55;color:#4A5568;">${safeSubtitle}</p>
+    <div style="margin:0 0 18px;padding:14px 16px;border:1px solid #bdecc8;border-radius:10px;background:#f2fff6;text-align:center;">
+      <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${EMAIL_BRAND.primaryDark};margin-bottom:6px;">One-time password</div>
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;font-size:34px;font-weight:800;letter-spacing:0.18em;color:#1f8b3d;">${safeOtp}</div>
+    </div>
+    <p style="margin:0;font-size:13px;line-height:1.6;color:#718096;">
+      This code expires in <strong style="color:#2D3748;">10 minutes</strong>. ${safeFooter}
+    </p>`;
+  return renderBrandedEmailShell({
+    kicker: 'Nesti AI',
+    title: 'Account security',
+    innerHtml: content,
+    maxWidth: 560,
+  });
+}
+
 const queueSignupOtpEmail = ({ email, first_name, otp }) => {
   sendEmail({
     email,
     subject: 'Nesti AI - Verify Your Email',
     message: `Welcome to Nesti AI! Your email verification OTP is: ${otp}. It will expire in 10 minutes.`,
-    htmlMessage: `
-      <h1>Welcome to Nesti AI, ${first_name}!</h1>
-      <p>Thank you for signing up. Please use the following One-Time Password (OTP) to verify your email address:</p>
-      <h2 style="background: #f4f4f4; padding: 10px; display: inline-block; letter-spacing: 5px;">${otp}</h2>
-      <p>This code will expire in 10 minutes.</p>
-    `,
+    htmlMessage: brandOtpEmailHtml({
+      title: `Welcome to Nesti AI${first_name ? `, ${first_name}` : ''}!`,
+      subtitle: 'Use this OTP to verify your email address and complete your signup.',
+      otp,
+    }),
   }).then((result) => {
     if (!result.success) {
       logger.error(`Background OTP email failed to send to ${email}`);
@@ -42,12 +67,12 @@ const queuePasswordResetEmail = (email, otp) => {
     email,
     subject: 'Nesti AI - Password Reset OTP',
     message: `You requested a password reset. Your OTP is: ${otp}. It will expire in 10 minutes.`,
-    htmlMessage: `
-      <h1>Password Reset Request</h1>
-      <p>Use the following One-Time Password (OTP) to reset your password:</p>
-      <h2 style="background: #f4f4f4; padding: 10px; display: inline-block; letter-spacing: 5px;">${otp}</h2>
-      <p>This code will expire in 10 minutes. If you did not request this, you can safely ignore this email.</p>
-    `,
+    htmlMessage: brandOtpEmailHtml({
+      title: 'Password reset request',
+      subtitle: 'Use this OTP to continue resetting your password.',
+      otp,
+      footerNote: 'If you did not request this, you can safely ignore this email.',
+    }),
   }).then((result) => {
     if (!result.success) {
       logger.error(`Password reset email failed to send to ${email}`);
@@ -55,24 +80,57 @@ const queuePasswordResetEmail = (email, otp) => {
   });
 };
 
-export const signupService = async (payload) => {
-  const { email, password, first_name, last_name, role } = payload;
+function normalizeProfessionalProfile(profileDoc) {
+  const p = profileDoc || {};
+  return {
+    ...p,
+    full_name: p.full_name || '',
+    website: p.website || '',
+    company_name: p.company_name || '',
+    certificates: Array.isArray(p.certificates) ? p.certificates : [],
+    phone: p.phone || '',
+    location: p.location || '',
+    target_neighborhoods: p.target_neighborhoods || '',
+    experience: p.experience || '',
+    license_number: p.license_number || '',
+    social_media: p.social_media || '',
+    transaction_volume: p.transaction_volume || '',
+    avg_sale_price: p.avg_sale_price || '',
+    response_time: p.response_time || '',
+    availability: p.availability || '',
+    support_level: p.support_level || '',
+    negotiation_style: p.negotiation_style || '',
+    sales_approach: p.sales_approach || '',
+    energy_style: p.energy_style || '',
+    personality_tag: p.personality_tag || '',
+    awards: p.awards || '',
+    specializations: Array.isArray(p.specializations) ? p.specializations : [],
+    communication_channels: Array.isArray(p.communication_channels) ? p.communication_channels : [],
+    preferred_clients: Array.isArray(p.preferred_clients) ? p.preferred_clients : [],
+    calendly_link: p.calendly_link || '',
+    bio: p.bio || '',
+  };
+}
 
-  if (!email || !password || !first_name || !last_name) {
+export const signupService = async (payload) => {
+  const { email, password, first_name, last_name, role, invite_token } = payload;
+  const normalizedEmail = String(email || '').toLowerCase().trim();
+
+  if (!normalizedEmail || !password || !first_name || !last_name) {
     return { status: 400, body: { success: false, message: 'Please provide all required fields' } };
   }
 
   const assignedRole = role && USER_ROLE_VALUES.includes(role) ? role : USER_ROLE.AGENT;
 
-  if (await User.findOne({ email })) {
+  if (await User.findOne({ email: normalizedEmail })) {
     return { status: 400, body: { success: false, message: 'User already exists' } };
   }
 
   const otp = randomOtp();
-  queueSignupOtpEmail({ email, first_name, otp });
+  queueSignupOtpEmail({ email: normalizedEmail, first_name, otp });
 
   const verificationToken = signJwt(
-    { email, password, first_name, last_name, role: assignedRole, otp },
+    { email: normalizedEmail, password, first_name, last_name, role: assignedRole, otp, invite_token: invite_token || '' },
     '10m'
   );
 
@@ -86,7 +144,7 @@ export const signupService = async (payload) => {
   };
 };
 
-export const verifyEmailService = async ({ verificationToken, otp }) => {
+export const verifyEmailService = async ({ verificationToken, otp, invite_token }) => {
   if (!verificationToken) {
     return {
       status: 401,
@@ -120,16 +178,27 @@ export const verifyEmailService = async ({ verificationToken, otp }) => {
     };
   }
 
-  const user = await User.create({
-    email: decoded.email,
-    password: decoded.password,
-    first_name: decoded.first_name,
-    last_name: decoded.last_name,
-    role: decoded.role,
-    is_verified: true,
-    account_status: 'free_trial',
-    trial_ends_at: trialEndsAt,
-  });
+  let user;
+  try {
+    user = await User.create({
+      email: decoded.email,
+      password: decoded.password,
+      first_name: decoded.first_name,
+      last_name: decoded.last_name,
+      role: decoded.role,
+      is_verified: true,
+      account_status: 'free_trial',
+      trial_ends_at: trialEndsAt,
+    });
+  } catch (error) {
+    if (error?.code === 11000) {
+      return {
+        status: 400,
+        body: { success: false, message: 'Account already verified. Please login.' },
+      };
+    }
+    throw error;
+  }
 
   if (user.role !== USER_ROLE.ADMIN) {
     await ProfessionalProfile.create({
@@ -143,6 +212,23 @@ export const verifyEmailService = async ({ verificationToken, otp }) => {
     }
   }
 
+  const inviteTokenFromPayload = String(invite_token || decoded?.invite_token || '').trim();
+  if (inviteTokenFromPayload) {
+    try {
+      await finalizeInviteAttribution({
+        invite_token: inviteTokenFromPayload,
+        authenticated_user_id: user._id,
+        method: 'signup_verify_email',
+        path: '/auth/verify-email',
+      });
+    } catch (err) {
+      logger.warn('Invite attribution finalization failed after verify-email', {
+        user_id: String(user._id),
+        error: err?.message,
+      });
+    }
+  }
+
   return {
     status: 200,
     body: {
@@ -153,7 +239,7 @@ export const verifyEmailService = async ({ verificationToken, otp }) => {
   };
 };
 
-export const loginService = async ({ email, password }) => {
+export const loginService = async ({ email, password, invite_token }) => {
   const user = await User.findOne({ email });
 
   if (!user || !(await user.matchPassword(password))) {
@@ -169,6 +255,22 @@ export const loginService = async ({ email, password }) => {
     await user.save();
   }
 
+  if (invite_token && String(invite_token).trim()) {
+    try {
+      await finalizeInviteAttribution({
+        invite_token: String(invite_token).trim(),
+        authenticated_user_id: user._id,
+        method: 'login',
+        path: '/auth/login',
+      });
+    } catch (err) {
+      logger.warn('Invite attribution finalization failed after login', {
+        user_id: String(user._id),
+        error: err?.message,
+      });
+    }
+  }
+
   return {
     status: 200,
     body: { success: true, token: signJwt({ id: user._id }, '30d') },
@@ -176,7 +278,12 @@ export const loginService = async ({ email, password }) => {
 };
 
 export const profileService = async (user) => {
-  const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id });
+  const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id })
+    .select('-property_match_scoring')
+    .lean();
+  const hasIcpConfigured = Boolean(
+    professionalProfile?.active_icp_profile_id
+  );
 
   const trialExpired =
     user.account_status === 'free_trial' &&
@@ -184,20 +291,167 @@ export const profileService = async (user) => {
     new Date() > new Date(user.trial_ends_at);
   const isExpired = user.account_status === 'expired' || trialExpired;
 
+  const profileSetup =
+    user.role === USER_ROLE.ADMIN
+      ? {
+          personal_complete: true,
+          business_complete: true,
+          is_complete: true,
+          missing_fields: [],
+        }
+      : evaluateProfessionalProfileSetup(user, professionalProfile);
+
   return {
     status: 200,
     body: {
       success: true,
+      // ICP is optional; gates use personal + business basics only (see requireCompleteProfessionalProfile).
+      profile_setup: { ...profileSetup, icp_is_separate_from_workspace_basics: true },
       user: {
+        id: String(user._id),
+        _id: String(user._id),
         name: `${user.first_name} ${user.last_name}`,
+        first_name: user.first_name,
+        last_name: user.last_name,
         email: user.email,
         role: user.role,
+        profile_image: user.profile_image || null,
+        cover_image: user.cover_image || null,
         accountStatus: user.account_status,
         trialEndsAt: user.trial_ends_at,
         isExpired,
         ...(isExpired && { message: 'Account expired. Please upgrade.' }),
       },
-      professionalProfile: professionalProfile || null,
+      professionalProfile: professionalProfile
+        ? {
+            ...normalizeProfessionalProfile(professionalProfile),
+            has_icp_configured: hasIcpConfigured,
+          }
+        : null,
+    },
+  };
+};
+
+export const publicProfileService = async (email) => {
+  if (!email || !String(email).trim()) {
+    return { status: 400, body: { success: false, message: 'Please provide a valid email' } };
+  }
+
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail }).lean();
+  if (!user) {
+    return { status: 404, body: { success: false, message: 'User not found' } };
+  }
+
+  const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id })
+    .select('-property_match_scoring')
+    .lean();
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      user: {
+        name: `${user.first_name || ''} ${user.last_name || ''}`.trim(),
+        first_name: user.first_name || '',
+        last_name: user.last_name || '',
+        email: user.email,
+        role: user.role,
+      },
+      professionalProfile: professionalProfile
+        ? normalizeProfessionalProfile(professionalProfile)
+        : null,
+    },
+  };
+};
+
+export const checkEmailService = async ({ email }) => {
+  if (!email || !String(email).trim()) {
+    return { status: 400, body: { success: false, message: 'Please provide a valid email' } };
+  }
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const existing = await User.findOne({ email: normalizedEmail }).select('_id is_verified').lean();
+  return {
+    status: 200,
+    body: {
+      success: true,
+      exists: Boolean(existing),
+      is_verified: Boolean(existing?.is_verified),
+    },
+  };
+};
+
+export const resendVerificationService = async ({ email, verification_token }) => {
+  if (!email || !String(email).trim()) {
+    return { status: 400, body: { success: false, message: 'Please provide a valid email' } };
+  }
+
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const alreadyVerified = await User.findOne({ email: normalizedEmail }).select('_id').lean();
+  if (alreadyVerified) {
+    return {
+      status: 400,
+      body: { success: false, message: 'Account already verified. Please login.' },
+    };
+  }
+
+  if (!verification_token || !String(verification_token).trim()) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Verification session missing. Please sign up again.',
+      },
+    };
+  }
+
+  const verified = tryVerifyJwt(String(verification_token).trim());
+  if (!verified.ok) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Verification session expired or invalid. Please sign up again.',
+      },
+    };
+  }
+  const decoded = verified.payload || {};
+  if (String(decoded.email || '').toLowerCase().trim() !== normalizedEmail) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Verification session does not match this email. Please sign up again.',
+      },
+    };
+  }
+
+  const otp = randomOtp();
+  queueSignupOtpEmail({
+    email: normalizedEmail,
+    first_name: decoded.first_name || '',
+    otp,
+  });
+
+  const refreshedVerificationToken = signJwt(
+    {
+      email: normalizedEmail,
+      password: decoded.password,
+      first_name: decoded.first_name,
+      last_name: decoded.last_name,
+      role: decoded.role,
+      invite_token: decoded.invite_token || '',
+      otp,
+    },
+    '10m',
+  );
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'A new OTP has been sent to your email.',
+      verificationToken: refreshedVerificationToken,
     },
   };
 };
@@ -226,7 +480,8 @@ export const forgotPasswordService = async ({ email }) => {
     return { status: 400, body: { success: false, message: 'Please provide an email address' } };
   }
 
-  const user = await User.findOne({ email });
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail });
   if (!user) {
     return {
       status: 404,
@@ -245,7 +500,7 @@ export const forgotPasswordService = async ({ email }) => {
     status: 200,
     body: {
       success: true,
-      message: 'If an account with that email exists, a reset OTP has been sent',
+      message: 'A reset code has been sent to your email.',
     },
   };
 };
@@ -258,7 +513,8 @@ export const verifyResetOtpService = async ({ email, otp }) => {
     };
   }
 
-  const user = await User.findOne({ email });
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail });
   if (!user || !user.reset_password_token || !user.reset_password_expires) {
     return { status: 400, body: { success: false, message: 'Invalid or expired OTP' } };
   }

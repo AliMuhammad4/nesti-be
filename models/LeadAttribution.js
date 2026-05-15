@@ -21,6 +21,12 @@ const leadAttributionSchema = new mongoose.Schema(
       ref: 'LeadProfile',
       default: null,
     },
+    lead_match_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'LeadMatch',
+      default: null,
+      index: true,
+    },
     session_id: {
       type: String,
     },

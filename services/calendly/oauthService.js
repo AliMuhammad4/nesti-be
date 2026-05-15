@@ -71,6 +71,41 @@ export async function exchangeCalendlyAuthorizationCode(code) {
   return JSON.parse(text);
 }
 
+/**
+ * Refresh OAuth access token (Calendly access tokens expire; cancel/list APIs need a valid one).
+ * @param {string} refreshToken
+ * @returns {Promise<{ access_token: string, refresh_token?: string, expires_in?: number }>}
+ */
+export async function refreshCalendlyAccessToken(refreshToken) {
+  const clientId = process.env.CALENDLY_CLIENT_ID?.trim();
+  const clientSecret = process.env.CALENDLY_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) {
+    throw new Error('Set CALENDLY_CLIENT_ID and CALENDLY_CLIENT_SECRET');
+  }
+  if (!refreshToken || !String(refreshToken).trim()) {
+    throw new Error('Missing Calendly refresh token; reconnect Calendly in the app.');
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: String(refreshToken).trim(),
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+
+  const res = await fetch(`${AUTH_BASE}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Calendly token refresh failed (${res.status}): ${text.slice(0, 500)}`);
+  }
+  return JSON.parse(text);
+}
+
 export async function fetchCalendlyAccountLabel(accessToken) {
   const res = await fetch(`${API_BASE}/users/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },

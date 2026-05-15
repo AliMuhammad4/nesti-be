@@ -45,6 +45,9 @@ import { buildLeadRecapMarkdownLines, injectLeadRecapIntoReply } from './utils/l
 
 export { flowTypeForConversation, recomputeSignalsForPropertyMatches } from './handleChat/index.js';
 
+const MAX_USER_MESSAGES_FOR_SCORING = 120;
+const MAX_MESSAGES_FOR_PROMPT = 20;
+
 function normalizePersistedGradeByScore(grade, score) {
   const normalizedGrade = String(grade || '').toLowerCase();
   const normalizedScore = Number(score);
@@ -223,14 +226,24 @@ export const handleChatService = async ({
   let contactInfo = await accumulateContactInfo(conversation._id, currentContact);
   let hasContact = hasIdentityContact(contactInfo);
 
-  const allUserMessages = await ChatMessage.find({
-    conversation_id: conversation._id,
-    role: 'user',
-  })
-    .sort({ createdAt: 1 })
-    .select('content');
-  const interactionCount = allUserMessages.length;
-  const conversationText = allUserMessages.map((m) => m.content).join(' ');
+  const [interactionCount, recentUserMessages] = await Promise.all([
+    ChatMessage.countDocuments({
+      conversation_id: conversation._id,
+      role: 'user',
+    }),
+    ChatMessage.find({
+      conversation_id: conversation._id,
+      role: 'user',
+    })
+      .sort({ createdAt: -1 })
+      .limit(MAX_USER_MESSAGES_FOR_SCORING)
+      .select('content')
+      .lean(),
+  ]);
+  const conversationText = [...recentUserMessages]
+    .reverse()
+    .map((m) => m.content)
+    .join(' ');
 
   const textSignals = extractSignals(conversationText);
   const seedSignals = mergeSignals(formSignals, textSignals);
@@ -244,10 +257,13 @@ export const handleChatService = async ({
     formQualification,
   });
 
-  const history = await ChatMessage.find({ conversation_id: conversation._id })
-    .sort({ createdAt: 1 })
-    .limit(20)
-    .select('role content meta');
+  const history = (
+    await ChatMessage.find({ conversation_id: conversation._id })
+      .sort({ createdAt: -1 })
+      .limit(MAX_MESSAGES_FOR_PROMPT)
+      .select('role content meta')
+      .lean()
+  ).reverse();
 
   const { calendlyLinkForVisitor } = resolveCalendlyLinksForVisitor(
     flow,

@@ -47,6 +47,7 @@ const ICP_ROLE_FIELDS = Object.freeze({
 const ALL_ICP_FIELDS = Object.freeze(
   Array.from(new Set(Object.values(ICP_ROLE_FIELDS).flat()))
 );
+const ICP_RESCORING_BULK_CHUNK_SIZE = 250;
 
 function roleScopedIcpPayload(professionalType, input = {}) {
   const allowed = ICP_ROLE_FIELDS[professionalType] || [];
@@ -64,6 +65,15 @@ function roleExcludedUnsetMap(professionalType) {
     if (!allowed.has(key)) unset[key] = 1;
   }
   return unset;
+}
+
+async function runBulkWriteInChunks(model, operations, chunkSize = ICP_RESCORING_BULK_CHUNK_SIZE) {
+  if (!Array.isArray(operations) || operations.length === 0) return;
+  for (let i = 0; i < operations.length; i += chunkSize) {
+    const chunk = operations.slice(i, i + chunkSize);
+    // unordered keeps throughput higher and isolates single-op failures
+    await model.bulkWrite(chunk, { ordered: false });
+  }
 }
 
 /** Public ICP shape for API (no internal linkage fields). */
@@ -321,26 +331,50 @@ export const saveIdealClientProfile = async (req, res, next) => {
       if (!firstMatchIdByProfile.has(pid)) firstMatchIdByProfile.set(pid, String(m._id));
     }
 
-    let rescored = 0;
+    const uniqueProfileIds = Array.from(
+      new Set(
+        leadMatches
+          .map((m) => (m.lead_profile_id ? String(m.lead_profile_id) : ''))
+          .filter(Boolean)
+      )
+    );
+    const leadProfiles = uniqueProfileIds.length
+      ? await LeadProfile.find({ _id: { $in: uniqueProfileIds } }).lean()
+      : [];
+    const leadProfileById = new Map(
+      leadProfiles.map((doc) => [String(doc._id), doc])
+    );
+
+    const bulkOps = [];
     for (const lm of leadMatches) {
-      const leadProfile = await LeadProfile.findById(lm.lead_profile_id).lean();
+      const pid = String(lm.lead_profile_id || '');
+      if (!pid) continue;
+      const leadProfile = leadProfileById.get(pid);
       if (!leadProfile) continue;
-      const pid = String(lm.lead_profile_id);
+
       const reusedExisting = firstMatchIdByProfile.get(pid) !== String(lm._id);
       const fit = scoreLeadAgainstIcp(leadProfile, icpProfile, { reusedExisting });
       if (!fit) continue;
-      await LeadMatch.findByIdAndUpdate(lm._id, {
-        $set: {
-          icp_fit: {
-            fit_score: fit.fit_score,
-            fit_tier: fit.fit_tier,
-            matched_factors: fit.matched_factors,
-            missing_factors: fit.missing_factors,
+
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: lm._id },
+          update: {
+            $set: {
+              icp_fit: {
+                fit_score: fit.fit_score,
+                fit_tier: fit.fit_tier,
+                matched_factors: fit.matched_factors,
+                missing_factors: fit.missing_factors,
+              },
+            },
           },
         },
       });
-      rescored += 1;
     }
+
+    await runBulkWriteInChunks(LeadMatch, bulkOps);
+    const rescored = bulkOps.length;
 
     return res.json({
       success: true,

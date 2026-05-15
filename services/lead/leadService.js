@@ -38,10 +38,12 @@ import { PROFESSIONAL_TYPE, USER_ROLE } from '../../constants/roles.js';
 async function leadMatchIdsWithBookedWorkspaceAppointment(userId, leadMatchObjectIds) {
   const ids = (leadMatchObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
   if (!ids.length) return new Set();
+  const now = new Date();
   const rows = await WorkspaceAppointment.find({
     user_id: userId,
     lead_match_id: { $in: ids },
     status: 'booked',
+    scheduled_start: { $gte: now },
   })
     .select('lead_match_id')
     .lean();
@@ -52,14 +54,53 @@ async function leadMatchIdsWithBookedWorkspaceAppointment(userId, leadMatchObjec
 async function conversationIdsWithBookedWorkspaceAppointment(userId, conversationObjectIds) {
   const ids = (conversationObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
   if (!ids.length) return new Set();
+  const now = new Date();
   const rows = await WorkspaceAppointment.find({
     user_id: userId,
     status: 'booked',
     conversation_id: { $in: ids },
+    scheduled_start: { $gte: now },
   })
     .select('conversation_id')
     .lean();
   return new Set(rows.map((r) => (r.conversation_id ? String(r.conversation_id) : '')).filter(Boolean));
+}
+
+async function workspaceBookingStartsByLeadAndConversation(userId, leadMatchObjectIds, conversationObjectIds) {
+  const leadIds = (leadMatchObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+  const convoIds = (conversationObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+  if (!leadIds.length && !convoIds.length) {
+    return { startByLeadId: new Map(), startByConversationId: new Map() };
+  }
+  const now = new Date();
+  const rows = await WorkspaceAppointment.find({
+    user_id: userId,
+    status: 'booked',
+    scheduled_start: { $gte: now },
+    $or: [
+      ...(leadIds.length ? [{ lead_match_id: { $in: leadIds } }] : []),
+      ...(convoIds.length ? [{ conversation_id: { $in: convoIds } }] : []),
+    ],
+  })
+    .select('lead_match_id conversation_id scheduled_start')
+    .sort({ scheduled_start: 1, recorded_at: -1 })
+    .lean();
+
+  const startByLeadId = new Map();
+  const startByConversationId = new Map();
+  for (const row of rows) {
+    const start = row?.scheduled_start ? new Date(row.scheduled_start) : null;
+    if (!start || Number.isNaN(start.getTime())) continue;
+    if (row?.lead_match_id) {
+      const k = String(row.lead_match_id);
+      if (!startByLeadId.has(k)) startByLeadId.set(k, start.toISOString());
+    }
+    if (row?.conversation_id) {
+      const k = String(row.conversation_id);
+      if (!startByConversationId.has(k)) startByConversationId.set(k, start.toISOString());
+    }
+  }
+  return { startByLeadId, startByConversationId };
 }
 
 function mergeConvoWithWorkspaceBooking(
@@ -68,15 +109,26 @@ function mergeConvoWithWorkspaceBooking(
   leadConversationId,
   bookedLeadIdSet,
   bookedConversationIdSet,
+  startByLeadId = new Map(),
+  startByConversationId = new Map(),
 ) {
   const c = conversation && typeof conversation === 'object' ? conversation : {};
   const convoKey = c._id ? String(c._id) : leadConversationId ? String(leadConversationId) : null;
-  const leadBooked = leadMatchId && bookedLeadIdSet.has(String(leadMatchId));
+  const leadKey = leadMatchId ? String(leadMatchId) : null;
+  const leadBooked = leadKey && bookedLeadIdSet.has(leadKey);
   const convoBooked = convoKey && bookedConversationIdSet.has(convoKey);
+  const startsAt =
+    (leadKey ? startByLeadId.get(leadKey) : null) ||
+    (convoKey ? startByConversationId.get(convoKey) : null) ||
+    null;
+  const next = { ...c };
   if ((leadBooked || convoBooked) && !c.calendly_booking_status) {
-    return { ...c, calendly_booking_status: 'booked' };
+    next.calendly_booking_status = 'booked';
   }
-  return c;
+  if (startsAt && !next.calendly_event_start) {
+    next.calendly_event_start = startsAt;
+  }
+  return next;
 }
 
 /** Buyer/seller `intent` is only for agent dashboards; omit for other roles. */
@@ -212,6 +264,11 @@ export const getLeads = async (req, res, next) => {
       userId,
       convoIds,
     );
+    const { startByLeadId, startByConversationId } = await workspaceBookingStartsByLeadAndConversation(
+      userId,
+      leadMatches.map((m) => m._id),
+      convoIds,
+    );
 
     const leads = await Promise.all(
       leadMatches.map(async (m) => {
@@ -223,6 +280,8 @@ export const getLeads = async (req, res, next) => {
           m.conversation_id,
           workspaceBookedLeadIds,
           workspaceBookedConversationIds,
+          startByLeadId,
+          startByConversationId,
         );
         const row = mapLeadMatchToListRow(
           m,
@@ -378,13 +437,18 @@ export const updateLeadMatch = async (req, res, next) => {
     if (!leadMatch) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
-    const [profile, convo, workspaceBookedIds, workspaceBookedConvIds] = await Promise.all([
+    const [profile, convo, workspaceBookedIds, workspaceBookedConvIds, workspaceStartMaps] = await Promise.all([
       leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
       leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
       leadMatchIdsWithBookedWorkspaceAppointment(userId, [leadMatch._id]),
       leadMatch.conversation_id
         ? conversationIdsWithBookedWorkspaceAppointment(userId, [leadMatch.conversation_id])
         : Promise.resolve(new Set()),
+      workspaceBookingStartsByLeadAndConversation(
+        userId,
+        [leadMatch._id],
+        leadMatch.conversation_id ? [leadMatch.conversation_id] : [],
+      ),
     ]);
     const mergedConvo = mergeConvoWithWorkspaceBooking(
       convo || {},
@@ -392,6 +456,8 @@ export const updateLeadMatch = async (req, res, next) => {
       leadMatch.conversation_id,
       workspaceBookedIds,
       workspaceBookedConvIds,
+      workspaceStartMaps.startByLeadId,
+      workspaceStartMaps.startByConversationId,
     );
     const leadDetail = mapLeadMatchToDetail(
       leadMatch,
@@ -422,13 +488,18 @@ export const getLeadById = async (req, res, next) => {
     }
     const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId }).lean();
     if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
-    const [profile, convo, workspaceBookedIds, workspaceBookedConvIds] = await Promise.all([
+    const [profile, convo, workspaceBookedIds, workspaceBookedConvIds, workspaceStartMaps] = await Promise.all([
       leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
       leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
       leadMatchIdsWithBookedWorkspaceAppointment(userId, [leadMatch._id]),
       leadMatch.conversation_id
         ? conversationIdsWithBookedWorkspaceAppointment(userId, [leadMatch.conversation_id])
         : Promise.resolve(new Set()),
+      workspaceBookingStartsByLeadAndConversation(
+        userId,
+        [leadMatch._id],
+        leadMatch.conversation_id ? [leadMatch.conversation_id] : [],
+      ),
     ]);
     const mergedConvo = mergeConvoWithWorkspaceBooking(
       convo || {},
@@ -436,6 +507,8 @@ export const getLeadById = async (req, res, next) => {
       leadMatch.conversation_id,
       workspaceBookedIds,
       workspaceBookedConvIds,
+      workspaceStartMaps.startByLeadId,
+      workspaceStartMaps.startByConversationId,
     );
     const leadDetail = mapLeadMatchToDetail(
       leadMatch,
@@ -611,6 +684,11 @@ export const getLeadsByProfileId = async (req, res, next) => {
       userId,
       convoIds,
     );
+    const { startByLeadId, startByConversationId } = await workspaceBookingStartsByLeadAndConversation(
+      userId,
+      leadMatches.map((m) => m._id),
+      convoIds,
+    );
     const leads = leadMatches.map((m) => {
       const raw = convoById.get(String(m.conversation_id)) || {};
       const convo = mergeConvoWithWorkspaceBooking(
@@ -619,6 +697,8 @@ export const getLeadsByProfileId = async (req, res, next) => {
         m.conversation_id,
         workspaceBookedLeadIds,
         workspaceBookedConversationIds,
+        startByLeadId,
+        startByConversationId,
       );
       return mapLeadMatchUnderProfile(m, profile, convo, leadMapperOptsFromRequest(req));
     });

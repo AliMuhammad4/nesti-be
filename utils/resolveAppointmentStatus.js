@@ -17,10 +17,12 @@ export function resolveAppointmentStatus(matchStatus, calendlyBookingStatus, app
   const c = String(calendlyBookingStatus || '').trim().toLowerCase();
   if (c === 'canceled') return c;
   if (c === 'booked') {
+    if (!parseDateSafe(appointmentDate)) return 'not_booked';
     return isPastAppointmentDate(appointmentDate) ? 'not_booked' : 'booked';
   }
   const m = String(matchStatus || '').trim().toLowerCase();
   if (MATCH_STATUSES_MEETING_BOOKED.includes(m)) {
+    if (!parseDateSafe(appointmentDate)) return 'not_booked';
     return isPastAppointmentDate(appointmentDate) ? 'not_booked' : 'booked';
   }
   return 'not_booked';

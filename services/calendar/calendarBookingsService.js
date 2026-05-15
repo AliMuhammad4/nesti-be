@@ -22,6 +22,7 @@ const LEAD_FIELDS = '_id lead_profile_id conversation_id match_status compatibil
 const PROFILE_FIELDS =
   'identity intent ownership.professional_type property.property_type property.location property.address qualification';
 const CONV_FIELDS = 'calendly_booking_status calendly_booking_at intent';
+const NOW_DATE = () => new Date();
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ async function loadProfileAndConvMaps(profileIds, convIds) {
 // ─── Primary: WorkspaceAppointment collection ─────────────────────────────────
 
 async function listCollectionAppointments(uid) {
+  const now = NOW_DATE();
   const apptDocs = await WorkspaceAppointment.find({ user_id: uid, status: 'booked' })
     .sort({ scheduled_start: -1, recorded_at: -1 })
     .limit(500)
@@ -124,13 +126,15 @@ async function listCollectionAppointments(uid) {
 
     const profileId = String(a.lead_profile_id || lead?.lead_profile_id || '');
     const profile = profileId ? profileMap.get(profileId) : null;
+    const startsAt = firstValidDate(a.scheduled_start, a.recorded_at, a.createdAt, a.updatedAt);
+    if (startsAt && startsAt.getTime() < now.getTime()) continue;
 
     rows.push(
       buildCalendarBookingRow({
         leadMatchId: lm,
         conversationId: convId || null,
         matchStatus: lead?.match_status || 'consult_booked',
-        startsAt: firstValidDate(a.scheduled_start, a.recorded_at, a.createdAt, a.updatedAt),
+        startsAt,
         profile,
         conv,
         calFromLead: lead?.compatibility_factors?.calendly,
@@ -146,6 +150,7 @@ async function listCollectionAppointments(uid) {
 // ─── Legacy: old bookings without WorkspaceAppointment docs ───────────────────
 
 async function listLegacyBookedAppointments(uid) {
+  const now = NOW_DATE();
   const kpiSince = new Date(Date.now() - KPI_BOOKING_LOOKBACK_MS);
 
   const kpiBookedAgg = await LeadKpiEvent.aggregate([
@@ -227,12 +232,13 @@ async function listLegacyBookedAppointments(uid) {
     const profile = lead.lead_profile_id ? profileMap.get(String(lead.lead_profile_id)) : null;
 
     const startsAt = firstValidDate(
-      conv?.calendly_booking_at,
       cal?.calendly_event_start,
       nurtureStartByMatch.get(String(lead._id)),
       countedInKpi ? kpiOccurredByMatch.get(String(lead._id)) : null,
+      conv?.calendly_booking_at,
       lead.updatedAt,
     );
+    if (startsAt && startsAt.getTime() < now.getTime()) continue;
 
     bookings.push(
       buildCalendarBookingRow({
@@ -255,6 +261,7 @@ async function listLegacyBookedAppointments(uid) {
  * Skips times already represented in `existingRows` (minute-level dedupe vs lead_match_id).
  */
 async function listNurtureLogSupplementRows(uid, existingRows) {
+  const now = NOW_DATE();
   const existingKeys = new Set();
   for (const r of existingRows) {
     if (!r?.lead_match_id || !r?.starts_at) continue;
@@ -297,6 +304,7 @@ async function listNurtureLogSupplementRows(uid, existingRows) {
 
     const start = parseValidDate(log.calendly_scheduled_start);
     if (!start) continue;
+    if (start.getTime() < now.getTime()) continue;
 
     const bucket = `${lm}|${Math.floor(start.getTime() / 60000)}`;
     if (existingKeys.has(bucket)) continue;

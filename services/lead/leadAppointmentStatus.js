@@ -101,7 +101,7 @@ export async function buildAppointmentStatusByProfileIds(userObjectId, profileId
     user_id: userObjectId,
     lead_profile_id: { $in: ids },
   })
-    .select('lead_profile_id match_status conversation_id')
+    .select('lead_profile_id match_status conversation_id compatibility_factors')
     .lean();
   const convoIds = [...new Set(matches.map((m) => m.conversation_id).filter(Boolean).map(String))];
   const conversations =
@@ -116,7 +116,11 @@ export async function buildAppointmentStatusByProfileIds(userObjectId, profileId
     const pid = String(m.lead_profile_id);
     if (!pid) continue;
     const convo = convoById.get(String(m.conversation_id)) || {};
-    const st = resolveAppointmentStatus(m.match_status, convo.calendly_booking_status);
+    const st = resolveAppointmentStatus(
+      m.match_status,
+      convo.calendly_booking_status,
+      m?.compatibility_factors?.calendly?.calendly_event_start || null
+    );
     if (!byProfile.has(pid)) byProfile.set(pid, []);
     byProfile.get(pid).push(st);
   }

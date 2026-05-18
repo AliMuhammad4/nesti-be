@@ -330,7 +330,7 @@ export async function createOrReuseLeadProfile({
   const leadProfile = await LeadProfile.findByIdAndUpdate(
     existingProfile._id,
     { $set: patch, $unset: LEGACY_LEAD_PROFILE_UNSET },
-    { new: true }
+    { returnDocument: 'after' }
   );
   if (!leadProfile) {
     const created = await LeadProfile.create(validated);

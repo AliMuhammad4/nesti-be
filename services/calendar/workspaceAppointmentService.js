@@ -59,7 +59,7 @@ export async function upsertBookedAppointmentFromCalendly({
       const doc = await WorkspaceAppointment.findOneAndUpdate(
         { calendly_invitee_uri: inviteeUri },
         { $set: setDoc },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       ).lean();
       logger.info('WorkspaceAppointment: upsert booked', {
         op: 'workspace_appointment.upsert',

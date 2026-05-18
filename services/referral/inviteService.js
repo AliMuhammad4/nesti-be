@@ -352,7 +352,7 @@ export async function captureInviteAttribution(rawToken, payload = {}, requestCo
   };
 
   const attribution = await InviteAttribution.findOneAndUpdate(keyFilter, update, {
-    new: true,
+    returnDocument: 'after',
     upsert: true,
   });
 

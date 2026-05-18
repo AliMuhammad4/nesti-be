@@ -46,7 +46,7 @@ export async function createOrGetDirectThread({ currentUserId, otherUserId }) {
       },
     },
     {
-      new: true,
+      returnDocument: 'after',
       upsert: true,
       setDefaultsOnInsert: true,
       runValidators: true,
@@ -128,7 +128,11 @@ export async function updateGroupTitle({ currentUserId, threadId, title: titleRa
         ? String(titleRaw).trim().slice(0, 120)
         : null;
 
-  const updated = await ProfessionalChatThread.findByIdAndUpdate(threadId, { $set: { title } }, { new: true }).lean();
+  const updated = await ProfessionalChatThread.findByIdAndUpdate(
+    threadId,
+    { $set: { title } },
+    { returnDocument: 'after' },
+  ).lean();
   const meId = String(currentUserId);
   const to = (check.participants || []).filter((p) => String(p) !== meId);
   const sender = await User.findById(currentUserId).select(USER_SELECT).lean();

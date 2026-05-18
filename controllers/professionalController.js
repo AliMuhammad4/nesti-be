@@ -298,7 +298,7 @@ export const saveIdealClientProfile = async (req, res, next) => {
           },
           $unset: roleUnset,
         },
-        { new: true }
+        { returnDocument: 'after' }
       );
     }
     if (!icpProfile) {

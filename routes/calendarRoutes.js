@@ -84,7 +84,7 @@ async function requireCalendlyConnected(req, res, next) {
       integ = await CalendarIntegration.findOneAndUpdate(
         { _id: integ._id },
         { $set: { access_token: accessToken, refresh_token: newRefresh, expires_at: newExpires } },
-        { new: true },
+        { returnDocument: 'after' },
       );
       logger.info('Calendar API: Calendly access token refreshed', { op: 'calendar.calendly.refresh', user_id: String(userId) });
     } catch (e) {

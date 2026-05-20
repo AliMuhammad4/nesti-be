@@ -58,11 +58,28 @@ const leadMatchSchema = new mongoose.Schema(
     last_contact_at: {
       type: Date,
     },
+    ai_insights: {
+      payload: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+      },
+      generated_at: {
+        type: Date,
+        default: null,
+      },
+      model: {
+        type: String,
+        default: null,
+      },
+    },
   },
   { timestamps: true }
 );
 
 leadMatchSchema.index({ user_id: 1, 'icp_fit.fit_tier': 1, lead_profile_id: 1 });
 leadMatchSchema.index({ user_id: 1, lead_profile_id: 1 });
+leadMatchSchema.index({ user_id: 1, createdAt: -1 });
+leadMatchSchema.index({ user_id: 1, match_status: 1, createdAt: -1 });
+leadMatchSchema.index({ user_id: 1, conversation_id: 1 });
 
 export default mongoose.model('LeadMatch', leadMatchSchema);

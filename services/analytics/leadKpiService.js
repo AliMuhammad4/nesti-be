@@ -495,6 +495,96 @@ export async function getLeadIntentAndBudgetTrends(userId, { days = 30, viewerRo
   return { window_days: d, intent_metric: 'buyer_seller', intent, budget };
 }
 
+/** Section H — professional performance snapshot for dashboard. */
+export async function getProfessionalPerformanceInsights(userId, { days = 30 } = {}) {
+  const uid = new mongoose.Types.ObjectId(String(userId));
+  const since = sinceDate(days);
+  const d = parseDays(days);
+
+  const [cohortAgg, referralAgg, kpiAgg, closedDeals] = await Promise.all([
+    LeadMatch.aggregate([
+      { $match: { user_id: uid, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          leads_in_window: { $sum: 1 },
+          closed_won: { $sum: { $cond: [{ $eq: ['$match_status', 'converted'] }, 1, 0] } },
+        },
+      },
+    ]),
+    Referral.aggregate([
+      {
+        $match: {
+          $or: [{ user_id: uid }, { target_user_id: uid }],
+          createdAt: { $gte: since },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          outbound: { $sum: { $cond: [{ $eq: ['$user_id', uid] }, 1, 0] } },
+          inbound: { $sum: { $cond: [{ $eq: ['$target_user_id', uid] }, 1, 0] } },
+          successful: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $in: ['$status', ['accepted', 'completed']] },
+                    { $or: [{ $eq: ['$user_id', uid] }, { $eq: ['$target_user_id', uid] }] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]),
+    LeadKpiEvent.aggregate([
+      { $match: { user_id: uid, occurred_at: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          lead_views: { $sum: { $cond: [{ $eq: ['$event_type', 'lead_viewed'] }, 1, 0] } },
+          appointments: { $sum: { $cond: [{ $eq: ['$event_type', 'appointment_booked'] }, 1, 0] } },
+          nurture_sent: { $sum: { $cond: [{ $eq: ['$event_type', 'nurture_email_sent'] }, 1, 0] } },
+        },
+      },
+    ]),
+    LeadMatch.countDocuments({ user_id: uid, match_status: 'converted' }),
+  ]);
+
+  const cohort = cohortAgg?.[0] || { leads_in_window: 0, closed_won: 0 };
+  const ref = referralAgg?.[0] || { outbound: 0, inbound: 0, successful: 0 };
+  const kpi = kpiAgg?.[0] || { lead_views: 0, appointments: 0, nurture_sent: 0 };
+  const leadsInWindow = Number(cohort.leads_in_window || 0);
+  const closedWon = Number(cohort.closed_won || 0);
+  const refTotal = Number(ref.outbound || 0) + Number(ref.inbound || 0);
+  const refSuccess = Number(ref.successful || 0);
+
+  const engagementDenominator = Math.max(leadsInWindow, 1);
+  const engagement_quality = Number(
+    (
+      (Number(kpi.lead_views || 0) + Number(kpi.appointments || 0) * 2 + Number(kpi.nurture_sent || 0)) /
+      engagementDenominator
+    ).toFixed(2),
+  );
+
+  return {
+    window_days: d,
+    conversion_rate: leadsInWindow > 0 ? Number((closedWon / leadsInWindow).toFixed(3)) : 0,
+    avg_response_time_minutes: null,
+    engagement_quality,
+    referral_success_rate: refTotal > 0 ? Number((refSuccess / refTotal).toFixed(3)) : 0,
+    closed_deals: Number(closedDeals || 0),
+    closed_deals_in_window: closedWon,
+    collaboration_score: refTotal > 0 ? Math.min(100, Math.round((refSuccess / refTotal) * 100)) : 0,
+    referrals_outbound: Number(ref.outbound || 0),
+    referrals_inbound: Number(ref.inbound || 0),
+  };
+}
+
 export async function getLeadKpiFunnel(userId, { days = 30 } = {}) {
   const uid = new mongoose.Types.ObjectId(String(userId));
   const since = sinceDate(days);

@@ -18,7 +18,8 @@ import {
 import { mapLeadMatchToDetail } from '../lead/leadResponseMappers.js';
 import { mapLeadProfileForApi } from '../lead/leadProfileFormat.js';
 import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../../constants/roles.js';
-import { awardReferralPoints, REFERRAL_REWARD_POINTS } from './rewardService.js';
+import { recordLeadKpiEvent } from '../analytics/leadKpiService.js';
+import { awardReferralPoints, REWARD_RULES, REFERRAL_REWARD_POINTS } from './rewardService.js';
 
 /** Shape profile/contact/property for API rows by referrer role (not viewer role). */
 export function displayProfessionalTypeFromRole(roleRaw) {
@@ -519,7 +520,6 @@ export async function buildReferralLeadDetailsResponse(referralLean, viewerUserI
         roleAdjustedLeadMatch,
         leadProfile || {},
         conversation || {},
-        true,
         { includeIntentField: true }
       )
     : null;
@@ -767,6 +767,14 @@ export async function createReferralForUser(referrerUserId, body) {
       notifyReferralReceived(created).catch((e) =>
         logger.warn('notifyReferralReceived failed', { error: e?.message }),
       );
+      recordLeadKpiEvent({
+        user_id: created.user_id?._id || created.user_id,
+        lead_match_id: null,
+        conversation_id: created.conversation_id || null,
+        event_type: 'referral_created',
+        metadata: { referral_id: String(created._id) },
+      }).catch(() => {});
+
       awardReferralPoints({
         user_id: created.user_id?._id || created.user_id,
         event_type: 'referral_created',
@@ -886,8 +894,10 @@ export async function patchReferralForUser(userId, referralId, { status, notes }
       const doc = updated || referral;
       if (newStatus === 'accepted' && isTarget) {
         await notifyReferralAccepted(doc, actor || { _id: userId });
+        const referrerId = doc.user_id?._id || doc.user_id;
+        const targetId = doc.target_user_id?._id || doc.target_user_id;
         awardReferralPoints({
-          user_id: doc.user_id?._id || doc.user_id,
+          user_id: referrerId,
           event_type: 'referral_accepted',
           points_delta: REFERRAL_REWARD_POINTS.referral_accepted,
           idempotency_key: `referral:accepted:${String(doc._id)}`,
@@ -895,6 +905,66 @@ export async function patchReferralForUser(userId, referralId, { status, notes }
           source_id: String(doc._id),
           metadata: { accepted_by_user_id: String(userId) },
         }).catch((e) => logger.warn('referral_accepted reward failed', { error: e?.message }));
+        awardReferralPoints({
+          user_id: referrerId,
+          event_type: 'collaboration_success',
+          points_delta: REWARD_RULES.collaboration_success,
+          idempotency_key: `referral:collab:referrer:${String(doc._id)}`,
+          source_model: 'Referral',
+          source_id: String(doc._id),
+        }).catch(() => {});
+        if (targetId) {
+          awardReferralPoints({
+            user_id: targetId,
+            event_type: 'collaboration_success',
+            points_delta: REWARD_RULES.collaboration_success,
+            idempotency_key: `referral:collab:target:${String(doc._id)}`,
+            source_model: 'Referral',
+            source_id: String(doc._id),
+          }).catch(() => {});
+        }
+      } else if (newStatus === 'completed') {
+        const referrerId = doc.user_id?._id || doc.user_id;
+        const targetId = doc.target_user_id?._id || doc.target_user_id;
+        awardReferralPoints({
+          user_id: referrerId,
+          event_type: 'referral_transaction_complete',
+          points_delta: REWARD_RULES.referral_transaction_complete,
+          idempotency_key: `referral:txn_complete:referrer:${String(doc._id)}`,
+          source_model: 'Referral',
+          source_id: String(doc._id),
+        }).catch(() => {});
+        if (targetId) {
+          awardReferralPoints({
+            user_id: targetId,
+            event_type: 'referral_transaction_complete',
+            points_delta: REWARD_RULES.referral_transaction_complete,
+            idempotency_key: `referral:txn_complete:target:${String(doc._id)}`,
+            source_model: 'Referral',
+            source_id: String(doc._id),
+          }).catch(() => {});
+        }
+        if (doc.conversation_id) {
+          const collabCount = await Referral.countDocuments({
+            conversation_id: doc.conversation_id,
+            status: { $in: ['accepted', 'completed'] },
+          });
+          if (collabCount >= 2) {
+            const bonusEach = Math.floor(REWARD_RULES.multi_pro_deal_bonus / Math.max(collabCount, 2));
+            const participants = [referrerId, targetId].filter(Boolean);
+            for (const pid of participants) {
+              awardReferralPoints({
+                user_id: pid,
+                event_type: 'multi_pro_deal_bonus',
+                points_delta: bonusEach,
+                idempotency_key: `referral:multi_pro:${String(doc.conversation_id)}:${String(pid)}`,
+                source_model: 'Referral',
+                source_id: String(doc._id),
+                metadata: { collaborators: collabCount },
+              }).catch(() => {});
+            }
+          }
+        }
       } else if (newStatus === 'rejected') {
         await notifyReferralRejected(doc, userId, actor || { _id: userId });
       }

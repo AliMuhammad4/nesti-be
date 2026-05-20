@@ -39,5 +39,10 @@ referralSchema.index(
     partialFilterExpression: { status: { $in: ['pending', 'accepted'] } },
   }
 );
+referralSchema.index({ user_id: 1, createdAt: -1 });
+referralSchema.index({ target_user_id: 1, createdAt: -1 });
+referralSchema.index({ user_id: 1, status: 1, createdAt: -1 });
+referralSchema.index({ target_user_id: 1, status: 1, createdAt: -1 });
+referralSchema.index({ conversation_id: 1, status: 1 });
 
 export default mongoose.model('Referral', referralSchema);

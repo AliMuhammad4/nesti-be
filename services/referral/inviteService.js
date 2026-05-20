@@ -9,6 +9,7 @@ import Referral from '../../models/Referral.js';
 import {
   awardReferralPoints,
   getReferralRewardsSummary,
+  REWARD_RULES,
   REFERRAL_REWARD_POINTS,
 } from './rewardService.js';
 import { createReferralForUser } from './referralService.js';
@@ -471,9 +472,9 @@ export async function finalizeInviteAttribution({
 
   await awardReferralPoints({
     user_id: invite.inviter_user_id,
-    event_type: 'invite_signup_converted',
-    points_delta: REFERRAL_REWARD_POINTS.invite_signup_converted,
-    idempotency_key: `invite:converted:${String(attribution._id)}:${String(authUserId)}`,
+    event_type: 'pro_signup',
+    points_delta: REWARD_RULES.pro_signup,
+    idempotency_key: `invite:pro_signup:${String(attribution._id)}:${String(authUserId)}`,
     source_model: 'InviteAttribution',
     source_id: String(attribution._id),
     metadata: {
@@ -481,6 +482,17 @@ export async function finalizeInviteAttribution({
       source_channel: attribution.source_channel || invite.source_channel || 'direct',
     },
   });
+  await awardReferralPoints({
+    user_id: invite.inviter_user_id,
+    event_type: 'invite_signup_converted',
+    points_delta: REWARD_RULES.invite_signup_converted,
+    idempotency_key: `invite:converted:${String(attribution._id)}:${String(authUserId)}`,
+    source_model: 'InviteAttribution',
+    source_id: String(attribution._id),
+    metadata: { consumed_by_user_id: String(authUserId) },
+  });
+
+  await awardInviterMilestoneForUser(authUserId, 'pro_verified', String(attribution._id));
 
   const inviter = await getInviterPreview(invite.inviter_user_id);
   return {
@@ -564,6 +576,11 @@ export async function getInviteMetricsForUser(inviter_user_id, { days = 30 } = {
   const conversionRate =
     Number(totals.clicked) > 0 ? Number((Number(totals.completed) / Number(totals.clicked)).toFixed(3)) : 0;
 
+  const latestInvite = await InviteLink.findOne({ inviter_user_id: uid, is_active: true })
+    .sort({ createdAt: -1 })
+    .lean();
+  const shareUrl = latestInvite?.metadata?.share_url || null;
+
   return {
     window_days: windowDays,
     totals: {
@@ -579,7 +596,67 @@ export async function getInviteMetricsForUser(inviter_user_id, { days = 30 } = {
       pending: Number(row.pending || 0),
       completed: Number(row.completed || 0),
     })),
-    points,
+    points: {
+      ...points,
+      tier: points.tier || 'bronze',
+      reputation_score: points.reputation_score ?? 50,
+      referral_link: shareUrl,
+    },
+  };
+}
+
+const INVITEE_MILESTONE_RULES = {
+  pro_profile_complete: REWARD_RULES.pro_profile_complete,
+  pro_verified: REWARD_RULES.pro_verified,
+  pro_first_engagement: REWARD_RULES.pro_first_engagement,
+  pro_first_deal: REWARD_RULES.pro_first_deal,
+};
+
+/**
+ * Award the inviter when an invitee (converted attribution) hits a lifecycle milestone.
+ */
+export async function awardInviterMilestoneForUser(inviteeUserId, milestone, sourceId = '') {
+  if (!inviteeUserId || !INVITEE_MILESTONE_RULES[milestone]) return { awarded: false };
+  const inviteeOid = mongoose.Types.ObjectId.isValid(String(inviteeUserId))
+    ? new mongoose.Types.ObjectId(String(inviteeUserId))
+    : null;
+  if (!inviteeOid) return { awarded: false };
+
+  const attribution = await InviteAttribution.findOne({
+    consumed_by_user_id: inviteeOid,
+    status: 'converted',
+  })
+    .sort({ consumed_at: -1 })
+    .lean();
+  if (!attribution?.invite_link_id) return { awarded: false };
+
+  const invite = await InviteLink.findById(attribution.invite_link_id).select('inviter_user_id').lean();
+  if (!invite?.inviter_user_id) return { awarded: false };
+
+  return awardReferralPoints({
+    user_id: invite.inviter_user_id,
+    event_type: milestone,
+    points_delta: INVITEE_MILESTONE_RULES[milestone],
+    idempotency_key: `invite:milestone:${milestone}:${String(inviteeOid)}`,
+    source_model: 'InviteAttribution',
+    source_id: sourceId || String(attribution._id),
+    metadata: { invitee_user_id: String(inviteeOid) },
+  });
+}
+
+export async function getRewardsProfileForUser(userId) {
+  const summary = await getReferralRewardsSummary(userId);
+  const latestInvite = await InviteLink.findOne({
+    inviter_user_id: userId,
+    is_active: true,
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+  const referral_link = latestInvite?.metadata?.share_url || null;
+  return {
+    ...summary,
+    referral_code: latestInvite?._id ? String(latestInvite._id).slice(-8).toUpperCase() : null,
+    referral_link,
   };
 }
 
@@ -732,4 +809,107 @@ export async function listInviteConversionsForUser(
       has_more: p < total_pages,
     },
   };
+}
+
+export async function getInviteConversionRoleTrendsForUser(inviter_user_id, { days = 30 } = {}) {
+  if (!mongoose.Types.ObjectId.isValid(String(inviter_user_id))) {
+    return { window_days: 30, roles: [], series: [], total: 0 };
+  }
+
+  const uid = new mongoose.Types.ObjectId(String(inviter_user_id));
+  const windowDays = Math.min(Math.max(Number(days) || 30, 1), 365);
+  const since = new Date();
+  since.setUTCHours(0, 0, 0, 0);
+  since.setUTCDate(since.getUTCDate() - (windowDays - 1));
+
+  const rows = await InviteAttribution.aggregate([
+    {
+      $match: {
+        status: 'converted',
+        consumed_by_user_id: { $ne: null },
+        consumed_at: { $gte: since },
+      },
+    },
+    {
+      $lookup: {
+        from: 'invitelinks',
+        localField: 'invite_link_id',
+        foreignField: '_id',
+        as: 'invite_link',
+      },
+    },
+    { $unwind: '$invite_link' },
+    { $match: { 'invite_link.inviter_user_id': uid } },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'consumed_by_user_id',
+        foreignField: '_id',
+        as: 'consumed_user',
+      },
+    },
+    { $unwind: { path: '$consumed_user', preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        day: { $dateToString: { date: '$consumed_at', format: '%Y-%m-%d', timezone: 'UTC' } },
+        role: {
+          $ifNull: [
+            '$consumed_user.role',
+            {
+              $cond: [
+                { $ne: ['$invite_link.intended_role', ''] },
+                '$invite_link.intended_role',
+                'unknown',
+              ],
+            },
+          ],
+        },
+      },
+    },
+    {
+      $group: {
+        _id: { day: '$day', role: '$role' },
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { '_id.day': 1, '_id.role': 1 } },
+  ]);
+
+  const roles = [];
+  const roleSet = new Set();
+  const countsByDay = new Map();
+  let total = 0;
+
+  rows.forEach((row) => {
+    const day = row?._id?.day;
+    const role = String(row?._id?.role || 'unknown').trim().toLowerCase() || 'unknown';
+    const count = Number(row?.count || 0);
+    if (!day || count <= 0) return;
+    if (!roleSet.has(role)) {
+      roleSet.add(role);
+      roles.push(role);
+    }
+    const dayCounts = countsByDay.get(day) || {};
+    dayCounts[role] = count;
+    countsByDay.set(day, dayCounts);
+    total += count;
+  });
+
+  const formatter = new Intl.DateTimeFormat('en-US', { month: '2-digit', day: '2-digit', timeZone: 'UTC' });
+  const series = Array.from({ length: windowDays }, (_, idx) => {
+    const d = new Date(since);
+    d.setUTCDate(since.getUTCDate() + idx);
+    const date = d.toISOString().slice(0, 10);
+    const counts = countsByDay.get(date) || {};
+    return {
+      date,
+      label: formatter.format(d),
+      ...roles.reduce((acc, role) => {
+        acc[role] = Number(counts[role] || 0);
+        return acc;
+      }, {}),
+    };
+  });
+
+  return { window_days: windowDays, roles, series, total };
 }

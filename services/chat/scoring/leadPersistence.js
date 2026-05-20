@@ -62,6 +62,29 @@ const LEGACY_LEAD_PROFILE_UNSET = {
   mortgage_property_budget: '',
 };
 
+function normalizePropertyImages(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const url = String(item.secure_url || item.url || '').trim();
+      if (!url) return null;
+      return {
+        url,
+        secure_url: String(item.secure_url || url).trim(),
+        public_id: String(item.public_id || '').trim(),
+        width: item.width != null && Number.isFinite(Number(item.width)) ? Number(item.width) : null,
+        height: item.height != null && Number.isFinite(Number(item.height)) ? Number(item.height) : null,
+        format: String(item.format || '').trim(),
+        bytes: item.bytes != null && Number.isFinite(Number(item.bytes)) ? Number(item.bytes) : null,
+        original_filename: String(item.original_filename || '').trim(),
+        uploaded_at: item.uploaded_at || new Date(),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
 function normalizeEmail(value) {
   const email = String(value || '').trim().toLowerCase();
   return email || '';
@@ -198,6 +221,7 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
       backyard_needed: payload.property?.backyard_needed || '',
       school_district_important:
         payload.property?.school_district_important || '',
+      images: normalizePropertyImages(payload.property?.images),
     },
     qualification: {
       agent: {

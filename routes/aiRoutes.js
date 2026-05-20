@@ -3,6 +3,7 @@ import { protect, requireCompleteProfessionalProfile } from '../middleware/authM
 import { validateBody } from '../middleware/validate.js';
 import { passthrough } from '../schemas/common.js';
 import {
+  analyzeLeadInsights,
   getGuidance,
   getInsights,
   getQuestionnaireHandler,
@@ -13,6 +14,7 @@ import {
 const router = express.Router();
 
 router.post('/professional/guidance', protect, requireCompleteProfessionalProfile, getGuidance);
+router.post('/lead/:lead_id/insights/analyze', protect, requireCompleteProfessionalProfile, analyzeLeadInsights);
 router.get('/lead/insights/:conversation_id', protect, requireCompleteProfessionalProfile, getInsights);
 router.get('/lead/questionnaire/:type', protect, requireCompleteProfessionalProfile, getQuestionnaireHandler);
 router.post(

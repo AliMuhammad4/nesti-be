@@ -18,6 +18,18 @@ const userRewardBalanceSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    tier: {
+      type: String,
+      enum: ['bronze', 'silver', 'gold', 'platinum', 'elite'],
+      default: 'bronze',
+      index: true,
+    },
+    reputation_score: {
+      type: Number,
+      default: 50,
+      min: 0,
+      max: 100,
+    },
   },
   { timestamps: true },
 );

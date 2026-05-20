@@ -58,6 +58,19 @@ const leadProfileSchema = new mongoose.Schema(
       parking_required: { type: String, enum: YES_NO_EMPTY, default: '' },
       backyard_needed: { type: String, enum: YES_NO_EMPTY, default: '' },
       school_district_important: { type: String, enum: YES_NO_EMPTY, default: '' },
+      images: [
+        {
+          url: { type: String },
+          secure_url: { type: String },
+          public_id: { type: String },
+          width: { type: Number, default: null },
+          height: { type: Number, default: null },
+          format: { type: String },
+          bytes: { type: Number, default: null },
+          original_filename: { type: String },
+          uploaded_at: { type: Date, default: Date.now },
+        },
+      ],
     },
     qualification: {
       agent: {

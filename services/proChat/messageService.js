@@ -8,6 +8,7 @@ import {
   userSummary,
 } from '../../utils/proChatUtils.js';
 import { assertThreadMembership } from './accessService.js';
+import { awardInviterMilestoneForUser } from '../referral/inviteService.js';
 
 const USER_SELECT = 'first_name last_name email role profile_image';
 
@@ -102,6 +103,8 @@ export async function postThreadMessage({ currentUserId, threadId, body, attachm
     }
   }
 
+  const priorCount = await ProfessionalChatMessage.countDocuments({ sender_user_id: currentUserId });
+
   const msg = await ProfessionalChatMessage.create({
     thread_id: threadId,
     sender_user_id: currentUserId,
@@ -109,6 +112,10 @@ export async function postThreadMessage({ currentUserId, threadId, body, attachm
     body: text,
     attachments: atts,
   });
+
+  if (priorCount === 0) {
+    awardInviterMilestoneForUser(currentUserId, 'pro_first_engagement', String(msg._id)).catch(() => {});
+  }
 
   await ProfessionalChatThread.updateOne(
     { _id: threadId },

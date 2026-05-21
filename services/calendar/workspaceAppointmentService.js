@@ -30,20 +30,23 @@ export async function upsertBookedAppointmentFromCalendly({
   nurtureLogId,
   inviteeEmail,
   scheduledStart,
+  bookingOrigin,
 }) {
   const uid = toOid(userId);
   if (!uid) return { ok: false, reason: 'invalid_user' };
 
   const inviteeUri = trimStr(payloadCalendlyMeta?.calendly_invitee_uri);
   const eventUri = trimStr(payloadCalendlyMeta?.calendly_event_uri);
+  const isPublicProfileConsultation = trimStr(bookingOrigin) === 'public_profile_consultation';
 
   const setDoc = {
     user_id: uid,
-    lead_match_id: toOid(leadMatchId),
-    lead_profile_id: toOid(leadProfileId),
-    conversation_id: toOid(conversationId),
+    lead_match_id: isPublicProfileConsultation ? null : toOid(leadMatchId),
+    lead_profile_id: isPublicProfileConsultation ? null : toOid(leadProfileId),
+    conversation_id: isPublicProfileConsultation ? null : toOid(conversationId),
     status: 'booked',
     source: 'calendly',
+    booking_origin: trimStr(bookingOrigin),
     booked_via_nurture: Boolean(bookedViaNurture),
     invitee_email: inviteeEmail ? String(inviteeEmail).trim().toLowerCase() || null : null,
     scheduled_start: toValidDate(scheduledStart),

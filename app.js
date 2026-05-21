@@ -23,6 +23,8 @@ import webhookRoutes from './routes/webhookRoutes.js';
 import calendlyWebhookRoutes from './routes/calendlyWebhookRoutes.js';
 import propertyMatchScoringRoutes from './routes/agent/propertyMatchScoringRoutes.js';
 import proChatRoutes from './routes/proChatRoutes.js';
+import publicProfileRoutes from './routes/publicProfileRoutes.js';
+import professionalDashboardRoutes from './routes/professionalDashboardRoutes.js';
 import { configureCloudinary } from './services/media/cloudinaryClient.js';
 
 // Load env
@@ -113,6 +115,8 @@ app.use('/api/property-match-scoring', propertyMatchScoringRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/pro-chat', proChatRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/public', publicProfileRoutes);
+app.use('/api/professional-dashboard', professionalDashboardRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

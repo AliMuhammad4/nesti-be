@@ -82,6 +82,21 @@ function buildConversion(leadMatch, profile, convo) {
   });
 }
 
+function formatCloseSummary(cf) {
+  const cs = cf?.close_summary;
+  if (!cs || typeof cs !== 'object') return null;
+  return {
+    status: cs.status || null,
+    reason: cs.reason || null,
+    note: cs.note || null,
+    value: cs.value ?? null,
+    closed_at: cs.closed_at || null,
+    closed_by_user_id: cs.closed_by_user_id || null,
+    closed_by_label: cs.closed_by_label || null,
+    reopened_at: cs.reopened_at || null,
+  };
+}
+
 function leadCore(leadMatch, profileView, convo, opts = {}) {
   const { includeIntentField = true } = opts;
   const grade = leadMatch.lead_type?.split('_')[0] || null;
@@ -111,6 +126,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     created_at: leadMatch.createdAt,
     updated_at: leadMatch.updatedAt,
     agent_notes: formatAgentNotesForApi(leadMatch.compatibility_factors),
+    close_summary: formatCloseSummary(leadMatch.compatibility_factors),
   };
   if (includeIntentField) {
     core.intent = profileView.intent;
@@ -136,7 +152,7 @@ export function mapLeadMatchToListRow(leadMatch, profile, convo, includeConversi
   return row;
 }
 
-export function mapLeadMatchToDetail(leadMatch, profile, convo, includeConversion, opts = {}) {
+export function mapLeadMatchToDetail(leadMatch, profile, convo, opts = {}) {
   const profType = professionalTypeFromMatch(leadMatch, profile);
   const profileView = mapLeadProfileForApi(profile, profType);
   const conversion = buildConversion(leadMatch, profile, convo);
@@ -148,9 +164,6 @@ export function mapLeadMatchToDetail(leadMatch, profile, convo, includeConversio
   };
   if (includeAgentStyleLeadExperience(profType)) {
     Object.assign(lead, buildExperienceBlocks(conversion, grade, profileView, leadMatch));
-    if (includeConversion) lead.conversion = conversion;
-  } else if (includePlaybookConversionPack(profType) && includeConversion) {
-    lead.conversion = conversion;
   }
   return lead;
 }

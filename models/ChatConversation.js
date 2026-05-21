@@ -123,4 +123,8 @@ const chatConversationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+chatConversationSchema.index({ user_id: 1, createdAt: -1 });
+chatConversationSchema.index({ user_id: 1, last_interaction_at: -1 });
+chatConversationSchema.index({ user_id: 1, calendly_booking_status: 1, calendly_booking_at: -1 });
+
 export default mongoose.model('ChatConversation', chatConversationSchema);

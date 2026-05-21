@@ -17,14 +17,87 @@ function parseEnabledFlag(raw, defaultValue = true) {
 
 const REWARDS_ENABLED = parseEnabledFlag(process.env.ENABLE_REFERRAL_REWARDS, true);
 
-export const REFERRAL_REWARD_POINTS = Object.freeze({
+/** Client-spec point catalog — single source of truth. */
+export const REWARD_RULES = Object.freeze({
+  pro_signup: 100,
+  pro_profile_complete: 150,
+  pro_verified: 300,
+  pro_first_engagement: 250,
+  pro_first_deal: 1000,
+  collaboration_success: 200,
+  referral_transaction_complete: 500,
+  multi_pro_deal_bonus: 1500,
+  lead_active_client: 100,
+  deal_closed: 1000,
+  positive_review: 150,
+  high_engagement_lead: 100,
+  fast_response_monthly: 50,
+  complete_profile_monthly: 100,
+  ai_tool_milestone: 25,
+  education_complete: 75,
+  // Legacy invite micro-rewards (kept for backward-compatible event types)
   invite_link_created: 1,
   invite_click_captured: 1,
-  invite_signup_converted: 25,
+  invite_signup_converted: 100,
   referral_created: 8,
   referral_cross_role_bonus: 4,
   referral_accepted: 12,
 });
+
+/** @deprecated Use REWARD_RULES — kept for existing imports */
+export const REFERRAL_REWARD_POINTS = Object.freeze({
+  invite_link_created: REWARD_RULES.invite_link_created,
+  invite_click_captured: REWARD_RULES.invite_click_captured,
+  invite_signup_converted: REWARD_RULES.invite_signup_converted,
+  referral_created: REWARD_RULES.referral_created,
+  referral_cross_role_bonus: REWARD_RULES.referral_cross_role_bonus,
+  referral_accepted: REWARD_RULES.referral_accepted,
+});
+
+export function tierFromPoints(points) {
+  const p = Number(points) || 0;
+  if (p >= 50000) return 'elite';
+  if (p >= 15000) return 'platinum';
+  if (p >= 5000) return 'gold';
+  if (p >= 1000) return 'silver';
+  return 'bronze';
+}
+
+const REPUTATION_WEIGHTS = {
+  deal_closed: 12,
+  pro_first_deal: 15,
+  referral_transaction_complete: 10,
+  collaboration_success: 8,
+  positive_review: 10,
+  pro_verified: 6,
+  referral_accepted: 4,
+  referral_created: 2,
+};
+
+const REPUTATION_PENALTIES = {
+  referral_rejected: -5,
+};
+
+export function computeReputationDelta(event_type) {
+  if (REPUTATION_WEIGHTS[event_type]) return REPUTATION_WEIGHTS[event_type];
+  if (REPUTATION_PENALTIES[event_type]) return REPUTATION_PENALTIES[event_type];
+  return 0;
+}
+
+export async function updateReputation(user_id, event_type, session = null) {
+  const delta = computeReputationDelta(event_type);
+  if (!delta) return;
+  const uid = new mongoose.Types.ObjectId(String(user_id));
+  const opts = session ? { session } : {};
+  const bal = await UserRewardBalance.findOne({ user_id: uid }).select('reputation_score').lean();
+  const current = Number(bal?.reputation_score ?? 50);
+  const next = Math.max(0, Math.min(100, current + delta));
+  await UserRewardBalance.updateOne(
+    { user_id: uid },
+    { $set: { reputation_score: next } },
+    { upsert: true, ...opts },
+  );
+}
 
 export async function awardReferralPoints({
   user_id,
@@ -72,54 +145,85 @@ export async function awardReferralPoints({
       trxSession ? { session: trxSession } : undefined,
     );
 
-    await UserRewardBalance.updateOne(
+    const updated = await UserRewardBalance.findOneAndUpdate(
       { user_id: uid },
       {
-        // Don't touch points_balance in $setOnInsert — $inc will create it if missing.
-        // Setting + incrementing the same path in one update causes a Mongo conflict.
-        $setOnInsert: { user_id: uid },
+        $setOnInsert: { user_id: uid, reputation_score: 50 },
         $inc: { points_balance: points },
         $set: { last_event_at: now },
       },
-      { upsert: true, ...(trxSession ? { session: trxSession } : {}) },
+      { upsert: true, returnDocument: 'after', ...(trxSession ? { session: trxSession } : {}) },
+    ).lean();
+
+    const newBalance = Number(updated?.points_balance ?? points);
+    const tier = tierFromPoints(newBalance);
+    await UserRewardBalance.updateOne(
+      { user_id: uid },
+      { $set: { tier } },
+      trxSession ? { session: trxSession } : {},
     );
 
-    return created;
+    await updateReputation(uid, event_type, trxSession);
+
+    return { created, tier, points_balance: newBalance };
   };
 
-  let createdEvent = null;
+  let result = null;
   if (session) {
-    createdEvent = await createAndUpdate(session);
+    result = await createAndUpdate(session);
   } else {
-    createdEvent = await createAndUpdate(null);
+    result = await createAndUpdate(null);
   }
 
   return {
     awarded: true,
-    event_id: createdEvent?._id ? String(createdEvent._id) : '',
+    event_id: result?.created?._id ? String(result.created._id) : '',
     points_delta: points,
+    tier: result?.tier,
+    points_balance: result?.points_balance,
   };
 }
 
 export async function getReferralRewardsSummary(user_id) {
   if (!REWARDS_ENABLED) {
-    return { points_balance: 0, events_count: 0, last_event_at: null, rewards_enabled: false };
+    return {
+      points_balance: 0,
+      tier: 'bronze',
+      reputation_score: 50,
+      events_count: 0,
+      last_event_at: null,
+      rewards_enabled: false,
+    };
   }
   if (!mongoose.Types.ObjectId.isValid(String(user_id))) {
-    return { points_balance: 0, events_count: 0 };
+    return { points_balance: 0, tier: 'bronze', reputation_score: 50, events_count: 0 };
   }
   const uid = new mongoose.Types.ObjectId(String(user_id));
 
   const [balance, eventsCount] = await Promise.all([
-    UserRewardBalance.findOne({ user_id: uid }).select('points_balance last_event_at').lean(),
+    UserRewardBalance.findOne({ user_id: uid })
+      .select('points_balance last_event_at tier reputation_score')
+      .lean(),
     ReferralRewardEvent.countDocuments({ user_id: uid }),
   ]);
 
+  const points = Number(balance?.points_balance || 0);
   return {
-    points_balance: Number(balance?.points_balance || 0),
+    points_balance: points,
+    tier: balance?.tier || tierFromPoints(points),
+    reputation_score: Number(balance?.reputation_score ?? 50),
     events_count: Number(eventsCount || 0),
     last_event_at: balance?.last_event_at || null,
     rewards_enabled: true,
+  };
+}
+
+export async function getRewardsProfile(user_id, { invite_code = null, referral_link = null } = {}) {
+  const summary = await getReferralRewardsSummary(user_id);
+  return {
+    ...summary,
+    referral_code: invite_code || null,
+    referral_link: referral_link || null,
   };
 }
 
@@ -159,5 +263,6 @@ export async function listReferralRewardEvents(user_id, { page = 1, limit = 20 }
       occurred_at: row.occurred_at || row.createdAt || null,
     })),
     pagination: { page: p, limit: l, total, total_pages: Math.max(1, Math.ceil(total / l)) },
+    rewards_enabled: true,
   };
 }

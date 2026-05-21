@@ -61,4 +61,9 @@ const nurtureLogSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+nurtureLogSchema.index({ user_id: 1, createdAt: -1 });
+nurtureLogSchema.index({ user_id: 1, lead_match_id: 1, createdAt: -1 });
+nurtureLogSchema.index({ user_id: 1, lead_profile_id: 1, createdAt: -1 });
+nurtureLogSchema.index({ user_id: 1, meeting_booked: 1, calendly_scheduled_start: 1 });
+
 export default mongoose.model('NurtureLog', nurtureLogSchema);

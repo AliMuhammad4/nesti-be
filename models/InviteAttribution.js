@@ -84,5 +84,6 @@ inviteAttributionSchema.index(
   { unique: true, sparse: true },
 );
 inviteAttributionSchema.index({ consumed_by_user_id: 1, createdAt: -1 });
+inviteAttributionSchema.index({ invite_link_id: 1, status: 1, consumed_at: -1 });
 
 export default mongoose.model('InviteAttribution', inviteAttributionSchema);

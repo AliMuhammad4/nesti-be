@@ -6,8 +6,10 @@ import {
   finalizeInviteAttribution,
   getInviteMetricsForUser,
   listInviteConversionsForUser,
+  getInviteConversionRoleTrendsForUser,
 } from '../services/referral/inviteService.js';
 import { listReferralRewardEvents } from '../services/referral/rewardService.js';
+import { getRewardsProfileForUser } from '../services/referral/inviteService.js';
 
 function sendServiceResult(res, result, fallbackSuccessBody) {
   if (result?.ok === false) {
@@ -106,12 +108,30 @@ export async function listInviteRewardEvents(req, res, next) {
   }
 }
 
+export async function getRewardsProfile(req, res, next) {
+  try {
+    const profile = await getRewardsProfileForUser(req.user._id);
+    return res.json({ success: true, profile });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 export async function listInviteConversions(req, res, next) {
   try {
     const days = req.query?.days;
     const page = req.query?.page;
     const limit = req.query?.limit;
     const data = await listInviteConversionsForUser(req.user._id, { days, page, limit });
+    return res.json({ success: true, ...data });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function inviteConversionRoleTrends(req, res, next) {
+  try {
+    const data = await getInviteConversionRoleTrendsForUser(req.user._id, { days: req.query?.days });
     return res.json({ success: true, ...data });
   } catch (error) {
     return next(error);

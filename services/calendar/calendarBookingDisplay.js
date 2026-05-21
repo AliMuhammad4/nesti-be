@@ -63,12 +63,13 @@ function qualificationFromProfile(profile) {
 
 function contactFromProfile(profile, inviteeEmailFallback) {
   const identity = profile?.identity || {};
+  const fallbackEmail = inviteeEmailFallback ? String(inviteeEmailFallback) : null;
   return {
-    full_name: identity.full_name || null,
+    full_name: identity.full_name || (fallbackEmail ? fallbackEmail.split('@')[0] : null),
     email:
       identity.email ||
       identity.canonical_email ||
-      (inviteeEmailFallback ? String(inviteeEmailFallback) : null),
+      fallbackEmail,
   };
 }
 
@@ -107,6 +108,7 @@ export function buildCalendarBookingRow({
     starts_at: startsAt ? startsAt.toISOString() : null,
     title: appointmentTitle(matchStatus, bookedViaNurture),
     match_status: matchStatus,
+    booking_origin: workspaceAppointment?.booking_origin || null,
     cancelable_via_calendly: cancelableViaCalendly,
     contact: contactFromProfile(profile, inviteeEmailFallback),
     professional_type: professionalTypeFromProfile(profile),

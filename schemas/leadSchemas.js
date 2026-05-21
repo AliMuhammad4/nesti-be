@@ -15,6 +15,18 @@ const icpFitSchema = Joi.object({
   missing_factors: Joi.array().items(Joi.string()).default([]),
 });
 
+const propertyImageSchema = Joi.object({
+  url: str,
+  secure_url: str,
+  public_id: str,
+  width: Joi.number().allow(null),
+  height: Joi.number().allow(null),
+  format: str,
+  bytes: Joi.number().allow(null),
+  original_filename: str,
+  uploaded_at: isoDate,
+});
+
 export const leadMatchCreateSchema = Joi.object({
   user_id: objectId.required(),
   professional_profile_id: objectId.allow(null),
@@ -36,6 +48,9 @@ export const leadMatchUpdateSchema = leadMatchCreateSchema.fork(['user_id'], (s)
 export const leadAgentPatchSchema = Joi.object({
   match_status: Joi.string().valid(...MATCH_STATUSES).optional(),
   note: Joi.string().max(8000).allow('').optional(),
+  close_reason: Joi.string().max(100).optional(),
+  close_note: Joi.string().max(2000).allow('').optional(),
+  closed_value: Joi.number().min(0).max(999_999_999).optional(),
 }).min(1);
 
 export const leadProfileCreateSchema = Joi.object({
@@ -89,6 +104,7 @@ export const leadProfileCreateSchema = Joi.object({
     parking_required: Joi.string().valid(...YES_NO_EMPTY).default(''),
     backyard_needed: Joi.string().valid(...YES_NO_EMPTY).default(''),
     school_district_important: Joi.string().valid(...YES_NO_EMPTY).default(''),
+    images: Joi.array().items(propertyImageSchema).max(8).default([]),
   }).default({}),
   qualification: Joi.object({
     agent: anyObj.default({}),

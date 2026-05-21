@@ -288,6 +288,18 @@ export const createLeadRecords = async ({
     });
   }
 
+  if (
+    intent === 'sell' &&
+    !(
+      Array.isArray(formContact?.property_images) &&
+      formContact.property_images.some((img) => img?.secure_url || img?.url)
+    )
+  ) {
+    const err = new Error('At least one property image is required to create a seller lead.');
+    err.statusCode = 400;
+    throw err;
+  }
+
   const budgetBuy = intent === 'buy' ? buyerBudgetStr : '';
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
@@ -315,6 +327,7 @@ export const createLeadRecords = async ({
         parking_required: formContact?.parking_required || aiDetails?.parking_required || '',
         backyard_needed: formContact?.backyard_needed || aiDetails?.backyard_needed || '',
         school_district_important: formContact?.school_district_important || '',
+        images: intent === 'sell' && Array.isArray(formContact?.property_images) ? formContact.property_images : [],
       },
       qualification: {
         agent: {

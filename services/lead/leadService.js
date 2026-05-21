@@ -10,13 +10,18 @@ import WorkspaceAppointment from '../../models/WorkspaceAppointment.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { getBuyerPropertyMatches, getBuyerMatchesForSellerProperty } from '../agent/propertyMatch/matchService.js';
 import { parsePageLimitPagination, buildPaginationMeta, PAGINATION_PRESETS } from '../../utils/pagination.js';
-import { truthyQueryFlag, includeConversionInLeadDetail } from './leadQueryUtils.js';
+import { truthyQueryFlag } from './leadQueryUtils.js';
 import { mapLeadMatchToListRow, mapLeadMatchToDetail, mapLeadMatchUnderProfile } from './leadResponseMappers.js';
 import { buildCollectionEmptyState } from './leadExperienceContract.js';
 import { formatLeadProfileSummary } from './leadProfileFormat.js';
 import { buildAppointmentMongoFilter, buildAppointmentStatusByProfileIds } from './leadAppointmentStatus.js';
 import { buildNurtureConsultationBookedFromEmailByProfileIds } from './leadNurtureBookingStatus.js';
-import { recordLeadViewIfNeeded } from '../analytics/leadKpiService.js';
+import { recordLeadViewIfNeeded, recordLeadKpiEvent } from '../analytics/leadKpiService.js';
+import {
+  awardReferralPoints,
+  REWARD_RULES,
+} from '../referral/rewardService.js';
+import { awardInviterMilestoneForUser } from '../referral/inviteService.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
 import { AGENT_NOTES_MAX_ENTRIES, isTerminalMatchStatus } from '../../utils/leadMatchStatus.js';
 import {
@@ -141,9 +146,10 @@ function leadMapperOptsFromRequest(req) {
 async function enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail) {
   if (!profile?._id || !leadDetail) return leadDetail;
   const nurtureMap = await buildNurtureConsultationBookedFromEmailByProfileIds(userId, [profile._id]);
+  const appointmentBooked = String(leadDetail.appointment_status || '').toLowerCase() === 'booked';
   return {
     ...leadDetail,
-    nurture_consultation_booked: nurtureMap.get(String(profile._id)) ?? false,
+    nurture_consultation_booked: appointmentBooked && Boolean(nurtureMap.get(String(profile._id))),
   };
 }
 
@@ -298,7 +304,9 @@ export const getLeads = async (req, res, next) => {
             })
           : 0;
         const pid = m.lead_profile_id ? String(m.lead_profile_id) : '';
-        const nurture_consultation_booked = pid ? nurtureBookedByProfile.get(pid) ?? false : false;
+        const rowAppointmentBooked = String(row.appointment_status || '').toLowerCase() === 'booked';
+        const nurture_consultation_booked =
+          rowAppointmentBooked && pid ? nurtureBookedByProfile.get(pid) ?? false : false;
         return { ...row, match_count: matchCount, nurture_consultation_booked };
       }),
     );
@@ -369,6 +377,29 @@ export const updateLeadMatch = async (req, res, next) => {
 
     const mongoUpdate = {};
     if (statusChanged) mongoUpdate.$set = { match_status: nextStatus };
+
+    const wasTerminal = isTerminalMatchStatus(prevStatus);
+    if (statusChanged && isTerminalMatchStatus(nextStatus)) {
+      const closeSummary = {
+        status: nextStatus,
+        reason: req.body.close_reason || null,
+        note: req.body.close_note || null,
+        value: req.body.closed_value ?? null,
+        closed_at: now,
+        closed_by_user_id: authorUserIdStr,
+        closed_by_label: authorLabel,
+      };
+      mongoUpdate.$set = {
+        ...mongoUpdate.$set,
+        'compatibility_factors.close_summary': closeSummary,
+      };
+    } else if (statusChanged && wasTerminal && !isTerminalMatchStatus(nextStatus)) {
+      mongoUpdate.$set = {
+        ...mongoUpdate.$set,
+        'compatibility_factors.close_summary.reopened_at': now,
+      };
+    }
+
     if (notesToPush.length) {
       mongoUpdate.$push = {
         'compatibility_factors.agent_notes': {
@@ -425,6 +456,34 @@ export const updateLeadMatch = async (req, res, next) => {
             error: syncErr.message,
           });
         }
+        if (nextStatus === 'converted' && prevStatus !== 'converted') {
+          recordLeadKpiEvent({
+            user_id: userId,
+            lead_match_id: lead._id,
+            conversation_id: lead.conversation_id || null,
+            event_type: 'lead_updated',
+            metadata: { match_status: 'converted', deal_closed: true },
+          }).catch(() => {});
+          awardReferralPoints({
+            user_id: userId,
+            event_type: 'deal_closed',
+            points_delta: REWARD_RULES.deal_closed,
+            idempotency_key: `lead:deal_closed:${String(lead._id)}`,
+            source_model: 'LeadMatch',
+            source_id: String(lead._id),
+          }).catch((e) => logger.warn('deal_closed reward failed', { error: e?.message }));
+          awardInviterMilestoneForUser(userId, 'pro_first_deal', String(lead._id)).catch(() => {});
+        }
+        if (nextStatus === 'nurturing' && prevStatus === 'new') {
+          awardReferralPoints({
+            user_id: userId,
+            event_type: 'lead_active_client',
+            points_delta: REWARD_RULES.lead_active_client,
+            idempotency_key: `lead:active_client:${String(lead._id)}`,
+            source_model: 'LeadMatch',
+            source_id: String(lead._id),
+          }).catch((e) => logger.warn('lead_active_client reward failed', { error: e?.message }));
+        }
       }
       emitWorkspaceLeadEvent(userId, {
         kind: 'lead_updated',
@@ -463,7 +522,6 @@ export const updateLeadMatch = async (req, res, next) => {
       leadMatch,
       profile,
       mergedConvo,
-      includeConversionInLeadDetail(req.query || {}),
       leadMapperOptsFromRequest(req),
     );
     const leadPayload = await enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail);
@@ -514,7 +572,6 @@ export const getLeadById = async (req, res, next) => {
       leadMatch,
       profile,
       mergedConvo,
-      includeConversionInLeadDetail(req.query || {}),
       leadMapperOptsFromRequest(req),
     );
     const lead = await enrichLeadDetailWithProfileConsultation(userId, profile, leadDetail);

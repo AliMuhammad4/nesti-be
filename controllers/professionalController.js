@@ -3,6 +3,8 @@ import User from '../models/User.js';
 import { isValidProfessionalType, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { refreshCalendlySlugMismatchForUser } from '../services/calendly/calendlyAlignmentService.js';
 import { scoreLeadAgainstIcp } from '../services/lead/icpScoringService.js';
+import { evaluateProfessionalProfileSetup } from '../utils/professionalProfileSetup.js';
+import { awardInviterMilestoneForUser } from '../services/referral/inviteService.js';
 import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import IcpProfile from '../models/IcpProfile.js';
@@ -224,6 +226,14 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       { $set: update },
       { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
     );
+    try {
+      const setup = evaluateProfessionalProfileSetup(user, profile);
+      if (setup.is_complete) {
+        await awardInviterMilestoneForUser(userId, 'pro_profile_complete', String(profile._id));
+      }
+    } catch {
+      /* non-fatal */
+    }
     if (
       calendly_link !== undefined
     ) {

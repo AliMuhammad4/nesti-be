@@ -29,6 +29,21 @@ function hasStructuredBudgetRange(bp) {
 
 function mapPropertyForApi(profile, profType) {
   const p = profile || {};
+  const images = Array.isArray(p.property?.images)
+    ? p.property.images
+        .filter((img) => img?.secure_url || img?.url)
+        .map((img) => ({
+          url: img.secure_url || img.url,
+          secure_url: img.secure_url || img.url,
+          public_id: img.public_id || null,
+          width: img.width ?? null,
+          height: img.height ?? null,
+          format: img.format || null,
+          bytes: img.bytes ?? null,
+          original_filename: img.original_filename || null,
+          uploaded_at: img.uploaded_at || null,
+        }))
+    : [];
   const budget =
     p.property?.budget || p.property?.expected_price || p.budget_profile?.latest_budget_text || null;
   const timeline =
@@ -57,6 +72,7 @@ function mapPropertyForApi(profile, profType) {
     parking_required: p.property?.parking_required || null,
     backyard_needed: p.property?.backyard_needed || null,
     school_district_important: p.property?.school_district_important || null,
+    ...(images.length ? { images } : {}),
   };
 }
 

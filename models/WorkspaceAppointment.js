@@ -37,6 +37,11 @@ const workspaceAppointmentSchema = new mongoose.Schema(
       type: String,
       default: 'calendly',
     },
+    booking_origin: {
+      type: String,
+      default: null,
+      index: true,
+    },
     booked_via_nurture: {
       type: Boolean,
       default: false,

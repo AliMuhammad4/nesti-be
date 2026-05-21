@@ -7,6 +7,8 @@ import {
 } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { handleChat, handlePropertyMatches, scorePreview, clearChatSession } from '../controllers/chatController.js';
+import { postPropertyImagesUpload } from '../controllers/chatPropertyImageController.js';
+import { uploadPropertyImages } from '../middleware/uploadPropertyImages.js';
 import {
   getChatAnalyticsSummary,
   getChatAnalyticsFunnel,
@@ -34,6 +36,7 @@ import {
 const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
 
 router.post('/', validateBody(chatBodySchema), handleChat);
+router.post('/property-images', uploadPropertyImages.array('images', 8), postPropertyImagesUpload);
 router.delete('/clear/:id', clearChatSession);
 router.post('/property-matches', validateBody(propertyMatchesSchema), handlePropertyMatches);
 router.post('/score-preview', validateBody(scorePreviewSchema), scorePreview);

@@ -31,6 +31,25 @@ const protect = async (req, res, next) => {
   }
 };
 
+const optionalAuth = async (req, res, next) => {
+  const token = readAuthToken(req);
+  
+  if (!token) {
+    req.user = null;
+    return next();
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = await User.findById(decoded.id).select('-password');
+  } catch (error) {
+    logger.warn('Optional auth: token verification failed', { err: error.message });
+    req.user = null;
+  }
+  
+  next();
+};
+
 const ensureAgent = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
@@ -102,6 +121,7 @@ const requireCompleteProfessionalProfile = async (req, res, next) => {
 
 export {
   protect,
+  optionalAuth,
   ensureAgent,
   ensureAgentOrMortgageBroker,
   ensureAgentPropertyMatches,

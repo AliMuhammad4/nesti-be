@@ -167,6 +167,14 @@ function extractCalendlyOwnerUri(payload) {
   return null;
 }
 
+function isPublicProfileBookingTracking({ trackingSource, trackingUtm, ownerUserIdFromTracking }) {
+  return (
+    String(trackingSource || '').trim().toLowerCase() === 'nesti_public_profile' ||
+    String(trackingUtm || '').trim().toLowerCase() === 'public_profile_consultation' ||
+    Boolean(ownerUserIdFromTracking && !trackingUtm)
+  );
+}
+
 function calendlyMeta(eventName, payload) {
   const startDate = extractScheduledEventStartDate(payload);
   return {
@@ -218,6 +226,20 @@ function ownerFilter(userId) {
     : {};
 }
 
+// Seller leads should never be stamped with a consultation booking. A Calendly
+// invitee whose email happens to match a seller's LeadProfile/LeadMatch would
+// incorrectly mark that property listing as "Meeting Booked". Exclude them.
+const SELLER_LEAD_MATCH_EXCLUSION = {
+  lead_type: { $not: /seller/i },
+};
+const SELLER_LEAD_PROFILE_EXCLUSION = {
+  $nor: [
+    { 'intent_summary.primary_intent': 'sell' },
+    { intent: 'sell' },
+    { 'property.images.0': { $exists: true } },
+  ],
+};
+
 async function findLeadForBooking(email, trackingUtm, ownerUserId = null) {
   const filter = ownerFilter(ownerUserId);
 
@@ -230,14 +252,25 @@ async function findLeadForBooking(email, trackingUtm, ownerUserId = null) {
 
   const emailRe = new RegExp(`^${String(email).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
-  const byContact = await LeadMatch.findOne({ 'compatibility_factors.contact.email': { $regex: emailRe }, ...filter }).sort({ last_contact_at: -1 });
+  // Match by LeadMatch contact email — skip seller-type leads
+  const byContact = await LeadMatch.findOne({
+    'compatibility_factors.contact.email': { $regex: emailRe },
+    ...SELLER_LEAD_MATCH_EXCLUSION,
+    ...filter,
+  }).sort({ last_contact_at: -1 });
   if (byContact) return { lead: byContact, matchedVia: 'leadmatch_contact_email' };
 
+  // Match via LeadProfile email — skip seller LeadProfiles entirely
   const profile = await LeadProfile.findOne({
     $or: [{ 'identity.canonical_email': { $regex: emailRe } }, { 'identity.email': { $regex: emailRe } }],
+    ...SELLER_LEAD_PROFILE_EXCLUSION,
   }).sort({ updatedAt: -1 });
   if (profile?._id) {
-    const lm = await LeadMatch.findOne({ lead_profile_id: profile._id, ...filter }).sort({ last_contact_at: -1 });
+    const lm = await LeadMatch.findOne({
+      lead_profile_id: profile._id,
+      ...SELLER_LEAD_MATCH_EXCLUSION,
+      ...filter,
+    }).sort({ last_contact_at: -1 });
     if (lm) return { lead: lm, matchedVia: 'leadprofile_email' };
   }
 
@@ -387,6 +420,28 @@ async function emitBookingNotification(lead, conversationId, bookedViaNurture) {
   });
 }
 
+async function emitOwnerBookingNotification({ userId, email, payload }) {
+  if (!userId) return;
+  const inviteeName =
+    payload?.name ||
+    payload?.invitee?.name ||
+    [payload?.first_name, payload?.last_name].filter(Boolean).join(' ').trim() ||
+    'A visitor';
+  const startDate = extractScheduledEventStartDate(payload);
+  await emitLeadLifecycleNotification(userId, {
+    notification_type: 'consultation_booked',
+    title: 'Consultation booked from public profile',
+    body: `${inviteeName}${email ? ` (${email})` : ''} booked a consultation${startDate ? ` for ${startDate.toLocaleString()}` : ''}.`,
+    severity: 'info',
+    appointment_status: 'booked',
+    action: {
+      type: 'open_calendar',
+      calendly_event_uri: typeof payload?.event === 'string' ? payload.event : payload?.event?.uri || null,
+      calendly_invitee_uri: payload?.uri || null,
+    },
+  });
+}
+
 async function emitCancelNotification(lead, conversationId) {
   if (!lead?.user_id || !lead?._id) return;
   const conv = await fetchConvForPreview(conversationId);
@@ -422,18 +477,31 @@ async function handleInviteeCreated({
   payload,
   emailDomain,
 }) {
-  const { match, matchedVia, conversationId } = await resolveInviteeMatchContext(
-    email,
+  const isPublicProfileBooking = isPublicProfileBookingTracking({
+    trackingSource,
     trackingUtm,
-    ownerUserIdFromTracking || ownerUserIdFromCalendly,
-  );
+    ownerUserIdFromTracking,
+  });
+  const matchContext = isPublicProfileBooking
+    ? { match: null, matchedVia: 'public_profile_booking', conversationId: null }
+    : await resolveInviteeMatchContext(
+        email,
+        trackingUtm,
+        ownerUserIdFromTracking || ownerUserIdFromCalendly,
+      );
+  const { match, matchedVia, conversationId } = matchContext;
 
   const meta = calendlyMeta('invitee.created', payload);
   const scheduledStart = extractScheduledEventStartDate(payload);
 
   if (match) {
-    if (shouldAutoUpdatePipelineFromCalendly(match) && !isTerminalMatchStatus(match.match_status)) {
-      match.match_status = 'consult_booked';
+    // Never stamp a seller lead with a consultation booking status — seller leads
+    // represent listed properties, not buyer/client pipeline stages.
+    const isSellerLead = /seller/i.test(String(match.lead_type || ''));
+    if (!isSellerLead) {
+      if (shouldAutoUpdatePipelineFromCalendly(match) && !isTerminalMatchStatus(match.match_status)) {
+        match.match_status = 'consult_booked';
+      }
     }
     match.compatibility_factors = { ...match.compatibility_factors, calendly: meta };
     match.markModified('compatibility_factors');
@@ -466,11 +534,13 @@ async function handleInviteeCreated({
     ownerUserIdFromTracking ||
     ownerUserIdFromCalendly ||
     (await resolveOwnerUserIdForNurture(match, effectiveConversationId)) ||
-    (await resolveNurtureSenderUserIdFromLogs({
-      conversationId: effectiveConversationId,
-      leadMatchId: match?._id || null,
-      inviteeEmail: email,
-    }));
+    (isPublicProfileBooking
+      ? null
+      : await resolveNurtureSenderUserIdFromLogs({
+          conversationId: effectiveConversationId,
+          leadMatchId: match?._id || null,
+          inviteeEmail: email,
+        }));
   let leadForOps = match;
   let matchedViaEffective = matchedVia;
   if (effectiveConversationId && nurtureUserId) {
@@ -480,7 +550,8 @@ async function handleInviteeCreated({
         conversation_id: effectiveConversationId,
       });
       if (ownerMatch && (!leadForOps || String(ownerMatch._id) !== String(leadForOps._id))) {
-        if (shouldAutoUpdatePipelineFromCalendly(ownerMatch) && !isTerminalMatchStatus(ownerMatch.match_status)) {
+        const isOwnerMatchSeller = /seller/i.test(String(ownerMatch.lead_type || ''));
+        if (!isOwnerMatchSeller && shouldAutoUpdatePipelineFromCalendly(ownerMatch) && !isTerminalMatchStatus(ownerMatch.match_status)) {
           ownerMatch.match_status = 'consult_booked';
         }
         ownerMatch.compatibility_factors = { ...ownerMatch.compatibility_factors, calendly: meta };
@@ -519,8 +590,13 @@ async function handleInviteeCreated({
   }
 
   /** Book workspace row whenever we know the professional + thread, even if LeadMatch was not resolved yet (e.g. booked before CRM lead existed). */
-  const appointmentUserId = leadForOps?.user_id || match?.user_id || ownerUserIdFromTracking || nurtureUserId;
-  if (appointmentUserId && effectiveConversationId) {
+  const appointmentUserId =
+    leadForOps?.user_id ||
+    match?.user_id ||
+    ownerUserIdFromTracking ||
+    ownerUserIdFromCalendly ||
+    nurtureUserId;
+  if (appointmentUserId) {
     try {
       await upsertBookedAppointmentFromCalendly({
         userId: appointmentUserId,
@@ -532,13 +608,22 @@ async function handleInviteeCreated({
         nurtureLogId,
         inviteeEmail: email,
         scheduledStart,
+        bookingOrigin: isPublicProfileBooking ? 'public_profile_consultation' : null,
       });
     } catch (e) {
       logger.error(`workspace appointment upsert: ${e.message}`);
     }
   }
 
-  await emitBookingNotification(leadForOps, effectiveConversationId, bookedViaNurture);
+  if (leadForOps) {
+    await emitBookingNotification(leadForOps, effectiveConversationId, bookedViaNurture);
+  } else if (appointmentUserId || ownerUserIdFromCalendly || ownerUserIdFromTracking) {
+    await emitOwnerBookingNotification({
+      userId: appointmentUserId || ownerUserIdFromCalendly || ownerUserIdFromTracking,
+      email,
+      payload,
+    });
+  }
 
   const ownerUserId = leadForOps?.user_id || match?.user_id || ownerUserIdFromTracking || nurtureUserId;
   if (effectiveConversationId && ownerUserId && email) {
@@ -573,11 +658,18 @@ async function handleInviteeCanceled({
   payload,
   emailDomain,
 }) {
-  const { match, matchedVia, conversationId } = await resolveInviteeMatchContext(
-    email,
+  const isPublicProfileBooking = isPublicProfileBookingTracking({
+    trackingSource,
     trackingUtm,
-    ownerUserIdFromTracking || ownerUserIdFromCalendly,
-  );
+    ownerUserIdFromTracking,
+  });
+  const { match, matchedVia, conversationId } = isPublicProfileBooking
+    ? { match: null, matchedVia: 'public_profile_booking', conversationId: null }
+    : await resolveInviteeMatchContext(
+        email,
+        trackingUtm,
+        ownerUserIdFromTracking || ownerUserIdFromCalendly,
+      );
 
   if (conversationId) {
     const conv = await ChatConversation.findById(conversationId).select('calendly_booking_status').lean();
@@ -632,11 +724,13 @@ async function handleInviteeCanceled({
     ownerUserIdFromTracking ||
     ownerUserIdFromCalendly ||
     (await resolveOwnerUserIdForNurture(match, conversationId)) ||
-    (await resolveNurtureSenderUserIdFromLogs({
-      conversationId,
-      leadMatchId: match?._id || null,
-      inviteeEmail: email,
-    }));
+    (isPublicProfileBooking
+      ? null
+      : await resolveNurtureSenderUserIdFromLogs({
+          conversationId,
+          leadMatchId: match?._id || null,
+          inviteeEmail: email,
+        }));
   let leadForOps = match;
   let matchedViaEffective = matchedVia;
   if (conversationId && nurtureUserId) {

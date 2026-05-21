@@ -90,7 +90,12 @@ export async function syncLeadMatchAfterTurn({
   leadMeta,
   aiIntent,
 }) {
-  const intentSuffix = flow.getIntentSuffix(aiIntent);
+  const formIntent =
+    formContact?.intent === 'sell' || formContact?.intent === 'buy'
+      ? formContact.intent
+      : null;
+  const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
+  const intentSuffix = flow.getIntentSuffix(leadIntent);
   const existingLeadMatch = canCreateLeads
     ? await LeadMatch.findOne({
         conversation_id: conversation._id,
@@ -131,7 +136,7 @@ export async function syncLeadMatchAfterTurn({
 
     const newLeadMatch = await flow.createNewLead({
       conversation,
-      intent: usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent,
+      intent: leadIntent,
       professionalProfileId: professionalProfile?._id || null,
       activeIcpProfileId: professionalProfile?.active_icp_profile_id || null,
       leadScore: finalScore,
@@ -157,14 +162,14 @@ export async function syncLeadMatchAfterTurn({
         lead_match_id: String(newLeadMatch._id),
         owner_user_id: String(userId),
         lead_grade: persistedGrade,
-        intent: aiIntent,
+        intent: leadIntent,
       });
       try {
         const convo = await ChatConversation.findById(conversation._id)
           .select('calendly_booking_status lead_reasons last_interaction_at intent')
           .lean();
         const appointment_status = resolveAppointmentStatus(newLeadMatch.match_status, convo?.calendly_booking_status);
-        const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent;
+        const socketIntent = leadIntent;
         const conversion_preview = buildWorkspaceLeadConversionPreview({
           leadMatch: newLeadMatch,
           conversation: convo || conversation,
@@ -228,7 +233,7 @@ export async function syncLeadMatchAfterTurn({
   existingLeadMatch.compatibility_factors = nextFactors;
 
   existingLeadMatch.match_score = finalScore;
-  existingLeadMatch.lead_type = computeLeadTypeForMatch(flow, persistedGrade, aiIntent);
+  existingLeadMatch.lead_type = computeLeadTypeForMatch(flow, persistedGrade, leadIntent);
 
   await existingLeadMatch.save();
 
@@ -300,7 +305,7 @@ export async function syncLeadMatchAfterTurn({
           .lean()
       : null;
     const appointment_status = resolveAppointmentStatus(fresh?.match_status, convo?.calendly_booking_status);
-    const socketIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent;
+    const socketIntent = leadIntent;
     const conversion_preview = buildWorkspaceLeadConversionPreview({
       leadMatch: fresh || existingLeadMatch,
       conversation: convo || conversation,

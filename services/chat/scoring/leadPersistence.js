@@ -328,13 +328,33 @@ export async function createOrReuseLeadProfile({
 
   const profType = professionalType || validated.ownership?.professional_type || 'agent';
 
+  const contactConditions = [
+    ...(email ? [{ 'identity.canonical_email': email }] : []),
+    ...(phone ? [{ 'identity.canonical_phone': phone }] : []),
+  ];
+
+  // Always exclude seller profiles from reuse for non-sell intents.
+  // Seller profiles contain property listing data (images, prices) that must never be overwritten.
+  const intentExclusion = {};
+  if (validated.intent !== 'sell') {
+    intentExclusion.$nor = [
+      { intent: 'sell' },
+      { 'intent_summary.primary_intent': 'sell' },
+      { 'property.images.0': { $exists: true } },
+    ];
+  } else {
+    // For seller leads, don't reuse buyer profiles
+    intentExclusion.$nor = [
+      { intent: 'buy' },
+      { 'intent_summary.primary_intent': 'buy' },
+    ];
+  }
+
   const existingProfile = await LeadProfile.findOne({
     'ownership.user_id': toIdString(userId),
     'ownership.professional_type': profType,
-    $or: [
-      ...(email ? [{ 'identity.canonical_email': email }] : []),
-      ...(phone ? [{ 'identity.canonical_phone': phone }] : []),
-    ],
+    $or: contactConditions,
+    ...intentExclusion,
   })
     .sort({ updatedAt: -1, createdAt: -1 })
     .select('_id')

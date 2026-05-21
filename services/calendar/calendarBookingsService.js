@@ -118,7 +118,6 @@ async function listCollectionAppointments(uid) {
     }
 
     const convId = String(a.conversation_id || lead?.conversation_id || '');
-    if (!lm && !convId) continue;
 
     if (lm) coveredMatchIds.add(lm);
 

@@ -24,6 +24,7 @@ const KPI_LIFECYCLE_TYPE_MAP = {
   lead_lifecycle: 'lead_updated',
   lead_updated: 'lead_updated',
   appointment_booked: 'appointment_booked',
+  consultation_booked: 'appointment_booked',
   appointment_canceled: 'appointment_canceled',
   nurture_appointment_booked: 'appointment_booked',
 };

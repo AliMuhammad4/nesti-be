@@ -19,6 +19,8 @@ import ReferralRewardEvent from './ReferralRewardEvent.js';
 import UserRewardBalance from './UserRewardBalance.js';
 import ProfessionalChatThread from './ProfessionalChatThread.js';
 import ProfessionalChatMessage from './ProfessionalChatMessage.js';
+import PublicProfile from './PublicProfile.js';
+import ProfileViewEvent from './ProfileViewEvent.js';
 export {
   User,
   ChatConversation,
@@ -41,4 +43,6 @@ export {
   UserRewardBalance,
   ProfessionalChatThread,
   ProfessionalChatMessage,
+  PublicProfile,
+  ProfileViewEvent,
 };

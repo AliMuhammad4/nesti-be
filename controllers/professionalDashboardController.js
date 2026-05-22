@@ -5,6 +5,7 @@ import {
   exportProfileAnalyticsService,
   updateThemeService,
   generatePublicProfileCopyService,
+  deletePublicProfileService,
 } from '../services/publicProfile/professionalDashboardService.js';
 
 const send = (res, result) => {
@@ -38,6 +39,15 @@ export const generatePublicProfileCopy = async (req, res, next) => {
     if (error.statusCode) {
       return res.status(error.statusCode).json({ success: false, message: error.message });
     }
+    next(error);
+  }
+};
+
+export const deletePublicProfile = async (req, res, next) => {
+  try {
+    const userId = req.user._id;
+    send(res, await deletePublicProfileService(userId));
+  } catch (error) {
     next(error);
   }
 };

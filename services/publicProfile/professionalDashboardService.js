@@ -145,16 +145,12 @@ export const generatePublicProfileCopyService = async (userId) => {
   }
 
   const generated = await generatePublicProfileCopy({ user, professionalProfile });
-  await updatePublicProfileService(userId, {
-    ...generated,
-    enabled: true,
-  });
 
   return {
     status: 200,
     body: {
       success: true,
-      message: 'AI landing page copy generated and published',
+      message: 'AI landing page copy generated. Review and save to apply changes.',
       generated,
       professional_profile: toProfessionalProfileSummary(professionalProfile),
     },
@@ -255,6 +251,28 @@ export const updatePublicProfileService = async (userId, updates) => {
         slug: profile.slug,
         enabled: profile.enabled,
       },
+    },
+  };
+};
+
+export const deletePublicProfileService = async (userId) => {
+  const profile = await PublicProfile.findOne({ user_id: userId }).lean();
+
+  if (!profile) {
+    return {
+      status: 404,
+      body: { success: false, message: 'Public profile not found' },
+    };
+  }
+
+  await PublicProfile.deleteOne({ user_id: userId });
+  await ProfileViewEvent.deleteMany({ user_id: userId });
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Public webpage deleted successfully',
     },
   };
 };

@@ -6,6 +6,7 @@ import {
   exportProfileAnalytics,
   updateTheme,
   generatePublicProfileCopy,
+  deletePublicProfile,
 } from '../controllers/professionalDashboardController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
@@ -23,6 +24,8 @@ router.get('/profile', getOwnPublicProfile);
 router.post('/profile/generate-copy', generatePublicProfileCopy);
 
 router.patch('/profile', validateBody(updatePublicProfileSchema), updatePublicProfile);
+
+router.delete('/profile', deletePublicProfile);
 
 router.get('/analytics', getProfileAnalytics);
 

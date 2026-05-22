@@ -402,6 +402,7 @@ export const listProfessionalsByRole = async (req, res, next) => {
   try {
     const roleRaw = String(req.query.role || '').trim().toLowerCase();
     const role = roleRaw && PROFESSIONAL_TYPE_VALUES.includes(roleRaw) ? roleRaw : null;
+    const fetchAll = String(req.query.all || '').trim().toLowerCase() === 'true';
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(String(req.query.limit || '12'), 10) || 12, 1), 100);
     const search = String(req.query.search || '').trim();
@@ -421,12 +422,15 @@ export const listProfessionalsByRole = async (req, res, next) => {
     }
 
     const total = await User.countDocuments(userFilter);
-    const users = await User.find(userFilter)
+    const query = User.find(userFilter)
       .select('first_name last_name email role profile_image cover_image createdAt updatedAt')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean();
+      .sort({ createdAt: -1 });
+
+    if (!fetchAll) {
+      query.skip((page - 1) * limit).limit(limit);
+    }
+
+    const users = await query.lean();
 
     const userIds = users.map((u) => u._id);
     const profiles = userIds.length
@@ -493,11 +497,11 @@ export const listProfessionalsByRole = async (req, res, next) => {
       items,
       pagination: {
         page,
-        limit,
+        limit: fetchAll ? total : limit,
         total,
-        total_pages: Math.max(Math.ceil(total / limit), 1),
-        has_prev_page: page > 1,
-        has_next_page: page * limit < total,
+        total_pages: fetchAll ? 1 : Math.max(Math.ceil(total / limit), 1),
+        has_prev_page: fetchAll ? false : page > 1,
+        has_next_page: fetchAll ? false : page * limit < total,
       },
     });
   } catch (error) {

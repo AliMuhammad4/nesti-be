@@ -104,6 +104,14 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     leadMatch?.compatibility_factors?.calendly?.calendly_event_start ||
     convo?.calendly_event_start ||
     null;
+  const leadSource = leadMatch?.compatibility_factors?.source || null;
+  const inquiredProperty =
+    leadMatch?.compatibility_factors?.inquired_property &&
+    typeof leadMatch.compatibility_factors.inquired_property === 'object'
+      ? leadMatch.compatibility_factors.inquired_property
+      : null;
+  const linkedSellerLeadMatchId =
+    leadMatch?.compatibility_factors?.linked_seller_lead_match_id || null;
   const core = {
     id: String(leadMatch._id),
     professional_type: null,
@@ -123,6 +131,11 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     embed_token: leadMatch.compatibility_factors?.embed_token || null,
     session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,
     conversation_id: String(leadMatch.conversation_id || ''),
+    source: leadSource,
+    inquired_property: inquiredProperty,
+    linked_seller_lead_match_id: linkedSellerLeadMatchId,
+    is_direct_public_inquiry:
+      Boolean(leadMatch?.compatibility_factors?.direct_submission) || leadSource === 'public_web_form',
     created_at: leadMatch.createdAt,
     updated_at: leadMatch.updatedAt,
     agent_notes: formatAgentNotesForApi(leadMatch.compatibility_factors),

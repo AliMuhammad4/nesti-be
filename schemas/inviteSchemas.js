@@ -15,7 +15,7 @@ export const captureInviteSchema = Joi.object({
   session_id: Joi.string().max(128).allow('').optional(),
   visitor_id: Joi.string().max(128).allow('').optional(),
   source_channel: Joi.string().allow('').optional(),
-  source_referrer: Joi.string().uri({ allowRelative: false }).allow('').optional(),
+  source_referrer: Joi.string().max(512).allow('').optional(),
   landing_path: Joi.string().max(256).allow('').optional(),
 });
 

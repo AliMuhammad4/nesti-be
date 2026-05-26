@@ -57,7 +57,7 @@ export async function emitNewLeadCreatedNotification(ownerUserId, ctx) {
     severity: severityFromConversionPreview(conversion_preview),
     lead_match_id: String(newLeadMatch._id),
     lead_profile_id: newLeadMatch.lead_profile_id ? String(newLeadMatch.lead_profile_id) : null,
-    conversation_id: String(conversationId),
+    conversation_id: conversationId ? String(conversationId) : null,
     session_id: sessionId || null,
     grade: persistedGrade,
     score: Number(newLeadMatch.match_score ?? finalScore),

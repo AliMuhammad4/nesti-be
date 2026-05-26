@@ -42,6 +42,10 @@ import {
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
 import { buildLeadRecapMarkdownLines, injectLeadRecapIntoReply } from './utils/leadRecapMarkdown.js';
+import {
+  normalizeInquiredProperty,
+  resolveLinkedSellerLeadMatchId,
+} from '../lead/inquiredProperty.js';
 
 export { flowTypeForConversation, recomputeSignalsForPropertyMatches } from './handleChat/index.js';
 
@@ -117,6 +121,67 @@ export const handlePropertyMatchesService = async ({
   });
   if (!payload.session_id) payload.session_id = sessionId.trim();
   return { status: 200, body: payload };
+};
+
+export const selectChatPropertyMatchService = async ({ id: sessionId, embedToken, property }) => {
+  if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
+    return { status: 400, body: { success: false, message: 'id (session_id) is required' } };
+  }
+  if (!embedToken || typeof embedToken !== 'string' || !embedToken.trim()) {
+    return { status: 400, body: { success: false, message: 'embedToken is required' } };
+  }
+  const embed = await ChatbotEmbedUrl.findOne({ token: embedToken }).select('user_id').lean();
+  if (!embed) {
+    return { status: 403, body: { success: false, message: 'Invalid or inactive embed token' } };
+  }
+
+  const conversation = await ChatConversation.findOne({
+    session_id: sessionId.trim(),
+    user_id: embed.user_id,
+  }).select('_id').lean();
+  if (!conversation) {
+    return { status: 404, body: { success: false, message: 'Session not found' } };
+  }
+
+  const inquiredProperty = normalizeInquiredProperty(property, { fromPropertyMatch: true });
+  if (!inquiredProperty) {
+    return { status: 400, body: { success: false, message: 'Selected property is empty' } };
+  }
+
+  const leadMatch = await LeadMatch.findOne({
+    conversation_id: conversation._id,
+    user_id: embed.user_id,
+    lead_type: /_(buyer|client)$/,
+  }).sort({ updatedAt: -1, createdAt: -1 });
+  if (!leadMatch) {
+    return { status: 404, body: { success: false, message: 'Buyer lead not found for this chat session' } };
+  }
+
+  const linkedSellerLeadMatchId = await resolveLinkedSellerLeadMatchId({
+    ownerUserId: embed.user_id,
+    inquiredProperty,
+    selectedProperty: property,
+  });
+  const nextFactors =
+    leadMatch.compatibility_factors && typeof leadMatch.compatibility_factors === 'object'
+      ? { ...leadMatch.compatibility_factors }
+      : {};
+  nextFactors.inquired_property = inquiredProperty;
+  nextFactors.inquiry_type = 'specific_property';
+  nextFactors.linked_seller_lead_match_id = linkedSellerLeadMatchId || null;
+  leadMatch.compatibility_factors = nextFactors;
+  leadMatch.markModified('compatibility_factors');
+  await leadMatch.save();
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      lead_match_id: String(leadMatch._id),
+      inquired_property: inquiredProperty,
+      linked_seller_lead_match_id: linkedSellerLeadMatchId || null,
+    },
+  };
 };
 
 export const handleChatService = async ({

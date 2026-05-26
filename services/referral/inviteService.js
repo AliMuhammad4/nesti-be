@@ -152,7 +152,15 @@ export async function createInviteLinkForUser(inviter_user_id, payload = {}) {
   }
 
   const inviterOid = new mongoose.Types.ObjectId(String(inviter_user_id));
-  const sourceConversationId =
+  const metadataFromPayload = payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {};
+  const metadataLeadMatchIdRaw = String(metadataFromPayload?.lead_match_id || '')
+    .trim()
+    .slice(0, 64);
+  const metadataLeadMatchId = mongoose.Types.ObjectId.isValid(metadataLeadMatchIdRaw)
+    ? new mongoose.Types.ObjectId(metadataLeadMatchIdRaw)
+    : null;
+
+  let sourceConversationId =
     payload?.source_conversation_id && mongoose.Types.ObjectId.isValid(String(payload.source_conversation_id))
       ? new mongoose.Types.ObjectId(String(payload.source_conversation_id))
       : null;
@@ -160,6 +168,33 @@ export async function createInviteLinkForUser(inviter_user_id, payload = {}) {
     payload?.source_referral_id && mongoose.Types.ObjectId.isValid(String(payload.source_referral_id))
       ? new mongoose.Types.ObjectId(String(payload.source_referral_id))
       : null;
+
+  let resolvedMetadataLeadMatchId = metadataLeadMatchId;
+
+  if (!sourceConversationId && metadataLeadMatchId) {
+    const leadMatch = await LeadMatch.findOne({
+      _id: metadataLeadMatchId,
+      user_id: inviterOid,
+    })
+      .select('conversation_id')
+      .lean();
+    const convIdRaw = String(leadMatch?.conversation_id || '').trim();
+    if (convIdRaw && mongoose.Types.ObjectId.isValid(convIdRaw)) {
+      sourceConversationId = new mongoose.Types.ObjectId(convIdRaw);
+    }
+  }
+
+  if (!resolvedMetadataLeadMatchId && sourceConversationId) {
+    const leadFromConv = await LeadMatch.findOne({
+      user_id: inviterOid,
+      conversation_id: sourceConversationId,
+    })
+      .select('_id')
+      .lean();
+    if (leadFromConv?._id) {
+      resolvedMetadataLeadMatchId = leadFromConv._id;
+    }
+  }
 
   if (sourceConversationId) {
     const ownsLead = await LeadMatch.exists({
@@ -206,7 +241,10 @@ export async function createInviteLinkForUser(inviter_user_id, payload = {}) {
     expires_at: expiresAt,
     is_active: true,
     metadata: {
-      ...(payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}),
+      ...metadataFromPayload,
+      lead_match_id: resolvedMetadataLeadMatchId
+        ? String(resolvedMetadataLeadMatchId)
+        : metadataLeadMatchIdRaw || undefined,
       share_url: shareUrl,
     },
   });
@@ -405,25 +443,114 @@ export async function finalizeInviteAttribution({
     return { ok: false, code: 410, message: 'Invite has expired' };
   }
 
-  const existingForUser = await InviteAttribution.findOne({
+  async function createOrGetLeadReferralFromInviteWithLeadId(resolvedLeadMatchId) {
+    const newUser = await User.findById(authUserId).select('role').lean();
+    const inferredVertical = String(invite?.intended_role || newUser?.role || 'agent').trim().toLowerCase();
+    const autoReferral = await createReferralForUser(invite.inviter_user_id, {
+      target_user_id: authUserId,
+      lead_match_id: resolvedLeadMatchId,
+      target_vertical: inferredVertical || 'agent',
+      status: 'pending',
+      notes: 'Auto-created from lead invite link signup.',
+    });
+    if (autoReferral?.ok) {
+      return autoReferral.referral || null;
+    }
+    if (autoReferral?.code === 409) {
+      const existing = await Referral.findOne({
+        user_id: invite.inviter_user_id,
+        target_user_id: authUserId,
+        lead_match_id: new mongoose.Types.ObjectId(resolvedLeadMatchId),
+      })
+        .sort({ updatedAt: -1 })
+        .lean();
+      if (existing?._id) {
+        return {
+          id: String(existing._id),
+          status: existing.status || '',
+          existing: true,
+        };
+      }
+    }
+    return null;
+  }
+
+  async function createOrGetLeadReferralFromInvite() {
+    const inviterOid = invite.inviter_user_id?._id || invite.inviter_user_id;
+    const leadMatchIdRaw = String(invite?.metadata?.lead_match_id || '').trim();
+    if (mongoose.Types.ObjectId.isValid(leadMatchIdRaw) && mongoose.Types.ObjectId.isValid(String(inviterOid))) {
+      const sourceLead = await LeadMatch.findOne({
+        _id: new mongoose.Types.ObjectId(leadMatchIdRaw),
+        user_id: new mongoose.Types.ObjectId(String(inviterOid)),
+      })
+        .select('_id')
+        .lean();
+      if (sourceLead?._id) {
+        return createOrGetLeadReferralFromInviteWithLeadId(String(sourceLead._id));
+      }
+    }
+    const convIdRaw = String(invite?.source_conversation_id || '').trim();
+    if (mongoose.Types.ObjectId.isValid(convIdRaw) && mongoose.Types.ObjectId.isValid(String(inviterOid))) {
+      const sourceLead = await LeadMatch.findOne({
+        user_id: new mongoose.Types.ObjectId(String(inviterOid)),
+        conversation_id: new mongoose.Types.ObjectId(convIdRaw),
+      })
+        .select('_id')
+        .lean();
+      if (sourceLead?._id) {
+        return createOrGetLeadReferralFromInviteWithLeadId(String(sourceLead._id));
+      }
+    }
+    if (mongoose.Types.ObjectId.isValid(leadMatchIdRaw) && mongoose.Types.ObjectId.isValid(String(inviterOid))) {
+      const byConvSurrogate = await LeadMatch.findOne({
+        user_id: new mongoose.Types.ObjectId(String(inviterOid)),
+        conversation_id: new mongoose.Types.ObjectId(leadMatchIdRaw),
+      })
+        .select('_id')
+        .lean();
+      if (byConvSurrogate?._id) {
+        return createOrGetLeadReferralFromInviteWithLeadId(String(byConvSurrogate._id));
+      }
+    }
+    return null;
+  }
+
+  const existingForThisInvite = await InviteAttribution.findOne({
+    token_hash,
     consumed_by_user_id: authUserId,
     status: 'converted',
-  })
-    .sort({ consumed_at: -1 })
-    .lean();
-  if (existingForUser) {
+  }).lean();
+  if (existingForThisInvite) {
+    const linkedLeadReferral = await createOrGetLeadReferralFromInvite();
     return {
       ok: true,
       already_converted: true,
-      attribution: serializeAttribution(existingForUser),
+      attribution: serializeAttribution(existingForThisInvite),
+      lead_referral: linkedLeadReferral,
     };
   }
 
-  const attribution = await InviteAttribution.findOne({
-    token_hash,
-    status: 'pending',
-    expires_at: { $gte: new Date() },
-  }).sort({ last_clicked_at: -1 });
+  const findPendingAttribution = () =>
+    InviteAttribution.findOne({
+      token_hash,
+      status: 'pending',
+      expires_at: { $gte: new Date() },
+    }).sort({ last_clicked_at: -1 });
+
+  let attribution = await findPendingAttribution();
+
+  // Signup/login often pass invite_token without a prior /api/invites/capture call.
+  if (!attribution) {
+    await captureInviteAttribution(
+      invite_token,
+      {
+        source_channel: invite.source_channel,
+        landing_path: String(path || '').slice(0, 256),
+      },
+      { ip: '', user_agent: '' }
+    );
+    attribution = await findPendingAttribution();
+  }
 
   if (!attribution) {
     return { ok: false, code: 404, message: 'No pending attribution found for this invite' };
@@ -438,37 +565,7 @@ export async function finalizeInviteAttribution({
   };
   await attribution.save();
 
-  let linkedLeadReferral = null;
-  const sourceConversationId = invite?.source_conversation_id ? String(invite.source_conversation_id) : '';
-  if (sourceConversationId) {
-    const newUser = await User.findById(authUserId).select('role').lean();
-    const inferredVertical = String(invite?.intended_role || newUser?.role || 'agent').trim().toLowerCase();
-    const autoReferral = await createReferralForUser(invite.inviter_user_id, {
-      target_user_id: authUserId,
-      conversation_id: sourceConversationId,
-      target_vertical: inferredVertical || 'agent',
-      status: 'pending',
-      notes: 'Auto-created from lead invite link signup.',
-    });
-    if (autoReferral?.ok) {
-      linkedLeadReferral = autoReferral.referral || null;
-    } else if (autoReferral?.code === 409) {
-      const existing = await Referral.findOne({
-        user_id: invite.inviter_user_id,
-        target_user_id: authUserId,
-        conversation_id: invite.source_conversation_id,
-      })
-        .sort({ updatedAt: -1 })
-        .lean();
-      if (existing?._id) {
-        linkedLeadReferral = {
-          id: String(existing._id),
-          status: existing.status || '',
-          existing: true,
-        };
-      }
-    }
-  }
+  const linkedLeadReferral = await createOrGetLeadReferralFromInvite();
 
   await awardReferralPoints({
     user_id: invite.inviter_user_id,

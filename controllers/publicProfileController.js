@@ -5,6 +5,7 @@ import {
   getSellerPropertiesBySlugService,
   trackProfileViewService,
   checkSlugAvailabilityService,
+  submitPublicLeadService,
 } from '../services/publicProfile/publicProfileService.js';
 
 const send = (res, result) => {
@@ -76,6 +77,22 @@ export const checkSlugAvailability = async (req, res, next) => {
     const { slug } = req.body;
     const userId = req.user?.user_id || null;
     send(res, await checkSlugAvailabilityService(slug, userId));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const submitPublicLead = async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    const payload = req.body || {};
+    const requestMeta = {
+      visitor_user_id: req.user?._id || req.user?.user_id || null,
+      referrer: req.get('Referer') || '',
+      user_agent: req.get('User-Agent') || '',
+      ip_address: req.ip || null,
+    };
+    send(res, await submitPublicLeadService({ slug, payload, requestMeta }));
   } catch (error) {
     next(error);
   }

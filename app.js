@@ -47,7 +47,13 @@ app.use(
 );
 
 // Middleware
-app.use(cors());
+const corsOptions = {
+  origin: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  optionsSuccessStatus: 204,
+  maxAge: 60 * 60 * 24, // cache preflight for 24h to reduce repeated OPTIONS noise
+};
+app.use(cors(corsOptions));
 
 // Webhooks often need raw bodies, so they are routed before express.json()
 app.use('/api/billing/stripe/webhook', webhookRoutes); // Just map the stripe webhook path to here if needed or separate it. We will map all webhooks to /api/webhooks in app.js, except stripe if it needs special handling. Let's handle stripe inside webhookRoutes.

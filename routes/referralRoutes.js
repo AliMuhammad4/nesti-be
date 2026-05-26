@@ -6,6 +6,7 @@ import { referralPostBodySchema, referralPatchBodySchema } from '../schemas/chat
 import {
   createReferral,
   listReferrals,
+  listReferralsForLeadMatch,
   patchReferral,
   getReferralLeadDetails,
   processReferral,
@@ -19,6 +20,7 @@ router.post(
   createReferral
 );
 router.get('/', protect, requireCompleteProfessionalProfile, listReferrals);
+router.get('/lead-match/:leadMatchId', protect, requireCompleteProfessionalProfile, listReferralsForLeadMatch);
 router.get('/:id/lead', protect, requireCompleteProfessionalProfile, getReferralLeadDetails);
 router.patch(
   '/:id',

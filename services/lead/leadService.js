@@ -24,6 +24,7 @@ import {
 import { awardInviterMilestoneForUser } from '../referral/inviteService.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
 import { AGENT_NOTES_MAX_ENTRIES, isTerminalMatchStatus } from '../../utils/leadMatchStatus.js';
+import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
 import {
   recomputeLeadProfileLifecycle,
   syncLeadAttributionForMatchStatus,
@@ -38,6 +39,14 @@ import {
   ICP_TIERS,
 } from './leadProfileHelpers.js';
 import { PROFESSIONAL_TYPE, USER_ROLE } from '../../constants/roles.js';
+import { mapLeadProfileForApi } from './leadProfileFormat.js';
+
+const INQUIRED_PROPERTY_LEAD_MATCH_FIELDS =
+  '_id lead_profile_id conversation_id match_score match_status compatibility_factors lead_type createdAt updatedAt';
+const INQUIRED_PROPERTY_PROFILE_FIELDS =
+  'intent identity contact_preferences property qualification ownership createdAt updatedAt';
+const INQUIRED_PROPERTY_CONVERSATION_FIELDS =
+  '_id calendly_booking_status calendly_event_start session_id';
 
 /** Lead rows where WorkspaceAppointment exists as booked (Calendly) but ChatConversation was not synced. */
 async function leadMatchIdsWithBookedWorkspaceAppointment(userId, leadMatchObjectIds) {
@@ -134,6 +143,71 @@ function mergeConvoWithWorkspaceBooking(
     next.calendly_event_start = startsAt;
   }
   return next;
+}
+
+function mapLeadMatchToInquiredPropertySellerLead(leadMatch, profile, convo, opts = {}) {
+  const profType =
+    leadMatch?.compatibility_factors?.professional_type ||
+    profile?.ownership?.professional_type ||
+    PROFESSIONAL_TYPE.AGENT;
+  const profileView = mapLeadProfileForApi(profile, profType);
+  const includeIntentField = opts.includeIntentField !== false;
+  const appointmentDate =
+    leadMatch?.compatibility_factors?.calendly?.calendly_event_start ||
+    convo?.calendly_event_start ||
+    null;
+  const lead = {
+    id: String(leadMatch._id),
+    professional_type: profType,
+    lead_type: leadMatch.lead_type,
+    grade: leadMatch.lead_type?.split('_')[0] || null,
+    score: leadMatch.match_score,
+    status: leadMatch.match_status,
+    contact: profileView.contact,
+    property: profileView.property,
+    qualification: profileView.qualification,
+    appointment_status: resolveAppointmentStatus(
+      leadMatch.match_status,
+      convo?.calendly_booking_status,
+      appointmentDate,
+    ),
+    calendly_booking_status: convo?.calendly_booking_status || null,
+    conversation_id: String(leadMatch.conversation_id || ''),
+    source: leadMatch?.compatibility_factors?.source || null,
+    created_at: leadMatch.createdAt,
+    updated_at: leadMatch.updatedAt,
+  };
+  if (includeIntentField) lead.intent = profileView.intent;
+  return lead;
+}
+
+function extractInquiredPropertyContext(leadMatch) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const inquiredProperty =
+    cf.inquired_property && typeof cf.inquired_property === 'object'
+      ? cf.inquired_property
+      : null;
+  const linkedSellerLeadMatchId = String(cf.linked_seller_lead_match_id || '').trim();
+  return { inquiredProperty, linkedSellerLeadMatchId };
+}
+
+async function fetchInquiredPropertySellerLead({ userId, linkedSellerLeadMatchId, mapperOpts }) {
+  if (!linkedSellerLeadMatchId || !mongoose.Types.ObjectId.isValid(linkedSellerLeadMatchId)) return null;
+  const sellerMatch = await LeadMatch.findOne({ _id: linkedSellerLeadMatchId, user_id: userId })
+    .select(INQUIRED_PROPERTY_LEAD_MATCH_FIELDS)
+    .lean();
+  if (!sellerMatch) return null;
+
+  const [profile, convo] = await Promise.all([
+    sellerMatch.lead_profile_id
+      ? LeadProfile.findById(sellerMatch.lead_profile_id).select(INQUIRED_PROPERTY_PROFILE_FIELDS).lean()
+      : null,
+    sellerMatch.conversation_id
+      ? ChatConversation.findById(sellerMatch.conversation_id).select(INQUIRED_PROPERTY_CONVERSATION_FIELDS).lean()
+      : null,
+  ]);
+
+  return mapLeadMatchToInquiredPropertySellerLead(sellerMatch, profile, convo || {}, mapperOpts);
 }
 
 /** Buyer/seller `intent` is only for agent dashboards; omit for other roles. */
@@ -326,6 +400,65 @@ function assertMatchStatusTransition(prevStatus, nextStatus) {
   }
 }
 
+const ROLE_CLOSE_REASONS = {
+  agent: {
+    converted: new Set(['deal_closed', 'buyer_found_match', 'seller_accepted_offer', 'other']),
+    closed_lost: new Set(['went_with_another_agent', 'changed_mind', 'not_ready', 'unresponsive', 'other']),
+  },
+  lawyer: {
+    converted: new Set(['matter_retained', 'case_completed', 'other']),
+    closed_lost: new Set(['went_elsewhere', 'declined_service', 'matter_withdrawn', 'other']),
+  },
+  mortgage_broker: {
+    converted: new Set(['loan_funded', 'pre_approval_secured', 'other']),
+    closed_lost: new Set(['went_with_another_lender', 'application_denied', 'not_qualified', 'other']),
+  },
+};
+
+function leadProfessionalType(lead, professionalTypeOverride = '') {
+  const override = String(professionalTypeOverride || '')
+    .trim()
+    .toLowerCase();
+  if (override === PROFESSIONAL_TYPE.LAWYER) return PROFESSIONAL_TYPE.LAWYER;
+  if (override === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+  if (override === PROFESSIONAL_TYPE.AGENT) return PROFESSIONAL_TYPE.AGENT;
+  const raw = String(
+    lead?.compatibility_factors?.professional_type ||
+      lead?.professional_type ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+  if (raw === PROFESSIONAL_TYPE.LAWYER) return PROFESSIONAL_TYPE.LAWYER;
+  if (raw === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+  return PROFESSIONAL_TYPE.AGENT;
+}
+
+function validateCloseReasonForLead({ lead, nextStatus, closeReason, professionalTypeOverride = '' }) {
+  if (!isTerminalMatchStatus(nextStatus)) return null;
+  const reason = String(closeReason || '').trim();
+  if (!reason) return 'close_reason is required when closing a lead';
+  const role = leadProfessionalType(lead, professionalTypeOverride);
+  const allowed =
+    ROLE_CLOSE_REASONS[role]?.[nextStatus] ||
+    ROLE_CLOSE_REASONS[PROFESSIONAL_TYPE.AGENT][nextStatus];
+  if (!allowed || !allowed.has(reason)) {
+    return `Invalid close_reason '${reason}' for ${role.replace('_', ' ')} lead`;
+  }
+  return null;
+}
+
+function isReferralRecipientLead(lead) {
+  const factors =
+    lead?.compatibility_factors && typeof lead.compatibility_factors === 'object'
+      ? lead.compatibility_factors
+      : {};
+  return Boolean(
+    String(factors.referral_id || '').trim() ||
+      String(factors.referral_source_user_id || '').trim(),
+  );
+}
+
 export const updateLeadMatch = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
@@ -345,6 +478,17 @@ export const updateLeadMatch = async (req, res, next) => {
 
     const prevStatus = lead.match_status;
     if (hasStatus) assertMatchStatusTransition(prevStatus, nextStatus);
+    if (hasStatus && nextStatus !== prevStatus && isReferralRecipientLead(lead)) {
+      const closeValidationError = validateCloseReasonForLead({
+        lead,
+        nextStatus,
+        closeReason: req.body?.close_reason,
+        professionalTypeOverride: req.user?.role,
+      });
+      if (closeValidationError) {
+        return res.status(400).json({ success: false, message: closeValidationError });
+      }
+    }
 
     const statusChanged = hasStatus && nextStatus !== prevStatus;
     const authorLabel =
@@ -579,6 +723,44 @@ export const getLeadById = async (req, res, next) => {
       success: true,
       conversation_id: leadMatch.conversation_id ? String(leadMatch.conversation_id) : null,
       lead,
+    });
+  } catch (err) { return next(err); }
+};
+
+export const getLeadInquiredProperty = async (req, res, next) => {
+  try {
+    const { _id: userId } = req.user;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead id' });
+    }
+
+    const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId })
+      .select('compatibility_factors')
+      .lean();
+    if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    const { inquiredProperty, linkedSellerLeadMatchId } = extractInquiredPropertyContext(leadMatch);
+
+    if (!inquiredProperty && !linkedSellerLeadMatchId) {
+      return res.json({
+        success: true,
+        inquired_property: null,
+        linked_seller_lead_match_id: null,
+        seller_lead: null,
+      });
+    }
+
+    const sellerLead = await fetchInquiredPropertySellerLead({
+      userId,
+      linkedSellerLeadMatchId,
+      mapperOpts: leadMapperOptsFromRequest(req),
+    });
+
+    return res.json({
+      success: true,
+      inquired_property: inquiredProperty,
+      linked_seller_lead_match_id: linkedSellerLeadMatchId || null,
+      seller_lead: sellerLead,
     });
   } catch (err) { return next(err); }
 };

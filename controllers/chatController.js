@@ -1,4 +1,9 @@
-import { handleChatService, handlePropertyMatchesService, clearChatSessionService } from '../services/chat/chatService.js';
+import {
+  handleChatService,
+  handlePropertyMatchesService,
+  clearChatSessionService,
+  selectChatPropertyMatchService,
+} from '../services/chat/chatService.js';
 import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageBroker/mortgageAffordabilityFromLead.js';
 import { scoreLead, scoreMortgageBrokerLead, scoreLawyerLead } from '../services/chat/scoring/index.js';
 import { PROFESSIONAL_TYPE } from '../constants/roles.js';
@@ -119,6 +124,21 @@ export const handlePropertyMatches = async (req, res, next) => {
   } catch (error) {
     logger.error('Chat API: property-matches error', {
       op:    'chat.property_matches',
+      error: error.message,
+      stack: error.stack,
+    });
+    next(error);
+  }
+};
+
+export const selectPropertyMatch = async (req, res, next) => {
+  try {
+    const { id, embedToken, property } = req.body;
+    const result = await selectChatPropertyMatchService({ id, embedToken, property });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    logger.error('Chat API: select property match error', {
+      op: 'chat.property_match_select',
       error: error.message,
       stack: error.stack,
     });

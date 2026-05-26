@@ -1,4 +1,3 @@
-import mongoose from 'mongoose';
 import logger from '../../utils/logger.js';
 import { createLeadLifecycleNotification } from '../notifications/notificationService.js';
 import { emitNotification } from '../realtime/workspaceSocket.js';
@@ -17,13 +16,11 @@ function referralIdOf(doc) {
   return String(o._id || '').trim();
 }
 
-function conversationOid(doc) {
+function leadMatchIdStr(doc) {
   const o = doc?.toObject ? doc.toObject() : doc;
-  const cid = o.conversation_id;
-  if (!cid) return null;
-  if (cid instanceof mongoose.Types.ObjectId) return cid;
-  if (mongoose.Types.ObjectId.isValid(String(cid))) return new mongoose.Types.ObjectId(String(cid));
-  return null;
+  const lid = o.lead_match_id;
+  if (!lid) return null;
+  return String(lid);
 }
 
 async function persistAndEmit(recipientUserId, payload) {
@@ -46,7 +43,7 @@ async function persistAndEmit(recipientUserId, payload) {
     title: payload.title,
     body: payload.body,
     severity: payload.severity || 'info',
-    conversation_id: payload.conversation_id ? String(payload.conversation_id) : null,
+    lead_match_id: payload.lead_match_id ? String(payload.lead_match_id) : null,
     action: payload.action || null,
   });
 }
@@ -65,7 +62,7 @@ export async function notifyReferralReceived(referralDoc) {
       title: 'New referral',
       body,
       severity: 'high',
-      conversation_id: conversationOid(referralDoc),
+      lead_match_id: leadMatchIdStr(referralDoc),
       action: { type: 'open_referral', referral_id: rid, direction: 'inbound' },
     });
   } catch (e) {
@@ -86,7 +83,7 @@ export async function notifyReferralAccepted(referralDoc, targetUserDoc) {
       title: 'Referral accepted',
       body,
       severity: 'info',
-      conversation_id: conversationOid(referralDoc),
+      lead_match_id: leadMatchIdStr(referralDoc),
       action: { type: 'open_referral', referral_id: rid, direction: 'outbound' },
     });
   } catch (e) {
@@ -114,7 +111,7 @@ export async function notifyReferralRejected(referralDoc, actorUserId, actorUser
       title: 'Referral declined',
       body,
       severity: 'info',
-      conversation_id: conversationOid(referralDoc),
+      lead_match_id: leadMatchIdStr(referralDoc),
       action: {
         type: 'open_referral',
         referral_id: rid,

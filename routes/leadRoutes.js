@@ -12,6 +12,7 @@ import {
   deleteLeadById,
   getLeadById,
   getLeadConversation,
+  getLeadInquiredProperty,
   getLeadsByProfileId,
   getLeadProfiles,
   getLeadProfileById,
@@ -25,6 +26,7 @@ router.get('/', protect, requireCompleteProfessionalProfile, ensureAgentOrMortga
 router.get('/profiles', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, getLeadProfiles);
 router.get('/profiles/:profileId', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, getLeadProfileById);
 router.get('/profiles/:profileId/leads', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, getLeadsByProfileId);
+router.get('/:id/inquired-property', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, getLeadInquiredProperty);
 router.get(
   '/:id/property-matches',
   protect,

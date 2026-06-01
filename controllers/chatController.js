@@ -1,4 +1,10 @@
-import { handleChatService, handlePropertyMatchesService, clearChatSessionService } from '../services/chat/chatService.js';
+import {
+  handleChatService,
+  handlePropertyMatchesService,
+  getChatSessionMessagesService,
+  clearChatSessionService,
+  selectChatPropertyMatchService,
+} from '../services/chat/chatService.js';
 import { buildMortgageAffordabilitySnapshot } from '../services/chat/mortgageBroker/mortgageAffordabilityFromLead.js';
 import { scoreLead, scoreMortgageBrokerLead, scoreLawyerLead } from '../services/chat/scoring/index.js';
 import { PROFESSIONAL_TYPE } from '../constants/roles.js';
@@ -119,6 +125,36 @@ export const handlePropertyMatches = async (req, res, next) => {
   } catch (error) {
     logger.error('Chat API: property-matches error', {
       op:    'chat.property_matches',
+      error: error.message,
+      stack: error.stack,
+    });
+    next(error);
+  }
+};
+
+export const getSessionMessages = async (req, res, next) => {
+  try {
+    const { id, embedToken } = req.body;
+    const result = await getChatSessionMessagesService({ id, embedToken });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    logger.error('Chat API: session-messages error', {
+      op: 'chat.session_messages',
+      error: error.message,
+      stack: error.stack,
+    });
+    next(error);
+  }
+};
+
+export const selectPropertyMatch = async (req, res, next) => {
+  try {
+    const { id, embedToken, property } = req.body;
+    const result = await selectChatPropertyMatchService({ id, embedToken, property });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    logger.error('Chat API: select property match error', {
+      op: 'chat.property_match_select',
       error: error.message,
       stack: error.stack,
     });

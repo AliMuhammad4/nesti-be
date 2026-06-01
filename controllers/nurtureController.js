@@ -238,6 +238,7 @@ async function nurturePropertyMatchesSnapshot(
 ) {
   const isReferralNurture =
     Boolean(referralContext) || Boolean(leadMatch?.compatibility_factors?.referral_id);
+  const missingConversationId = !leadMatch?.conversation_id;
   const operatingRole = resolveNurtureOperatingRole(leadMatch, referralContext, viewerRoleRaw);
   return loadPropertyMatchesForNurtureEmail({
     userId,
@@ -246,7 +247,8 @@ async function nurturePropertyMatchesSnapshot(
     professionalProfile,
     leadProfile: leadProfile || null,
     leadMatch: leadMatch || null,
-    enableProfileFallback: isReferralNurture,
+    // Direct inquiry leads can be created without chat threads; use profile-based match fallback.
+    enableProfileFallback: isReferralNurture || missingConversationId,
   });
 }
 

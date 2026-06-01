@@ -6,7 +6,14 @@ import {
   requireCompleteProfessionalProfile,
 } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
-import { handleChat, handlePropertyMatches, scorePreview, clearChatSession } from '../controllers/chatController.js';
+import {
+  handleChat,
+  handlePropertyMatches,
+  getSessionMessages,
+  selectPropertyMatch,
+  scorePreview,
+  clearChatSession,
+} from '../controllers/chatController.js';
 import { postPropertyImagesUpload } from '../controllers/chatPropertyImageController.js';
 import { uploadPropertyImages } from '../middleware/uploadPropertyImages.js';
 import {
@@ -19,6 +26,8 @@ import {
 import {
   chatBodySchema,
   propertyMatchesSchema,
+  sessionMessagesSchema,
+  selectPropertyMatchSchema,
   scorePreviewSchema,
   nurtureDraftBodySchema,
   nurtureRefineBodySchema,
@@ -38,7 +47,9 @@ const stub = (req, res) => res.json({ success: true, message: 'Not implemented y
 router.post('/', validateBody(chatBodySchema), handleChat);
 router.post('/property-images', uploadPropertyImages.array('images', 8), postPropertyImagesUpload);
 router.delete('/clear/:id', clearChatSession);
+router.post('/session-messages', validateBody(sessionMessagesSchema), getSessionMessages);
 router.post('/property-matches', validateBody(propertyMatchesSchema), handlePropertyMatches);
+router.post('/property-matches/select', validateBody(selectPropertyMatchSchema), selectPropertyMatch);
 router.post('/score-preview', validateBody(scorePreviewSchema), scorePreview);
 router.get('/conversations', protect, requireCompleteProfessionalProfile, stub);
 router.get('/conversations/:id/messages', protect, requireCompleteProfessionalProfile, stub);

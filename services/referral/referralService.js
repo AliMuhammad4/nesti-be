@@ -55,7 +55,7 @@ export function serializeReferral(doc) {
     id: String(o._id),
     user_id: userIdRaw ? String(userIdRaw) : '',
     target_user_id: targetUserIdRaw ? String(targetUserIdRaw) : '',
-    conversation_id: String(o.conversation_id),
+    lead_match_id: o.lead_match_id ? String(o.lead_match_id) : '',
     target_vertical: o.target_vertical,
     status: o.status,
     notes: o.notes ?? '',
@@ -64,6 +64,43 @@ export function serializeReferral(doc) {
     created_at: o.createdAt,
     updated_at: o.updatedAt,
   };
+}
+
+async function resolveSourceLeadForReferral({ userId, leadMatchIdRaw = '', conversationIdRaw = '' }) {
+  const userOid = mongoose.Types.ObjectId.isValid(String(userId))
+    ? new mongoose.Types.ObjectId(String(userId))
+    : null;
+  if (!userOid) return null;
+
+  const leadMatchId = String(leadMatchIdRaw || '').trim();
+  if (mongoose.Types.ObjectId.isValid(leadMatchId)) {
+    const leadOid = new mongoose.Types.ObjectId(leadMatchId);
+    const byLeadId = await LeadMatch.findOne({
+      _id: leadOid,
+      user_id: userOid,
+    }).lean();
+    if (byLeadId) return byLeadId;
+    // Legacy: lead_match_id sometimes stored a chat conversation id instead of LeadMatch._id.
+    const byConvFromLeadId = await LeadMatch.findOne({
+      user_id: userOid,
+      conversation_id: leadOid,
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+    if (byConvFromLeadId) return byConvFromLeadId;
+  }
+
+  const conversationId = String(conversationIdRaw || '').trim();
+  if (mongoose.Types.ObjectId.isValid(conversationId)) {
+    const byConversation = await LeadMatch.findOne({
+      user_id: userOid,
+      conversation_id: new mongoose.Types.ObjectId(conversationId),
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+    if (byConversation) return byConversation;
+  }
+  return null;
 }
 
 function intentFromLeadType(leadType) {
@@ -183,23 +220,113 @@ function buildListLeadSummary(sourceRoleRaw, profile, conversation, leadMatch) {
   return base;
 }
 
-function pairKeyReferral(userId, conversationId) {
-  return `${String(userId)}:${String(conversationId)}`;
+function referrerUserIdStr(r) {
+  const uid = r?.user_id?._id || r?.user_id;
+  return uid != null ? String(uid) : '';
+}
+
+/** Batch-fetch referrer leads: match by LeadMatch._id or conversation_id (legacy surrogate ids). */
+function buildReferrerLeadMatchOrConditions(list) {
+  const or = [];
+  const seen = new Set();
+  for (const r of list) {
+    const uidRaw = referrerUserIdStr(r);
+    if (!mongoose.Types.ObjectId.isValid(uidRaw)) continue;
+    const userOid = new mongoose.Types.ObjectId(uidRaw);
+    const idCandidates = [];
+    if (r?.lead_match_id) idCandidates.push(String(r.lead_match_id));
+    if (r?.conversation_id) idCandidates.push(String(r.conversation_id));
+    for (const idRaw of idCandidates) {
+      if (!mongoose.Types.ObjectId.isValid(idRaw)) continue;
+      const oid = new mongoose.Types.ObjectId(idRaw);
+      const byIdKey = `${uidRaw}:_id:${idRaw}`;
+      const byConvKey = `${uidRaw}:conv:${idRaw}`;
+      if (!seen.has(byIdKey)) {
+        seen.add(byIdKey);
+        or.push({ user_id: userOid, _id: oid });
+      }
+      if (!seen.has(byConvKey)) {
+        seen.add(byConvKey);
+        or.push({ user_id: userOid, conversation_id: oid });
+      }
+    }
+  }
+  return or;
+}
+
+function buildLeadMatchConvKeyByUser(matches) {
+  const convKeyByUser = new Map();
+  for (const m of matches) {
+    const uid = String(m.user_id?._id || m.user_id || '');
+    const convId = m.conversation_id ? String(m.conversation_id) : '';
+    if (uid && convId) convKeyByUser.set(`${uid}:${convId}`, m);
+  }
+  return convKeyByUser;
+}
+
+/** Referrer LeadMatch for list rows (lead_match_id; legacy conversation_id / surrogate ids). */
+function resolveReferrerLeadMatchForList(r, matchById, convKeyByUser = new Map()) {
+  const uid = referrerUserIdStr(r);
+  if (!uid) return null;
+  const leadMatchIdRaw = r.lead_match_id ? String(r.lead_match_id) : '';
+  if (leadMatchIdRaw && mongoose.Types.ObjectId.isValid(leadMatchIdRaw)) {
+    const byLeadId = matchById.get(leadMatchIdRaw);
+    if (byLeadId && String(byLeadId.user_id?._id || byLeadId.user_id) === uid) return byLeadId;
+    const byConv = convKeyByUser.get(`${uid}:${leadMatchIdRaw}`);
+    if (byConv) return byConv;
+  }
+  const legacyCid = r.conversation_id ? String(r.conversation_id) : '';
+  if (legacyCid && mongoose.Types.ObjectId.isValid(legacyCid)) {
+    const byConvLegacy = convKeyByUser.get(`${uid}:${legacyCid}`);
+    if (byConvLegacy) return byConvLegacy;
+    const legacy = matchById.get(legacyCid);
+    if (legacy && String(legacy.user_id?._id || legacy.user_id) === uid) return legacy;
+  }
+  return null;
+}
+
+function leadContactFromProfileAndConversation(profile, conversation, leadMatch) {
+  let full_name = String(profile?.identity?.full_name || '').trim();
+  let email = String(profile?.identity?.canonical_email || profile?.identity?.email || '').trim();
+  let phone = profile?.identity?.phone ? String(profile.identity.phone).trim() : '';
+
+  const fd =
+    conversation?.form_data && typeof conversation.form_data === 'object'
+      ? conversation.form_data
+      : null;
+  if (fd) {
+    if (!full_name) full_name = String(fd.full_name || fd.name || '').trim();
+    if (!email) email = String(fd.email || '').trim();
+    if (!phone) phone = String(fd.phone || fd.phone_number || fd.mobile || '').trim();
+  }
+
+  const cf =
+    leadMatch?.compatibility_factors && typeof leadMatch.compatibility_factors === 'object'
+      ? leadMatch.compatibility_factors
+      : null;
+  if (cf) {
+    if (!full_name) full_name = String(cf.contact_name || cf.full_name || '').trim();
+    if (!email) email = String(cf.contact_email || cf.email || '').trim();
+    if (!phone) phone = String(cf.contact_phone || cf.phone || '').trim();
+  }
+
+  return {
+    full_name: full_name || null,
+    email: email || null,
+    phone: phone || null,
+  };
 }
 
 /** Viewer’s LeadMatch doc from batch map (inbound = target row, outbound = referrer row). */
-function viewerLeadMatchFromMap(r, viewerStr, matchByPair) {
-  if (!viewerStr || !r.conversation_id) return null;
-  const cid = r.conversation_id;
+function viewerLeadMatchFromMap(r, viewerStr, matchById, targetByReferralId, convKeyByUser = new Map()) {
+  if (!viewerStr) return null;
   const targetId = String(r.target_user_id?._id || r.target_user_id || '');
   const sourceId = String(r.user_id?._id || r.user_id || '');
   if (viewerStr === targetId) {
-    const uid = r.target_user_id?._id || r.target_user_id;
-    return uid ? matchByPair.get(pairKeyReferral(uid, cid)) : null;
+    return targetByReferralId.get(String(r._id)) || null;
   }
   if (viewerStr === sourceId) {
-    const uid = r.user_id?._id || r.user_id;
-    return uid ? matchByPair.get(pairKeyReferral(uid, cid)) : null;
+    return resolveReferrerLeadMatchForList(r, matchById, convKeyByUser);
   }
   return null;
 }
@@ -210,6 +337,19 @@ function normalizedMatchStatus(leanDoc) {
   return String(raw).trim().toLowerCase();
 }
 
+function hasUpcomingPipelineBooking(leadMatch, nowMs = Date.now()) {
+  if (!leadMatch || typeof leadMatch !== 'object') return false;
+  const status = String(leadMatch?.match_status || '')
+    .trim()
+    .toLowerCase();
+  if (status !== 'consult_booked' && status !== 'showing_booked') return false;
+  const startRaw = leadMatch?.compatibility_factors?.calendly?.calendly_event_start;
+  if (!startRaw) return false;
+  const start = new Date(startRaw);
+  if (Number.isNaN(start.getTime())) return false;
+  return start.getTime() >= nowMs;
+}
+
 /**
  * Enrich referral rows for list UIs: batch-load LeadMatch (referrer + recipient rows), profile, and conversation.
  * @param {object[]} list — referral lean docs
@@ -218,46 +358,29 @@ function normalizedMatchStatus(leanDoc) {
 export async function mapReferralsListToApiItems(list, viewerUserId) {
   if (!Array.isArray(list) || list.length === 0) return [];
 
-  const pairSeen = new Set();
-  const orConditions = [];
-  const pushPair = (userId, conversationId) => {
-    if (!userId || !conversationId) return;
-    const k = pairKeyReferral(userId, conversationId);
-    if (pairSeen.has(k)) return;
-    pairSeen.add(k);
-    orConditions.push({ user_id: userId, conversation_id: conversationId });
-  };
+  const referralIds = list.map((r) => String(r._id)).filter(Boolean);
+  const referrerLeadOr = buildReferrerLeadMatchOrConditions(list);
 
-  for (const r of list) {
-    const sourceUid = r.user_id?._id || r.user_id;
-    const targetUid = r.target_user_id?._id || r.target_user_id;
-    const cid = r.conversation_id;
-    pushPair(sourceUid, cid);
-    pushPair(targetUid, cid);
+  const matchOr = [...referrerLeadOr];
+  if (referralIds.length > 0) {
+    matchOr.push({ 'compatibility_factors.referral_id': { $in: referralIds } });
   }
 
-  let matches = [];
-  if (orConditions.length > 0) {
-    matches = await LeadMatch.find({ $or: orConditions })
-      .select(
-        'user_id conversation_id lead_profile_id match_score match_status compatibility_factors lead_type updatedAt'
-      )
-      .lean();
-  }
+  const matches =
+    matchOr.length > 0
+      ? await LeadMatch.find({ $or: matchOr })
+          .select(
+            'user_id conversation_id lead_profile_id match_score match_status compatibility_factors lead_type updatedAt',
+          )
+          .lean()
+      : [];
 
-  const matchByPair = new Map();
+  const matchById = new Map(matches.map((m) => [String(m._id), m]));
+  const convKeyByUser = buildLeadMatchConvKeyByUser(matches);
+  const targetByReferralId = new Map();
   for (const m of matches) {
-    const key = pairKeyReferral(m.user_id, m.conversation_id);
-    const prev = matchByPair.get(key);
-    if (!prev) {
-      matchByPair.set(key, m);
-      continue;
-    }
-    const prevTs = new Date(prev.updatedAt || 0).getTime();
-    const currTs = new Date(m.updatedAt || 0).getTime();
-    if (currTs >= prevTs) {
-      matchByPair.set(key, m);
-    }
+    const rid = String(m?.compatibility_factors?.referral_id || '').trim();
+    if (rid) targetByReferralId.set(rid, m);
   }
 
   const profileIds = [...new Set(matches.map((m) => m.lead_profile_id).filter(Boolean))];
@@ -269,7 +392,9 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
       : [];
   const profileById = new Map(profiles.map((p) => [String(p._id), p]));
 
-  const convIds = [...new Set(list.map((r) => r.conversation_id).filter(Boolean))];
+  const convIds = [
+    ...new Set(matches.map((m) => m.conversation_id).filter(Boolean).map(String)),
+  ];
   const conversations =
     convIds.length > 0
       ? await ChatConversation.find({ _id: { $in: convIds } })
@@ -301,7 +426,7 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
     ? [
         ...new Set(
           list
-            .map((r) => viewerLeadMatchFromMap(r, viewerStr, matchByPair))
+            .map((r) => viewerLeadMatchFromMap(r, viewerStr, matchById, targetByReferralId, convKeyByUser))
             .filter(Boolean)
             .map((m) => String(m._id))
             .filter(Boolean),
@@ -312,7 +437,10 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
     ? [
         ...new Set(
           list
-            .map((r) => (r?.conversation_id ? String(r.conversation_id) : ''))
+            .map((r) => {
+              const lm = viewerLeadMatchFromMap(r, viewerStr, matchById, targetByReferralId, convKeyByUser);
+              return lm?.conversation_id ? String(lm.conversation_id) : '';
+            })
             .filter(Boolean),
         ),
       ]
@@ -356,17 +484,24 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
     const referrerUser = r.user_id;
     const uid = referrerUser?._id || referrerUser;
     const targetUid = r.target_user_id?._id || r.target_user_id;
-    const cid = r.conversation_id;
-    const lm = uid && cid ? matchByPair.get(pairKeyReferral(uid, cid)) : null;
-    const targetLm = targetUid && cid ? matchByPair.get(pairKeyReferral(targetUid, cid)) : null;
-    const viewerLm = viewerStr ? viewerLeadMatchFromMap(r, viewerStr, matchByPair) : null;
+    const lm = resolveReferrerLeadMatchForList(r, matchById, convKeyByUser);
+    const targetLm =
+      viewerStr && String(targetUid) === viewerStr
+        ? targetByReferralId.get(String(r._id)) || null
+        : null;
+    const viewerLm = viewerStr
+      ? viewerLeadMatchFromMap(r, viewerStr, matchById, targetByReferralId, convKeyByUser) || targetLm
+      : null;
     const viewer_match_status = normalizedMatchStatus(viewerLm);
     const viewer_match_updated_at = viewerLm?.updatedAt || null;
     const target_match_status = normalizedMatchStatus(targetLm);
     const target_match_updated_at = targetLm?.updatedAt || null;
+    const viewer_has_upcoming_pipeline_booking = hasUpcomingPipelineBooking(viewerLm);
+    const target_has_upcoming_pipeline_booking = hasUpcomingPipelineBooking(targetLm);
 
     const profile = lm?.lead_profile_id ? profileById.get(String(lm.lead_profile_id)) : null;
-    const conversation = cid ? convById.get(String(cid)) : null;
+    const conversationConvId = lm?.conversation_id ? String(lm.conversation_id) : '';
+    const conversation = conversationConvId ? convById.get(conversationConvId) : null;
     const viewerProfileId = viewerLm?.lead_profile_id
       ? String(viewerLm.lead_profile_id)
       : lm?.lead_profile_id
@@ -383,7 +518,7 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
       viewerLm?.compatibility_factors?.calendly?.calendly_event_start || null
     );
     const viewerLeadMatchId = viewerLm?._id ? String(viewerLm._id) : '';
-    const conversationId = cid ? String(cid) : '';
+    const conversationId = conversationConvId;
     if (
       appointment_status !== 'booked' &&
       (workspaceBookedLeadIds.has(viewerLeadMatchId) || workspaceBookedConversationIds.has(conversationId))
@@ -400,21 +535,19 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
         'agent'
     ).trim();
 
-    let full_name = String(profile?.identity?.full_name || '').trim();
-    let email = String(profile?.identity?.canonical_email || profile?.identity?.email || '').trim();
-    if (!full_name && conversation?.form_data && typeof conversation.form_data === 'object') {
-      const fd = conversation.form_data;
-      full_name = String(fd.full_name || fd.name || '').trim();
-      email = email || String(fd.email || '').trim();
-    }
-
-    const lead_contact = {
-      full_name: full_name || null,
-      email: email || null,
-      phone: profile?.identity?.phone ? String(profile.identity.phone).trim() || null : null,
-    };
+    const lead_contact = leadContactFromProfileAndConversation(profile, conversation, lm);
 
     const lead_summary = buildListLeadSummary(sourceRoleRaw, profile, conversation, lm);
+
+    if (lm?._id) {
+      const resolvedLmId = String(lm._id);
+      if (!base.lead_match_id || base.lead_match_id !== resolvedLmId) {
+        base.lead_match_id = resolvedLmId;
+        Referral.updateOne({ _id: r._id }, { $set: { lead_match_id: lm._id } }).catch((err) =>
+          logger.warn('referral lead_match_id backfill failed', { referral_id: String(r._id), error: err?.message }),
+        );
+      }
+    }
 
     items.push({
       ...base,
@@ -426,6 +559,8 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
       viewer_match_updated_at,
       target_match_status,
       target_match_updated_at,
+      viewer_has_upcoming_pipeline_booking,
+      target_has_upcoming_pipeline_booking,
     });
   }
 
@@ -440,12 +575,11 @@ export async function mapReferralsListToApiItems(list, viewerUserId) {
 export async function buildReferralLeadDetailsResponse(referralLean, viewerUserId, viewerRoleRaw) {
   const referral = referralLean;
 
-  const sourceLeadMatch = await LeadMatch.findOne({
-    user_id: referral.user_id,
-    conversation_id: referral.conversation_id,
-  })
-    .sort({ updatedAt: -1 })
-    .lean();
+  const sourceLeadMatch = await resolveSourceLeadForReferral({
+    userId: referral.user_id,
+    leadMatchIdRaw: referral.lead_match_id || referral.conversation_id,
+    conversationIdRaw: '',
+  });
 
   /** Recipient's row (created on accept). Required for target's pipeline PATCH/note APIs. */
   const refStatus = String(referral.status || '').trim().toLowerCase();
@@ -459,11 +593,11 @@ export async function buildReferralLeadDetailsResponse(referralLean, viewerUserI
     const vOid = new mongoose.Types.ObjectId(String(viewerUserId));
     targetViewerLeadMatch = await LeadMatch.findOne({
       user_id: vOid,
-      conversation_id: referral.conversation_id,
+      'compatibility_factors.referral_id': String(referral._id),
     })
       .sort({ updatedAt: -1 })
       .lean();
-    // Accept via PATCH alone never called POST /process — no row yet; self-heal for GET /referrals/:id/lead
+    // Self-heal: create recipient LeadMatch when they open an accepted inbound referral.
     if (!targetViewerLeadMatch && refStatus === 'accepted') {
       const ensured = await ensureTargetLeadMatchForReferral(referral);
       if (ensured.ok && ensured.lead_match) {
@@ -472,15 +606,24 @@ export async function buildReferralLeadDetailsResponse(referralLean, viewerUserI
     }
   }
 
+  // Never expose the referrer's LeadMatch id to the target — PATCH /leads/:id would 404 for them.
   const resolvedLeadMatchId = targetViewerLeadMatch
     ? String(targetViewerLeadMatch._id)
-    : sourceLeadMatch
-      ? String(sourceLeadMatch._id)
-      : '';
+    : isTargetViewer
+      ? ''
+      : sourceLeadMatch
+        ? String(sourceLeadMatch._id)
+        : '';
 
-  const conversation = await ChatConversation.findById(referral.conversation_id)
-    .select('intent lead_score lead_grade lead_classification is_qualified emotional_state form_data')
-    .lean();
+  const conversationOid =
+    sourceLeadMatch?.conversation_id && mongoose.Types.ObjectId.isValid(String(sourceLeadMatch.conversation_id))
+      ? sourceLeadMatch.conversation_id
+      : null;
+  const conversation = conversationOid
+    ? await ChatConversation.findById(conversationOid)
+        .select('intent lead_score lead_grade lead_classification is_qualified emotional_state form_data')
+        .lean()
+    : null;
 
   const leadProfile = sourceLeadMatch?.lead_profile_id
     ? await LeadProfile.findById(sourceLeadMatch.lead_profile_id)
@@ -592,17 +735,18 @@ export async function ensureTargetLeadMatchForReferral(referral) {
 
   let targetLeadMatch = await LeadMatch.findOne({
     user_id: uid,
-    conversation_id: referral.conversation_id,
+    'compatibility_factors.referral_id': String(referral._id),
   }).lean();
 
   if (targetLeadMatch) {
     return { ok: true, lead_match: targetLeadMatch };
   }
 
-  const sourceLeadMatch = await LeadMatch.findOne({
-    user_id: referral.user_id,
-    conversation_id: referral.conversation_id,
-  }).lean();
+  const sourceLeadMatch = await resolveSourceLeadForReferral({
+    userId: referral.user_id,
+    leadMatchIdRaw: referral.lead_match_id || referral.conversation_id,
+    conversationIdRaw: '',
+  });
   if (!sourceLeadMatch) {
     return { ok: false, code: 404, message: 'Source lead was not found for this referral' };
   }
@@ -679,27 +823,26 @@ export async function processReferralForTarget(referral, targetUserId) {
  */
 export async function createReferralForUser(referrerUserId, body) {
   const userId = referrerUserId;
-  const { target_user_id, conversation_id, target_vertical, status, notes } = body || {};
+  const { target_user_id, lead_match_id, target_vertical, status, notes } = body || {};
 
-  if (!mongoose.Types.ObjectId.isValid(conversation_id)) {
-    return { ok: false, code: 400, message: 'Invalid conversation_id' };
+  if (!mongoose.Types.ObjectId.isValid(String(lead_match_id || ''))) {
+    return { ok: false, code: 400, message: 'lead_match_id is required' };
   }
-  const convOid = new mongoose.Types.ObjectId(conversation_id);
 
-  const lm = await LeadMatch.findOne({
-    user_id: userId,
-    conversation_id: convOid,
-  })
-    .select('_id')
-    .lean();
+  const sourceLeadMatch = await resolveSourceLeadForReferral({
+    userId,
+    leadMatchIdRaw: lead_match_id,
+    conversationIdRaw: '',
+  });
 
-  if (!lm) {
+  if (!sourceLeadMatch) {
     return {
       ok: false,
       code: 403,
-      message: 'This conversation is not linked to your leads.',
+      message: 'This lead is not linked to your account.',
     };
   }
+  const sourceLeadMatchOid = new mongoose.Types.ObjectId(String(sourceLeadMatch._id));
 
   if (!mongoose.Types.ObjectId.isValid(target_user_id)) {
     return { ok: false, code: 400, message: 'Invalid target_user_id' };
@@ -734,7 +877,7 @@ export async function createReferralForUser(referrerUserId, body) {
   if (['pending', 'accepted'].includes(nextStatus)) {
     const inflight = await Referral.findOne({
       user_id: userId,
-      conversation_id: convOid,
+      lead_match_id: sourceLeadMatchOid,
       target_user_id: targetOid,
       status: { $in: ['pending', 'accepted'] },
     })
@@ -754,7 +897,7 @@ export async function createReferralForUser(referrerUserId, body) {
     const referral = await Referral.create({
       user_id: userId,
       target_user_id: targetOid,
-      conversation_id: convOid,
+      lead_match_id: sourceLeadMatchOid,
       target_vertical: vertical,
       status: nextStatus,
       notes: notes != null ? String(notes) : '',
@@ -769,8 +912,8 @@ export async function createReferralForUser(referrerUserId, body) {
       );
       recordLeadKpiEvent({
         user_id: created.user_id?._id || created.user_id,
-        lead_match_id: null,
-        conversation_id: created.conversation_id || null,
+        lead_match_id: created.lead_match_id || null,
+        conversation_id: sourceLeadMatch?.conversation_id || null,
         event_type: 'referral_created',
         metadata: { referral_id: String(created._id) },
       }).catch(() => {});
@@ -783,7 +926,7 @@ export async function createReferralForUser(referrerUserId, body) {
         source_model: 'Referral',
         source_id: String(created._id),
         metadata: {
-          conversation_id: String(created.conversation_id || ''),
+          lead_match_id: String(created.lead_match_id || ''),
           target_user_id: String(created.target_user_id?._id || created.target_user_id || ''),
         },
       }).catch((e) => logger.warn('referral_created reward failed', { error: e?.message }));
@@ -944,9 +1087,9 @@ export async function patchReferralForUser(userId, referralId, { status, notes }
             source_id: String(doc._id),
           }).catch(() => {});
         }
-        if (doc.conversation_id) {
+        if (doc.lead_match_id) {
           const collabCount = await Referral.countDocuments({
-            conversation_id: doc.conversation_id,
+            lead_match_id: doc.lead_match_id,
             status: { $in: ['accepted', 'completed'] },
           });
           if (collabCount >= 2) {
@@ -957,7 +1100,7 @@ export async function patchReferralForUser(userId, referralId, { status, notes }
                 user_id: pid,
                 event_type: 'multi_pro_deal_bonus',
                 points_delta: bonusEach,
-                idempotency_key: `referral:multi_pro:${String(doc.conversation_id)}:${String(pid)}`,
+                idempotency_key: `referral:multi_pro:${String(doc.lead_match_id)}:${String(pid)}`,
                 source_model: 'Referral',
                 source_id: String(doc._id),
                 metadata: { collaborators: collabCount },

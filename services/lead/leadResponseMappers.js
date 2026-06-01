@@ -2,6 +2,7 @@ import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
+import { extractInquiredPropertyContext } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
 
 function professionalTypeFromMatch(leadMatch, profile = null) {
@@ -104,6 +105,8 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     leadMatch?.compatibility_factors?.calendly?.calendly_event_start ||
     convo?.calendly_event_start ||
     null;
+  const leadSource = leadMatch?.compatibility_factors?.source || null;
+  const { inquiredProperty, linkedSellerLeadMatchId } = extractInquiredPropertyContext(leadMatch);
   const core = {
     id: String(leadMatch._id),
     professional_type: null,
@@ -123,6 +126,11 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     embed_token: leadMatch.compatibility_factors?.embed_token || null,
     session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,
     conversation_id: String(leadMatch.conversation_id || ''),
+    source: leadSource,
+    inquired_property: inquiredProperty,
+    linked_seller_lead_match_id: linkedSellerLeadMatchId,
+    is_direct_public_inquiry:
+      Boolean(leadMatch?.compatibility_factors?.direct_submission) || leadSource === 'public_web_form',
     created_at: leadMatch.createdAt,
     updated_at: leadMatch.updatedAt,
     agent_notes: formatAgentNotesForApi(leadMatch.compatibility_factors),

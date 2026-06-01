@@ -215,12 +215,19 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
   const inviteTokenFromPayload = String(invite_token || decoded?.invite_token || '').trim();
   if (inviteTokenFromPayload) {
     try {
-      await finalizeInviteAttribution({
+      const finResult = await finalizeInviteAttribution({
         invite_token: inviteTokenFromPayload,
         authenticated_user_id: user._id,
         method: 'signup_verify_email',
         path: '/auth/verify-email',
       });
+      if (finResult?.ok === false) {
+        logger.warn('Invite attribution finalization failed after verify-email', {
+          user_id: String(user._id),
+          code: finResult.code,
+          message: finResult.message,
+        });
+      }
     } catch (err) {
       logger.warn('Invite attribution finalization failed after verify-email', {
         user_id: String(user._id),
@@ -257,12 +264,19 @@ export const loginService = async ({ email, password, invite_token }) => {
 
   if (invite_token && String(invite_token).trim()) {
     try {
-      await finalizeInviteAttribution({
+      const finResult = await finalizeInviteAttribution({
         invite_token: String(invite_token).trim(),
         authenticated_user_id: user._id,
         method: 'login',
         path: '/auth/login',
       });
+      if (finResult?.ok === false) {
+        logger.warn('Invite attribution finalization failed after login', {
+          user_id: String(user._id),
+          code: finResult.code,
+          message: finResult.message,
+        });
+      }
     } catch (err) {
       logger.warn('Invite attribution finalization failed after login', {
         user_id: String(user._id),

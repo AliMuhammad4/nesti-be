@@ -21,6 +21,17 @@ export const propertyMatchesSchema = Joi.object({
   formContact: Joi.object().unknown(true).optional(),
 });
 
+export const sessionMessagesSchema = Joi.object({
+  id: Joi.string().trim().required(),
+  embedToken: Joi.string().trim().required(),
+});
+
+export const selectPropertyMatchSchema = Joi.object({
+  id: Joi.string().trim().required(),
+  embedToken: Joi.string().trim().required(),
+  property: Joi.object().unknown(true).required(),
+});
+
 export const scorePreviewSchema = Joi.object({
   professionalType: Joi.string().optional(),
   formContact: Joi.object().unknown(true).optional(),
@@ -29,7 +40,7 @@ export const scorePreviewSchema = Joi.object({
 /** Body from dashboard; user_id is taken from JWT server-side. */
 export const referralPostBodySchema = Joi.object({
   target_user_id: objectId.required(),
-  conversation_id: objectId.required(),
+  lead_match_id: objectId.required(),
   target_vertical: Joi.string().trim().min(1).max(200).required(),
   status: Joi.string().valid(...REFERRAL_STATUSES).optional(),
   notes: str.optional(),

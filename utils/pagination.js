@@ -39,6 +39,8 @@ export function buildPaginationMeta({ page, limit, total }) {
 
 export const PAGINATION_PRESETS = {
   leadList: { defaultLimit: 20, maxLimit: 100 },
+  /** Lead workspace transcript — return full thread (no practical cap). */
+  leadConversation: { defaultLimit: 10_000, maxLimit: 10_000 },
   propertyMatches: { defaultLimit: 10, maxLimit: 100 },
   /** Referrals table (inbound/outbound tabs). */
   referralsList: { defaultLimit: 10, maxLimit: 100 },

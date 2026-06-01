@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Referral from '../models/Referral.js';
+import LeadMatch from '../models/LeadMatch.js';
 import logger from '../utils/logger.js';
 import { REFERRAL_STATUSES } from '../constants/validationEnums.js';
 import {
@@ -96,6 +97,47 @@ export async function listReferrals(req, res) {
   } catch (err) {
     logger.error('listReferrals failed', { err: err?.message });
     return res.status(500).json({ success: false, message: 'Failed to load referrals' });
+  }
+}
+
+/**
+ * GET /api/referrals/lead-match/:leadMatchId
+ * Referrals linked only to a specific lead (conversation-based or direct lead-match based).
+ */
+export async function listReferralsForLeadMatch(req, res) {
+  try {
+    const uid = req.user._id;
+    const leadMatchId = String(req.params.leadMatchId || '').trim();
+    if (!mongoose.Types.ObjectId.isValid(leadMatchId)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead match id' });
+    }
+
+    const leadMatch = await LeadMatch.findOne({ _id: leadMatchId, user_id: uid })
+      .select('_id conversation_id')
+      .lean();
+    if (!leadMatch) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    const scopedLeadId = String(leadMatch._id);
+    const list = await Referral.find({
+      lead_match_id: leadMatch._id,
+      $or: [{ user_id: uid }, { target_user_id: uid }],
+    })
+      .populate('user_id', 'first_name last_name full_name email role profile_image')
+      .populate('target_user_id', 'first_name last_name full_name email role profile_image')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    const items = await mapReferralsListToApiItems(list, uid);
+    return res.json({
+      success: true,
+      lead_match_id: scopedLeadId,
+      items,
+    });
+  } catch (err) {
+    logger.error('listReferralsForLeadMatch failed', { err: err?.message });
+    return res.status(500).json({ success: false, message: 'Failed to load lead referrals' });
   }
 }
 

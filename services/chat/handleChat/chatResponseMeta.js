@@ -28,6 +28,7 @@ export async function buildChatResponseMeta({
   mortgageBrokerSnapshotQual,
   mortgageBrokerSnapshotSignals,
   extractedData,
+  refetchPropertyMatches = false,
 }) {
   const property_matches_available = Boolean(supportsPropertyMatches(flow) && hasContact);
 
@@ -64,6 +65,7 @@ export async function buildChatResponseMeta({
     sub_scores: leadMeta.sub_scores,
     contact: contactInfo,
     property_matches_available,
+    refetch_property_matches: Boolean(property_matches_available && refetchPropertyMatches),
     calendly_link: deferCalendlyLink ? null : calendlyLinkForVisitor || null,
     conversation_id: conversation._id ? String(conversation._id) : null,
     automated_booking_enabled: isAutomatedBookingEnabled,

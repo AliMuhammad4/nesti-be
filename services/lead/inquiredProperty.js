@@ -17,6 +17,17 @@ function normalizeImageUrls(input) {
     .slice(0, 8);
 }
 
+/** Read stored inquiry context from a LeadMatch row. */
+export function extractInquiredPropertyContext(leadMatch) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const inquiredProperty =
+    cf.inquired_property && typeof cf.inquired_property === 'object'
+      ? cf.inquired_property
+      : null;
+  const linkedSellerLeadMatchId = String(cf.linked_seller_lead_match_id || '').trim();
+  return { inquiredProperty, linkedSellerLeadMatchId };
+}
+
 export function normalizeInquiredProperty(input, { fromPropertyMatch = false } = {}) {
   if (!input || typeof input !== 'object') return null;
   const matchedContact = input.matched_contact && typeof input.matched_contact === 'object'

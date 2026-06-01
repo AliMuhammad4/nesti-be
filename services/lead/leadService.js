@@ -40,6 +40,7 @@ import {
 } from './leadProfileHelpers.js';
 import { PROFESSIONAL_TYPE, USER_ROLE } from '../../constants/roles.js';
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
+import { extractInquiredPropertyContext } from './inquiredProperty.js';
 
 const INQUIRED_PROPERTY_LEAD_MATCH_FIELDS =
   '_id lead_profile_id conversation_id match_score match_status compatibility_factors lead_type createdAt updatedAt';
@@ -181,19 +182,11 @@ function mapLeadMatchToInquiredPropertySellerLead(leadMatch, profile, convo, opt
   return lead;
 }
 
-function extractInquiredPropertyContext(leadMatch) {
-  const cf = leadMatch?.compatibility_factors || {};
-  const inquiredProperty =
-    cf.inquired_property && typeof cf.inquired_property === 'object'
-      ? cf.inquired_property
-      : null;
-  const linkedSellerLeadMatchId = String(cf.linked_seller_lead_match_id || '').trim();
-  return { inquiredProperty, linkedSellerLeadMatchId };
-}
-
-async function fetchInquiredPropertySellerLead({ userId, linkedSellerLeadMatchId, mapperOpts }) {
+async function fetchInquiredPropertySellerLead({ linkedSellerLeadMatchId, mapperOpts }) {
   if (!linkedSellerLeadMatchId || !mongoose.Types.ObjectId.isValid(linkedSellerLeadMatchId)) return null;
-  const sellerMatch = await LeadMatch.findOne({ _id: linkedSellerLeadMatchId, user_id: userId })
+  // Seller row belongs to the listing agent; the viewer is authorized via their own buyer lead's
+  // `linked_seller_lead_match_id` (including referred copies), not seller `user_id`.
+  const sellerMatch = await LeadMatch.findById(linkedSellerLeadMatchId)
     .select(INQUIRED_PROPERTY_LEAD_MATCH_FIELDS)
     .lean();
   if (!sellerMatch) return null;
@@ -751,7 +744,6 @@ export const getLeadInquiredProperty = async (req, res, next) => {
     }
 
     const sellerLead = await fetchInquiredPropertySellerLead({
-      userId,
       linkedSellerLeadMatchId,
       mapperOpts: leadMapperOptsFromRequest(req),
     });
@@ -771,20 +763,21 @@ export const getLeadConversation = async (req, res, next) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ success: false, message: 'Invalid lead id' });
     }
-    const { page, limit, skip } = parsePageLimitPagination(req.query || {}, PAGINATION_PRESETS.leadList);
     const leadMatch = await LeadMatch.findOne({ _id: req.params.id, user_id: userId }).lean();
     if (!leadMatch) return res.status(404).json({ success: false, message: 'Lead not found' });
 
     if (!leadMatch.conversation_id) {
-      return res.json({ success: true, lead_id: req.params.id, conversation_id: null, messages: [], empty_state: { reason: 'No conversation thread exists for this lead yet.', action: 'Start outreach from the lead card and message history will appear here.' }, pagination: buildPaginationMeta({ page, limit, total: 0 }) });
+      return res.json({ success: true, lead_id: req.params.id, conversation_id: null, messages: [], empty_state: { reason: 'No conversation thread exists for this lead yet.', action: 'Start outreach from the lead card and message history will appear here.' }, pagination: buildPaginationMeta({ page: 1, limit: 0, total: 0 }) });
     }
 
     const convFilter = { conversation_id: leadMatch.conversation_id };
     const [convoExists, total, messages] = await Promise.all([
       ChatConversation.exists({ _id: leadMatch.conversation_id }),
       ChatMessage.countDocuments(convFilter),
-      ChatMessage.find(convFilter).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+      ChatMessage.find(convFilter).sort({ createdAt: 1 }).lean(),
     ]);
+    const page = 1;
+    const limit = total;
     const conversationMessages = messages.map((m) => ({ id: String(m._id), role: m.role, content: m.content, intent: m.intent || null, created_at: m.createdAt }));
     let emptyState = null;
     if (conversationMessages.length === 0) {

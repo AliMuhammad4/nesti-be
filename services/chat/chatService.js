@@ -41,6 +41,8 @@ import {
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
+import { isPropertyMatchesRequestMessage } from './utils/propertyMatchesRequestIntent.js';
+import { stripPropertyListingsFromReply } from './utils/stripPropertyListingsFromReply.js';
 import { buildLeadRecapMarkdownLines, injectLeadRecapIntoReply } from './utils/leadRecapMarkdown.js';
 import {
   normalizeInquiredProperty,
@@ -60,6 +62,64 @@ function normalizePersistedGradeByScore(grade, score) {
   }
   return normalizedGrade || grade;
 }
+
+export const getChatSessionMessagesService = async ({ id: sessionId, embedToken }) => {
+  if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
+    return { status: 400, body: { success: false, message: 'id (session_id) is required' } };
+  }
+  if (!embedToken || typeof embedToken !== 'string' || !embedToken.trim()) {
+    return { status: 400, body: { success: false, message: 'embedToken is required' } };
+  }
+
+  const embed = await ChatbotEmbedUrl.findOne({ token: embedToken });
+  if (!embed) {
+    return { status: 403, body: { success: false, message: 'Invalid or inactive embed token' } };
+  }
+
+  const conversation = await ChatConversation.findOne({
+    session_id: sessionId.trim(),
+    user_id: embed.user_id,
+  })
+    .select('_id session_id')
+    .lean();
+
+  if (!conversation) {
+    return {
+      status: 200,
+      body: {
+        success: true,
+        session_id: sessionId.trim(),
+        conversation_id: null,
+        messages: [],
+        total: 0,
+      },
+    };
+  }
+
+  const rows = await ChatMessage.find({ conversation_id: conversation._id })
+    .sort({ createdAt: 1 })
+    .select('role content intent createdAt meta')
+    .lean();
+
+  const messages = rows.map((m) => ({
+    id: String(m._id),
+    role: m.role,
+    content: m.content,
+    intent: m.intent || null,
+    created_at: m.createdAt,
+  }));
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      session_id: sessionId.trim(),
+      conversation_id: String(conversation._id),
+      messages,
+      total: messages.length,
+    },
+  };
+};
 
 export const handlePropertyMatchesService = async ({
   id: sessionId,
@@ -402,14 +462,20 @@ export const handleChatService = async ({
   coerceContactIdentityFields(contactInfo);
   hasContact = hasIdentityContact(contactInfo);
 
-  const recapLines = buildLeadRecapMarkdownLines({
-    form: storedForm,
-    contact: contactInfo,
-    extracted: parsedAiDetails,
-    intent: aiIntent,
-  });
-  const finalReply =
+  const refetchPropertyMatches = isPropertyMatchesRequestMessage(trimmedMessage);
+  const recapLines = refetchPropertyMatches
+    ? []
+    : buildLeadRecapMarkdownLines({
+        form: storedForm,
+        contact: contactInfo,
+        extracted: parsedAiDetails,
+        intent: aiIntent,
+      });
+  let finalReply =
     recapLines.length > 0 ? injectLeadRecapIntoReply(aiReply, recapLines) : aiReply;
+  if (refetchPropertyMatches) {
+    finalReply = stripPropertyListingsFromReply(finalReply);
+  }
 
   const finalScore = leadScore;
   const finalGradeRaw = flow.bestGrade(leadGrade, conversation.lead_grade || 'unscored');
@@ -495,6 +561,7 @@ export const handleChatService = async ({
     mortgageBrokerSnapshotQual,
     mortgageBrokerSnapshotSignals,
     extractedData: parsedAiDetails,
+    refetchPropertyMatches,
   });
 
   return {

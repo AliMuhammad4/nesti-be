@@ -2,6 +2,7 @@ import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
+import { extractInquiredPropertyContext } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
 
 function professionalTypeFromMatch(leadMatch, profile = null) {
@@ -105,13 +106,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     convo?.calendly_event_start ||
     null;
   const leadSource = leadMatch?.compatibility_factors?.source || null;
-  const inquiredProperty =
-    leadMatch?.compatibility_factors?.inquired_property &&
-    typeof leadMatch.compatibility_factors.inquired_property === 'object'
-      ? leadMatch.compatibility_factors.inquired_property
-      : null;
-  const linkedSellerLeadMatchId =
-    leadMatch?.compatibility_factors?.linked_seller_lead_match_id || null;
+  const { inquiredProperty, linkedSellerLeadMatchId } = extractInquiredPropertyContext(leadMatch);
   const core = {
     id: String(leadMatch._id),
     professional_type: null,

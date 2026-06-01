@@ -21,6 +21,11 @@ export const propertyMatchesSchema = Joi.object({
   formContact: Joi.object().unknown(true).optional(),
 });
 
+export const sessionMessagesSchema = Joi.object({
+  id: Joi.string().trim().required(),
+  embedToken: Joi.string().trim().required(),
+});
+
 export const selectPropertyMatchSchema = Joi.object({
   id: Joi.string().trim().required(),
   embedToken: Joi.string().trim().required(),

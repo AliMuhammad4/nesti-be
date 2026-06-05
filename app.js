@@ -20,6 +20,7 @@ import billingRoutes from './routes/billingRoutes.js';
 import professionalRoutes from './routes/professionalRoutes.js';
 import calendarRoutes from './routes/calendarRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
+import stripeWebhookRoutes from './routes/stripeWebhookRoutes.js';
 import calendlyWebhookRoutes from './routes/calendlyWebhookRoutes.js';
 import propertyMatchScoringRoutes from './routes/agent/propertyMatchScoringRoutes.js';
 import proChatRoutes from './routes/proChatRoutes.js';
@@ -56,7 +57,11 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Webhooks often need raw bodies, so they are routed before express.json()
-app.use('/api/billing/stripe/webhook', webhookRoutes); // Just map the stripe webhook path to here if needed or separate it. We will map all webhooks to /api/webhooks in app.js, except stripe if it needs special handling. Let's handle stripe inside webhookRoutes.
+app.use(
+  '/api/billing/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  stripeWebhookRoutes
+);
 
 app.use(
   '/api/webhooks/calendly',

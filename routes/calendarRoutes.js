@@ -1,7 +1,9 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
+import { requireFeature } from '../middleware/subscriptionAccess.js';
 import { validateBody } from '../middleware/validate.js';
+import { FEATURES } from '../services/billing/entitlements.js';
 import {
   webhookSubscriptionBodySchema,
   webhookSubscriptionBearerBodySchema,
@@ -471,14 +473,15 @@ router.post(
   '/calendly/cancel-booking',
   protect,
   requireCompleteProfessionalProfile,
+  requireFeature(FEATURES.CALENDAR_VIRTUAL_CONSULT),
   requireCalendlyConnected,
   validateBody(calendlyCancelBookingBodySchema),
   cancelCalendlyBookingHandler
 );
-router.get('/connect/:provider',                     protect, requireCompleteProfessionalProfile, requireCalendlyProvider, connectCalendar);
+router.get('/connect/:provider',                     protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALENDAR_INTEGRATION), requireCalendlyProvider, connectCalendar);
 router.get('/callback/:provider',                    requireCalendlyProvider, callbackCalendar);
-router.get('/status',                                protect, requireCompleteProfessionalProfile, getCalendarStatus);
-router.get('/bookings',                              protect, requireCompleteProfessionalProfile, getBookings);
-router.delete('/disconnect/:provider',               protect, requireCompleteProfessionalProfile, requireCalendlyProvider, disconnectCalendar);
+router.get('/status',                                protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALENDAR_INTEGRATION), getCalendarStatus);
+router.get('/bookings',                              protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALENDAR_INTEGRATION), getBookings);
+router.delete('/disconnect/:provider',               protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALENDAR_INTEGRATION), requireCalendlyProvider, disconnectCalendar);
 
 export default router;

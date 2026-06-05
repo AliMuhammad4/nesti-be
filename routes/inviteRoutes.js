@@ -1,6 +1,8 @@
 import express from 'express';
 import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
+import { requireFeature } from '../middleware/subscriptionAccess.js';
 import { validateBody } from '../middleware/validate.js';
+import { FEATURES } from '../services/billing/entitlements.js';
 import {
   createInviteSchema,
   captureInviteSchema,
@@ -21,13 +23,13 @@ import {
 
 const router = express.Router();
 
-router.post('/', protect, requireCompleteProfessionalProfile, validateBody(createInviteSchema), createInviteLink);
-router.get('/', protect, requireCompleteProfessionalProfile, listInviteLinks);
-router.get('/metrics', protect, requireCompleteProfessionalProfile, inviteMetrics);
-router.get('/conversions/role-trends', protect, requireCompleteProfessionalProfile, inviteConversionRoleTrends);
-router.get('/conversions', protect, requireCompleteProfessionalProfile, listInviteConversions);
-router.get('/rewards/profile', protect, requireCompleteProfessionalProfile, getRewardsProfile);
-router.get('/rewards/events', protect, requireCompleteProfessionalProfile, listInviteRewardEvents);
+router.post('/', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), validateBody(createInviteSchema), createInviteLink);
+router.get('/', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listInviteLinks);
+router.get('/metrics', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), inviteMetrics);
+router.get('/conversions/role-trends', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REPORTS_AI_MONTHLY), inviteConversionRoleTrends);
+router.get('/conversions', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listInviteConversions);
+router.get('/rewards/profile', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), getRewardsProfile);
+router.get('/rewards/events', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listInviteRewardEvents);
 router.get('/resolve/:token', resolveInvite);
 router.post('/capture', validateBody(captureInviteSchema), captureInvite);
 router.post('/finalize', protect, validateBody(finalizeInviteSchema), finalizeInvite);

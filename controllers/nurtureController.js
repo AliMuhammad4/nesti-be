@@ -19,6 +19,7 @@ import {
 import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurturePropertyMatchesContext.js';
 import { composeNurtureEmailHtml } from '../services/nurture/nurtureEmailTemplate.js';
 import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
+import { ownerQuery } from '../services/lead/leadProfileHelpers.js';
 
 function normalizeProfessionalType(raw) {
   const role = String(raw || '').trim().toLowerCase();
@@ -26,6 +27,12 @@ function normalizeProfessionalType(raw) {
   if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
   if (role === PROFESSIONAL_TYPE.AGENT) return PROFESSIONAL_TYPE.AGENT;
   return null;
+}
+
+function shouldIncludePropertyCards(user, includePropertyCardsFlag) {
+  const viewerRole = normalizeProfessionalType(user?.role);
+  if (viewerRole !== PROFESSIONAL_TYPE.AGENT) return false;
+  return includePropertyCardsFlag !== false;
 }
 
 function resolveNurtureOperatingRole(leadMatch, referralContext, viewerRoleRaw) {
@@ -86,7 +93,27 @@ async function loadLeadBundleForNurture(userId, { lead_match_id, lead_profile_id
   }
   if (lead_profile_id && mongoose.Types.ObjectId.isValid(String(lead_profile_id))) {
     const leadMatch = await findLatestLeadMatchForProfileLean(userId, lead_profile_id);
-    if (!leadMatch) return null;
+    if (!leadMatch) {
+      const profile = await LeadProfile.findOne({
+        _id: new mongoose.Types.ObjectId(String(lead_profile_id)),
+        ...ownerQuery(userId),
+      }).lean();
+      if (!profile) return null;
+      return {
+        leadMatch: {
+          _id: null,
+          user_id: userId,
+          lead_profile_id: profile._id,
+          conversation_id: null,
+          lead_type: profile.intent === 'sell' ? 'unknown_seller' : 'unknown_buyer',
+          match_score: null,
+          match_status: 'new',
+          compatibility_factors: { professional_type: PROFESSIONAL_TYPE.AGENT, contact: {} },
+        },
+        profile,
+        conversation: null,
+      };
+    }
     return loadLeadBundle(userId, String(leadMatch._id));
   }
   return null;
@@ -183,7 +210,7 @@ function nurtureLogPayload({ userId, leadMatch, convId, recipient, subject, body
   const leadProfileId = leadMatch?.lead_profile_id || null;
   return {
     user_id: userId,
-    lead_match_id: leadMatch._id,
+    lead_match_id: leadMatch?._id || null,
     lead_profile_id: leadProfileId,
     conversation_id: convId,
     to_email: recipient,
@@ -441,7 +468,7 @@ export async function postNurtureSend(req, res, next) {
       htmlForSend = composeNurtureEmailHtml({
         bodyPlain: bodyForTemplate,
         listings: propertyMatches.listings || [],
-        includePropertyCards: include_property_cards !== false,
+        includePropertyCards: shouldIncludePropertyCards(req.user, include_property_cards),
         agentName,
         propertyMatchesContext: propertyMatches.context || null,
         propertyMatchesNote: propertyMatches.note || null,
@@ -473,17 +500,19 @@ export async function postNurtureSend(req, res, next) {
       return res.status(502).json({ success: false, message: 'Email delivery failed' });
     }
 
-    try {
-      await recordLeadKpiEvent({
-        user_id: req.user._id,
-        lead_match_id: bundle.leadMatch._id,
-        conversation_id: convId,
-        event_type: 'nurture_email_sent',
-        grade: bundle.leadMatch.lead_type?.split('_')[0] || null,
-        metadata: { subject_len: String(subject || '').length },
-      });
-    } catch (kpiErr) {
-      logger.warn('nurture KPI event failed', { error: kpiErr.message });
+    if (bundle.leadMatch?._id) {
+      try {
+        await recordLeadKpiEvent({
+          user_id: req.user._id,
+          lead_match_id: bundle.leadMatch._id,
+          conversation_id: convId,
+          event_type: 'nurture_email_sent',
+          grade: bundle.leadMatch.lead_type?.split('_')[0] || null,
+          metadata: { subject_len: String(subject || '').length },
+        });
+      } catch (kpiErr) {
+        logger.warn('nurture KPI event failed', { error: kpiErr.message });
+      }
     }
 
     return res.json({
@@ -567,7 +596,7 @@ export async function postNurturePreview(req, res, next) {
       htmlPreview = composeNurtureEmailHtml({
         bodyPlain: bodyForTemplate,
         listings: propertyMatches.listings || [],
-        includePropertyCards: include_property_cards !== false,
+        includePropertyCards: shouldIncludePropertyCards(req.user, include_property_cards),
         agentName,
         propertyMatchesContext: propertyMatches.context || null,
         propertyMatchesNote: propertyMatches.note || null,

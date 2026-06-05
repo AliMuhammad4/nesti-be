@@ -1,6 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
+import { requireFeature } from '../middleware/subscriptionAccess.js';
 import { validateBody } from '../middleware/validate.js';
 import crypto from 'crypto';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
@@ -9,6 +10,7 @@ import User from '../models/User.js';
 import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { validateWidgetRoleAgainstProfile } from '../utils/embedWidgetRole.js';
 import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
+import { FEATURES } from '../services/billing/entitlements.js';
 
 const generateEmbedToken = async (req, res, next) => {
   try {
@@ -132,12 +134,13 @@ router.post(
   '/generate',
   protect,
   requireCompleteProfessionalProfile,
+  requireFeature(FEATURES.CHATBOT_BASIC),
   validateBody(embedGenerateBodySchema),
   generateEmbedToken
 );
-router.get('/list', protect, requireCompleteProfessionalProfile, listEmbeds);
+router.get('/list', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CHATBOT_BASIC), listEmbeds);
 router.get('/resolve/:token', resolveEmbed);
-router.patch('/:id', protect, requireCompleteProfessionalProfile, validateBody(embedPatchBodySchema), updateEmbed);
-router.delete('/:id', protect, requireCompleteProfessionalProfile, deleteEmbed);
+router.patch('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CHATBOT_BASIC), validateBody(embedPatchBodySchema), updateEmbed);
+router.delete('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CHATBOT_BASIC), deleteEmbed);
 
 export default router;

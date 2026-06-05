@@ -55,8 +55,6 @@ export const MATCH_STATUSES = [
   'converted',
   'closed_lost',
 ];
-export const ACCOUNT_STATUSES = ['free_trial', 'active', 'expired', 'canceled'];
-export const SUBSCRIPTION_TIERS = ['starter', 'pro', 'enterprise'];
 export const CALENDAR_PROVIDERS = ['google', 'calendly'];
 export const CALENDLY_BOOKING_STATUSES = ['booked', 'canceled'];
 export const POST_BOOKING_RUN_STATUSES = ['completed', 'failed', 'skipped'];

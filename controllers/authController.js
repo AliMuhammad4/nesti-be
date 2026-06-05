@@ -49,7 +49,10 @@ const login = async (req, res, next) => {
 
 const profile = async (req, res, next) => {
   try {
-    send(res, await profileService(req.user));
+    const refreshFromStripe = ['1', 'true', 'yes'].includes(
+      String(req.query?.refresh_subscription || '').trim().toLowerCase(),
+    );
+    send(res, await profileService(req.user, { refreshFromStripe }));
   } catch (error) {
     next(error);
   }

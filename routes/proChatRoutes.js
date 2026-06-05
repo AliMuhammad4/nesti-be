@@ -2,7 +2,9 @@ import express from 'express';
 const router = express.Router();
 
 import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
+import { requireFeature } from '../middleware/subscriptionAccess.js';
 import { uploadProChatAttachment } from '../middleware/uploadProChatAttachment.js';
+import { FEATURES } from '../services/billing/entitlements.js';
 import {
   createOrGetThread,
   createGroupThread,
@@ -30,21 +32,21 @@ function runProChatUpload(req, res, next) {
   });
 }
 
-router.get('/threads', protect, requireCompleteProfessionalProfile, listMyThreads);
-router.post('/threads', protect, requireCompleteProfessionalProfile, createOrGetThread);
-router.post('/groups', protect, requireCompleteProfessionalProfile, createGroupThread);
-router.patch('/groups/:id', protect, requireCompleteProfessionalProfile, updateGroupThread);
-router.delete('/groups/:id', protect, requireCompleteProfessionalProfile, deleteGroupThread);
-router.post('/groups/:id/members', protect, requireCompleteProfessionalProfile, addGroupMembers);
-router.delete('/groups/:id/members/:userId', protect, requireCompleteProfessionalProfile, removeGroupMember);
-router.post('/groups/:id/leave', protect, requireCompleteProfessionalProfile, leaveGroupThread);
-router.post('/groups/:id/rejoin-request', protect, requireCompleteProfessionalProfile, requestRejoinGroupThread);
-router.get('/groups/:id/rejoin-requests', protect, requireCompleteProfessionalProfile, listGroupRejoinRequests);
-router.post('/groups/:id/rejoin-requests/:userId/:action', protect, requireCompleteProfessionalProfile, resolveGroupRejoinRequest);
-router.get('/threads/:id', protect, requireCompleteProfessionalProfile, getThreadById);
-router.get('/threads/:id/messages', protect, requireCompleteProfessionalProfile, listThreadMessages);
-router.post('/threads/:id/messages', protect, requireCompleteProfessionalProfile, postThreadMessage);
-router.post('/threads/:id/attachments', protect, requireCompleteProfessionalProfile, runProChatUpload, postProChatAttachmentUpload);
+router.get('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), listMyThreads);
+router.post('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), createOrGetThread);
+router.post('/groups', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), createGroupThread);
+router.patch('/groups/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), updateGroupThread);
+router.delete('/groups/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), deleteGroupThread);
+router.post('/groups/:id/members', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), addGroupMembers);
+router.delete('/groups/:id/members/:userId', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), removeGroupMember);
+router.post('/groups/:id/leave', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), leaveGroupThread);
+router.post('/groups/:id/rejoin-request', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), requestRejoinGroupThread);
+router.get('/groups/:id/rejoin-requests', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), listGroupRejoinRequests);
+router.post('/groups/:id/rejoin-requests/:userId/:action', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), resolveGroupRejoinRequest);
+router.get('/threads/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), getThreadById);
+router.get('/threads/:id/messages', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), listThreadMessages);
+router.post('/threads/:id/messages', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), postThreadMessage);
+router.post('/threads/:id/attachments', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), runProChatUpload, postProChatAttachmentUpload);
 
 export default router;
 

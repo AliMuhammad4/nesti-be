@@ -50,6 +50,19 @@ const nurtureLogSchema = new mongoose.Schema({
     enum: NURTURE_LOG_STATUSES,
     default: 'sent',
   },
+  automation_type: {
+    type: String,
+    default: '',
+    index: true,
+  },
+  idempotency_key: {
+    type: String,
+    default: '',
+  },
+  followup_due_for: {
+    type: Date,
+    default: null,
+  },
   meeting_booked: {
     type: Boolean,
     default: false,
@@ -64,6 +77,8 @@ const nurtureLogSchema = new mongoose.Schema({
 nurtureLogSchema.index({ user_id: 1, createdAt: -1 });
 nurtureLogSchema.index({ user_id: 1, lead_match_id: 1, createdAt: -1 });
 nurtureLogSchema.index({ user_id: 1, lead_profile_id: 1, createdAt: -1 });
+nurtureLogSchema.index({ automation_type: 1, followup_due_for: 1, createdAt: -1 });
+nurtureLogSchema.index({ idempotency_key: 1 });
 nurtureLogSchema.index({ user_id: 1, meeting_booked: 1, calendly_scheduled_start: 1 });
 
 export default mongoose.model('NurtureLog', nurtureLogSchema);

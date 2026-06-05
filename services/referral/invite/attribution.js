@@ -129,7 +129,7 @@ export async function finalizeInviteAttribution({
           conversion_context: conversionContext,
         },
       },
-      { sort: { last_clicked_at: -1 }, new: true },
+      { sort: { last_clicked_at: -1 }, returnDocument: 'after' },
     );
 
   const convertedResponse = async (doc) => ({

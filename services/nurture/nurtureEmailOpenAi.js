@@ -333,9 +333,25 @@ export function buildLeadContext(leadMatch, profile, conversation, extras = {}) 
 
 function extractJsonObject(raw) {
   const t = String(raw || '').trim();
-  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const jsonStr = fence ? fence[1].trim() : t;
-  return JSON.parse(jsonStr);
+  const candidates = [];
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) candidates.push(fence[1].trim());
+  candidates.push(t);
+  const firstBrace = t.indexOf('{');
+  const lastBrace = t.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidates.push(t.slice(firstBrace, lastBrace + 1));
+  }
+
+  let lastErr = null;
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('Invalid JSON');
 }
 
 export function validateEmailDraft(obj) {
@@ -352,89 +368,323 @@ export function validateEmailDraft(obj) {
   return { subject, body_text, body_html };
 }
 
-const SYSTEM_DRAFT = `You draft follow-up emails on behalf of licensed real estate professionals (agents, mortgage brokers, or real estate attorneys—mirror professional_type in lead_context).
+function plainTextToHtml(bodyText) {
+  const esc = String(bodyText || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return `<p>${esc.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br/>')}</p>`;
+}
 
-Voice (executive, brokerage-grade):
-- Sound like a seasoned advisor: clear, direct, warm but not chatty. Prefer active voice and short sentences.
-- Avoid hype ("exciting", "amazing"), empty praise ("great to hear"), and filler ("just", "I wanted to reach out").
-- Do NOT open with stock phrases: "I hope this message finds you well", "Hope you are well", "I hope you're doing well", "Touching base", "Circling back", "Following up on my last email"—unless the user goal explicitly asks for them. Prefer a purpose-led first line after the greeting (e.g. reference their search criteria or next step).
+function compactSubjectPart(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+}
 
-Use the data:
-- Draw only from lead_context. Weave 2–5 relevant facts (intent, market/location, property type, beds/baths, budget or budget_numbers, qualification, timeline, ICP, conversation signals, must-haves) into prose—never dump the JSON as a list.
-- Financing/pre-approval: state it once, factually (e.g. "With financing already in place…")—not celebratory.
-- If calendly_booking_status is "booked", acknowledge briefly; do not push scheduling (the platform adds it).
-- Respect professional_type: mortgage = financing readiness; lawyer = transaction stage without legal advice; agent = listings/search/showings.
-- Referral role override: when lead_context.referral_context.action_professional_role or target_professional_role is present, treat that as the operating role for tone and structure (not the source referrer's role).
-- If operating role is agent and listings exist, mention matched options aligned to budget range (within budget vs stretch) and guide next showing/search step.
-- If operating role is lawyer or mortgage broker, do not turn the email into an agent-style property pitch; keep to legal/financing progression and consultation framing.
-- Property matches: when property_matches_email.listings has items, the send template adds a formatted listings table below. In body_text, do NOT add bullet/list-style listing rows; write one short transition sentence that points to the matched listings below.
-- Never copy raw labels like "Strong buyer match", "Interested buyer", or any match_headline verbatim into the email body.
-- Do not output a "Matched options include:" section or any itemized listing bullets (including markdown bullets like "- ...", "* ...", "_ - ...", or bolded list rows).
-- Budget consistency is mandatory:
-  - If a listing is within budget, label it "within budget".
-  - If above budget, label it "above budget" or "stretch option" and add one brief reason only if supported.
-  - Never say "aligns with your criteria" and "above budget" in the same clause without qualification.
-  - If most options are above budget, acknowledge that clearly and propose a next step (adjust search/budget strategy).
-- If listings is empty, do not invent properties.
-- Referral leads: if lead_context.referral_context exists, acknowledge the referral naturally in 1 short clause (no over-thanking), and use referral_notes only as directional guidance. Do not expose private/internal phrasing verbatim; convert it into client-safe next steps.
+function meetingPrepHeading(leadContext = {}) {
+  const booked =
+    String(
+      leadContext?.calendly_booking_status
+      || leadContext?.conversation?.calendly_booking_status
+      || '',
+    ).toLowerCase() === 'booked';
+  return booked ? 'To make the most of our scheduled meeting' : 'Before our meeting';
+}
 
-Structure:
-- Subject: specific, professional (market + intent), no clickbait.
-- Body order:
-  1) Greeting ("Hi {first_name}," or "Hi there,")
-  2) One context sentence (their goal + location/budget signal)
-  3) If listings exist: short "Matched options include:" block (up to 4 compact lines)
-  4) One action paragraph with a decisive CTA (what to prioritize / what to confirm next)
-- Keep body compact and scannable. Avoid long dense paragraphs.
-- Do NOT include: scheduling URLs, any sign-off, name, email, phone, or [Your Name]—the platform appends those.
+function buildMeetingPrepLines(profType, leadContext = {}) {
+  const qualification = leadContext?.qualification || {};
+  const property = leadContext?.property || {};
+  const intent = String(leadContext?.intent || leadContext?.intent_summary?.primary_intent || '').toLowerCase();
 
-Compliance:
+  if (profType === PROFESSIONAL_TYPE.LAWYER) {
+    const lines = ['Government-issued photo ID'];
+    const stage = String(qualification.transaction_stage || '').trim();
+    if (stage === 'offer_accepted' || stage === 'actively_submitting') {
+      lines.push('Signed agreement of purchase and sale (if available)');
+    }
+    const mortgage = String(qualification.mortgage_status || '').trim();
+    if (mortgage && mortgage !== 'still_applying') {
+      lines.push('Mortgage commitment or approval letter');
+    } else {
+      lines.push('Latest mortgage pre-approval or lender contact details (if applicable)');
+    }
+    lines.push('Any title-related documents already received');
+    lines.push('Your target closing date and outstanding questions about adjustments or title insurance');
+    return lines.slice(0, 5);
+  }
+
+  if (profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    const lines = [
+      'Government-issued photo ID',
+      'Recent pay stubs or employment confirmation letter',
+      'Last two years of tax documents (T4/NOA or equivalent)',
+      'Recent bank statements (typically 90 days)',
+    ];
+    const preApproval = String(qualification.pre_approval_status || qualification.mortgage_status || '').trim();
+    if (!preApproval || preApproval === 'not_yet' || preApproval === 'in_progress') {
+      lines.push('Estimated down payment source and amount');
+    } else {
+      lines.push('Questions about rate hold, pre-approval amount, or next documentation step');
+    }
+    return lines.slice(0, 5);
+  }
+
+  const lines = ['Government-issued photo ID'];
+  if (intent !== 'sell') {
+    const mortgage = String(qualification.mortgage_status || '').trim();
+    if (!mortgage || mortgage === 'not_yet' || mortgage === 'in_progress') {
+      lines.push('Mortgage pre-approval or pre-qualification letter (if available)');
+    } else {
+      lines.push('Current financing pre-approval or budget confirmation');
+    }
+  }
+  if (property.must_have_features) {
+    lines.push('Updated must-have list and any deal-breakers');
+  } else {
+    lines.push('Preferred areas, budget range, and must-have features');
+  }
+  if (intent === 'sell') {
+    lines.push('Property details, recent updates, and your ideal closing timeline');
+  } else {
+    lines.push('Questions about showings, timing, and next properties to review');
+  }
+  return lines.slice(0, 5);
+}
+
+function appendMeetingPrepSection(bodyText, profType, leadContext = {}) {
+  const lines = buildMeetingPrepLines(profType, leadContext);
+  if (!lines.length) return bodyText;
+  const heading = meetingPrepHeading(leadContext);
+  const checklist = `${heading}, please have the following ready:\n${lines.map((line) => `• ${line}`).join('\n')}`;
+  return `${String(bodyText || '').trim()}\n\n${checklist}`.trim();
+}
+
+function meetingPrepHtml(bodyText, profType, leadContext = {}) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const main = String(bodyText || '').trim();
+  const mainHtml = main
+    ? `<p>${esc(main).replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br/>')}</p>`
+    : '';
+  const heading = meetingPrepHeading(leadContext);
+  const lines = buildMeetingPrepLines(profType, leadContext);
+  const checklistHtml = [
+    `<p><strong>${esc(heading)}, please have the following ready:</strong></p>`,
+    ...lines.map((line) => `<p>• ${esc(line)}</p>`),
+  ].join('');
+  return `${mainHtml}${checklistHtml}`;
+}
+
+function buildFallbackDraft(leadContext) {
+  const firstName = compactSubjectPart(leadContext?.contact?.first_name) || 'there';
+  const profType = String(leadContext?.professional_type || PROFESSIONAL_TYPE.AGENT).toLowerCase();
+  const location =
+    compactSubjectPart(leadContext?.property?.location || leadContext?.property?.address) ||
+    'your transaction';
+  const intent = compactSubjectPart(leadContext?.intent_summary?.primary_intent || leadContext?.intent);
+  const budget = compactSubjectPart(leadContext?.property?.budget);
+  const timeline = compactSubjectPart(leadContext?.property?.timeline);
+  const qualification = leadContext?.qualification || {};
+
+  if (profType === PROFESSIONAL_TYPE.LAWYER) {
+    const stage = compactSubjectPart(qualification.transaction_stage);
+    const closing = compactSubjectPart(qualification.closing_timeline);
+    const subject = compactSubjectPart(
+      closing ? `Closing timeline: next steps for ${location}` : `Next steps for your transaction in ${location}`,
+    );
+    const contextParts = [`Following up regarding your transaction in ${location}`];
+    if (stage) contextParts.push(`at the ${stage} stage`);
+    if (closing) contextParts.push(`with a target closing window of ${closing}`);
+    const body_text = appendMeetingPrepSection(
+      [
+        `Hi ${firstName},`,
+        `${contextParts.join(' ')}.`,
+        'I would like to confirm where things stand and outline the next steps on our side.',
+        'Please reply with any updates to your closing date or outstanding documents, or let me know a convenient time to connect.',
+      ].join('\n\n'),
+      profType,
+      leadContext,
+    );
+    return validateEmailDraft({
+      subject,
+      body_text,
+      body_html: meetingPrepHtml(
+        [
+          `Hi ${firstName},`,
+          `${contextParts.join(' ')}.`,
+          'I would like to confirm where things stand and outline the next steps on our side.',
+          'Please reply with any updates to your closing date or outstanding documents, or let me know a convenient time to connect.',
+        ].join('\n\n'),
+        profType,
+        leadContext,
+      ),
+    });
+  }
+
+  if (profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    const preApproval = compactSubjectPart(qualification.pre_approval_status);
+    const subject = compactSubjectPart(`Financing next steps for ${location}`);
+    const contextParts = [`Following up on your financing plans for ${location}`];
+    if (preApproval) contextParts.push(`with pre-approval status noted as ${preApproval}`);
+    if (timeline) contextParts.push(`and your ${timeline} timeline`);
+    const bodyCore = [
+      `Hi ${firstName},`,
+      `${contextParts.join(' ')}.`,
+      'I would like to confirm what remains on the financing checklist and schedule the appropriate next review.',
+      'Reply with any updates, or let me know a convenient time to connect.',
+    ].join('\n\n');
+    const body_text = appendMeetingPrepSection(bodyCore, profType, leadContext);
+    return validateEmailDraft({
+      subject,
+      body_text,
+      body_html: meetingPrepHtml(bodyCore, profType, leadContext),
+    });
+  }
+
+  const subject = compactSubjectPart(
+    intent && location !== 'your transaction'
+      ? `${location}: next steps for your ${intent} plans`
+      : `Next steps for ${location}`,
+  );
+
+  const contextParts = [`Following up on your search in ${location}`];
+  if (budget) contextParts.push(`within the budget range you shared (${budget})`);
+  if (timeline) contextParts.push(`on your ${timeline} timeline`);
+
+  const bodyCore = [
+    `Hi ${firstName},`,
+    `${contextParts.join(' ')}.`,
+    'I would like to confirm your current priorities and align the next properties we review.',
+    'Reply with any updates to your criteria, or let me know a convenient time to connect.',
+  ].join('\n\n');
+  const body_text = appendMeetingPrepSection(bodyCore, profType, leadContext);
+
+  return validateEmailDraft({
+    subject,
+    body_text,
+    body_html: meetingPrepHtml(bodyCore, profType, leadContext),
+  });
+}
+
+const SYSTEM_DRAFT = `You draft client follow-up emails on behalf of the licensed professional in lead_context.professional_type (agent, lawyer, or mortgage_broker). Write as that professional's office would — never as a generic chatbot.
+
+GLOBAL VOICE:
+- Polished, confident, and professional. Clear sentences; active voice; no slang or filler.
+- Avoid hype ("exciting", "amazing"), empty praise ("great to hear"), and stock openers ("I hope this finds you well", "Touching base", "Circling back", "I wanted to reach out") unless explicitly requested in goal.
+- Open with purpose after the greeting: reference their stated goal, timeline, or situation — not generic pleasantries.
+
+DATA DISCIPLINE:
+- Use only facts from lead_context (intent, location, property type, beds/baths, budget, qualification, timeline, ICP, conversation signals, must-haves).
+- Weave 2–4 relevant facts into natural prose — never dump JSON or label lists.
+- Financing/pre-approval: state once, factually — not celebratory.
+- If calendly_booking_status is "booked", acknowledge briefly; do not push scheduling.
+- Referral leads: acknowledge the referral in one natural clause; use referral_notes as directional guidance only — client-safe language.
+- Never copy internal labels verbatim ("Strong buyer match", match_headline, etc.).
 - No guaranteed outcomes; no invented facts, neighborhoods, or listing details.
 
-Output one JSON object: subject, body_text, body_html (p, br, strong only—no <a>). Subject ~120 chars or less; body well under 800 words.`;
+ROLE-SPECIFIC STYLE (use professional_type, or referral_context.action_professional_role / target_professional_role when present):
 
-const SYSTEM_REFINE = `You refine nurture emails to the same standard as draft generation: executive real-estate tone, crisp sentences, no stock openers or filler praise, only lead_context facts.
+AGENT (professional_type = agent):
+- Executive brokerage tone: market-aware, action-oriented, focused on search fit and next showing steps.
+- Reference search criteria (location, budget, beds/baths, must-haves) and readiness to view.
+- If property_matches_email.listings has items: the send template appends a formatted listings table. In body_text write ONE concise transition sentence directing them to review the matched listings below — no property listing bullets in the main message.
+- Budget consistency when referencing matches in prose: distinguish "within budget" vs "above budget/stretch" clearly; never contradict.
+- If listings is empty, do not mention or invent properties; focus on clarifying criteria and scheduling a search review.
+- CTA: confirm priorities, schedule a showing, or reply with updated criteria.
+- Meeting prep checklist themes (pick 3–5 only, tailored to lead_context): photo ID; financing pre-approval/pre-qual; updated must-haves and deal-breakers; preferred areas and budget; showing availability; for sellers — property details and ideal closing timeline.
 
-Keep main message only—no scheduling links, no closings, no contact block. The platform appends scheduling and signature.
+REAL ESTATE LAWYER (professional_type = lawyer):
+- Formal attorney-office tone: measured, reassuring, precise. This is legal correspondence — not a realtor sales email.
+- Reference transaction stage, closing timeline, transaction type, and legal services needed from qualification.
+- NEVER discuss property search, showings, listings, market options, or neighborhood recommendations. No listing language whatsoever.
+- NEVER provide legal advice, interpret documents, or state legal conclusions — invite consultation for personalized guidance.
+- CTA: confirm closing dates/documents, schedule a consultation, or reply with transaction updates.
+- Meeting prep checklist themes (pick 3–5 only, tailored to lead_context): photo ID; agreement of purchase and sale; mortgage commitment/approval letter; title documents received; survey or status certificate questions; target closing date; outstanding questions about adjustments or title insurance.
 
-Improve wording and flow with strict readability:
-- Respect operating role the same way as draft generation: if referral_context.action_professional_role or target_professional_role is present, that role controls style/structure.
+MORTGAGE BROKER (professional_type = mortgage_broker):
+- Professional financing tone: clarity on readiness, timelines, and next documentation steps — not property sales.
+- Reference pre-approval status, mortgage timeline, purchase purpose, and budget from qualification.
+- No property pitches, listing tables, or showing language; focus on financing progression.
+- CTA: confirm documents/timeline or schedule a financing review.
+- Meeting prep checklist themes (pick 3–5 only, tailored to lead_context): photo ID; pay stubs or employment letter; tax documents (T4/NOA); recent bank statements; down payment source; questions on rate hold, pre-approval amount, or remaining documentation.
+
+MEETING PREPARATION SECTION (required for every draft):
+- After the CTA paragraph, add a concise preparation block so the email feels like professional meeting coordination — not a generic marketing blast.
+- Heading: use "Before our meeting" unless lead_context.conversation.calendly_booking_status is "booked", then use "To make the most of our scheduled meeting".
+- Include 3–5 checklist items as short lines prefixed with "• " in body_text (one item per line).
+- Mirror in body_html: one <p><strong>Heading:</strong></p> then one <p>• item</p> per checklist line.
+- Customize items using lead_context only — skip items already confirmed, and never invent documents the client has not discussed.
+- Do NOT mix property listing bullets into this checklist. Listing tables remain separate for agents only.
+
+STRUCTURE:
+- Subject: specific and professional (reflect role-appropriate topic); no clickbait; ~120 chars or less.
+- Body order:
+  1) "Hi {first_name}," or "Hi there,"
+  2) One context sentence grounded in their situation
+  3) One value/next-step paragraph with a decisive, role-appropriate CTA
+  4) Meeting preparation heading + 3–5 tailored checklist items
+- Keep the main message compact (2–4 short paragraphs before the checklist). No sign-off, name, phone, email, or scheduling URLs — the platform appends those.
+
+Output one JSON object: subject, body_text, body_html (p, br, strong only — no <a>). Body well under 800 words.`;
+
+const SYSTEM_REFINE = `You refine nurture emails to the same professional standard as draft generation. Mirror lead_context.professional_type (or referral_context.action_professional_role / target_professional_role).
+
+Keep main message only — no scheduling links, no closings, no contact block. The platform appends scheduling and signature.
+
+Refinement rules:
+- AGENT: executive brokerage tone; one transition sentence for listings if property_matches_email has items — no property listing bullets in the main message.
+- LAWYER: formal attorney-office tone; transaction/closing focus only — remove any property search, listing, or sales language.
+- MORTGAGE BROKER: financing-focused tone — remove property pitch or listing language.
+- Preserve or improve the meeting preparation checklist (3–5 role-appropriate items with • lines). Use "Before our meeting" or "To make the most of our scheduled meeting" based on calendly_booking_status.
 - Break oversized paragraphs into short blocks.
-- If property_matches_email has listings, keep one concise transition sentence and rely on the rendered table/cards for detailed rows.
-- Remove raw ranking labels (e.g., "Strong buyer match") and keep listing text factual.
-- Do not output "Matched options include:" or bullet listing rows in refined output (including markdown bullet formats).
-- Enforce budget consistency language ("within budget" vs "above budget/stretch"), and remove contradictory phrasing.
-- Cards on send are supplemental; text should preview, not duplicate the table/cards.
+- Remove stock openers, filler praise, and raw internal labels.
+- No "Matched options include:" or property listing bullet rows in the main message.
+- Enforce budget consistency language for agents when matches are referenced in prose.
 
 Output only JSON: { "subject", "body_text", "body_html" } with p, br, strong only in body_html (no <a>).`;
 
 async function completionToEmailDraft(system, userContent, temperature, logLabel) {
-  const completion = await getOpenAI().chat.completions.create({
-    model: MODEL,
-    response_format: { type: 'json_object' },
-    temperature,
-    max_tokens: MAX_TOKENS,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: userContent },
-    ],
-  });
-  const raw = completion.choices[0]?.message?.content || '';
-  try {
-    return validateEmailDraft(extractJsonObject(raw));
-  } catch (e) {
-    logger.warn(`${logLabel} JSON parse/validate failed`, { error: e.message });
-    throw new Error('AI returned invalid JSON');
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const completion = await getOpenAI().chat.completions.create({
+      model: MODEL,
+      response_format: { type: 'json_object' },
+      temperature: attempt === 0 ? temperature : 0,
+      max_tokens: MAX_TOKENS,
+      messages: [
+        { role: 'system', content: system },
+        {
+          role: 'user',
+          content:
+            attempt === 0
+              ? userContent
+              : `${userContent}\n\nReturn only a valid JSON object with string keys subject, body_text, and body_html.`,
+        },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content || '';
+    try {
+      return validateEmailDraft(extractJsonObject(raw));
+    } catch (e) {
+      lastErr = e;
+      logger.warn(`${logLabel} JSON parse/validate failed`, { attempt: attempt + 1, error: e.message });
+    }
   }
+  throw new Error(lastErr?.message || 'AI returned invalid JSON');
 }
 
 export async function generateDraft(leadContext, { goal = null, tone = 'professional' } = {}) {
   const userPayload = JSON.stringify({
     lead_context: leadContext,
-    goal: goal || 'Re-engage the lead and move toward a booked conversation.',
+    goal:
+      goal
+      || 'Re-engage the lead, move toward a booked conversation, and include a role-appropriate meeting-preparation checklist.',
     tone,
   });
-  return completionToEmailDraft(SYSTEM_DRAFT, `Generate the email.\n${userPayload}`, 0.24, 'nurture draft');
+  try {
+    return await completionToEmailDraft(SYSTEM_DRAFT, `Generate the email.\n${userPayload}`, 0.24, 'nurture draft');
+  } catch (err) {
+    logger.warn('nurture draft fallback used', { error: err.message });
+    return buildFallbackDraft(leadContext);
+  }
 }
 
 export async function refineDraft(leadContext, { subject, body_text }, instruction) {

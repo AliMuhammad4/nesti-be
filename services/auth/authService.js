@@ -7,6 +7,10 @@ import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
 import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
 import { finalizeInviteAttribution } from '../referral/inviteService.js';
+import {
+  createFreeTrialSubscription,
+  getSubscriptionPresentationForUser,
+} from '../billing/subscriptionService.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 
@@ -187,9 +191,8 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       last_name: decoded.last_name,
       role: decoded.role,
       is_verified: true,
-      account_status: 'free_trial',
-      trial_ends_at: trialEndsAt,
     });
+    await createFreeTrialSubscription(user._id, trialEndsAt);
   } catch (error) {
     if (error?.code === 11000) {
       return {
@@ -257,32 +260,29 @@ export const loginService = async ({ email, password, invite_token }) => {
     return { status: 403, body: { success: false, message: 'Email not verified' } };
   }
 
-  if (user.account_status === 'free_trial' && user.trial_ends_at && new Date() > new Date(user.trial_ends_at)) {
-    user.account_status = 'expired';
-    await user.save();
-  }
-
   if (invite_token && String(invite_token).trim()) {
-    try {
-      const finResult = await finalizeInviteAttribution({
-        invite_token: String(invite_token).trim(),
-        authenticated_user_id: user._id,
-        method: 'login',
-        path: '/auth/login',
-      });
-      if (finResult?.ok === false) {
+    const normalizedInviteToken = String(invite_token).trim();
+    finalizeInviteAttribution({
+      invite_token: normalizedInviteToken,
+      authenticated_user_id: user._id,
+      method: 'login',
+      path: '/auth/login',
+    })
+      .then((finResult) => {
+        if (finResult?.ok === false) {
+          logger.warn('Invite attribution finalization failed after login', {
+            user_id: String(user._id),
+            code: finResult.code,
+            message: finResult.message,
+          });
+        }
+      })
+      .catch((err) => {
         logger.warn('Invite attribution finalization failed after login', {
           user_id: String(user._id),
-          code: finResult.code,
-          message: finResult.message,
+          error: err?.message,
         });
-      }
-    } catch (err) {
-      logger.warn('Invite attribution finalization failed after login', {
-        user_id: String(user._id),
-        error: err?.message,
       });
-    }
   }
 
   return {
@@ -291,7 +291,7 @@ export const loginService = async ({ email, password, invite_token }) => {
   };
 };
 
-export const profileService = async (user) => {
+export const profileService = async (user, { refreshFromStripe = false } = {}) => {
   const professionalProfile = await ProfessionalProfile.findOne({ user_id: user._id })
     .select('-property_match_scoring')
     .lean();
@@ -299,11 +299,10 @@ export const profileService = async (user) => {
     professionalProfile?.active_icp_profile_id
   );
 
-  const trialExpired =
-    user.account_status === 'free_trial' &&
-    user.trial_ends_at &&
-    new Date() > new Date(user.trial_ends_at);
-  const isExpired = user.account_status === 'expired' || trialExpired;
+  const subscription = await getSubscriptionPresentationForUser(user, {
+    refreshFromStripe,
+  });
+  const isExpired = subscription.isExpired;
 
   const profileSetup =
     user.role === USER_ROLE.ADMIN
@@ -331,8 +330,14 @@ export const profileService = async (user) => {
         role: user.role,
         profile_image: user.profile_image || null,
         cover_image: user.cover_image || null,
-        accountStatus: user.account_status,
-        trialEndsAt: user.trial_ends_at,
+        accountStatus: subscription.accountStatus,
+        trialEndsAt: subscription.trialEndsAt,
+        subscriptionPlan: subscription.subscriptionPlan,
+        subscriptionStatus: subscription.subscriptionStatus,
+        subscriptionEndsAt: subscription.subscriptionEndsAt,
+        cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+        pendingPlanKey: subscription.pendingPlanKey,
+        pendingPlanEffectiveAt: subscription.pendingPlanEffectiveAt,
         isExpired,
         ...(isExpired && { message: 'Account expired. Please upgrade.' }),
       },

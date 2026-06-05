@@ -21,6 +21,7 @@ import ProfessionalChatThread from './ProfessionalChatThread.js';
 import ProfessionalChatMessage from './ProfessionalChatMessage.js';
 import PublicProfile from './PublicProfile.js';
 import ProfileViewEvent from './ProfileViewEvent.js';
+import Subscription from './Subscription.js';
 export {
   User,
   ChatConversation,
@@ -45,4 +46,5 @@ export {
   ProfessionalChatMessage,
   PublicProfile,
   ProfileViewEvent,
+  Subscription,
 };

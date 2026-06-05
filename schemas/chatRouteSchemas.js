@@ -153,4 +153,19 @@ export const nurturePreviewBodySchema = Joi.object({
   }, 'nurture preview body')
   .messages({ 'object.xor': 'Provide exactly one of lead_match_id or lead_profile_id' });
 
+export const bulkNurtureDraftJobSchema = Joi.object({
+  icp_tier: Joi.string().trim().valid('perfect_match', 'good_match', 'low_match').allow('', null),
+});
+
+export const bulkNurtureSendJobSchema = Joi.object({
+  source_job_id: objectId.required(),
+  send_all: Joi.boolean().default(false),
+  item_ids: Joi.array().items(objectId).min(1).max(500),
+});
+
+export const bulkNurtureDraftItemUpdateSchema = Joi.object({
+  subject: Joi.string().trim().max(200).required(),
+  body: Joi.string().trim().max(8000).required(),
+});
+
 export const calculatorSchema = passthrough;

@@ -740,6 +740,12 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
     normalizeStripeId(schedule.subscription) || normalizeStripeId(schedule.released_subscription);
   const terminalStatuses = new Set(['completed', 'released', 'canceled']);
   const isTerminalSchedule = terminalStatuses.has(String(schedule.status || ''));
+  const pendingPlanKey = String(
+    schedule?.metadata?.pending_plan_key
+    || schedule?.phases?.[1]?.metadata?.plan_key
+    || '',
+  ).trim();
+  const pendingEffectiveAt = toDateFromUnix(schedule?.phases?.[0]?.end_date);
   const update = {
     last_stripe_event_id: eventId,
     last_synced_at: new Date(),
@@ -749,6 +755,12 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
     update.pending_plan_key = '';
     update.pending_plan_effective_at = null;
     update.stripe_subscription_schedule_id = '';
+  } else {
+    update.stripe_subscription_schedule_id = scheduleId;
+    if (pendingPlanKey && getPlan(pendingPlanKey)) {
+      update.pending_plan_key = pendingPlanKey;
+      update.pending_plan_effective_at = pendingEffectiveAt;
+    }
   }
 
   let synced = await Subscription.findOneAndUpdate(
@@ -760,7 +772,7 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
   if (!synced && subscriptionId) {
     synced = await Subscription.findOneAndUpdate(
       { stripe_subscription_id: subscriptionId },
-      { $set: isTerminalSchedule ? update : { ...update, stripe_subscription_schedule_id: scheduleId } },
+      { $set: update },
       { returnDocument: 'after' },
     );
   }

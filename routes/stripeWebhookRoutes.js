@@ -17,6 +17,7 @@ const HANDLED_EVENT_TYPES = new Set([
   'customer.subscription.created',
   'customer.subscription.updated',
   'customer.subscription.deleted',
+  'subscription_schedule.created',
   'subscription_schedule.updated',
   'subscription_schedule.completed',
   'subscription_schedule.released',
@@ -89,6 +90,7 @@ async function processStripeEvent(event) {
     case 'customer.subscription.deleted':
       result = await syncStripeSubscription(event.data.object, { last_stripe_event_id: event.id });
       break;
+    case 'subscription_schedule.created':
     case 'subscription_schedule.updated':
     case 'subscription_schedule.completed':
     case 'subscription_schedule.released':

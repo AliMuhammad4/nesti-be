@@ -28,6 +28,10 @@ const HANDLED_EVENT_TYPES = new Set([
 
 const STALE_PROCESSING_MS = 5 * 60 * 1000;
 
+function isSubscriptionScheduleEvent(event) {
+  return String(event?.type || '').startsWith('subscription_schedule.');
+}
+
 async function claimStripeEvent(event) {
   const eventId = String(event?.id || '').trim();
   if (!eventId) return { shouldProcess: true, eventId: '' };
@@ -154,6 +158,17 @@ router.post('/', async (req, res) => {
     await finalizeStripeEvent(eventId, null);
     return res.json({ received: true });
   } catch (err) {
+    if (isSubscriptionScheduleEvent(event)) {
+      await finalizeStripeEvent(eventId, null);
+      logger.warn('Stripe subscription schedule webhook acknowledged after non-critical processing error', {
+        event_id: event?.id,
+        event_type: event?.type,
+        error: err.message,
+        stack: err.stack,
+      });
+      return res.json({ received: true, schedule_sync_deferred: true });
+    }
+
     await finalizeStripeEvent(eventId, err);
     logger.error('Stripe webhook processing failed', {
       event_id: event?.id,

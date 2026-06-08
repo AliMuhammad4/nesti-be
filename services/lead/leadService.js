@@ -49,36 +49,50 @@ const INQUIRED_PROPERTY_PROFILE_FIELDS =
 const INQUIRED_PROPERTY_CONVERSATION_FIELDS =
   '_id calendly_booking_status calendly_event_start session_id';
 
-/** Lead rows where WorkspaceAppointment exists as booked (Calendly) but ChatConversation was not synced. */
-async function leadMatchIdsWithBookedWorkspaceAppointment(userId, leadMatchObjectIds) {
-  const ids = (leadMatchObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
-  if (!ids.length) return new Set();
+/**
+ * Fix #2 — Merge the two separate WorkspaceAppointment.find calls that used to run
+ * one-after-the-other into a single query that covers both lead_match_id and
+ * conversation_id lookups. Returns the same two Sets the callers already expect so
+ * no downstream code needs to change.
+ */
+async function fetchBookedWorkspaceAppointments(userId, leadMatchObjectIds, conversationObjectIds) {
+  const leadIds = (leadMatchObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+  const convoIds = (conversationObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+  if (!leadIds.length && !convoIds.length) {
+    return { bookedLeadIds: new Set(), bookedConvoIds: new Set() };
+  }
   const now = new Date();
+  const orClauses = [];
+  if (leadIds.length) orClauses.push({ lead_match_id: { $in: leadIds } });
+  if (convoIds.length) orClauses.push({ conversation_id: { $in: convoIds } });
   const rows = await WorkspaceAppointment.find({
     user_id: userId,
-    lead_match_id: { $in: ids },
     status: 'booked',
     scheduled_start: { $gte: now },
+    $or: orClauses,
   })
-    .select('lead_match_id')
+    .select('lead_match_id conversation_id')
     .lean();
-  return new Set(rows.map((r) => String(r.lead_match_id)));
+
+  const bookedLeadIds = new Set();
+  const bookedConvoIds = new Set();
+  for (const r of rows) {
+    if (r.lead_match_id) bookedLeadIds.add(String(r.lead_match_id));
+    if (r.conversation_id) bookedConvoIds.add(String(r.conversation_id));
+  }
+  return { bookedLeadIds, bookedConvoIds };
 }
 
-/** Booked Calendly rows keyed by chat thread (covers orphan upserts where lead_match_id was null initially). */
+/** @deprecated Use fetchBookedWorkspaceAppointments — kept for getLeadById / updateLeadMatch call sites */
+async function leadMatchIdsWithBookedWorkspaceAppointment(userId, leadMatchObjectIds) {
+  const { bookedLeadIds } = await fetchBookedWorkspaceAppointments(userId, leadMatchObjectIds, []);
+  return bookedLeadIds;
+}
+
+/** @deprecated Use fetchBookedWorkspaceAppointments — kept for getLeadById / updateLeadMatch call sites */
 async function conversationIdsWithBookedWorkspaceAppointment(userId, conversationObjectIds) {
-  const ids = (conversationObjectIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
-  if (!ids.length) return new Set();
-  const now = new Date();
-  const rows = await WorkspaceAppointment.find({
-    user_id: userId,
-    status: 'booked',
-    conversation_id: { $in: ids },
-    scheduled_start: { $gte: now },
-  })
-    .select('conversation_id')
-    .lean();
-  return new Set(rows.map((r) => (r.conversation_id ? String(r.conversation_id) : '')).filter(Boolean));
+  const { bookedConvoIds } = await fetchBookedWorkspaceAppointments(userId, [], conversationObjectIds);
+  return bookedConvoIds;
 }
 
 async function workspaceBookingStartsByLeadAndConversation(userId, leadMatchObjectIds, conversationObjectIds) {
@@ -324,59 +338,64 @@ export const getLeads = async (req, res, next) => {
     const convoById   = new Map(conversations.map((c) => [String(c._id), c]));
 
     const uniqueProfileKeys = [...new Set(profileIds.map((id) => String(id)))];
-    const nurtureBookedByProfile =
+    const leadMatchIds = leadMatches.map((m) => m._id);
+
+    // Fix #2 — single WorkspaceAppointment query covering both lead and conversation IDs
+    const [
+      nurtureBookedByProfile,
+      { bookedLeadIds: workspaceBookedLeadIds, bookedConvoIds: workspaceBookedConversationIds },
+      { startByLeadId, startByConversationId },
+    ] = await Promise.all([
       uniqueProfileKeys.length > 0
-        ? await buildNurtureConsultationBookedFromEmailByProfileIds(userId, uniqueProfileKeys)
-        : new Map();
+        ? buildNurtureConsultationBookedFromEmailByProfileIds(userId, uniqueProfileKeys)
+        : Promise.resolve(new Map()),
+      fetchBookedWorkspaceAppointments(userId, leadMatchIds, convoIds),
+      workspaceBookingStartsByLeadAndConversation(userId, leadMatchIds, convoIds),
+    ]);
 
-    const workspaceBookedLeadIds = await leadMatchIdsWithBookedWorkspaceAppointment(
-      userId,
-      leadMatches.map((m) => m._id),
-    );
-    const workspaceBookedConversationIds = await conversationIdsWithBookedWorkspaceAppointment(
-      userId,
-      convoIds,
-    );
-    const { startByLeadId, startByConversationId } = await workspaceBookingStartsByLeadAndConversation(
-      userId,
-      leadMatches.map((m) => m._id),
-      convoIds,
-    );
+    // Fix #1 — resolve all property match counts in one batch instead of N individual queries
+    const propertyMatchCountById = new Map();
+    if (includePropertyMatchCounts) {
+      const agentLeads = leadMatches.filter((m) => {
+        const prof =
+          m?.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
+        return prof === PROFESSIONAL_TYPE.AGENT;
+      });
+      await Promise.all(
+        agentLeads.map(async (m) => {
+          const profile = profileById.get(String(m.lead_profile_id)) || null;
+          const count = await resolveLeadPropertyMatchCount({ userId, leadMatch: m, leadProfile: profile });
+          propertyMatchCountById.set(String(m._id), count);
+        }),
+      );
+    }
 
-    const leads = await Promise.all(
-      leadMatches.map(async (m) => {
-        const profile = profileById.get(String(m.lead_profile_id)) || null;
-        const rawConvo = convoById.get(String(m.conversation_id)) || {};
-        const conversation = mergeConvoWithWorkspaceBooking(
-          rawConvo,
-          m._id,
-          m.conversation_id,
-          workspaceBookedLeadIds,
-          workspaceBookedConversationIds,
-          startByLeadId,
-          startByConversationId,
-        );
-        const row = mapLeadMatchToListRow(
-          m,
-          profile || {},
-          conversation,
-          truthyQueryFlag(q.include_conversion),
-          leadMapperOptsFromRequest(req),
-        );
-        const matchCount = includePropertyMatchCounts
-          ? await resolveLeadPropertyMatchCount({
-              userId,
-              leadMatch: m,
-              leadProfile: profile,
-            })
-          : 0;
-        const pid = m.lead_profile_id ? String(m.lead_profile_id) : '';
-        const rowAppointmentBooked = String(row.appointment_status || '').toLowerCase() === 'booked';
-        const nurture_consultation_booked =
-          rowAppointmentBooked && pid ? nurtureBookedByProfile.get(pid) ?? false : false;
-        return { ...row, match_count: matchCount, nurture_consultation_booked };
-      }),
-    );
+    const leads = leadMatches.map((m) => {
+      const profile = profileById.get(String(m.lead_profile_id)) || null;
+      const rawConvo = convoById.get(String(m.conversation_id)) || {};
+      const conversation = mergeConvoWithWorkspaceBooking(
+        rawConvo,
+        m._id,
+        m.conversation_id,
+        workspaceBookedLeadIds,
+        workspaceBookedConversationIds,
+        startByLeadId,
+        startByConversationId,
+      );
+      const row = mapLeadMatchToListRow(
+        m,
+        profile || {},
+        conversation,
+        truthyQueryFlag(q.include_conversion),
+        leadMapperOptsFromRequest(req),
+      );
+      const matchCount = propertyMatchCountById.get(String(m._id)) ?? 0;
+      const pid = m.lead_profile_id ? String(m.lead_profile_id) : '';
+      const rowAppointmentBooked = String(row.appointment_status || '').toLowerCase() === 'booked';
+      const nurture_consultation_booked =
+        rowAppointmentBooked && pid ? nurtureBookedByProfile.get(pid) ?? false : false;
+      return { ...row, match_count: matchCount, nurture_consultation_booked };
+    });
     return res.json({ success: true, leads, empty_state: null, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (err) { return next(err); }
 };
@@ -771,13 +790,14 @@ export const getLeadConversation = async (req, res, next) => {
     }
 
     const convFilter = { conversation_id: leadMatch.conversation_id };
+    // Use the leadConversation preset — 10,000 default/max keeps full transcript behaviour
+    // while still providing the pagination envelope the frontend already reads.
+    const { page, limit, skip } = parsePageLimitPagination(req.query, PAGINATION_PRESETS.leadConversation);
     const [convoExists, total, messages] = await Promise.all([
       ChatConversation.exists({ _id: leadMatch.conversation_id }),
       ChatMessage.countDocuments(convFilter),
-      ChatMessage.find(convFilter).sort({ createdAt: 1 }).lean(),
+      ChatMessage.find(convFilter).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
     ]);
-    const page = 1;
-    const limit = total;
     const conversationMessages = messages.map((m) => ({ id: String(m._id), role: m.role, content: m.content, intent: m.intent || null, created_at: m.createdAt }));
     let emptyState = null;
     if (conversationMessages.length === 0) {

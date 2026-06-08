@@ -49,4 +49,7 @@ const chatMessageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Fix #4 — compound index supports paginated transcript queries efficiently
+chatMessageSchema.index({ conversation_id: 1, createdAt: 1 });
+
 export default mongoose.model('ChatMessage', chatMessageSchema);

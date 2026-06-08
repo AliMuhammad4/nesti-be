@@ -43,26 +43,14 @@ export async function recordLeadKpiEvent({
 export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
   const uid = new mongoose.Types.ObjectId(String(userId));
   const since = sinceDate(days);
-  const rows = await LeadKpiEvent.aggregate([
-    { $match: { user_id: uid, occurred_at: { $gte: since } } },
-    {
-      $group: {
-        _id: '$event_type',
-        count: { $sum: 1 },
-      },
-    },
-  ]);
 
-  const byType = Object.fromEntries(rows.map((r) => [r._id, r.count]));
-  const totalEvents = rows.reduce((s, r) => s + r.count, 0);
-  const created = byType.lead_created || 0;
-  const booked = byType.appointment_booked || 0;
-  const canceled = byType.appointment_canceled || 0;
-  const updated = byType.lead_updated || 0;
-  const views = byType.lead_viewed || 0;
-  const nurtureEmails = byType.nurture_email_sent || 0;
-
-  const [cohortAgg, closedWonAgg] = await Promise.all([
+  // Run all three queries in parallel — each uses its own indexed $match at the top
+  // so MongoDB can use the existing indexes efficiently (no full collection scan).
+  const [kpiRows, cohortAgg, closedWonAgg] = await Promise.all([
+    LeadKpiEvent.aggregate([
+      { $match: { user_id: uid, occurred_at: { $gte: since } } },
+      { $group: { _id: '$event_type', count: { $sum: 1 } } },
+    ]),
     LeadMatch.aggregate([
       { $match: { user_id: uid, createdAt: { $gte: since } } },
       {
@@ -83,12 +71,22 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
           match_status: 'converted',
         },
       },
-      { $group: { _id: null, deals_closed_won_in_window: { $sum: 1 } } },
+      { $count: 'n' },
     ]),
   ]);
+
+  const byType = Object.fromEntries(kpiRows.map((r) => [r._id, r.count]));
+  const totalEvents = kpiRows.reduce((s, r) => s + r.count, 0);
+  const created = byType.lead_created || 0;
+  const booked = byType.appointment_booked || 0;
+  const canceled = byType.appointment_canceled || 0;
+  const updated = byType.lead_updated || 0;
+  const views = byType.lead_viewed || 0;
+  const nurtureEmails = byType.nurture_email_sent || 0;
+
   const leadsInWindow = cohortAgg?.[0]?.leads_in_window ?? 0;
   const closedWonCohort = cohortAgg?.[0]?.closed_won_in_window ?? 0;
-  const dealsClosedWonInWindow = closedWonAgg?.[0]?.deals_closed_won_in_window ?? 0;
+  const dealsClosedWonInWindow = closedWonAgg?.[0]?.n ?? 0;
 
   return {
     window_days: parseDays(days),
@@ -189,7 +187,10 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
   const d = parseDays(days);
   const uid = new mongoose.Types.ObjectId(String(userId));
   const since = sinceDate(days);
-  const rows = await LeadKpiEvent.aggregate([
+
+  // Fix #5 — run both aggregations in parallel instead of sequentially
+  const [rows, referralRows] = await Promise.all([
+    LeadKpiEvent.aggregate([
     { $match: { user_id: uid, occurred_at: { $gte: since } } },
     {
       $group: {
@@ -229,37 +230,37 @@ export async function getLeadKpiTimeseries(userId, { days = 30 } = {}) {
         nurture_email_sent: 1,
       },
     },
-  ]);
-
-  const referralRows = await Referral.aggregate([
-    {
-      $match: {
-        $or: [{ user_id: uid }, { target_user_id: uid }],
-        createdAt: { $gte: since },
-      },
-    },
-    {
-      $group: {
-        _id: {
-          day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
-        },
-        inbound_referred: {
-          $sum: { $cond: [{ $eq: ['$target_user_id', uid] }, 1, 0] },
-        },
-        outbound_referred: {
-          $sum: { $cond: [{ $eq: ['$user_id', uid] }, 1, 0] },
+  ]),
+    Referral.aggregate([
+      {
+        $match: {
+          $or: [{ user_id: uid }, { target_user_id: uid }],
+          createdAt: { $gte: since },
         },
       },
-    },
-    { $sort: { '_id.day': 1 } },
-    {
-      $project: {
-        _id: 0,
-        date: '$_id.day',
-        inbound_referred: 1,
-        outbound_referred: 1,
+      {
+        $group: {
+          _id: {
+            day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+          },
+          inbound_referred: {
+            $sum: { $cond: [{ $eq: ['$target_user_id', uid] }, 1, 0] },
+          },
+          outbound_referred: {
+            $sum: { $cond: [{ $eq: ['$user_id', uid] }, 1, 0] },
+          },
+        },
       },
-    },
+      { $sort: { '_id.day': 1 } },
+      {
+        $project: {
+          _id: 0,
+          date: '$_id.day',
+          inbound_referred: 1,
+          outbound_referred: 1,
+        },
+      },
+    ]),
   ]);
 
   const byDay = new Map(rows.map((r) => [r.date, r]));
@@ -501,7 +502,9 @@ export async function getProfessionalPerformanceInsights(userId, { days = 30 } =
   const since = sinceDate(days);
   const d = parseDays(days);
 
-  const [cohortAgg, referralAgg, kpiAgg, closedDeals] = await Promise.all([
+  // All 4 DB operations run in parallel — each starts with its own indexed $match
+  // so MongoDB can use existing indexes (no full collection scan from $facet).
+  const [cohortAgg, closedDealsCount, referralAgg, kpiAggRows] = await Promise.all([
     LeadMatch.aggregate([
       { $match: { user_id: uid, createdAt: { $gte: since } } },
       {
@@ -512,6 +515,7 @@ export async function getProfessionalPerformanceInsights(userId, { days = 30 } =
         },
       },
     ]),
+    LeadMatch.countDocuments({ user_id: uid, match_status: 'converted' }),
     Referral.aggregate([
       {
         $match: {
@@ -552,12 +556,12 @@ export async function getProfessionalPerformanceInsights(userId, { days = 30 } =
         },
       },
     ]),
-    LeadMatch.countDocuments({ user_id: uid, match_status: 'converted' }),
   ]);
 
   const cohort = cohortAgg?.[0] || { leads_in_window: 0, closed_won: 0 };
+  const closedDeals = closedDealsCount ?? 0;
   const ref = referralAgg?.[0] || { outbound: 0, inbound: 0, successful: 0 };
-  const kpi = kpiAgg?.[0] || { lead_views: 0, appointments: 0, nurture_sent: 0 };
+  const kpi = kpiAggRows?.[0] || { lead_views: 0, appointments: 0, nurture_sent: 0 };
   const leadsInWindow = Number(cohort.leads_in_window || 0);
   const closedWon = Number(cohort.closed_won || 0);
   const refTotal = Number(ref.outbound || 0) + Number(ref.inbound || 0);

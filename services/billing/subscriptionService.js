@@ -736,14 +736,16 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
   const scheduleId = normalizeStripeId(schedule?.id);
   if (!scheduleId) return null;
 
-  const subscriptionId = normalizeStripeId(schedule.subscription);
+  const subscriptionId =
+    normalizeStripeId(schedule.subscription) || normalizeStripeId(schedule.released_subscription);
   const terminalStatuses = new Set(['completed', 'released', 'canceled']);
+  const isTerminalSchedule = terminalStatuses.has(String(schedule.status || ''));
   const update = {
     last_stripe_event_id: eventId,
     last_synced_at: new Date(),
   };
 
-  if (terminalStatuses.has(String(schedule.status || ''))) {
+  if (isTerminalSchedule) {
     update.pending_plan_key = '';
     update.pending_plan_effective_at = null;
     update.stripe_subscription_schedule_id = '';
@@ -758,23 +760,25 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
   if (!synced && subscriptionId) {
     synced = await Subscription.findOneAndUpdate(
       { stripe_subscription_id: subscriptionId },
-      {
-        $set: {
-          ...update,
-          stripe_subscription_schedule_id: scheduleId,
-        },
-      },
+      { $set: isTerminalSchedule ? update : { ...update, stripe_subscription_schedule_id: scheduleId } },
       { returnDocument: 'after' },
     );
   }
 
-  if (subscriptionId && terminalStatuses.has(String(schedule.status || ''))) {
+  if (subscriptionId && isTerminalSchedule) {
     const stripe = getStripeClient();
-    const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-    return syncStripeSubscription(stripeSubscription, {
-      last_stripe_event_id: eventId,
-      clearPendingPlan: true,
-    });
+    try {
+      const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+      return syncStripeSubscription(stripeSubscription, {
+        last_stripe_event_id: eventId,
+        clearPendingPlan: true,
+      });
+    } catch (_err) {
+      // Released/canceled schedules can arrive after Stripe has detached or removed
+      // the subscription reference. The local pending schedule cleanup above is the
+      // important idempotent work; do not fail the webhook for a missing remote read.
+      return synced;
+    }
   }
 
   return synced;

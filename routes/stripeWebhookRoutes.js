@@ -95,7 +95,16 @@ async function processStripeEvent(event) {
     case 'subscription_schedule.completed':
     case 'subscription_schedule.released':
     case 'subscription_schedule.canceled':
-      result = await syncSubscriptionSchedule(event.data.object, event.id);
+      try {
+        result = await syncSubscriptionSchedule(event.data.object, event.id);
+      } catch (err) {
+        logger.warn('Stripe subscription schedule sync skipped', {
+          event_id: event.id,
+          event_type: event.type,
+          schedule_id: event.data.object?.id,
+          error: err?.message,
+        });
+      }
       break;
     case 'invoice.paid':
       result = await updateInvoicePaymentState(event.data.object, 'paid', event.id);

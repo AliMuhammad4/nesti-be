@@ -99,7 +99,11 @@ async function assertUserCanPurchasePlan(user, subscription) {
 }
 
 function toDateFromUnix(value) {
-  return value ? new Date(Number(value) * 1000) : null;
+  if (value == null || value === '') return null;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function getStripeSubscriptionPeriodEnd(stripeSubscription = {}) {

@@ -84,6 +84,121 @@ const queuePasswordResetEmail = (email, otp) => {
   });
 };
 
+const normalizeRole = (role) => (USER_ROLE_VALUES.includes(role) ? role : USER_ROLE.AGENT);
+const isGoogleAuthUser = (user) => String(user?.auth_provider || '').trim() === 'google';
+
+const parseGoogleName = (profile = {}) => {
+  const given = String(profile.given_name || '').trim();
+  const family = String(profile.family_name || '').trim();
+  const full = String(profile.name || '').trim();
+
+  if (given || family) {
+    return {
+      first_name: given || 'User',
+      last_name: family || 'Google',
+    };
+  }
+  if (full) {
+    const parts = full.split(/\s+/).filter(Boolean);
+    const first_name = parts.shift() || 'User';
+    const last_name = parts.join(' ') || 'Google';
+    return { first_name, last_name };
+  }
+  return { first_name: 'User', last_name: 'Google' };
+};
+
+const verifyGoogleToken = async ({ token, token_type }) => {
+  const normalizedToken = String(token || '').trim();
+  const normalizedType = String(token_type || '').trim().toLowerCase();
+  if (!normalizedToken || !normalizedType) {
+    throw new Error('Google token and token_type are required');
+  }
+
+  if (normalizedType !== 'access_token' && normalizedType !== 'id_token') {
+    throw new Error('Unsupported Google token_type');
+  }
+
+  const requestUrl =
+    normalizedType === 'access_token'
+      ? 'https://www.googleapis.com/oauth2/v3/userinfo'
+      : `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(normalizedToken)}`;
+
+  const response = await fetch(requestUrl, {
+    method: 'GET',
+    headers:
+      normalizedType === 'access_token'
+        ? {
+            Authorization: `Bearer ${normalizedToken}`,
+            'Content-Type': 'application/json',
+          }
+        : { 'Content-Type': 'application/json' },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error_description || payload?.error || 'Google token verification failed');
+  }
+
+  const email = String(payload?.email || '').toLowerCase().trim();
+  const emailVerified = String(payload?.email_verified ?? '').toLowerCase() === 'true';
+  if (!email || !emailVerified) {
+    throw new Error('Google account email is missing or not verified');
+  }
+
+  const configuredClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim();
+  if (configuredClientId && normalizedType === 'id_token') {
+    const aud = String(payload?.aud || '').trim();
+    if (aud && aud !== configuredClientId) {
+      throw new Error('Google token audience mismatch');
+    }
+  }
+
+  return {
+    email,
+    google_id: String(payload?.sub || '').trim() || null,
+    ...parseGoogleName(payload),
+  };
+};
+
+const bootstrapProfessionalProfile = async (user) => {
+  if (user.role === USER_ROLE.ADMIN) return;
+  await ProfessionalProfile.create({
+    user_id: user._id,
+    professional_type: user.role,
+    full_name: `${user.first_name} ${user.last_name}`,
+  });
+  if (user.role === USER_ROLE.AGENT) {
+    const { ensureAgentPropertyMatchScoring } = await import('../agent/propertyMatch/scoringConfig.js');
+    await ensureAgentPropertyMatchScoring(user._id);
+  }
+};
+
+const finalizeInviteForUser = ({ invite_token, userId, method, path }) => {
+  const normalizedInviteToken = String(invite_token || '').trim();
+  if (!normalizedInviteToken) return;
+
+  finalizeInviteAttribution({
+    invite_token: normalizedInviteToken,
+    authenticated_user_id: userId,
+    method,
+    path,
+  })
+    .then((finResult) => {
+      if (finResult?.ok === false) {
+        logger.warn(`Invite attribution finalization failed after ${method}`, {
+          user_id: String(userId),
+          code: finResult.code,
+          message: finResult.message,
+        });
+      }
+    })
+    .catch((err) => {
+      logger.warn(`Invite attribution finalization failed after ${method}`, {
+        user_id: String(userId),
+        error: err?.message,
+      });
+    });
+};
+
 function normalizeProfessionalProfile(profileDoc) {
   const p = profileDoc || {};
   return {
@@ -126,7 +241,17 @@ export const signupService = async (payload) => {
 
   const assignedRole = role && USER_ROLE_VALUES.includes(role) ? role : USER_ROLE.AGENT;
 
-  if (await User.findOne({ email: normalizedEmail })) {
+  const existingUser = await User.findOne({ email: normalizedEmail });
+  if (existingUser) {
+    if (isGoogleAuthUser(existingUser)) {
+      return {
+        status: 400,
+        body: {
+          success: false,
+          message: 'This email is already registered with Google. Please continue with Google sign-in.',
+        },
+      };
+    }
     return { status: 400, body: { success: false, message: 'User already exists' } };
   }
 
@@ -191,6 +316,7 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       last_name: decoded.last_name,
       role: decoded.role,
       is_verified: true,
+      auth_provider: 'local',
     });
     await createFreeTrialSubscription(user._id, trialEndsAt);
   } catch (error) {
@@ -203,41 +329,15 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
     throw error;
   }
 
-  if (user.role !== USER_ROLE.ADMIN) {
-    await ProfessionalProfile.create({
-      user_id: user._id,
-      professional_type: user.role,
-      full_name: `${user.first_name} ${user.last_name}`,
-    });
-    if (user.role === USER_ROLE.AGENT) {
-      const { ensureAgentPropertyMatchScoring } = await import('../agent/propertyMatch/scoringConfig.js');
-      await ensureAgentPropertyMatchScoring(user._id);
-    }
-  }
+  await bootstrapProfessionalProfile(user);
 
   const inviteTokenFromPayload = String(invite_token || decoded?.invite_token || '').trim();
-  if (inviteTokenFromPayload) {
-    try {
-      const finResult = await finalizeInviteAttribution({
-        invite_token: inviteTokenFromPayload,
-        authenticated_user_id: user._id,
-        method: 'signup_verify_email',
-        path: '/auth/verify-email',
-      });
-      if (finResult?.ok === false) {
-        logger.warn('Invite attribution finalization failed after verify-email', {
-          user_id: String(user._id),
-          code: finResult.code,
-          message: finResult.message,
-        });
-      }
-    } catch (err) {
-      logger.warn('Invite attribution finalization failed after verify-email', {
-        user_id: String(user._id),
-        error: err?.message,
-      });
-    }
-  }
+  finalizeInviteForUser({
+    invite_token: inviteTokenFromPayload,
+    userId: user._id,
+    method: 'signup_verify_email',
+    path: '/auth/verify-email',
+  });
 
   return {
     status: 200,
@@ -250,9 +350,19 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
 };
 
 export const loginService = async ({ email, password, invite_token }) => {
-  const user = await User.findOne({ email });
+  const normalizedEmail = String(email || '').toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail });
 
-  if (!user || !(await user.matchPassword(password))) {
+  if (!user) {
+    return { status: 401, body: { success: false, message: 'Invalid email or password' } };
+  }
+  if (user.auth_provider === 'google') {
+    return {
+      status: 400,
+      body: { success: false, message: 'This account uses Google sign-in. Please continue with Google.' },
+    };
+  }
+  if (!(await user.matchPassword(password))) {
     return { status: 401, body: { success: false, message: 'Invalid email or password' } };
   }
 
@@ -260,34 +370,143 @@ export const loginService = async ({ email, password, invite_token }) => {
     return { status: 403, body: { success: false, message: 'Email not verified' } };
   }
 
-  if (invite_token && String(invite_token).trim()) {
-    const normalizedInviteToken = String(invite_token).trim();
-    finalizeInviteAttribution({
-      invite_token: normalizedInviteToken,
-      authenticated_user_id: user._id,
-      method: 'login',
-      path: '/auth/login',
-    })
-      .then((finResult) => {
-        if (finResult?.ok === false) {
-          logger.warn('Invite attribution finalization failed after login', {
-            user_id: String(user._id),
-            code: finResult.code,
-            message: finResult.message,
-          });
-        }
-      })
-      .catch((err) => {
-        logger.warn('Invite attribution finalization failed after login', {
-          user_id: String(user._id),
-          error: err?.message,
-        });
-      });
-  }
+  finalizeInviteForUser({
+    invite_token,
+    userId: user._id,
+    method: 'login',
+    path: '/auth/login',
+  });
 
   return {
     status: 200,
     body: { success: true, token: signJwt({ id: user._id }, '30d') },
+  };
+};
+
+export const googleSignupService = async ({ token, token_type, role, invite_token }) => {
+  let googleProfile;
+  try {
+    googleProfile = await verifyGoogleToken({ token, token_type });
+  } catch (error) {
+    return { status: 401, body: { success: false, message: error.message } };
+  }
+
+  const existing = await User.findOne({ email: googleProfile.email });
+  if (existing) {
+    if (!isGoogleAuthUser(existing)) {
+      return {
+        status: 409,
+        body: {
+          success: false,
+          message: 'This email is already registered with email/password. Please sign in with email.',
+        },
+      };
+    }
+    return {
+      status: 409,
+      body: {
+        success: false,
+        message: 'Google account already exists. Please use Google login.',
+      },
+    };
+  }
+
+  const assignedRole = normalizeRole(role);
+  const trialEndsAt = new Date();
+  trialEndsAt.setDate(trialEndsAt.getDate() + 3);
+
+  let user;
+  try {
+    user = await User.create({
+      email: googleProfile.email,
+      first_name: googleProfile.first_name,
+      last_name: googleProfile.last_name,
+      role: assignedRole,
+      is_verified: true,
+      auth_provider: 'google',
+      google_id: googleProfile.google_id,
+    });
+    await createFreeTrialSubscription(user._id, trialEndsAt);
+  } catch (error) {
+    if (error?.code === 11000) {
+      return {
+        status: 409,
+        body: { success: false, message: 'Account already exists. Please login.' },
+      };
+    }
+    throw error;
+  }
+
+  await bootstrapProfessionalProfile(user);
+  finalizeInviteForUser({
+    invite_token,
+    userId: user._id,
+    method: 'google_signup',
+    path: '/auth/google-signup',
+  });
+
+  return {
+    status: 201,
+    body: {
+      success: true,
+      message: 'Signed up with Google successfully',
+      token: signJwt({ id: user._id }, '30d'),
+    },
+  };
+};
+
+export const googleLoginService = async ({ token, token_type, invite_token }) => {
+  let googleProfile;
+  try {
+    googleProfile = await verifyGoogleToken({ token, token_type });
+  } catch (error) {
+    return { status: 401, body: { success: false, message: error.message } };
+  }
+
+  const user = await User.findOne({ email: googleProfile.email });
+  if (!user) {
+    return {
+      status: 404,
+      body: {
+        success: false,
+        message: 'No Google account found for this email. Please sign up first.',
+      },
+    };
+  }
+  if (user.auth_provider !== 'google') {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'This account uses email/password login. Please sign in with email.',
+      },
+    };
+  }
+
+  if (!user.is_verified) {
+    user.is_verified = true;
+  }
+  if (googleProfile.google_id && user.google_id !== googleProfile.google_id) {
+    user.google_id = googleProfile.google_id;
+  }
+  if (user.isModified('is_verified') || user.isModified('google_id')) {
+    await user.save();
+  }
+
+  finalizeInviteForUser({
+    invite_token,
+    userId: user._id,
+    method: 'google_login',
+    path: '/auth/google',
+  });
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Logged in with Google successfully',
+      token: signJwt({ id: user._id }, '30d'),
+    },
   };
 };
 
@@ -328,6 +547,8 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         last_name: user.last_name,
         email: user.email,
         role: user.role,
+        auth_provider: user.auth_provider || 'local',
+        authProvider: user.auth_provider || 'local',
         profile_image: user.profile_image || null,
         cover_image: user.cover_image || null,
         accountStatus: subscription.accountStatus,
@@ -484,6 +705,12 @@ export const changePasswordService = async ({ userId, currentPassword, newPasswo
   }
 
   const user = await User.findById(userId);
+  if (isGoogleAuthUser(user)) {
+    return {
+      status: 400,
+      body: { success: false, message: 'This account uses Google sign-in. Password changes are not available.' },
+    };
+  }
   if (!user || !(await user.matchPassword(currentPassword))) {
     return { status: 401, body: { success: false, message: 'Incorrect current password' } };
   }
@@ -505,6 +732,12 @@ export const forgotPasswordService = async ({ email }) => {
     return {
       status: 404,
       body: { success: false, message: 'No account found with that email address' },
+    };
+  }
+  if (isGoogleAuthUser(user)) {
+    return {
+      status: 400,
+      body: { success: false, message: 'This account uses Google sign-in. Please continue with Google.' },
     };
   }
 
@@ -536,6 +769,12 @@ export const verifyResetOtpService = async ({ email, otp }) => {
   const user = await User.findOne({ email: normalizedEmail });
   if (!user || !user.reset_password_token || !user.reset_password_expires) {
     return { status: 400, body: { success: false, message: 'Invalid or expired OTP' } };
+  }
+  if (isGoogleAuthUser(user)) {
+    return {
+      status: 400,
+      body: { success: false, message: 'This account uses Google sign-in. Please continue with Google.' },
+    };
   }
 
   if (user.reset_password_token !== String(otp)) {
@@ -578,6 +817,12 @@ export const resetPasswordService = async ({ resetToken, newPassword }) => {
   const user = await User.findById(decoded.id);
   if (!user) {
     return { status: 400, body: { success: false, message: 'User not found for this reset session' } };
+  }
+  if (isGoogleAuthUser(user)) {
+    return {
+      status: 400,
+      body: { success: false, message: 'This account uses Google sign-in. Password reset is not available.' },
+    };
   }
 
   user.password = newPassword;

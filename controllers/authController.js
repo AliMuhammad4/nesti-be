@@ -2,6 +2,8 @@ import {
   signupService,
   verifyEmailService,
   loginService,
+  googleLoginService,
+  googleSignupService,
   profileService,
   publicProfileService,
   changePasswordService,
@@ -58,8 +60,6 @@ const profile = async (req, res, next) => {
   }
 };
 
-const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
-
 const changePassword = async (req, res, next) => {
   try {
     send(
@@ -105,8 +105,21 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
-const google = stub;
-const googleSignup = stub;
+const google = async (req, res, next) => {
+  try {
+    send(res, await googleLoginService(req.body));
+  } catch (error) {
+    next(error);
+  }
+};
+
+const googleSignup = async (req, res, next) => {
+  try {
+    send(res, await googleSignupService(req.body));
+  } catch (error) {
+    next(error);
+  }
+};
 const publicProfile = async (req, res, next) => {
   try {
     send(res, await publicProfileService(req.query.email));

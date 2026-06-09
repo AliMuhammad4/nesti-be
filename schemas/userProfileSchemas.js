@@ -1,6 +1,28 @@
 import { PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { Joi, anyObj, objectId, str } from './common.js';
 
+const calendlyUrl = Joi.string()
+  .trim()
+  .custom((value, helpers) => {
+    if (value === '' || value === null) return value;
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return helpers.error('string.uri');
+    }
+    const hostname = String(parsed.hostname || '').toLowerCase();
+    if (!hostname || (!hostname.endsWith('calendly.com') && hostname !== 'calendly.com')) {
+      return helpers.error('any.invalid');
+    }
+    return value;
+  }, 'Calendly URL validation')
+  .allow('', null)
+  .messages({
+    'string.uri': 'calendly_link must be a valid URL',
+    'any.invalid': 'calendly_link must be a Calendly URL (calendly.com)',
+  });
+
 const professionalProfileCreateSchema = Joi.object({
   user_id: objectId.required(),
   professional_type: Joi.string().valid(...PROFESSIONAL_TYPE_VALUES),
@@ -27,7 +49,7 @@ const professionalProfileCreateSchema = Joi.object({
   specializations: Joi.array().items(Joi.string()).default([]),
   communication_channels: Joi.array().items(Joi.string()).default([]),
   preferred_clients: Joi.array().items(Joi.string()).default([]),
-  calendly_link: str,
+  calendly_link: calendlyUrl,
   bio: str,
   property_match_scoring: anyObj,
 });

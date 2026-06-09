@@ -4,6 +4,17 @@ import LeadMatch from '../../models/LeadMatch.js';
 import Referral from '../../models/Referral.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
+/**
+ * Keep analytics lead counts aligned with GET /leads:
+ * recipient-side referral LeadMatch rows are tracked under Referrals, not Leads.
+ */
+const VISIBLE_LEAD_MATCH_FILTER = {
+  $or: [
+    { 'compatibility_factors.referral_id': { $exists: false } },
+    { 'compatibility_factors.referral_id': null },
+  ],
+};
+
 function parseDays(days) {
   const n = Number(days);
   if (!Number.isFinite(n) || n <= 0) return 30;
@@ -52,7 +63,7 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
       { $group: { _id: '$event_type', count: { $sum: 1 } } },
     ]),
     LeadMatch.aggregate([
-      { $match: { user_id: uid, createdAt: { $gte: since } } },
+      { $match: { user_id: uid, createdAt: { $gte: since }, ...VISIBLE_LEAD_MATCH_FILTER } },
       {
         $group: {
           _id: null,
@@ -69,6 +80,7 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
           user_id: uid,
           updatedAt: { $gte: since },
           match_status: 'converted',
+          ...VISIBLE_LEAD_MATCH_FILTER,
         },
       },
       { $count: 'n' },
@@ -77,14 +89,14 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
 
   const byType = Object.fromEntries(kpiRows.map((r) => [r._id, r.count]));
   const totalEvents = kpiRows.reduce((s, r) => s + r.count, 0);
-  const created = byType.lead_created || 0;
+  const leadsInWindow = cohortAgg?.[0]?.leads_in_window ?? 0;
+  const created = leadsInWindow;
   const booked = byType.appointment_booked || 0;
   const canceled = byType.appointment_canceled || 0;
   const updated = byType.lead_updated || 0;
   const views = byType.lead_viewed || 0;
   const nurtureEmails = byType.nurture_email_sent || 0;
 
-  const leadsInWindow = cohortAgg?.[0]?.leads_in_window ?? 0;
   const closedWonCohort = cohortAgg?.[0]?.closed_won_in_window ?? 0;
   const dealsClosedWonInWindow = closedWonAgg?.[0]?.n ?? 0;
 

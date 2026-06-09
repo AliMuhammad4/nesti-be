@@ -9,7 +9,8 @@ import {
   resetPasswordSchema,
   otpWithEmailSchema,
   verifyEmailSchema,
-  googleAuthSchema,
+  googleLoginSchema,
+  googleSignupSchema,
   emailOnlySchema,
   resendVerificationSchema,
 } from '../schemas/authSchemas.js';
@@ -40,8 +41,8 @@ router.use(authGlobalLimiter);
 router.post('/signup', authSensitiveLimiter, validateBody(signupSchema), signup);
 router.post('/verify-email', authOtpVerifyLimiter, validateBody(verifyEmailSchema), verifyEmail);
 router.post('/login', authSensitiveLimiter, validateBody(loginSchema), login);
-router.post('/google', validateBody(googleAuthSchema), google);
-router.post('/google-signup', validateBody(googleAuthSchema), googleSignup);
+router.post('/google', authSensitiveLimiter, validateBody(googleLoginSchema), google);
+router.post('/google-signup', authSensitiveLimiter, validateBody(googleSignupSchema), googleSignup);
 router.get('/profile', protect, profile);
 router.get('/public-profile', publicProfile);
 router.post('/change-password', protect, validateBody(changePasswordSchema), changePassword);

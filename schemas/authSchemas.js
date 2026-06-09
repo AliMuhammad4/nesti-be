@@ -1,4 +1,5 @@
-import { Joi, passthrough } from './common.js';
+import { Joi } from './common.js';
+import { USER_ROLE_VALUES } from '../constants/roles.js';
 
 export const signupSchema = Joi.object({
   email: Joi.string().email().required(),
@@ -38,7 +39,20 @@ export const verifyEmailSchema = Joi.object({
   invite_token: Joi.string().min(12).optional(),
 });
 
-export const googleAuthSchema = passthrough;
+export const googleLoginSchema = Joi.object({
+  token: Joi.string().required(),
+  token_type: Joi.string().valid('access_token', 'id_token').required(),
+  invite_token: Joi.string().min(12).optional(),
+});
+
+export const googleSignupSchema = Joi.object({
+  token: Joi.string().required(),
+  token_type: Joi.string().valid('access_token', 'id_token').required(),
+  role: Joi.string()
+    .valid(...USER_ROLE_VALUES.filter((value) => value !== 'admin'))
+    .required(),
+  invite_token: Joi.string().min(12).optional(),
+});
 
 export const emailOnlySchema = Joi.object({
   email: Joi.string().email().required(),

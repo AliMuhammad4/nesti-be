@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
-import postmark from 'postmark';
+import { Resend } from 'resend';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import dotenv from 'dotenv';
@@ -85,27 +85,36 @@ app.get('/lawyer', (req, res) => {
 
 app.get('/api/health/smtp', async (req, res) => {
   try {
-    if (!process.env.POSTMARK_SERVER_TOKEN || !process.env.POSTMARK_FROM_EMAIL) {
+    if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM_EMAIL) {
       return res.status(500).json({
         success: false,
-        message: 'Missing Postmark config: POSTMARK_SERVER_TOKEN or POSTMARK_FROM_EMAIL',
+        message: 'Missing Resend config: RESEND_API_KEY or RESEND_FROM_EMAIL',
       });
     }
 
-    const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
-    const server = await client.getServer();
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { data, error } = await resend.domains.list();
+
+    if (error) {
+      throw new Error(error.message || 'Resend API check failed');
+    }
+
+    const fromDomain = String(process.env.RESEND_FROM_EMAIL).split('@')[1] || '';
+    const domainVerified = (data?.data || []).some(
+      (domain) => domain.name === fromDomain && domain.status === 'verified',
+    );
 
     return res.json({
       success: true,
-      message: 'Postmark connection verified successfully',
-      serverName: server?.Name,
-      postmarkFromEmail: process.env.POSTMARK_FROM_EMAIL,
+      message: 'Resend connection verified successfully',
+      resendFromEmail: process.env.RESEND_FROM_EMAIL,
+      fromDomainVerified: domainVerified,
     });
   } catch (error) {
-    logger.error(`Postmark health check failed: ${error.message}`);
+    logger.error(`Resend health check failed: ${error.message}`);
     return res.status(500).json({
       success: false,
-      message: 'Postmark verification failed',
+      message: 'Resend verification failed',
       error: error.message,
     });
   }

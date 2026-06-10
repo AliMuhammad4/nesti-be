@@ -25,9 +25,8 @@
     "mongoose": "^9.2.4",
     "morgan": "^1.10.1",
     "multer": "^2.1.1",
-    "nodemailer": "^8.0.2",
     "openai": "^6.27.0",
-    "postmark": "^4.0.7",
+    "resend": "^6.12.4",
     "socket.io": "^4.8.3",
     "stripe": "^22.2.0",
     "winston": "^3.19.0"

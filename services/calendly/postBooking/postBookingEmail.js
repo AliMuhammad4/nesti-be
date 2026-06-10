@@ -1,5 +1,5 @@
 import logger from '../../../utils/logger.js';
-import sendEmail from '../../../utils/sendEmail.js';
+import sendEmail, { isResendConfigured } from '../../../utils/sendEmail.js';
 import { EMAIL_LINK_STYLE, renderBrandedEmailShell } from '../../email/emailTheme.js';
 export { EMAIL_LINK_STYLE } from '../../email/emailTheme.js';
 
@@ -248,12 +248,6 @@ export function sellerChecklistHtml() {
   return `<p style="margin:16px 0 8px;font-size:14px;font-weight:600;color:#0f172a;">Preparation checklist</p><ul style="margin:0;padding-left:20px;line-height:1.55;">${items}</ul>`;
 }
 
-function smtpConfigured() {
-  return Boolean(
-    process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS
-  );
-}
-
 function normEmail(e) {
   if (!e || typeof e !== 'string') return '';
   return e.trim().toLowerCase();
@@ -268,8 +262,8 @@ export async function sendVisitorAndAgentCopy(ctx, { visitorSubject, html, text 
   if (!ctx.inviteeEmail) {
     return { status: 'skipped', detail: 'no_invitee_email' };
   }
-  if (!smtpConfigured()) {
-    return { status: 'skipped', detail: 'smtp_not_configured' };
+  if (!isResendConfigured()) {
+    return { status: 'skipped', detail: 'resend_not_configured' };
   }
 
   const visitorSend = await sendEmail({

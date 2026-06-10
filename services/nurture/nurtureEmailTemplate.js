@@ -153,6 +153,57 @@ export function plainBodyToHtmlFragment(plainBody) {
     .join('\n');
 }
 
+function isListingBulletLine(value) {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  const normalized = s.replace(/^_+/, '').trim();
+  if (!/^[-*]\s+/.test(normalized)) return false;
+  const lower = normalized.toLowerCase();
+  return (
+    /\$[\d,]/.test(normalized) ||
+    /bed|bath|budget|stretch|area match|property type|lahore|karachi|islamabad/.test(lower)
+  );
+}
+
+function isMarkdownTableSeparatorLine(value) {
+  const s = String(value || '').trim();
+  return s.includes('|') && /-{2,}/.test(s) && /^[\s|:-]+$/.test(s);
+}
+
+function isMarkdownTableRow(value) {
+  const s = String(value || '').trim();
+  if (!s.includes('|')) return false;
+  const cells = s.split('|').map((part) => part.trim()).filter(Boolean);
+  return cells.length >= 2;
+}
+
+function isListingTableIntroLine(value) {
+  const s = String(value || '').trim().toLowerCase();
+  return (
+    /^matched options include\s*:/.test(s) ||
+    /matched listings|listings for your consideration|property listings below|review the matched listings|here are the matched listings/i.test(
+      s,
+    )
+  );
+}
+
+function skipMarkdownTableBlock(lines, startIndex) {
+  let i = startIndex;
+  while (i < lines.length) {
+    const trimmed = String(lines[i] || '').trim();
+    if (!trimmed) {
+      i += 1;
+      break;
+    }
+    if (isMarkdownTableRow(lines[i]) || isMarkdownTableSeparatorLine(lines[i])) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
 function stripMatchedOptionsBlock(plainBody) {
   const raw = String(plainBody || '');
   if (!raw.trim()) return '';
@@ -160,18 +211,6 @@ function stripMatchedOptionsBlock(plainBody) {
   const lines = normalized.split('\n');
   const out = [];
   let i = 0;
-  const isListingBullet = (value) => {
-    const s = String(value || '').trim();
-    if (!s) return false;
-    // Handles "- ...", "* ...", "_ - ...", "_* ..."
-    const normalized = s.replace(/^_+/, '').trim();
-    if (!/^[-*]\s+/.test(normalized)) return false;
-    const lower = normalized.toLowerCase();
-    return (
-      /\$[\d,]/.test(normalized) ||
-      /bed|bath|budget|stretch|area match|property type|lahore|karachi|islamabad/.test(lower)
-    );
-  };
 
   while (i < lines.length) {
     const line = String(lines[i] || '').trim();
@@ -179,7 +218,7 @@ function stripMatchedOptionsBlock(plainBody) {
       i += 1;
       while (i < lines.length) {
         const bullet = String(lines[i] || '').trim();
-        if (isListingBullet(bullet)) {
+        if (isListingBulletLine(bullet)) {
           i += 1;
           continue;
         }
@@ -191,15 +230,52 @@ function stripMatchedOptionsBlock(plainBody) {
       }
       continue;
     }
-    // Fallback cleanup: remove any contiguous listing-bullet block even without heading.
-    if (isListingBullet(line)) {
-      while (i < lines.length && isListingBullet(lines[i])) i += 1;
+    if (isListingBulletLine(line)) {
+      while (i < lines.length && isListingBulletLine(lines[i])) i += 1;
       continue;
     }
     out.push(lines[i]);
     i += 1;
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function stripMarkdownListingTables(plainBody) {
+  const raw = String(plainBody || '');
+  if (!raw.trim()) return '';
+  const lines = raw.replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const trimmed = String(lines[i] || '').trim();
+
+    if (isListingTableIntroLine(trimmed)) {
+      i += 1;
+      while (i < lines.length && !String(lines[i] || '').trim()) i += 1;
+      if (i < lines.length && (isMarkdownTableRow(lines[i]) || isMarkdownTableSeparatorLine(lines[i]))) {
+        i = skipMarkdownTableBlock(lines, i);
+      }
+      continue;
+    }
+
+    if (isMarkdownTableRow(lines[i]) || isMarkdownTableSeparatorLine(lines[i])) {
+      i = skipMarkdownTableBlock(lines, i);
+      continue;
+    }
+
+    out.push(lines[i]);
+    i += 1;
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Remove inline listing bullets/tables when formatted property cards are appended separately. */
+export function sanitizeNurturePlainBodyForPropertyCards(plainBody) {
+  let cleaned = stripMatchedOptionsBlock(plainBody);
+  cleaned = stripMarkdownListingTables(cleaned);
+  return cleaned;
 }
 
 function stripInlineBookingCta(plainBody) {
@@ -331,7 +407,7 @@ export function composeNurtureEmailHtml(opts) {
 
   let bodyPlain = bodyPlainRaw;
   if (includePropertyCards && listings.length) {
-    bodyPlain = stripMatchedOptionsBlock(bodyPlain);
+    bodyPlain = sanitizeNurturePlainBodyForPropertyCards(bodyPlain);
   }
   // Keep only one booking CTA in final HTML (footer schedule button).
   bodyPlain = stripInlineBookingCta(bodyPlain);

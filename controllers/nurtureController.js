@@ -17,7 +17,10 @@ import {
   refineDraft,
 } from '../services/nurture/nurtureEmailOpenAi.js';
 import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurturePropertyMatchesContext.js';
-import { composeNurtureEmailHtml } from '../services/nurture/nurtureEmailTemplate.js';
+import {
+  composeNurtureEmailHtml,
+  sanitizeNurturePlainBodyForPropertyCards,
+} from '../services/nurture/nurtureEmailTemplate.js';
 import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
 import { ownerQuery } from '../services/lead/leadProfileHelpers.js';
 
@@ -240,9 +243,13 @@ function resolveRecipientEmail(to_email, bundle) {
 /** Draft/refine API responses expose plain text plus compact property-match preview for UI. */
 function nurtureDraftJsonResponse(draft, propertyMatches) {
   const listings = Array.isArray(propertyMatches?.listings) ? propertyMatches.listings : [];
+  const body_text =
+    listings.length > 0
+      ? sanitizeNurturePlainBodyForPropertyCards(draft.body_text)
+      : draft.body_text;
   return {
     subject: draft.subject,
-    body_text: draft.body_text,
+    body_text,
     property_matches_preview: listings.map((L, i) => ({
       i: i + 1,
       title: L?.title || null,

@@ -585,7 +585,7 @@ ROLE-SPECIFIC STYLE (use professional_type, or referral_context.action_professio
 AGENT (professional_type = agent):
 - Executive brokerage tone: market-aware, action-oriented, focused on search fit and next showing steps.
 - Reference search criteria (location, budget, beds/baths, must-haves) and readiness to view.
-- If property_matches_email.listings has items: the send template appends a formatted listings table. In body_text write ONE concise transition sentence directing them to review the matched listings below — no property listing bullets in the main message.
+- If property_matches_email.listings has items: the send template appends a formatted HTML listings section. In body_text write ONE concise transition sentence directing them to review the matched listings below — no property listing bullets, no markdown tables (never use | pipe characters), and no property rows in the main message.
 - Budget consistency when referencing matches in prose: distinguish "within budget" vs "above budget/stretch" clearly; never contradict.
 - If listings is empty, do not mention or invent properties; focus on clarifying criteria and scheduling a search review.
 - CTA: confirm priorities, schedule a showing, or reply with updated criteria.
@@ -630,13 +630,13 @@ const SYSTEM_REFINE = `You refine nurture emails to the same professional standa
 Keep main message only — no scheduling links, no closings, no contact block. The platform appends scheduling and signature.
 
 Refinement rules:
-- AGENT: executive brokerage tone; one transition sentence for listings if property_matches_email has items — no property listing bullets in the main message.
+- AGENT: executive brokerage tone; one transition sentence for listings if property_matches_email has items — no property listing bullets, no markdown tables (never use | pipe characters), and no property rows in the main message.
 - LAWYER: formal attorney-office tone; transaction/closing focus only — remove any property search, listing, or sales language.
 - MORTGAGE BROKER: financing-focused tone — remove property pitch or listing language.
 - Preserve or improve the meeting preparation checklist (3–5 role-appropriate items with • lines). Use "Before our meeting" or "To make the most of our scheduled meeting" based on calendly_booking_status.
 - Break oversized paragraphs into short blocks.
 - Remove stock openers, filler praise, and raw internal labels.
-- No "Matched options include:" or property listing bullet rows in the main message.
+- No "Matched options include:", property listing bullet rows, or markdown tables (| pipes) in the main message.
 - Enforce budget consistency language for agents when matches are referenced in prose.
 
 Output only JSON: { "subject", "body_text", "body_html" } with p, br, strong only in body_html (no <a>).`;

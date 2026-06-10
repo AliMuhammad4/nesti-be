@@ -1,5 +1,15 @@
 import mongoose from 'mongoose';
 import LeadMatch from '../../models/LeadMatch.js';
+import LeadProfile from '../../models/LeadProfile.js';
+import ChatConversation from '../../models/ChatConversation.js';
+import { LEAD_LIST_CONVERSATION_FIELDS } from './leadAppointmentStatus.js';
+import { leadMapperOptsFromRequest } from './leadQueryUtils.js';
+import { mapLeadMatchToSellerLeadSummary } from './leadResponseMappers.js';
+
+const INQUIRED_PROPERTY_LEAD_MATCH_FIELDS =
+  '_id lead_profile_id conversation_id match_score match_status compatibility_factors lead_type createdAt updatedAt';
+const INQUIRED_PROPERTY_PROFILE_FIELDS =
+  'intent identity contact_preferences property qualification ownership createdAt updatedAt';
 
 function firstString(...values) {
   for (const value of values) {
@@ -75,4 +85,43 @@ export async function resolveLinkedSellerLeadMatchId({ ownerUserId, inquiredProp
     .sort({ updatedAt: -1, createdAt: -1 })
     .lean();
   return sellerLeadMatch?._id ? String(sellerLeadMatch._id) : null;
+}
+
+export async function fetchInquiredPropertySellerLead({ linkedSellerLeadMatchId, mapperOpts }) {
+  if (!linkedSellerLeadMatchId || !mongoose.Types.ObjectId.isValid(linkedSellerLeadMatchId)) return null;
+  const sellerMatch = await LeadMatch.findById(linkedSellerLeadMatchId)
+    .select(INQUIRED_PROPERTY_LEAD_MATCH_FIELDS)
+    .lean();
+  if (!sellerMatch) return null;
+
+  const [profile, convo] = await Promise.all([
+    sellerMatch.lead_profile_id
+      ? LeadProfile.findById(sellerMatch.lead_profile_id).select(INQUIRED_PROPERTY_PROFILE_FIELDS).lean()
+      : null,
+    sellerMatch.conversation_id
+      ? ChatConversation.findById(sellerMatch.conversation_id).select(LEAD_LIST_CONVERSATION_FIELDS).lean()
+      : null,
+  ]);
+
+  return mapLeadMatchToSellerLeadSummary(sellerMatch, profile, convo || {}, mapperOpts);
+}
+
+export async function buildInquiredPropertyPayload(req, leadMatch) {
+  const { inquiredProperty, linkedSellerLeadMatchId } = extractInquiredPropertyContext(leadMatch);
+  if (!inquiredProperty && !linkedSellerLeadMatchId) {
+    return {
+      inquired_property: null,
+      linked_seller_lead_match_id: null,
+      seller_lead: null,
+    };
+  }
+  const sellerLead = await fetchInquiredPropertySellerLead({
+    linkedSellerLeadMatchId,
+    mapperOpts: leadMapperOptsFromRequest(req),
+  });
+  return {
+    inquired_property: inquiredProperty,
+    linked_seller_lead_match_id: linkedSellerLeadMatchId || null,
+    seller_lead: sellerLead,
+  };
 }

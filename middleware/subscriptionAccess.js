@@ -10,7 +10,6 @@ import {
   getPlanLimits,
   hasFeature,
 } from '../services/billing/entitlements.js';
-
 async function loadSubscription(req, { refresh = false } = {}) {
   if (req.subscription && !refresh) return req.subscription;
   const subscription = refresh
@@ -55,7 +54,7 @@ export function requireFeature(featureKey) {
     if (isAdmin(req)) return next();
 
     try {
-      const subscription = await loadSubscription(req, { refresh: true });
+      const subscription = await loadSubscription(req);
       if (!hasFeature(subscription, featureKey)) {
         return res.status(403).json({
           success: false,

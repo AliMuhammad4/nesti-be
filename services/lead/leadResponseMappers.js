@@ -4,6 +4,7 @@ import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.j
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
 import { extractInquiredPropertyContext } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
+import { resolveListIntent } from './leadQueryUtils.js';
 
 function professionalTypeFromMatch(leadMatch, profile = null) {
   return (
@@ -137,7 +138,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     close_summary: formatCloseSummary(leadMatch.compatibility_factors),
   };
   if (includeIntentField) {
-    core.intent = profileView.intent;
+    core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);
   }
   return core;
 }
@@ -145,16 +146,19 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
 export function mapLeadMatchToListRow(leadMatch, profile, convo, includeConversion, opts = {}) {
   const profType = professionalTypeFromMatch(leadMatch, profile);
   const profileView = mapLeadProfileForApi(profile, profType);
-  const conversion = buildConversion(leadMatch, profile, convo);
   const grade = leadMatch.lead_type?.split('_')[0] || null;
+  const includeExperience = opts.includeExperienceBlocks !== false && includeAgentStyleLeadExperience(profType);
+  const needsConversion =
+    includeConversion && (includeExperience || includePlaybookConversionPack(profType));
+  const conversion = needsConversion ? buildConversion(leadMatch, profile, convo) : null;
   const row = {
-    ...leadCore(leadMatch, profileView, convo, opts),
+    ...leadCore(leadMatch, profileView, convo, { ...opts, leadProfile: profile }),
     professional_type: profType,
   };
-  if (includeAgentStyleLeadExperience(profType)) {
+  if (includeExperience && conversion) {
     Object.assign(row, buildExperienceBlocks(conversion, grade, profileView, leadMatch));
-    if (includeConversion) row.conversion = conversion;
-  } else if (includePlaybookConversionPack(profType) && includeConversion) {
+    row.conversion = conversion;
+  } else if (includePlaybookConversionPack(profType) && includeConversion && conversion) {
     row.conversion = conversion;
   }
   return row;
@@ -166,7 +170,7 @@ export function mapLeadMatchToDetail(leadMatch, profile, convo, opts = {}) {
   const conversion = buildConversion(leadMatch, profile, convo);
   const grade = leadMatch.lead_type?.split('_')[0] || null;
   const lead = {
-    ...leadCore(leadMatch, profileView, convo, opts),
+    ...leadCore(leadMatch, profileView, convo, { ...opts, leadProfile: profile }),
     professional_type: profType,
     icp_fit: leadMatch.icp_fit || null,
   };
@@ -176,9 +180,35 @@ export function mapLeadMatchToDetail(leadMatch, profile, convo, opts = {}) {
   return lead;
 }
 
+/** Compact lead row for linked seller context (inquired property tab). */
+export function mapLeadMatchToSellerLeadSummary(leadMatch, profile, convo, opts = {}) {
+  const profType = professionalTypeFromMatch(leadMatch, profile);
+  const profileView = mapLeadProfileForApi(profile, profType);
+  const core = leadCore(leadMatch, profileView, convo, { ...opts, leadProfile: profile });
+  const row = {
+    id: core.id,
+    professional_type: profType,
+    lead_type: core.lead_type,
+    grade: core.grade,
+    score: core.score,
+    status: core.status,
+    contact: core.contact,
+    property: core.property,
+    qualification: core.qualification,
+    appointment_status: core.appointment_status,
+    calendly_booking_status: core.calendly_booking_status,
+    conversation_id: core.conversation_id,
+    source: core.source,
+    created_at: core.created_at,
+    updated_at: core.updated_at,
+  };
+  if (opts.includeIntentField !== false && core.intent != null) row.intent = core.intent;
+  return row;
+}
+
 export function mapLeadMatchUnderProfile(leadMatch, profile, convo, opts = {}) {
   const profType = profile?.ownership?.professional_type || PROFESSIONAL_TYPE.AGENT;
-  const profileView = mapLeadProfileForApi(profile, profType);
+  const profileView = opts.profileView || mapLeadProfileForApi(profile, profType);
   const conversion = buildLeadConversionPack({
     leadMatch,
     leadProfile: profile,
@@ -188,14 +218,15 @@ export function mapLeadMatchUnderProfile(leadMatch, profile, convo, opts = {}) {
   const resolvedProfType = leadMatch.compatibility_factors?.professional_type || profType;
 
   const row = {
-    ...leadCore(leadMatch, profileView, convo, opts),
+    ...leadCore(leadMatch, profileView, convo, { ...opts, leadProfile: profile }),
     professional_type: resolvedProfType,
     icp_fit: leadMatch.icp_fit || null,
   };
-  if (includeAgentStyleLeadExperience(resolvedProfType)) {
+  const includeExperience = opts.includeExperienceBlocks !== false && includeAgentStyleLeadExperience(resolvedProfType);
+  if (includeExperience) {
     Object.assign(row, buildExperienceBlocks(conversion, grade, profileView, leadMatch));
-    row.conversion = conversion;
-  } else if (includePlaybookConversionPack(resolvedProfType)) {
+  }
+  if (includeExperience || includePlaybookConversionPack(resolvedProfType)) {
     row.conversion = conversion;
   }
   return row;

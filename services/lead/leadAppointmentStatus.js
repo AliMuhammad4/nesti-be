@@ -2,15 +2,25 @@ import mongoose from 'mongoose';
 import LeadMatch from '../../models/LeadMatch.js';
 import ChatConversation from '../../models/ChatConversation.js';
 import WorkspaceAppointment from '../../models/WorkspaceAppointment.js';
-import {
-  resolveAppointmentStatus,
-  MATCH_STATUSES_MEETING_BOOKED,
-} from '../../utils/resolveAppointmentStatus.js';
+import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
+import { normalizeProfileIdList } from './leadQueryUtils.js';
 
-function toOidArray(ids) {
+function toObjectIdList(ids) {
   return [...new Set((ids || []).map((id) => String(id)).filter(Boolean))]
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
+}
+
+function isFutureScheduledStart(scheduledStart, now = new Date()) {
+  const d = scheduledStart ? new Date(scheduledStart) : null;
+  return d && !Number.isNaN(d.getTime()) && d.getTime() >= now.getTime();
+}
+
+async function fetchFutureBookedWorkspaceAppointments(userObjectId, now = new Date()) {
+  const rows = await WorkspaceAppointment.find({ user_id: userObjectId, status: 'booked' })
+    .select('lead_match_id conversation_id scheduled_start')
+    .lean();
+  return rows.filter((r) => isFutureScheduledStart(r?.scheduled_start, now));
 }
 
 /** Query values for GET /api/leads?appointment= */
@@ -31,17 +41,9 @@ export async function buildAppointmentMongoFilter(userObjectId, appointment) {
 
   if (a === 'booked') {
     /** Lawyer/embed paths can have WorkspaceAppointment before ChatConversation is synced. */
-    const wsRows = await WorkspaceAppointment.find({ user_id: uid, status: 'booked' })
-      .select('lead_match_id conversation_id scheduled_start')
-      .lean();
-    const wsFuture = wsRows.filter((r) => {
-      const d = r?.scheduled_start ? new Date(r.scheduled_start) : null;
-      return d && !Number.isNaN(d.getTime()) && d.getTime() >= now.getTime();
-    });
-    const convOr = toOidArray([
-      ...wsFuture.map((r) => r.conversation_id).filter(Boolean),
-    ]);
-    const leadOr = toOidArray(wsFuture.map((r) => r.lead_match_id).filter(Boolean));
+    const wsFuture = await fetchFutureBookedWorkspaceAppointments(uid, now);
+    const convOr = toObjectIdList(wsFuture.map((r) => r.conversation_id).filter(Boolean));
+    const leadOr = toObjectIdList(wsFuture.map((r) => r.lead_match_id).filter(Boolean));
     const orClause = [
       { 'compatibility_factors.calendly.calendly_event_start': { $gte: now } },
     ];
@@ -59,17 +61,9 @@ export async function buildAppointmentMongoFilter(userObjectId, appointment) {
   }
 
   if (a === 'not_booked') {
-    const wsBooked = await WorkspaceAppointment.find({ user_id: uid, status: 'booked' })
-      .select('lead_match_id conversation_id scheduled_start')
-      .lean();
-    const wsFuture = wsBooked.filter((r) => {
-      const d = r?.scheduled_start ? new Date(r.scheduled_start) : null;
-      return d && !Number.isNaN(d.getTime()) && d.getTime() >= now.getTime();
-    });
-    const exclude = toOidArray([
-      ...wsFuture.map((r) => r.conversation_id).filter(Boolean),
-    ]);
-    const excludeLeadIds = toOidArray(wsFuture.map((r) => r.lead_match_id).filter(Boolean));
+    const wsFuture = await fetchFutureBookedWorkspaceAppointments(uid, now);
+    const exclude = toObjectIdList(wsFuture.map((r) => r.conversation_id).filter(Boolean));
+    const excludeLeadIds = toObjectIdList(wsFuture.map((r) => r.lead_match_id).filter(Boolean));
     const andClauses = [
       {
         $or: [
@@ -97,7 +91,7 @@ export async function buildAppointmentMongoFilter(userObjectId, appointment) {
 
 export async function buildAppointmentStatusByProfileIds(userObjectId, profileIds) {
   const map = new Map();
-  const ids = (profileIds || []).map((id) => String(id)).filter(Boolean);
+  const ids = normalizeProfileIdList(profileIds);
   if (!ids.length) return map;
   const matches = await LeadMatch.find({
     user_id: userObjectId,
@@ -139,4 +133,84 @@ export async function buildAppointmentStatusByProfileIds(userObjectId, profileId
   }
 
   return map;
+}
+
+export const LEAD_LIST_CONVERSATION_FIELDS =
+  'calendly_booking_status calendly_event_start session_id';
+
+/**
+ * Single query for booked workspace appointments by lead_match_id and/or conversation_id.
+ */
+export async function fetchBookedWorkspaceAppointments(userId, leadMatchObjectIds, conversationObjectIds) {
+  const leadIds = toObjectIdList(leadMatchObjectIds);
+  const convoIds = toObjectIdList(conversationObjectIds);
+  if (!leadIds.length && !convoIds.length) {
+    return {
+      bookedLeadIds: new Set(),
+      bookedConvoIds: new Set(),
+      startByLeadId: new Map(),
+      startByConversationId: new Map(),
+    };
+  }
+  const now = new Date();
+  const orClauses = [];
+  if (leadIds.length) orClauses.push({ lead_match_id: { $in: leadIds } });
+  if (convoIds.length) orClauses.push({ conversation_id: { $in: convoIds } });
+  const rows = await WorkspaceAppointment.find({
+    user_id: userId,
+    status: 'booked',
+    scheduled_start: { $gte: now },
+    $or: orClauses,
+  })
+    .select('lead_match_id conversation_id scheduled_start')
+    .sort({ scheduled_start: 1, recorded_at: -1 })
+    .lean();
+
+  const bookedLeadIds = new Set();
+  const bookedConvoIds = new Set();
+  const startByLeadId = new Map();
+  const startByConversationId = new Map();
+  for (const r of rows) {
+    if (r.lead_match_id) bookedLeadIds.add(String(r.lead_match_id));
+    if (r.conversation_id) bookedConvoIds.add(String(r.conversation_id));
+    const start = r?.scheduled_start ? new Date(r.scheduled_start) : null;
+    if (!start || Number.isNaN(start.getTime())) continue;
+    if (r.lead_match_id) {
+      const k = String(r.lead_match_id);
+      if (!startByLeadId.has(k)) startByLeadId.set(k, start.toISOString());
+    }
+    if (r.conversation_id) {
+      const k = String(r.conversation_id);
+      if (!startByConversationId.has(k)) startByConversationId.set(k, start.toISOString());
+    }
+  }
+  return { bookedLeadIds, bookedConvoIds, startByLeadId, startByConversationId };
+}
+
+export function mergeConvoWithWorkspaceBooking(
+  conversation,
+  leadMatchId,
+  leadConversationId,
+  bookedLeadIdSet,
+  bookedConversationIdSet,
+  startByLeadId = new Map(),
+  startByConversationId = new Map(),
+) {
+  const c = conversation && typeof conversation === 'object' ? conversation : {};
+  const convoKey = c._id ? String(c._id) : leadConversationId ? String(leadConversationId) : null;
+  const leadKey = leadMatchId ? String(leadMatchId) : null;
+  const leadBooked = leadKey && bookedLeadIdSet.has(leadKey);
+  const convoBooked = convoKey && bookedConversationIdSet.has(convoKey);
+  const startsAt =
+    (leadKey ? startByLeadId.get(leadKey) : null) ||
+    (convoKey ? startByConversationId.get(convoKey) : null) ||
+    null;
+  const next = { ...c };
+  if ((leadBooked || convoBooked) && !c.calendly_booking_status) {
+    next.calendly_booking_status = 'booked';
+  }
+  if (startsAt && !next.calendly_event_start) {
+    next.calendly_event_start = startsAt;
+  }
+  return next;
 }

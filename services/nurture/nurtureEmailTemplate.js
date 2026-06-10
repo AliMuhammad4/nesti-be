@@ -165,6 +165,24 @@ function isListingBulletLine(value) {
   );
 }
 
+function isNumberedListingLine(value) {
+  const s = String(value || '').trim();
+  if (!/^\d+\.\s+/.test(s)) return false;
+  const lower = s.toLowerCase();
+  return (
+    /\$[\d,]/.test(s) &&
+    /bed|bath|single family|condo|townhouse|multi.family|detached|semi.detached|property type|lahore|karachi|islamabad/.test(
+      lower,
+    )
+  );
+}
+
+function skipNumberedListingBlock(lines, startIndex) {
+  let i = startIndex;
+  while (i < lines.length && isNumberedListingLine(lines[i])) i += 1;
+  return i;
+}
+
 function isMarkdownTableSeparatorLine(value) {
   const s = String(value || '').trim();
   return s.includes('|') && /-{2,}/.test(s) && /^[\s|:-]+$/.test(s);
@@ -271,11 +289,53 @@ function stripMarkdownListingTables(plainBody) {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function stripNumberedListingLines(plainBody) {
+  const raw = String(plainBody || '');
+  if (!raw.trim()) return '';
+  const lines = raw.replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const trimmed = String(lines[i] || '').trim();
+
+    if (isListingTableIntroLine(trimmed)) {
+      i += 1;
+      while (i < lines.length && !String(lines[i] || '').trim()) i += 1;
+      if (i < lines.length && isNumberedListingLine(lines[i])) {
+        i = skipNumberedListingBlock(lines, i);
+      }
+      continue;
+    }
+
+    if (isNumberedListingLine(lines[i])) {
+      i = skipNumberedListingBlock(lines, i);
+      continue;
+    }
+
+    out.push(lines[i]);
+    i += 1;
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /** Remove inline listing bullets/tables when formatted property cards are appended separately. */
 export function sanitizeNurturePlainBodyForPropertyCards(plainBody) {
   let cleaned = stripMatchedOptionsBlock(plainBody);
   cleaned = stripMarkdownListingTables(cleaned);
+  cleaned = stripNumberedListingLines(cleaned);
   return cleaned;
+}
+
+/** Plain body used for both HTML composition and the text part of sent nurture emails. */
+export function prepareNurturePlainBodyForEmail({ bodyPlain, listings, includePropertyCards }) {
+  const listingRows = Array.isArray(listings) ? listings : [];
+  let cleaned = String(bodyPlain ?? '');
+  if (listingRows.length) {
+    cleaned = sanitizeNurturePlainBodyForPropertyCards(cleaned);
+  }
+  return stripInlineBookingCta(cleaned);
 }
 
 function stripInlineBookingCta(plainBody) {
@@ -399,18 +459,17 @@ function consultationStyleMatchesSectionHtml(
 export function composeNurtureEmailHtml(opts) {
   const bodyPlainRaw = opts.bodyPlain ?? '';
   const listings = Array.isArray(opts.listings) ? opts.listings : [];
-  const includePropertyCards = opts.includePropertyCards !== false;
+  const includePropertyCards = opts.includePropertyCards === true;
   const agentName =
     opts.agentName != null && String(opts.agentName).trim()
       ? String(opts.agentName).trim()
       : 'Your agent';
 
-  let bodyPlain = bodyPlainRaw;
-  if (includePropertyCards && listings.length) {
-    bodyPlain = sanitizeNurturePlainBodyForPropertyCards(bodyPlain);
-  }
-  // Keep only one booking CTA in final HTML (footer schedule button).
-  bodyPlain = stripInlineBookingCta(bodyPlain);
+  const bodyPlain = prepareNurturePlainBodyForEmail({
+    bodyPlain: bodyPlainRaw,
+    listings,
+    includePropertyCards,
+  });
   const bodyFrag = plainBodyToHtmlFragment(bodyPlain);
   const listingTableColumns =
     opts.listingTableColumns === 'location_budget' ? 'location_budget' : 'score_notes';

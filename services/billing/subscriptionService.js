@@ -2,7 +2,6 @@ import Subscription from '../../models/Subscription.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { getPlan, getPlanByPriceId, getPlanTier, getStripePriceId } from './plans.js';
 import { getStripeClient } from './stripeClient.js';
-
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const STRIPE_BLOCKING_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
 
@@ -526,6 +525,14 @@ export async function getFreshSubscriptionForUser(user) {
   return expireTrialIfNeeded(subscription);
 }
 
+export async function getSubscriptionForRead(user, { refresh = false } = {}) {
+  if (refresh) {
+    return getFreshSubscriptionForUser(user);
+  }
+  const subscription = await getOrCreateSubscriptionForUser(user);
+  return expireTrialIfNeeded(subscription);
+}
+
 export async function getSubscriptionPresentationForUser(user, { refreshFromStripe = true } = {}) {
   const subscription = refreshFromStripe
     ? await getFreshSubscriptionForUser(user)
@@ -687,7 +694,7 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
     (existing?.pending_plan_key && planKey && existing.pending_plan_key === planKey),
   );
 
-  return Subscription.findOneAndUpdate(
+  const synced = await Subscription.findOneAndUpdate(
     filter,
     {
       $set: update,
@@ -703,6 +710,7 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
     },
     { returnDocument: 'after', upsert: Boolean(userId) },
   );
+  return synced;
 }
 
 export async function syncCheckoutSession(session, eventId = '') {

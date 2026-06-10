@@ -45,6 +45,16 @@ function resolveIntent(leadProfile, conversation, leadMatch) {
   if (prof === PROFESSIONAL_TYPE.LAWYER || prof === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return 'unspecified';
   }
+  const leadType = String(leadMatch?.lead_type || '').toLowerCase();
+  if (/seller/i.test(leadType)) return 'sell';
+  if (/(buyer|client)/i.test(leadType)) return 'buy';
+
+  const cfIntent = String(leadMatch?.compatibility_factors?.inquiry_intent || '').trim().toLowerCase();
+  if (cfIntent === 'buy' || cfIntent === 'sell') return cfIntent;
+
+  const summaryIntent = String(leadProfile?.intent_summary?.primary_intent || '').trim().toLowerCase();
+  if (summaryIntent === 'buy' || summaryIntent === 'sell') return summaryIntent;
+
   const i = leadProfile?.intent ?? conversation?.intent;
   if (i === 'buy' || i === 'sell') return i;
   return 'buy';

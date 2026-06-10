@@ -190,34 +190,53 @@ export async function listMyThreads({ currentUserId, limitRaw = 20, pageRaw = 1 
   const page = Math.max(Number.isFinite(pageNum) ? pageNum : 1, 1);
   const skip = (page - 1) * limit;
 
-  const [total, items] = await Promise.all([
-    ProfessionalChatThread.countDocuments({ $or: [{ participants: currentUserId }, { left_participants: currentUserId }] }),
-    ProfessionalChatThread.find({ $or: [{ participants: currentUserId }, { left_participants: currentUserId }] })
-      .sort({ last_message_at: -1, updatedAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('participants', USER_SELECT)
-      .lean(),
+  const threadFilter = {
+    $or: [{ participants: currentUserId }, { left_participants: currentUserId }],
+  };
+  const [facet] = await ProfessionalChatThread.aggregate([
+    { $match: threadFilter },
+    {
+      $facet: {
+        total: [{ $count: 'count' }],
+        items: [
+          { $sort: { last_message_at: -1, updatedAt: -1 } },
+          { $skip: skip },
+          { $limit: limit },
+        ],
+      },
+    },
   ]);
+  const total = facet?.total?.[0]?.count || 0;
+  const items = Array.isArray(facet?.items) ? facet.items : [];
+
+  const participantIds = new Set();
+  for (const t of items) {
+    for (const pid of t.participants || []) participantIds.add(String(pid));
+  }
+  const users = participantIds.size
+    ? await User.find({ _id: { $in: [...participantIds] } }).select(USER_SELECT).lean()
+    : [];
+  const userById = new Map(users.map((u) => [String(u._id), u]));
 
   const out = items.map((t) => {
     const type = t.thread_type || 'dm';
     const isGroup = String(type) === 'group';
-    const other = !isGroup && Array.isArray(t.participants)
-      ? t.participants.find((p) => String(p?._id || p?.id || '') !== String(currentUserId)) || null
+    const participants = (t.participants || [])
+      .map((pid) => userById.get(String(pid)))
+      .filter(Boolean);
+    const other = !isGroup
+      ? participants.find((p) => String(p?._id || '') !== String(currentUserId)) || null
       : null;
-    const membersPreview = isGroup && Array.isArray(t.participants)
-      ? t.participants.slice(0, 3).map(userSummary).filter(Boolean)
+    const membersPreview = isGroup
+      ? participants.slice(0, 3).map(userSummary).filter(Boolean)
       : null;
-    const isMember = Array.isArray(t.participants)
-      ? t.participants.some((p) => String(p?._id || p?.id || p || '') === String(currentUserId))
-      : false;
+    const isMember = participants.some((p) => String(p?._id || '') === String(currentUserId));
     return {
       id: String(t._id),
       thread_type: type,
       title: t.title || null,
       created_by: t.created_by ? String(t.created_by) : null,
-      member_count: Array.isArray(t.participants) ? t.participants.length : 0,
+      member_count: participants.length,
       is_member: isMember,
       can_reply: isMember,
       rejoin_request_status: rejoinRequestStatusForUser(t, currentUserId),

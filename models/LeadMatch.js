@@ -78,6 +78,8 @@ const leadMatchSchema = new mongoose.Schema(
 
 leadMatchSchema.index({ user_id: 1, 'icp_fit.fit_tier': 1, lead_profile_id: 1 });
 leadMatchSchema.index({ user_id: 1, lead_profile_id: 1 });
+leadMatchSchema.index({ user_id: 1, lead_profile_id: 1, createdAt: -1 });
+leadMatchSchema.index({ user_id: 1, lead_profile_id: 1, last_contact_at: -1, updatedAt: -1, createdAt: -1 });
 leadMatchSchema.index({ user_id: 1, createdAt: -1 });
 leadMatchSchema.index({ user_id: 1, match_status: 1, createdAt: -1 });
 leadMatchSchema.index({ user_id: 1, conversation_id: 1 });

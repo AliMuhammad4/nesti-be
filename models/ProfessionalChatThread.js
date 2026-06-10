@@ -100,6 +100,9 @@ const professionalChatThreadSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+professionalChatThreadSchema.index({ participants: 1, last_message_at: -1, updatedAt: -1 });
+professionalChatThreadSchema.index({ left_participants: 1, last_message_at: -1, updatedAt: -1 });
+
 professionalChatThreadSchema.pre('validate', function () {
   const ids = normalizeParticipantIds(this.participants);
   this.participants = ids.map((s) => new mongoose.Types.ObjectId(s));

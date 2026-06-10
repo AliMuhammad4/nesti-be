@@ -19,6 +19,7 @@ import {
 import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurturePropertyMatchesContext.js';
 import {
   composeNurtureEmailHtml,
+  prepareNurturePlainBodyForEmail,
   sanitizeNurturePlainBodyForPropertyCards,
 } from '../services/nurture/nurtureEmailTemplate.js';
 import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
@@ -35,7 +36,7 @@ function normalizeProfessionalType(raw) {
 function shouldIncludePropertyCards(user, includePropertyCardsFlag) {
   const viewerRole = normalizeProfessionalType(user?.role);
   if (viewerRole !== PROFESSIONAL_TYPE.AGENT) return false;
-  return includePropertyCardsFlag !== false;
+  return includePropertyCardsFlag === true;
 }
 
 function resolveNurtureOperatingRole(leadMatch, referralContext, viewerRoleRaw) {
@@ -435,6 +436,7 @@ export async function postNurtureSend(req, res, next) {
     const convId = resolveConversationId(conversation_id, bundle.leadMatch);
     const customHtml = body_html != null && String(body_html).trim();
     let htmlForSend;
+    let plainMessageForSend = body;
     if (customHtml) {
       htmlForSend = String(body_html).trim();
     } else {
@@ -472,10 +474,16 @@ export async function postNurtureSend(req, res, next) {
         isReferralNurture && nurtureOperatingRole === PROFESSIONAL_TYPE.AGENT
           ? 'location_budget'
           : 'score_notes';
+      const includePropertyCards = shouldIncludePropertyCards(req.user, include_property_cards);
+      plainMessageForSend = prepareNurturePlainBodyForEmail({
+        bodyPlain: bodyForTemplate,
+        listings: propertyMatches.listings || [],
+        includePropertyCards,
+      });
       htmlForSend = composeNurtureEmailHtml({
         bodyPlain: bodyForTemplate,
         listings: propertyMatches.listings || [],
-        includePropertyCards: shouldIncludePropertyCards(req.user, include_property_cards),
+        includePropertyCards,
         agentName,
         propertyMatchesContext: propertyMatches.context || null,
         propertyMatchesNote: propertyMatches.note || null,
@@ -488,7 +496,7 @@ export async function postNurtureSend(req, res, next) {
     const result = await sendEmail({
       email: recipient,
       subject,
-      message: body,
+      message: plainMessageForSend,
       htmlMessage: htmlForSend,
     });
 
@@ -648,6 +656,41 @@ function mapNurtureLogRow(r) {
   };
 }
 
+export async function listNurtureLogsForUser(userId, { leadMatchId, leadProfileId, page, limit, skip } = {}) {
+  const q = { user_id: userId };
+
+  if (leadMatchId != null) {
+    const s = String(leadMatchId).trim();
+    if (!s || !mongoose.Types.ObjectId.isValid(s)) {
+      return { items: [], pagination: buildPaginationMeta({ page, limit, total: 0 }) };
+    }
+    q.lead_match_id = new mongoose.Types.ObjectId(s);
+  } else if (leadProfileId != null) {
+    const s = String(leadProfileId).trim();
+    if (!s || !mongoose.Types.ObjectId.isValid(s)) {
+      return { items: [], pagination: buildPaginationMeta({ page, limit, total: 0 }) };
+    }
+    q.lead_profile_id = new mongoose.Types.ObjectId(s);
+  }
+
+  const facetRows = await NurtureLog.aggregate([
+    { $match: q },
+    {
+      $facet: {
+        total: [{ $count: 'count' }],
+        rows: [{ $sort: { createdAt: -1 } }, { $skip: skip }, { $limit: limit }],
+      },
+    },
+  ]);
+  const total = facetRows[0]?.total?.[0]?.count ?? 0;
+  const rows = facetRows[0]?.rows ?? [];
+
+  return {
+    items: rows.map(mapNurtureLogRow),
+    pagination: buildPaginationMeta({ page, limit, total }),
+  };
+}
+
 export async function getNurtureLogs(req, res, next) {
   try {
     const { page, limit, skip } = parsePageLimitPagination(req.query || {}, PAGINATION_PRESETS.leadList);
@@ -656,8 +699,6 @@ export async function getNurtureLogs(req, res, next) {
     const leadProfileIdRaw = qp.lead_profile_id;
     const explicitMatch = Object.prototype.hasOwnProperty.call(qp, 'lead_match_id');
     const explicitProfile = Object.prototype.hasOwnProperty.call(qp, 'lead_profile_id');
-
-    const q = { user_id: req.user._id };
 
     if (explicitMatch) {
       const s = leadMatchIdRaw != null ? String(leadMatchIdRaw).trim() : '';
@@ -668,8 +709,16 @@ export async function getNurtureLogs(req, res, next) {
           pagination: buildPaginationMeta({ page, limit, total: 0 }),
         });
       }
-      q.lead_match_id = new mongoose.Types.ObjectId(s);
-    } else if (explicitProfile) {
+      const payload = await listNurtureLogsForUser(req.user._id, {
+        leadMatchId: s,
+        page,
+        limit,
+        skip,
+      });
+      return res.json({ success: true, ...payload });
+    }
+
+    if (explicitProfile) {
       const s = leadProfileIdRaw != null ? String(leadProfileIdRaw).trim() : '';
       if (!s || !mongoose.Types.ObjectId.isValid(s)) {
         return res.json({
@@ -678,27 +727,17 @@ export async function getNurtureLogs(req, res, next) {
           pagination: buildPaginationMeta({ page, limit, total: 0 }),
         });
       }
-      const leadMatch = await findLatestLeadMatchForProfileLean(req.user._id, s);
-      if (!leadMatch) {
-        return res.json({
-          success: true,
-          items: [],
-          pagination: buildPaginationMeta({ page, limit, total: 0 }),
-        });
-      }
-      q.lead_match_id = leadMatch._id;
+      const payload = await listNurtureLogsForUser(req.user._id, {
+        leadProfileId: s,
+        page,
+        limit,
+        skip,
+      });
+      return res.json({ success: true, ...payload });
     }
 
-    const [total, rows] = await Promise.all([
-      NurtureLog.countDocuments(q),
-      NurtureLog.find(q).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-    ]);
-
-    return res.json({
-      success: true,
-      items: rows.map(mapNurtureLogRow),
-      pagination: buildPaginationMeta({ page, limit, total }),
-    });
+    const payload = await listNurtureLogsForUser(req.user._id, { page, limit, skip });
+    return res.json({ success: true, ...payload });
   } catch (err) {
     return next(err);
   }

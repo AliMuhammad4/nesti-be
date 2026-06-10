@@ -23,7 +23,14 @@ const protect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = await User.findById(decoded.id).select('-password');
+    const doc = await User.findById(decoded.id).select('-password').lean();
+    if (!doc) {
+      return res.status(401).json({ success: false, message: 'Not authorized, user not found' });
+    }
+    req.user = User.hydrate(doc);
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Not authorized, user not found' });
+    }
     next();
   } catch (error) {
     logger.warn('Auth middleware: token verification failed', { err: error.message });

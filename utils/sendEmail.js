@@ -1,38 +1,43 @@
-import postmark from 'postmark';
+import { Resend } from 'resend';
 import logger from './logger.js';
+
+export function isResendConfigured() {
+  return Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL);
+}
+
+function getFromAddress() {
+  const email = process.env.RESEND_FROM_EMAIL;
+  const name = process.env.RESEND_FROM_NAME;
+  if (!email) return '';
+  return name ? `${name} <${email}>` : email;
+}
 
 const sendEmail = async (options) => {
   try {
-    if (!process.env.POSTMARK_SERVER_TOKEN || !process.env.POSTMARK_FROM_EMAIL) {
-      throw new Error('Missing Postmark config: POSTMARK_SERVER_TOKEN or POSTMARK_FROM_EMAIL');
+    if (!isResendConfigured()) {
+      throw new Error('Missing Resend config: RESEND_API_KEY or RESEND_FROM_EMAIL');
     }
 
-    const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
-    const from = process.env.POSTMARK_FROM_EMAIL;
-    const to = options.email;
-    const messageStream = options.messageStream || 'outbound';
+    if (options.templateAlias || options.templateId) {
+      logger.warn('Email templates are not supported with Resend; sending HTML body instead.');
+    }
 
-    const response =
-      options.templateAlias || options.templateId
-        ? await client.sendEmailWithTemplate({
-            From: from,
-            To: to,
-            TemplateAlias: options.templateAlias,
-            TemplateId: options.templateId,
-            TemplateModel: options.templateModel || {},
-            MessageStream: messageStream,
-          })
-        : await client.sendEmail({
-            From: from,
-            To: to,
-            Subject: options.subject,
-            TextBody: options.message,
-            HtmlBody: options.htmlMessage || `<p>${options.message}</p>`,
-            MessageStream: messageStream,
-          });
-    logger.info(`Message sent via Postmark: ${response.MessageID}`);
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { data, error } = await resend.emails.send({
+      from: getFromAddress(),
+      to: [options.email],
+      subject: options.subject,
+      text: options.message,
+      html: options.htmlMessage || `<p>${options.message}</p>`,
+    });
 
-    return { success: true };
+    if (error) {
+      throw new Error(error.message || 'Resend send failed');
+    }
+
+    logger.info(`Message sent via Resend: ${data?.id || 'unknown'}`);
+
+    return { success: true, id: data?.id };
   } catch (error) {
     logger.error(`Error sending email: ${error.message}`);
     return { success: false, error };

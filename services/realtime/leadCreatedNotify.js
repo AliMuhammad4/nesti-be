@@ -1,5 +1,5 @@
 import User from '../../models/User.js';
-import sendEmail from '../../utils/sendEmail.js';
+import sendEmail, { isResendConfigured } from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
 import { emitNotification } from './workspaceSocket.js';
 import {
@@ -127,8 +127,8 @@ export async function emitLeadLifecycleNotification(ownerUserId, payload) {
 
 export async function sendNewLeadCreatedEmailIfEnabled(ownerUserId, ctx) {
   if (!envTruthy(process.env.NEW_LEAD_EMAIL_NOTIFICATIONS)) return;
-  if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    logger.debug('NEW_LEAD_EMAIL_NOTIFICATIONS enabled but email transport is not configured');
+  if (!isResendConfigured()) {
+    logger.debug('NEW_LEAD_EMAIL_NOTIFICATIONS enabled but Resend is not configured');
     return;
   }
 

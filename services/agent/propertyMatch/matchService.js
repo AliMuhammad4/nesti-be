@@ -278,6 +278,7 @@ export async function resolveAgentPropertyMatchesForChat({
   userId,
   conversationId,
   leadMetaSignals,
+  matchMode = 'strict',
 }) {
   if (!isAgent || !hasContact) {
     return emptyPropertyMatchesMeta();
@@ -297,15 +298,22 @@ export async function resolveAgentPropertyMatchesForChat({
   }
 
   if (matchIntent === 'buy') {
-    const property_matches = await getBuyerPropertyMatches({
-      userId,
-      leadProfile: leadProfileDoc,
-      signals:     leadMetaSignals,
-    });
+    const relaxed = String(matchMode || 'strict').trim().toLowerCase() === 'relaxed';
+    const property_matches = relaxed
+      ? await getBuyerPropertyMatchesForChat({
+          userId,
+          leadProfile: leadProfileDoc,
+          signals: leadMetaSignals,
+        })
+      : await getBuyerPropertyMatches({
+          userId,
+          leadProfile: leadProfileDoc,
+          signals: leadMetaSignals,
+        });
     return {
       property_matches,
       property_matches_context: 'buy',
-      property_matches_note:    propertyMatchesFooterNote('buy', property_matches.length),
+      property_matches_note: propertyMatchesFooterNote('buy', property_matches.length),
     };
   }
 
@@ -354,6 +362,11 @@ export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {
  * even though scored inventory exists — fall back to ranked inventory for best-effort picks.
  */
 export async function getBuyerPropertyMatchesForNurture({ userId, leadProfile, signals = {} }) {
+  return computeBuyerInventoryMatches(userId, leadProfile, signals, true);
+}
+
+/** Chat widget: surface seller CRM leads with relaxed location filtering for "available options" requests. */
+export async function getBuyerPropertyMatchesForChat({ userId, leadProfile, signals = {} }) {
   return computeBuyerInventoryMatches(userId, leadProfile, signals, true);
 }
 

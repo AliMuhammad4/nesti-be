@@ -1,4 +1,5 @@
 import logger from '../../../utils/logger.js';
+import { afterLeadCapturedNotifyOverQuota } from '../../billing/planQuota.js';
 import LeadMatch from '../../../models/LeadMatch.js';
 import LeadProfile from '../../../models/LeadProfile.js';
 import ChatConversation from '../../../models/ChatConversation.js';
@@ -89,6 +90,7 @@ export async function syncLeadMatchAfterTurn({
   persistedGrade,
   leadMeta,
   aiIntent,
+  forceCreateLead = false,
 }) {
   const formIntent =
     formContact?.intent === 'sell' || formContact?.intent === 'buy'
@@ -96,13 +98,15 @@ export async function syncLeadMatchAfterTurn({
       : null;
   const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
   const intentSuffix = flow.getIntentSuffix(leadIntent);
-  const existingLeadMatch = canCreateLeads
-    ? await LeadMatch.findOne({
-        conversation_id: conversation._id,
-        user_id: userId,
-        lead_type: new RegExp(`${intentSuffix}$`),
-      })
-    : null;
+  const existingLeadMatch =
+    canCreateLeads && !forceCreateLead
+      ? await LeadMatch.findOne({
+          conversation_id: conversation._id,
+          user_id: userId,
+          lead_type: new RegExp(`${intentSuffix}$`),
+        })
+      : null;
+  const creatingNewLead = forceCreateLead || !existingLeadMatch;
 
   /**
    * Agents need a ProfessionalProfile row (ICP, business context). Lawyers and mortgage brokers
@@ -111,7 +115,7 @@ export async function syncLeadMatchAfterTurn({
   const profileRequiredForNewLead = flow?.flowRole === PROFESSIONAL_TYPE.AGENT;
   const canPersistNewLead = hasContact && (!profileRequiredForNewLead || professionalProfile);
 
-  if (canCreateLeads && !existingLeadMatch && !canPersistNewLead) {
+  if (canCreateLeads && creatingNewLead && !canPersistNewLead) {
     logger.warn('Chat service: lead not persisted (precheck)', {
       op: 'chat.lead',
       flow: flowType,
@@ -122,7 +126,7 @@ export async function syncLeadMatchAfterTurn({
     });
   }
 
-  if (canCreateLeads && !existingLeadMatch && canPersistNewLead) {
+  if (canCreateLeads && creatingNewLead && canPersistNewLead) {
     if (!professionalProfile && !profileRequiredForNewLead) {
       logger.warn('Chat service: creating lawyer/broker lead without ProfessionalProfile — complete Settings for full ICP', {
         op: 'chat.lead',
@@ -205,6 +209,7 @@ export async function syncLeadMatchAfterTurn({
           persistedGrade,
           conversion_preview,
         });
+        await afterLeadCapturedNotifyOverQuota(userId);
       } catch (e) {
         logger.warn('Workspace lead event (create) failed', { error: e.message });
       }

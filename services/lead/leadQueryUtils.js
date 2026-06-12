@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import LeadMatch from '../../models/LeadMatch.js';
 import { USER_ROLE } from '../../constants/roles.js';
+import { getOrCreateSubscriptionForUser } from '../billing/subscriptionService.js';
+import { assertLeadMatchPlanVisible } from '../billing/planQuota.js';
 
 export function assertValidLeadId(leadId) {
   if (!mongoose.Types.ObjectId.isValid(String(leadId || ''))) {
@@ -21,6 +23,13 @@ export async function findOwnedLeadMatch(userId, leadId, { select, lean = true }
     err.statusCode = 404;
     throw err;
   }
+  return lead;
+}
+
+export async function findOwnedVisibleLeadMatch(userId, leadId, opts = {}) {
+  const lead = await findOwnedLeadMatch(userId, leadId, opts);
+  const subscription = await getOrCreateSubscriptionForUser({ _id: userId });
+  await assertLeadMatchPlanVisible(userId, lead._id, subscription);
   return lead;
 }
 

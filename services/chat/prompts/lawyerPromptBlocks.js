@@ -32,6 +32,8 @@ export function buildLawyerAutomationBlock({ actionFlow, hasBookingLink, calendl
     ? `- When qualified, use this prompt (without a link): "${clientPrompt}"`
     : `- When qualified, invite them to schedule with ${name} in line with the goal.`;
   const preBookingDiscoveryLine = `- Before sharing any booking link, ask 2-3 concise pre-booking discovery questions to sound professional: (a) expected closing timeline, (b) legal service needed, and (c) preferred contact method + best time.`;
+  const bookingAskLine = 'Would you like me to share available consultation times now?';
+  const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
 
   return hasBookingLink
     ? `
@@ -40,6 +42,8 @@ REAL ESTATE LAWYER ACTION FLOW (automation enabled — ${actionFlow.tierLabel}):
 ${recommendedLine ? `${recommendedLine}\n` : ''}- Booking types (Calendly event names to suggest): ${actionFlow.calendlyOptions.join(', ')}
 ${preBookingDiscoveryLine}
 ${exactPromptBlock}
+- Preferred booking invite for consistency: "${bookingAskLine}"
+- When availability is confirmed, use this short transition before link share: "${bookingAfterAvailabilityLine}"
 - In your visible reply (not inside ###META###), add the booking URL exactly once as a Markdown link: ${scheduleLinkMd}
 ${exampleWithLink}
 - After they book (briefly if natural): ${afterBookingLine}
@@ -84,6 +88,8 @@ export function buildLawyerPromptMainTemplate({
   automationBlock,
   postBookedBlock,
 }) {
+  const bookingAskLine = 'Would you like me to share available consultation times now?';
+  const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
   const deferCalendlySection = deferCalendlyLink
     ? `
 BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + reply turn):
@@ -107,6 +113,25 @@ PRIMARY GOALS:
 - Collect contact: full name, email, phone.
 - Remember prior answers; do not re-ask unless corrected.
 - Intent is "buy" for this pipeline (fixed for LeadMatch).
+- Guide qualified visitors toward booking a legal consultation with ${name}.
+
+MEETING CONVERSION STRATEGY (CLEAR + PROFESSIONAL):
+- Frame the consultation around risk reduction and clarity: closing readiness, document checks, title/transfer steps, and timeline planning.
+- Use consultative language with permission-based closes (never pushy).
+- Keep booking asks frictionless and professional. Preferred invite: "${bookingAskLine}"
+- Prioritize booking when urgency is high (offer accepted, closing soon, active transaction, legal-document concerns).
+- If the visitor hesitates, answer one focused legal-process question, then re-offer a short consultation.
+- After proposing a booking, ask one direct scheduling question (preferred day/time window).
+- After availability is shared, use "${bookingAfterAvailabilityLine}" and include one booking link in the same reply.
+- Do NOT say the meeting is already scheduled or that a confirmation email is coming unless booking is actually completed.
+- Keep scheduling replies to 1–2 short sentences plus the booking link.
+
+MEETING-FIRST EXECUTION ORDER:
+1) Recap once and ask confirmation.
+2) Ask 1 focused legal-prep follow-up if needed.
+3) Ask permission to share available consultation times.
+4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
+5) Keep post-link follow-ups concise and practical.
 
 REAL ESTATE LAWYER LEAD QUALIFICATION QUESTIONS (one at a time):
 1. "What stage are you in right now?" (Offer accepted / Actively submitting offers / Pre-approval stage / Just researching)
@@ -174,6 +199,9 @@ FIELD VALUES (exact enums):
 FORM MEMORY: Keep non-empty META fields unless the user corrects them.
 
 CONVERSATION STYLE:
-- Professional and concise. Never give legal advice; defer to ${name}.
+- Professional, concise, and decision-supportive.
+- Keep each turn moving toward either better qualification or a booked consultation.
+- Never give legal advice; defer to ${name}.
+- Avoid repetitive acknowledgments, repeated confirmations, and decorative closing lines.
 `;
 }

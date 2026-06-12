@@ -81,6 +81,7 @@ export async function buildFlowSystemPromptOptions({
   deferCalendlyLink,
   isAutomatedBookingEnabled,
   calendlyLinkForVisitor,
+  propertyMatchesEnabled = true,
 }) {
   const calendlySnapForPrompt = await ChatConversation.findById(conversation._id)
     .select('calendly_booking_status lead_grade')
@@ -103,6 +104,7 @@ export async function buildFlowSystemPromptOptions({
     intent: conversation.intent || intent,
     calendlyBooked: Boolean(postBookingChatChecklistForPrompt.length),
     postBookingChatChecklist: postBookingChatChecklistForPrompt,
+    propertyMatchesEnabled,
   };
 
   if (

@@ -8,6 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import dotenv from 'dotenv';
 import morgan from 'morgan';
 import logger from './utils/logger.js';
+import { planQuotaErrorResponse } from './services/billing/planQuota.js';
 import authRoutes from './routes/authRoutes.js';
 import embedRoutes from './routes/embedRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
@@ -140,6 +141,10 @@ app.use('/api/professional-dashboard', professionalDashboardRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
+  if (err?.code === 'PLAN_LIMIT_REACHED') {
+    const payload = planQuotaErrorResponse(err);
+    if (payload) return res.status(403).json(payload);
+  }
   logger.error(`${err.status || 500} - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
   logger.error(err.stack);
   res.status(err.status || 500).json({ success: false, message: err.message || 'Server Error' });

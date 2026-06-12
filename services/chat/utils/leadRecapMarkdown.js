@@ -18,6 +18,88 @@ function isMdBulletLine(line) {
   return /^\s*(?:-\s+|\*\s+|•\s+)/.test(String(line || ''));
 }
 
+function isRecapBulletLine(line) {
+  const s = String(line || '').trim();
+  if (!isMdBulletLine(s)) return false;
+  return /^\s*[-*•]\s+\*\*[^*]+:\*\*/.test(s);
+}
+
+function hasHollowRecapBullets(raw) {
+  return String(raw || '')
+    .split(/\r?\n/)
+    .some((line) => /^\s*[-*•]\s+\*\*[^*]+:\*\*\s*$/.test(String(line || '')));
+}
+
+function blockLooksLikeRecapBullets(lines, start, end) {
+  const block = lines.slice(start, end + 1).filter((line) => isMdBulletLine(line));
+  if (!block.length) return false;
+  return block.every((line) => isRecapBulletLine(line) || /^\s*[-*•]\s+\*\*[^*]+:\*\*\s*$/.test(String(line || '')));
+}
+
+function aiReplyHasRecapIntent(raw) {
+  const r = String(raw || '');
+  return (
+    /(everything\s+correct|change\s+any\s+details|is\s+everything\s+correct)/i.test(r) ||
+    /\b(here'?s|here is)\b.*\b(so far|gathered|recap|shared)\b/i.test(r) ||
+    /\bwhat\s+i\s+(have|'?ve)\s+so\s+far\b/i.test(r) ||
+    /\b(anything\s+(you'?d\s+)?like\s+to\s+(change|correct)|does\s+this\s+look\s+right|sound\s+right|confirm\s+(these\s+)?details)\b/i.test(
+      r,
+    )
+  );
+}
+
+/** @param {string} text */
+export function isDetailsConfirmationMessage(text) {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return false;
+  const exact = new Set([
+    'yes',
+    'y',
+    'yep',
+    'yeah',
+    'sure',
+    'correct',
+    'confirmed',
+    'looks good',
+    'all good',
+    'perfect',
+    'right',
+    'ok',
+    'okay',
+    'agreed',
+    'approved',
+    'go ahead',
+    'please proceed',
+  ]);
+  if (exact.has(t)) return true;
+  return (
+    /details?.*(correct|right|good|fine|ok|okay|perfect|great|accurate)/.test(t) ||
+    /(everything|all(\s+the)?\s+details?).*(correct|right|good|fine|ok|okay|perfect|great)/.test(t) ||
+    /(looks?|seems?).*(correct|right|good|fine|perfect|great)/.test(t) ||
+    /(confirm|confirmed).*(details?|information|info)/.test(t) ||
+    /\b(entered\s+)?details?\s+(are|is)\s+(perfect|correct|right|good|fine|accurate)\b/.test(t) ||
+    /\b(that'?s|it'?s)\s+(all\s+)?(correct|right|perfect|accurate|good|fine)\b/.test(t) ||
+    /\b(all|everything)\s+(is|sounds?|looks?)\s+(correct|good|perfect|fine)\b/.test(t) ||
+    /\b(no\s+)?changes?\s+(needed|required)\b/.test(t) ||
+    /\b(that'?s|sounds?|looks?)\s+(perfect|great|good)\b/.test(t) ||
+    /\b(spot\s+on|exactly|precisely)\b/.test(t)
+  );
+}
+
+/**
+ * Only hydrate lead recap on intake confirmation turns — not general follow-up Q&A.
+ *
+ * @param {object} opts
+ * @param {string} [opts.userMessage]
+ * @param {string} [opts.aiReply]
+ * @param {number} [opts.interactionCount] user messages in conversation so far
+ */
+export function shouldHydrateLeadRecap({ userMessage, aiReply, interactionCount }) {
+  void userMessage;
+  void aiReply;
+  return Number(interactionCount) <= 1;
+}
+
 /**
  * @param {object} opts
  * @param {Record<string, unknown>} [opts.form] merged form_data / formContact
@@ -138,19 +220,15 @@ export function injectLeadRecapIntoReply(reply, recapLines) {
   }
 
   const looksLikeRecap =
-    start !== -1 ||
-    /(everything\s+correct|change\s+any\s+details|is\s+everything\s+correct)/i.test(raw) ||
-    /\b(here'?s|here is)\b.*\b(so far|gathered|recap|shared)\b/i.test(raw) ||
-    /\bwhat\s+i\s+(have|'?ve)\s+so\s+far\b/i.test(raw) ||
-    /\b(anything\s+(you'?d\s+)?like\s+to\s+(change|correct)|does\s+this\s+look\s+right|sound\s+right|confirm\s+(these\s+)?details)\b/i.test(
-      raw,
-    );
+    hasHollowRecapBullets(raw) ||
+    (start !== -1 && blockLooksLikeRecapBullets(lines, start, end)) ||
+    aiReplyHasRecapIntent(raw);
 
   if (!looksLikeRecap) return raw;
 
   const mid = recapLines.join('\n');
 
-  if (start !== -1) {
+  if (start !== -1 && blockLooksLikeRecapBullets(lines, start, end)) {
     const before = lines.slice(0, start).join('\n');
     const after = lines.slice(end + 1).join('\n');
     return [before, mid, after].filter((s) => trimVal(s)).join('\n\n');

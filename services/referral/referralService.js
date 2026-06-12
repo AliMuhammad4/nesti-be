@@ -20,6 +20,12 @@ import { mapLeadProfileForApi } from '../lead/leadProfileFormat.js';
 import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../../constants/roles.js';
 import { recordLeadKpiEvent } from '../analytics/leadKpiService.js';
 import { awardReferralPoints, REWARD_RULES, REFERRAL_REWARD_POINTS } from './rewardService.js';
+import { getOrCreateSubscriptionForUser } from '../billing/subscriptionService.js';
+import {
+  assertWithinPlanQuota,
+  handleWorkspacePlanQuotaError,
+  PlanQuotaError,
+} from '../billing/planQuota.js';
 
 /** Shape profile/contact/property for API rows by referrer role (not viewer role). */
 export function displayProfessionalTypeFromRole(roleRaw) {
@@ -752,6 +758,23 @@ export async function ensureTargetLeadMatchForReferral(referral) {
   }
 
   const targetPro = await ProfessionalProfile.findOne({ user_id: uid }).select('_id').lean();
+  const targetUser = await User.findById(uid).select('_id').lean();
+  if (targetUser) {
+    try {
+      const subscription = await getOrCreateSubscriptionForUser(targetUser);
+      await assertWithinPlanQuota({
+        userId: targetUser._id,
+        subscription,
+        limitKey: 'captured_leads',
+      });
+    } catch (err) {
+      if (err instanceof PlanQuotaError) {
+        const payload = await handleWorkspacePlanQuotaError(targetUser._id, err);
+        return { ok: false, code: 403, message: payload?.message || err.message, planLimit: payload };
+      }
+      throw err;
+    }
+  }
   const created = await LeadMatch.create({
     user_id: uid,
     professional_profile_id: targetPro?._id || null,

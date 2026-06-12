@@ -27,7 +27,7 @@ function hasChatContact(meta) {
 export const handleChat = async (req, res, next) => {
   const startedAt = Date.now();
   try {
-    const { id, message, embedToken, visitorId, agentType, channel, formContact } = req.body;
+    const { id, message, embedToken, visitorId, agentType, channel, formContact, forceNewLead } = req.body;
 
     logger.info('Chat API: request', {
       op:           'chat.message',
@@ -57,6 +57,7 @@ export const handleChat = async (req, res, next) => {
       userAgent,
       referer,
       formContact,
+      forceNewLead,
     });
 
     const meta = result.body?.meta;
@@ -93,7 +94,7 @@ export const handleChat = async (req, res, next) => {
 export const handlePropertyMatches = async (req, res, next) => {
   const startedAt = Date.now();
   try {
-    const { id, embedToken, visitorId, formContact, page, limit } = req.body;
+    const { id, embedToken, visitorId, formContact, page, limit, matchMode } = req.body;
     logger.info('Chat API: property-matches request', {
       op:          'chat.property_matches',
       session_id:  id || null,
@@ -108,6 +109,7 @@ export const handlePropertyMatches = async (req, res, next) => {
       formContact,
       page,
       limit,
+      matchMode,
     });
 
     const pm = result.body?.meta?.property_matches;

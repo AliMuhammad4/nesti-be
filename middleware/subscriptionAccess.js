@@ -46,6 +46,16 @@ export function requireActiveSubscriptionAccess(req, res, next) {
     .catch(next);
 }
 
+function featureDeniedResponse(req, featureKey) {
+  return {
+    success: false,
+    code: 'FEATURE_NOT_INCLUDED',
+    feature: featureKey,
+    plan: req.subscriptionPlanKey,
+    message: 'This feature is not included in your current subscription plan.',
+  };
+}
+
 export function requireFeature(featureKey) {
   return async (req, res, next) => {
     if (!req.user) {
@@ -56,12 +66,30 @@ export function requireFeature(featureKey) {
     try {
       const subscription = await loadSubscription(req);
       if (!hasFeature(subscription, featureKey)) {
+        return res.status(403).json(featureDeniedResponse(req, featureKey));
+      }
+      return next();
+    } catch (err) {
+      return next(err);
+    }
+  };
+}
+
+export function requireAnyFeature(...featureKeys) {
+  const keys = featureKeys.map((k) => String(k || '').trim()).filter(Boolean);
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Not authenticated' });
+    }
+    if (isAdmin(req)) return next();
+
+    try {
+      const subscription = await loadSubscription(req);
+      const allowed = keys.some((key) => hasFeature(subscription, key));
+      if (!allowed) {
         return res.status(403).json({
-          success: false,
-          code: 'FEATURE_NOT_INCLUDED',
-          feature: featureKey,
-          plan: req.subscriptionPlanKey,
-          message: 'This feature is not included in your current subscription plan.',
+          ...featureDeniedResponse(req, keys[0]),
+          features: keys,
         });
       }
       return next();

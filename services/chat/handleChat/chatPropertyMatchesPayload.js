@@ -1,5 +1,6 @@
 import LeadMatch from '../../../models/LeadMatch.js';
 import { resolveAgentPropertyMatchesForChat } from '../../agent/propertyMatch/matchService.js';
+import { enrichPropertyMatch } from '../../lead/leadPropertyMatchHelpers.js';
 import { buildLeadConversionPack } from '../../conversion/buildLeadConversionPack.js';
 import { accumulateContactInfo } from '../utils/contactUtils.js';
 import { mergeFormContactData } from '../utils/mergeFormContactData.js';
@@ -14,6 +15,7 @@ export async function buildPropertyMatchesPayload({
   page,
   limit,
   flow,
+  matchMode = 'strict',
 }) {
   const contactInfo = await accumulateContactInfo(conversation._id);
   const hasContact = Boolean(contactInfo.email || contactInfo.phone || contactInfo.name);
@@ -43,6 +45,7 @@ export async function buildPropertyMatchesPayload({
       userId,
       conversationId: conversation._id,
       leadMetaSignals: signals,
+      matchMode,
     }),
     LeadMatch.findOne({ conversation_id: conversation._id, user_id: userId })
       .sort({ createdAt: -1 })
@@ -51,9 +54,9 @@ export async function buildPropertyMatchesPayload({
 
   const { page: p, limit: l, offset } = parsePageLimitPagination({ page, limit }, PAGINATION_PRESETS.propertyMatches);
   const total_matches = Array.isArray(property_matches) ? property_matches.length : 0;
-  const pagedMatches = Array.isArray(property_matches)
-    ? property_matches.slice(offset, offset + l)
-    : [];
+  const pagedMatches = (
+    Array.isArray(property_matches) ? property_matches.slice(offset, offset + l) : []
+  ).map(enrichPropertyMatch);
 
   const conversion = leadMatchDoc
     ? buildLeadConversionPack({ leadMatch: leadMatchDoc, conversation, intent: propertyMatchIntent })

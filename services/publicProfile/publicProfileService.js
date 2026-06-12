@@ -8,6 +8,7 @@ import {
   createValidatedLeadAttribution,
   createValidatedLeadMatch,
 } from '../chat/scoring/leadPersistence.js';
+import { afterLeadCapturedNotifyOverQuota } from '../billing/planQuota.js';
 import { emitNewLeadCreatedNotification } from '../realtime/leadCreatedNotify.js';
 import {
   normalizeInquiredProperty,
@@ -503,6 +504,8 @@ export const submitPublicLeadService = async ({ slug, payload, requestMeta = {} 
     appointment_status: null,
     conversion_preview: null,
   });
+
+  await afterLeadCapturedNotifyOverQuota(profile.user_id);
 
   return {
     status: 201,

@@ -559,6 +559,8 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
         pendingPlanKey: subscription.pendingPlanKey,
         pendingPlanEffectiveAt: subscription.pendingPlanEffectiveAt,
+        planLimits: subscription.planLimits || null,
+        usage: subscription.usage || null,
         isExpired,
         ...(isExpired && { message: 'Account expired. Please upgrade.' }),
       },

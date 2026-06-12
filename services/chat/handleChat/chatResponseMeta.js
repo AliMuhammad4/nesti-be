@@ -15,6 +15,7 @@ export async function buildChatResponseMeta({
   userId,
   professionalProfile,
   hasContact,
+  propertyMatchesEnabled = true,
   deferCalendlyLink,
   calendlyLinkForVisitor,
   isAutomatedBookingEnabled,
@@ -30,7 +31,9 @@ export async function buildChatResponseMeta({
   extractedData,
   refetchPropertyMatches = false,
 }) {
-  const property_matches_available = Boolean(supportsPropertyMatches(flow) && hasContact);
+  const property_matches_available = Boolean(
+    supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact,
+  );
 
   const calendlyBookingSnap = await ChatConversation.findById(conversation._id)
     .select('calendly_booking_status calendly_booking_at')

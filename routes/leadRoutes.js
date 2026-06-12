@@ -40,7 +40,7 @@ router.get(
 router.post('/:id/view', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_LIST), ensureAgentOrMortgageBroker, recordLeadView);
 router.patch('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_STATUS), ensureAgentOrMortgageBroker, validateBody(leadAgentPatchSchema), updateLeadMatch);
 router.get('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_LIST), ensureAgentOrMortgageBroker, getLeadById);
-router.get('/:id/conversation', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_LIST), ensureAgentOrMortgageBroker, getLeadConversation);
+router.get('/:id/conversation', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_LEAD_CONVERSATION), ensureAgentOrMortgageBroker, getLeadConversation);
 router.delete('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_STATUS), ensureAgentOrMortgageBroker, deleteLeadById);
 
 export default router;

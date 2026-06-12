@@ -9,6 +9,7 @@ import logger from '../utils/logger.js';
 import { recordLeadKpiEvent } from '../services/analytics/leadKpiService.js';
 import { FEATURES, hasFeature } from '../services/billing/entitlements.js';
 import { getOrCreateSubscriptionForUser } from '../services/billing/subscriptionService.js';
+import { assertWithinPlanQuota, PlanQuotaError } from '../services/billing/planQuota.js';
 
 const AUTOMATION_TYPE = 'fifteen_day_followup';
 const TERMINAL_STATUSES = new Set(['converted', 'closed_lost']);
@@ -128,6 +129,22 @@ async function sendFollowupForLead(leadMatch, now, followupDays) {
   }
   if (!(await userCanReceiveAutomatedFollowups(user))) {
     return { sent: false, skipped: 'feature_unavailable' };
+  }
+
+  try {
+    const subscription = await getOrCreateSubscriptionForUser(user);
+    await assertWithinPlanQuota({
+      userId: user._id,
+      subscription,
+      limitKey: 'followup_actions',
+    });
+  } catch (err) {
+    if (err instanceof PlanQuotaError) {
+      const { notifyPlanLimitReachedIfNeeded } = await import('../services/billing/planLimitNotifications.js');
+      await notifyPlanLimitReachedIfNeeded(user._id, err);
+      return { sent: false, skipped: 'quota_reached' };
+    }
+    throw err;
   }
 
   const lastTouch = maxDate(latestLog?.sent_at, latestLog?.createdAt, leadMatch.last_contact_at, leadMatch.createdAt);

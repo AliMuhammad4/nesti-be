@@ -24,6 +24,8 @@ import {
   classifyLeadForFlow,
   usesFixedBuyIntentForLeadMatch,
 } from './flows/flowRoleMeta.js';
+import { getOrCreateSubscriptionForUser } from '../billing/subscriptionService.js';
+import { FEATURES, hasFeature } from '../billing/entitlements.js';
 import {
   isValidProfessionalType,
   professionalTypeToWidgetAgentType,
@@ -41,9 +43,14 @@ import {
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
-import { isPropertyMatchesRequestMessage } from './utils/propertyMatchesRequestIntent.js';
+import { appendCalendlyBookingLink } from './utils/chatBookingReply.js';
+import { shouldRefetchPropertyMatchesForMessage } from './utils/propertyMatchesRequestIntent.js';
 import { stripPropertyListingsFromReply } from './utils/stripPropertyListingsFromReply.js';
-import { buildLeadRecapMarkdownLines, injectLeadRecapIntoReply } from './utils/leadRecapMarkdown.js';
+import {
+  buildLeadRecapMarkdownLines,
+  injectLeadRecapIntoReply,
+  shouldHydrateLeadRecap,
+} from './utils/leadRecapMarkdown.js';
 import {
   normalizeInquiredProperty,
   resolveLinkedSellerLeadMatchId,
@@ -54,6 +61,12 @@ export { flowTypeForConversation, recomputeSignalsForPropertyMatches } from './h
 const MAX_USER_MESSAGES_FOR_SCORING = 120;
 const MAX_MESSAGES_FOR_PROMPT = 20;
 
+function propertyMatchesEnabledForPlan(flow, subscription) {
+  return Boolean(
+    supportsPropertyMatches(flow) && hasFeature(subscription, FEATURES.LEADS_INSIGHTS_ADVANCED),
+  );
+}
+
 function normalizePersistedGradeByScore(grade, score) {
   const normalizedGrade = String(grade || '').toLowerCase();
   const normalizedScore = Number(score);
@@ -61,6 +74,75 @@ function normalizePersistedGradeByScore(grade, score) {
     return 'interested';
   }
   return normalizedGrade || grade;
+}
+
+function asFormContactRecord(formContact) {
+  return formContact && typeof formContact === 'object' && !Array.isArray(formContact) ? formContact : {};
+}
+
+function intakeSessionId() {
+  return `session_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+function conversationCreateFields({
+  sessionId,
+  userId,
+  visitor,
+  embed,
+  embedToken,
+  embedFlowRole,
+  agentType,
+  channel,
+  intent,
+}) {
+  return {
+    session_id: sessionId,
+    user_id: userId,
+    visitor_id: visitor._id,
+    embed_id: embed._id,
+    embed_token: embedToken,
+    embed_flow_role: embedFlowRole,
+    agent_type: agentType,
+    channel,
+    intent,
+  };
+}
+
+async function shouldAwaitLeadSync({
+  forceNewLead,
+  canCreateLeads,
+  hasContact,
+  conversation,
+  userId,
+  flow,
+  mergedFormContact,
+  aiIntent,
+  sessionId,
+}) {
+  if (!canCreateLeads || !hasContact) return false;
+  // Intake forms fork a fresh conversation; persist the lead in the background so the reply returns fast.
+  if (forceNewLead) return false;
+
+  try {
+    const formIntent = String(mergedFormContact?.intent || '').trim().toLowerCase();
+    const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
+    const intentSuffix = flow.getIntentSuffix(leadIntent);
+    const existingLead = await LeadMatch.findOne({
+      conversation_id: conversation._id,
+      user_id: userId,
+      lead_type: new RegExp(`${intentSuffix}$`),
+    })
+      .select('_id')
+      .lean();
+    return !existingLead?._id;
+  } catch (err) {
+    logger.warn('Chat service: pre-sync lead existence check failed', {
+      session_id: sessionId,
+      user_id: String(userId),
+      error: err?.message || String(err),
+    });
+    return false;
+  }
 }
 
 export const getChatSessionMessagesService = async ({ id: sessionId, embedToken }) => {
@@ -128,6 +210,7 @@ export const handlePropertyMatchesService = async ({
   formContact,
   page,
   limit,
+  matchMode,
 }) => {
   if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
     return { status: 400, body: { success: false, message: 'id (session_id) is required' } };
@@ -155,7 +238,8 @@ export const handlePropertyMatchesService = async ({
   const professionalProfile = await ProfessionalProfile.findOne({ user_id: userId });
   const flowType = await flowTypeForConversation(conversation, professionalProfile);
   const flow = getFlowForRole(flowType);
-  if (!supportsPropertyMatches(flow)) {
+  const subscription = await getOrCreateSubscriptionForUser({ _id: userId });
+  if (!propertyMatchesEnabledForPlan(flow, subscription)) {
     return {
       status: 200,
       body: {
@@ -170,6 +254,7 @@ export const handlePropertyMatchesService = async ({
       },
     };
   }
+  const normalizedMatchMode = String(matchMode || 'strict').trim().toLowerCase() === 'relaxed' ? 'relaxed' : 'strict';
   const payload = await buildPropertyMatchesPayload({
     conversation,
     userId,
@@ -178,6 +263,7 @@ export const handlePropertyMatchesService = async ({
     page,
     limit,
     flow,
+    matchMode: normalizedMatchMode,
   });
   if (!payload.session_id) payload.session_id = sessionId.trim();
   return { status: 200, body: payload };
@@ -255,6 +341,7 @@ export const handleChatService = async ({
   userAgent,
   referer,
   formContact,
+  forceNewLead = false,
 }) => {
   if (!message || typeof message !== 'string' || !message.trim()) {
     return { status: 400, body: { success: false, message: 'message is required' } };
@@ -267,7 +354,7 @@ export const handleChatService = async ({
   }
 
   const trimmedMessage = message.trim();
-  const sessionId = id || crypto.randomBytes(8).toString('hex');
+  let sessionId = id || crypto.randomBytes(8).toString('hex');
   const normalizedAgentType = normalizeAgentType(agentType);
   const normalizedChannel = channel || 'web';
 
@@ -277,9 +364,10 @@ export const handleChatService = async ({
   }
   const userId = embed.user_id;
 
-  const [visitor, professionalProfile] = await Promise.all([
+  const [visitor, professionalProfile, subscription] = await Promise.all([
     resolveVisitor({ visitorUuid: visitorId, embedToken, userAgent, clientIp }),
     ProfessionalProfile.findOne({ user_id: userId }),
+    getOrCreateSubscriptionForUser({ _id: userId }),
   ]);
 
   const flowType = resolveChatFlowType({
@@ -289,6 +377,7 @@ export const handleChatService = async ({
   });
   const effectiveWidgetType = professionalTypeToWidgetAgentType(flowType);
   const flow = getFlowForRole(flowType);
+  const propertyMatchesEnabled = propertyMatchesEnabledForPlan(flow, subscription);
   const canCreateLeads = Boolean(flow?.flowRole);
 
   const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow);
@@ -298,34 +387,49 @@ export const handleChatService = async ({
       ? formContact.intent
       : classifyIntentFromKeywords(trimmedMessage);
 
-  let conversation = await ChatConversation.findOne({ session_id: sessionId });
   const embedFlowRole =
     embed.widget_role && isValidProfessionalType(embed.widget_role) ? embed.widget_role : undefined;
-  if (!conversation) {
-    conversation = await ChatConversation.create({
+  const conversationBase = {
+    userId,
+    visitor,
+    embed,
+    embedToken,
+    embedFlowRole,
+    agentType: effectiveWidgetType,
+    channel: normalizedChannel,
+    intent,
+  };
+
+  let conversation;
+  if (forceNewLead) {
+    sessionId = intakeSessionId();
+    conversation = await ChatConversation.create(
+      conversationCreateFields({ sessionId, ...conversationBase }),
+    );
+    logger.info('Chat service: intake conversation created', {
+      op: 'chat.lead',
       session_id: sessionId,
-      user_id: userId,
-      visitor_id: visitor._id,
-      embed_id: embed._id,
-      embed_token: embedToken,
-      embed_flow_role: embedFlowRole,
-      agent_type: effectiveWidgetType,
-      channel: normalizedChannel,
-      intent,
+      user_id: String(userId),
     });
   } else {
-    conversation.agent_type = effectiveWidgetType;
-    if (embedFlowRole) conversation.embed_flow_role = embedFlowRole;
-    conversation.channel = normalizedChannel;
-    conversation.last_interaction_at = new Date();
-    await conversation.save();
+    conversation = await ChatConversation.findOne({ session_id: sessionId });
+    if (!conversation) {
+      conversation = await ChatConversation.create(
+        conversationCreateFields({ sessionId, ...conversationBase }),
+      );
+    } else {
+      conversation.agent_type = effectiveWidgetType;
+      if (embedFlowRole) conversation.embed_flow_role = embedFlowRole;
+      conversation.channel = normalizedChannel;
+      conversation.last_interaction_at = new Date();
+      await conversation.save();
+    }
   }
 
-  // Same intake shape as `lawyer.html`: request `formContact` merged onto stored `form_data` for every turn.
-  const mergedFormContact = mergeFormContactData(
-    conversation.form_data && typeof conversation.form_data === 'object' ? conversation.form_data : {},
-    formContact && typeof formContact === 'object' ? formContact : {},
-  );
+  const formPatch = asFormContactRecord(formContact);
+  const mergedFormContact = forceNewLead
+    ? mergeFormContactData({}, formPatch)
+    : mergeFormContactData(asFormContactRecord(conversation.form_data), formPatch);
   const storedForm = mergedFormContact;
 
   const currentContact = buildUserMessageContactMeta(trimmedMessage, mergedFormContact);
@@ -419,6 +523,7 @@ export const handleChatService = async ({
     deferCalendlyLink,
     isAutomatedBookingEnabled,
     calendlyLinkForVisitor,
+    propertyMatchesEnabled,
   });
   const systemPrompt = flow.buildSystemPrompt(professionalProfile, systemPromptOptions);
   const openaiMessages = [
@@ -435,6 +540,7 @@ export const handleChatService = async ({
   let parsedAiDetails = {};
 
   try {
+    const openAiStartedAt = Date.now();
     const turn = await runChatOpenAiTurn({
       openaiMessages,
       sessionId,
@@ -446,6 +552,11 @@ export const handleChatService = async ({
       contactInfo,
       interactionCount,
       intent,
+    });
+    logger.info('Chat service: OpenAI turn completed', {
+      op: 'chat.message',
+      session_id: sessionId,
+      ms: Date.now() - openAiStartedAt,
     });
     aiReply = turn.aiReply;
     aiIntent = turn.aiIntent;
@@ -462,7 +573,7 @@ export const handleChatService = async ({
   coerceContactIdentityFields(contactInfo);
   hasContact = hasIdentityContact(contactInfo);
 
-  const refetchPropertyMatches = isPropertyMatchesRequestMessage(trimmedMessage);
+  const refetchPropertyMatches = shouldRefetchPropertyMatchesForMessage(trimmedMessage);
   const recapLines = refetchPropertyMatches
     ? []
     : buildLeadRecapMarkdownLines({
@@ -471,10 +582,29 @@ export const handleChatService = async ({
         extracted: parsedAiDetails,
         intent: aiIntent,
       });
-  let finalReply =
-    recapLines.length > 0 ? injectLeadRecapIntoReply(aiReply, recapLines) : aiReply;
+  let finalReply = aiReply;
+  if (
+    recapLines.length > 0 &&
+    shouldHydrateLeadRecap({
+      userMessage: trimmedMessage,
+      aiReply,
+      interactionCount,
+    })
+  ) {
+    finalReply = injectLeadRecapIntoReply(aiReply, recapLines);
+  }
   if (refetchPropertyMatches) {
     finalReply = stripPropertyListingsFromReply(finalReply);
+    if (!propertyMatchesEnabled) {
+      finalReply =
+        'Thanks for sharing. I can help refine your preferences and connect you with the professional for tailored options.';
+    }
+  }
+
+  if (isAutomatedBookingEnabled && calendlyLinkForVisitor && hasContact) {
+    finalReply = appendCalendlyBookingLink(finalReply, calendlyLinkForVisitor, {
+      userMessage: trimmedMessage,
+    });
   }
 
   const finalScore = leadScore;
@@ -518,7 +648,19 @@ export const handleChatService = async ({
   conversation.form_data = mergedFormContact;
   await conversation.save();
 
-  await syncLeadMatchAfterTurn({
+  const awaitLeadSync = await shouldAwaitLeadSync({
+    forceNewLead,
+    canCreateLeads,
+    hasContact,
+    conversation,
+    userId,
+    flow,
+    mergedFormContact,
+    aiIntent,
+    sessionId,
+  });
+
+  const syncLeadTask = syncLeadMatchAfterTurn({
     flow,
     flowType,
     canCreateLeads,
@@ -540,6 +682,13 @@ export const handleChatService = async ({
     persistedGrade,
     leadMeta,
     aiIntent,
+    forceCreateLead: Boolean(forceNewLead),
+  }).catch((err) => {
+    logger.warn('Chat service: async lead sync failed', {
+      session_id: sessionId,
+      user_id: String(userId),
+      error: err?.message || String(err),
+    });
   });
 
   const responseMeta = await buildChatResponseMeta({
@@ -562,7 +711,15 @@ export const handleChatService = async ({
     mortgageBrokerSnapshotSignals,
     extractedData: parsedAiDetails,
     refetchPropertyMatches,
+    propertyMatchesEnabled,
   });
+
+  if (awaitLeadSync) {
+    await syncLeadTask;
+  } else {
+    // Keep widget latency low: do not block the reply on non-critical CRM sync side effects.
+    void syncLeadTask;
+  }
 
   return {
     status: 200,

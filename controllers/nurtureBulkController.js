@@ -19,6 +19,15 @@ const DRAFT_STEP_TIMEOUT_MS = 90_000;
 const STALE_RUNNING_JOB_MS = 10 * 60 * 1000;
 const PROCESS_STARTED_AT_MS = Date.now();
 
+function asInt(value, fallback, { min = 1, max = 50 } = {}) {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
+}
+
+const BULK_SEND_WORKER_COUNT = asInt(process.env.BULK_NURTURE_SEND_WORKERS, 3, { min: 1, max: 10 });
+const BULK_SEND_BATCH_SIZE = asInt(process.env.BULK_NURTURE_SEND_BATCH_SIZE, 3, { min: 1, max: 10 });
+
 function userProfessionalRole(user) {
   return String(user?.role || '').trim().toLowerCase();
 }
@@ -593,48 +602,52 @@ async function runBulkSendJob(jobId, { user, source_job_id, item_ids, send_all =
       },
     });
 
-    await runBatchedPool(sendItems, async (item) => {
-      const leadProfileId = String(item.lead_profile_id);
-      await updateJobItem(jobId, leadProfileId, { status: 'sending', error: '' });
-      if (sourceJobId) {
-        await updateJobItem(sourceJobId, leadProfileId, { status: 'sending', error: '' });
-      }
-      try {
-        if (!leadProfileId || !item.email || !item.subject || !item.body) {
-          throw new Error('Missing client, email, subject, or body.');
-        }
-        await callController(postNurtureSend, {
-          user,
-          body: {
-            lead_profile_id: leadProfileId,
-            to_email: item.email,
-            subject: item.subject,
-            body: item.body,
-            include_property_cards: userIncludesPropertyCards(user),
-          },
-        });
-        await updateJobItem(
-          jobId,
-          leadProfileId,
-          { status: 'sent', selected_default: false, error: '' },
-          { 'progress.completed': 1, 'progress.sent': 1 },
-        );
+    await runBatchedPool(
+      sendItems,
+      async (item) => {
+        const leadProfileId = String(item.lead_profile_id);
+        await updateJobItem(jobId, leadProfileId, { status: 'sending', error: '' });
         if (sourceJobId) {
-          await removeJobItem(sourceJobId, leadProfileId);
+          await updateJobItem(sourceJobId, leadProfileId, { status: 'sending', error: '' });
         }
-      } catch (err) {
-        const error = err?.message || 'Failed to send.';
-        await updateJobItem(
-          jobId,
-          leadProfileId,
-          { status: 'error', error },
-          { 'progress.completed': 1, 'progress.failed': 1 },
-        );
-        if (sourceJobId) {
-          await updateJobItem(sourceJobId, leadProfileId, { status: 'error', error });
+        try {
+          if (!leadProfileId || !item.email || !item.subject || !item.body) {
+            throw new Error('Missing client, email, subject, or body.');
+          }
+          await callController(postNurtureSend, {
+            user,
+            body: {
+              lead_profile_id: leadProfileId,
+              to_email: item.email,
+              subject: item.subject,
+              body: item.body,
+              include_property_cards: userIncludesPropertyCards(user),
+            },
+          });
+          await updateJobItem(
+            jobId,
+            leadProfileId,
+            { status: 'sent', selected_default: false, error: '' },
+            { 'progress.completed': 1, 'progress.sent': 1 },
+          );
+          if (sourceJobId) {
+            await removeJobItem(sourceJobId, leadProfileId);
+          }
+        } catch (err) {
+          const error = err?.message || 'Failed to send.';
+          await updateJobItem(
+            jobId,
+            leadProfileId,
+            { status: 'error', error },
+            { 'progress.completed': 1, 'progress.failed': 1 },
+          );
+          if (sourceJobId) {
+            await updateJobItem(sourceJobId, leadProfileId, { status: 'error', error });
+          }
         }
-      }
-    });
+      },
+      { workerCount: BULK_SEND_WORKER_COUNT, batchSize: BULK_SEND_BATCH_SIZE },
+    );
 
     const completed = await touchJob(jobId, { $set: { status: 'completed' } });
     await notifyBulkSendJobCompleted(completed);

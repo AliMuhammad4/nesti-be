@@ -28,6 +28,11 @@ import {
   enrichLeadDetailWithProfileConsultation,
 } from './leadNurtureBookingStatus.js';
 import { listNurtureLogsForUser } from '../../controllers/nurtureController.js';
+import { getOrCreateSubscriptionForUser } from '../billing/subscriptionService.js';
+import {
+  loadPlanVisibleLeadFilter,
+  mergeLeadQueryWithPlanVisibility,
+} from '../billing/planQuota.js';
 
 export function ownerQuery(userId) {
   return { $or: [{ 'ownership.user_id': String(userId) }, { owner_user_id: String(userId) }] };
@@ -184,13 +189,20 @@ async function mapLeadMatchesToListRows(req, userId, leadMatches, q, mapperOpts)
   });
 }
 
+async function applyPlanLeadVisibility(userId, baseQuery) {
+  const subscription = await getOrCreateSubscriptionForUser({ _id: userId });
+  const visibilityFilter = await loadPlanVisibleLeadFilter(userId, subscription);
+  return mergeLeadQueryWithPlanVisibility(baseQuery, visibilityFilter);
+}
+
 export async function buildLeadsListPayload(req, userId, q, { page, limit, skip }) {
   const match = buildLeadsListMatchFilter(userId, q);
   const apptFilter = await buildAppointmentMongoFilter(userId, q.appointment);
   const hideReferralRecipientLeads = excludeAcceptedReferralRecipientMatchesFilter();
-  const query = apptFilter
-    ? { $and: [match, apptFilter, hideReferralRecipientLeads] }
-    : { $and: [match, hideReferralRecipientLeads] };
+  const andClauses = [match, hideReferralRecipientLeads];
+  if (apptFilter) andClauses.push(apptFilter);
+
+  const query = await applyPlanLeadVisibility(userId, { $and: andClauses });
 
   const { total, rows: leadMatches } = await aggregateLeadMatchesFacet(query, skip, limit);
   if (!total) {
@@ -233,7 +245,8 @@ export async function buildProfileLeadsPayload(req, userId, profile, { page, lim
       ...(refLeadIds.length ? [{ _id: { $in: refLeadIds } }] : []),
     ],
   };
-  const { total, rows: leadMatches } = await aggregateLeadMatchesFacet(listMatch, skip, limit);
+  const profileListMatch = await applyPlanLeadVisibility(userId, listMatch);
+  const { total, rows: leadMatches } = await aggregateLeadMatchesFacet(profileListMatch, skip, limit);
 
   const { convoById, workspaceBookings } = await loadConversationsAndWorkspaceForMatches(userId, leadMatches);
   const profType = profile?.ownership?.professional_type || PROFESSIONAL_TYPE.AGENT;

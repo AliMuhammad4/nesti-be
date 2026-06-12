@@ -22,12 +22,15 @@ export async function runChatOpenAiTurn({
   interactionCount,
   intent,
 }) {
-  const completion = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: openaiMessages,
-    temperature: 0.7,
-    max_tokens: 600,
-  });
+  const completion = await getOpenAI().chat.completions.create(
+    {
+      model: 'gpt-4o-mini',
+      messages: openaiMessages,
+      temperature: 0.7,
+      max_tokens: 600,
+    },
+    { timeout: 60_000 },
+  );
 
   const rawContent = completion.choices[0].message.content || '';
   const [replyPart, metaPart] = rawContent.split('###META###');

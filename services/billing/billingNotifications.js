@@ -105,18 +105,18 @@ async function notifyInvoicePaid(event) {
   const plans = invoicePricePlans(invoice);
   const planName = plans.at(-1)?.name || 'subscription';
 
-  let title = 'Payment received';
-  let body = `Your ${planName} payment of ${amount} was received.`;
+  let title = 'Payment paid';
+  let body = `Your ${planName} payment of ${amount} was paid.`;
 
   if (reason === 'subscription_create') {
     title = 'Subscription started';
-    body = `Your ${planName} subscription is active. Payment received: ${amount}.`;
+    body = `Your ${planName} subscription is active. Amount paid: ${amount}.`;
   } else if (reason === 'subscription_cycle') {
     title = 'Subscription renewed';
-    body = `Your ${planName} subscription renewed successfully. Payment received: ${amount}.`;
+    body = `Your ${planName} subscription renewed successfully. Amount paid: ${amount}.`;
   } else if (reason === 'subscription_update') {
-    title = 'Plan change payment received';
-    body = `Your plan change payment of ${amount} was received.`;
+    title = 'Plan change payment paid';
+    body = `Your plan change payment of ${amount} was paid.`;
   }
 
   return persistAndEmit(userId, event.id, {

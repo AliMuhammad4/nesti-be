@@ -5,7 +5,7 @@ import {
   ensureAgentOrMortgageBroker,
   requireCompleteProfessionalProfile,
 } from '../middleware/authMiddleware.js';
-import { requireFeature } from '../middleware/subscriptionAccess.js';
+import { requireAnyFeature, requireFeature } from '../middleware/subscriptionAccess.js';
 import { validateBody } from '../middleware/validate.js';
 import { FEATURES } from '../services/billing/entitlements.js';
 import {
@@ -72,7 +72,7 @@ router.get(
   '/analytics/summary',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.REPORTS_AI_MONTHLY),
+  requireFeature(FEATURES.DASHBOARD_ANALYTICS),
   ensureAgentOrMortgageBroker,
   getChatAnalyticsSummary
 );
@@ -80,7 +80,7 @@ router.get(
   '/analytics/funnel',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.REPORTS_AI_MONTHLY),
+  requireFeature(FEATURES.WORKSPACE_ANALYTICS_PAGE),
   ensureAgentOrMortgageBroker,
   getChatAnalyticsFunnel
 );
@@ -88,7 +88,7 @@ router.get(
   '/analytics/timeseries',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.REPORTS_AI_MONTHLY),
+  requireFeature(FEATURES.DASHBOARD_ANALYTICS),
   ensureAgentOrMortgageBroker,
   getChatAnalyticsTimeseries
 );
@@ -112,7 +112,7 @@ router.post(
   '/nurture/draft',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.LEADS_FOLLOWUP_AUTOMATED),
+  requireAnyFeature(FEATURES.CRM_FOLLOWUP_MANUAL, FEATURES.LEADS_FOLLOWUP_AUTOMATED),
   ensureAgentOrMortgageBroker,
   validateBody(nurtureDraftBodySchema),
   postNurtureDraft,
@@ -121,7 +121,7 @@ router.post(
   '/nurture/refine',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.LEADS_FOLLOWUP_AUTOMATED),
+  requireAnyFeature(FEATURES.CRM_FOLLOWUP_MANUAL, FEATURES.LEADS_FOLLOWUP_AUTOMATED),
   ensureAgentOrMortgageBroker,
   validateBody(nurtureRefineBodySchema),
   postNurtureRefine,
@@ -130,7 +130,7 @@ router.post(
   '/nurture/preview',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.LEADS_FOLLOWUP_AUTOMATED),
+  requireAnyFeature(FEATURES.CRM_FOLLOWUP_MANUAL, FEATURES.LEADS_FOLLOWUP_AUTOMATED),
   ensureAgentOrMortgageBroker,
   validateBody(nurturePreviewBodySchema),
   postNurturePreview,
@@ -139,7 +139,7 @@ router.post(
   '/nurture/send',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.LEADS_FOLLOWUP_AUTOMATED),
+  requireAnyFeature(FEATURES.CRM_FOLLOWUP_MANUAL, FEATURES.LEADS_FOLLOWUP_AUTOMATED),
   ensureAgentOrMortgageBroker,
   validateBody(nurtureSendBodySchema),
   postNurtureSend,
@@ -148,7 +148,7 @@ router.get(
   '/nurture/logs',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.LEADS_FOLLOWUP_AUTOMATED),
+  requireAnyFeature(FEATURES.CRM_FOLLOWUP_MANUAL, FEATURES.LEADS_FOLLOWUP_AUTOMATED),
   ensureAgentOrMortgageBroker,
   getNurtureLogs
 );

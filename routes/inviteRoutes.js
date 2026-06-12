@@ -26,7 +26,7 @@ const router = express.Router();
 router.post('/', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), validateBody(createInviteSchema), createInviteLink);
 router.get('/', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listInviteLinks);
 router.get('/metrics', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), inviteMetrics);
-router.get('/conversions/role-trends', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REPORTS_AI_MONTHLY), inviteConversionRoleTrends);
+router.get('/conversions/role-trends', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.DASHBOARD_ANALYTICS), inviteConversionRoleTrends);
 router.get('/conversions', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listInviteConversions);
 router.get('/rewards/profile', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), getRewardsProfile);
 router.get('/rewards/events', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listInviteRewardEvents);

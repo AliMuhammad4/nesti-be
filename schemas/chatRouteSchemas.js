@@ -19,6 +19,9 @@ export const propertyMatchesSchema = Joi.object({
   embedToken: Joi.string().trim().required(),
   visitorId: Joi.string().optional(),
   formContact: Joi.object().unknown(true).optional(),
+  page: Joi.number().integer().min(1).optional(),
+  limit: Joi.number().integer().min(1).max(50).optional(),
+  matchMode: Joi.string().valid('strict', 'relaxed').optional(),
 });
 
 export const sessionMessagesSchema = Joi.object({

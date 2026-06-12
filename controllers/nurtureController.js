@@ -24,6 +24,12 @@ import {
 } from '../services/nurture/nurtureEmailTemplate.js';
 import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
 import { ownerQuery } from '../services/lead/leadProfileHelpers.js';
+import { getOrCreateSubscriptionForUser } from '../services/billing/subscriptionService.js';
+import {
+  assertWithinPlanQuota,
+  handleWorkspacePlanQuotaError,
+  PlanQuotaError,
+} from '../services/billing/planQuota.js';
 
 function normalizeProfessionalType(raw) {
   const role = String(raw || '').trim().toLowerCase();
@@ -229,6 +235,13 @@ function trimEmail(value) {
   return t || null;
 }
 
+function describeEmailSendFailure(result) {
+  const raw = String(result?.error?.message || '').trim();
+  if (!raw) return 'Email delivery failed';
+  if (raw.length <= 220) return raw;
+  return `${raw.slice(0, 220)}...`;
+}
+
 /**
  * Prefer LeadProfile identity (email, then canonical_email), then chat contact on LeadMatch,
  * then optional body to_email only when nothing is stored on the lead.
@@ -424,6 +437,21 @@ export async function postNurtureSend(req, res, next) {
       });
     }
 
+    const subscription = await getOrCreateSubscriptionForUser(req.user);
+    try {
+      await assertWithinPlanQuota({
+        userId: req.user._id,
+        subscription,
+        limitKey: 'followup_actions',
+      });
+    } catch (err) {
+      if (err instanceof PlanQuotaError) {
+        const payload = await handleWorkspacePlanQuotaError(req.user._id, err);
+        return res.status(403).json(payload);
+      }
+      throw err;
+    }
+
     const recipient = resolveRecipientEmail(to_email, bundle);
     if (!recipient) {
       return res.status(400).json({
@@ -512,7 +540,17 @@ export async function postNurtureSend(req, res, next) {
     await NurtureLog.create(baseLog);
 
     if (!result.success) {
-      return res.status(502).json({ success: false, message: 'Email delivery failed' });
+      const failureMessage = describeEmailSendFailure(result);
+      logger.warn('nurture email delivery failed', {
+        user_id: String(req.user?._id || ''),
+        lead_match_id: bundle.leadMatch?._id ? String(bundle.leadMatch._id) : null,
+        lead_profile_id: bundle.leadMatch?.lead_profile_id
+          ? String(bundle.leadMatch.lead_profile_id)
+          : null,
+        to_email: recipient,
+        reason: failureMessage,
+      });
+      return res.status(502).json({ success: false, message: failureMessage });
     }
 
     if (bundle.leadMatch?._id) {

@@ -11,7 +11,7 @@ import { recordLeadKpiEvent } from '../analytics/leadKpiService.js';
 import { awardReferralPoints, REWARD_RULES } from '../referral/rewardService.js';
 import { awardInviterMilestoneForUser } from '../referral/inviteService.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
-import { assertValidLeadId } from './leadQueryUtils.js';
+import { assertValidLeadId, findOwnedVisibleLeadMatch } from './leadQueryUtils.js';
 
 /**
  * Keeps LeadProfile.lifecycle.status aligned with aggregate outcomes of all
@@ -158,6 +158,11 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
     err.statusCode = 404;
     throw err;
   }
+
+  const { getOrCreateSubscriptionForUser } = await import('../billing/subscriptionService.js');
+  const { assertLeadMatchPlanVisible } = await import('../billing/planQuota.js');
+  const subscription = await getOrCreateSubscriptionForUser({ _id: userId });
+  await assertLeadMatchPlanVisible(userId, lead._id, subscription);
 
   const prevStatus = lead.match_status;
   if (hasStatus) assertMatchStatusTransition(prevStatus, nextStatus);
@@ -334,13 +339,7 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
 }
 
 export async function deleteOwnedLeadMatch(userId, leadId) {
-  assertValidLeadId(leadId);
-  const leadMatch = await LeadMatch.findOne({ _id: leadId, user_id: userId });
-  if (!leadMatch) {
-    const err = new Error('Lead not found');
-    err.statusCode = 404;
-    throw err;
-  }
+  const leadMatch = await findOwnedVisibleLeadMatch(userId, leadId, { lean: false });
 
   const { lead_profile_id: profileId, conversation_id: conversationId, _id: leadMatchId } = leadMatch;
   await LeadMatch.deleteOne({ _id: leadMatchId });

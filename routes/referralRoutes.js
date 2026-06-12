@@ -18,21 +18,21 @@ router.post(
   '/',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.REFERRALS_INVITES),
+  requireFeature(FEATURES.REFERRALS_MANUAL),
   validateBody(referralPostBodySchema),
   createReferral
 );
-router.get('/', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listReferrals);
-router.get('/lead-match/:leadMatchId', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), listReferralsForLeadMatch);
-router.get('/:id/lead', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), getReferralLeadDetails);
+router.get('/', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_MANUAL), listReferrals);
+router.get('/lead-match/:leadMatchId', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_MANUAL), listReferralsForLeadMatch);
+router.get('/:id/lead', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_MANUAL), getReferralLeadDetails);
 router.patch(
   '/:id',
   protect,
   requireCompleteProfessionalProfile,
-  requireFeature(FEATURES.REFERRALS_INVITES),
+  requireFeature(FEATURES.REFERRALS_MANUAL),
   validateBody(referralPatchBodySchema),
   patchReferral
 );
-router.post('/:id/process', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_INVITES), processReferral);
+router.post('/:id/process', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.REFERRALS_MANUAL), processReferral);
 
 export default router;

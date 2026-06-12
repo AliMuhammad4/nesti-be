@@ -20,6 +20,7 @@ export const FEATURES = Object.freeze({
   CRM_BASIC_LIST: 'crm.basic.list',
   CRM_BASIC_STATUS: 'crm.basic.status',
   CRM_FOLLOWUP_MANUAL: 'crm.followup.manual',
+  CRM_LEAD_CONVERSATION: 'crm.lead.conversation',
   PUBLIC_PROFILE: 'public_profile.basic',
   CHATBOT_EMOTIONAL: 'chatbot.emotional',
   CHATBOT_EMOTIONAL_QA: 'chatbot.emotional.qa',
@@ -27,14 +28,18 @@ export const FEATURES = Object.freeze({
   CALENDAR_INTEGRATION: 'calendar.integration',
   CALENDAR_VIRTUAL_CONSULT: 'calendar.virtual_consultations',
   LEADS_FOLLOWUP_AUTOMATED: 'leads.followup.automated',
+  DASHBOARD_ANALYTICS: 'dashboard.analytics',
+  WORKSPACE_ANALYTICS_PAGE: 'workspace.analytics.page',
   REPORTS_AI_MONTHLY: 'reports.ai_monthly',
   ASSISTANT_PROFESSIONAL: 'assistant.professional',
   ASSISTANT_PROFESSIONAL_CLOSING: 'assistant.professional.closing',
   ASSISTANT_PROFESSIONAL_FOLLOWUP: 'assistant.professional.followup',
   LEADS_INSIGHTS_ADVANCED: 'leads.insights.advanced',
+  REFERRALS_MANUAL: 'referrals.manual',
   REFERRALS_INVITES: 'referrals.invites',
   PROFILE_ANALYTICS: 'profile.analytics',
   PRO_CHAT: 'prochat.messaging',
+  PRO_CHAT_DM: 'prochat.dm',
 });
 
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
@@ -48,8 +53,9 @@ export const BASIC_FEATURES = new Set([
   FEATURES.CRM_BASIC_LIST,
   FEATURES.CRM_BASIC_STATUS,
   FEATURES.CRM_FOLLOWUP_MANUAL,
-  FEATURES.PUBLIC_PROFILE,
-  FEATURES.REPORTS_AI_MONTHLY,
+  FEATURES.REFERRALS_MANUAL,
+  FEATURES.PRO_CHAT_DM,
+  FEATURES.DASHBOARD_ANALYTICS,
 ]);
 
 export const STANDARD_FEATURES = new Set([
@@ -63,6 +69,10 @@ export const STANDARD_FEATURES = new Set([
   FEATURES.ASSISTANT_PROFESSIONAL,
   FEATURES.ASSISTANT_PROFESSIONAL_CLOSING,
   FEATURES.ASSISTANT_PROFESSIONAL_FOLLOWUP,
+  FEATURES.CRM_LEAD_CONVERSATION,
+  FEATURES.PUBLIC_PROFILE,
+  FEATURES.WORKSPACE_ANALYTICS_PAGE,
+  FEATURES.REPORTS_AI_MONTHLY,
   FEATURES.LEADS_INSIGHTS_ADVANCED,
   FEATURES.REFERRALS_INVITES,
   FEATURES.PROFILE_ANALYTICS,
@@ -82,16 +92,16 @@ const PLAN_FEATURES = Object.freeze({
 export const PLAN_LIMITS = Object.freeze({
   [SUBSCRIPTION_PLAN.BASIC]: Object.freeze({
     chatbot_conversations: 200,
-    captured_leads: 100,
+    captured_leads: 50,
     ai_actions: 50,
-    followup_actions: 0,
+    followup_actions: 50,
     referral_analytics: 0,
   }),
   [SUBSCRIPTION_PLAN.STANDARD]: Object.freeze({
     chatbot_conversations: 1000,
     captured_leads: 1000,
     ai_actions: 300,
-    followup_actions: 300,
+    followup_actions: 500,
     referral_analytics: 100,
   }),
   [SUBSCRIPTION_PLAN.ENTERPRISE]: Object.freeze({

@@ -1,5 +1,5 @@
 import { parsePageLimitPagination, PAGINATION_PRESETS } from '../../utils/pagination.js';
-import { findOwnedLeadMatch, handleLeadServiceError } from './leadQueryUtils.js';
+import { findOwnedVisibleLeadMatch, handleLeadServiceError } from './leadQueryUtils.js';
 import { recordLeadViewIfNeeded } from '../analytics/leadKpiService.js';
 import { patchLeadMatchForUser, deleteOwnedLeadMatch } from './leadMatchFollowUpSync.js';
 import {
@@ -16,7 +16,7 @@ import { buildLeadPropertyMatchesPayload } from './leadPropertyMatchHelpers.js';
 export const recordLeadView = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
-    const leadMatch = await findOwnedLeadMatch(userId, req.params.id);
+    const leadMatch = await findOwnedVisibleLeadMatch(userId, req.params.id);
     const result = await recordLeadViewIfNeeded({
       user_id: userId,
       lead_match_id: leadMatch._id,
@@ -54,7 +54,7 @@ export const updateLeadMatch = async (req, res, next) => {
 export const getLeadById = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
-    const leadMatch = await findOwnedLeadMatch(userId, req.params.id);
+    const leadMatch = await findOwnedVisibleLeadMatch(userId, req.params.id);
     const payload = await formatLeadDetailApiResponse(req, userId, leadMatch);
     return res.json({ success: true, ...payload });
   } catch (err) { return handleLeadServiceError(res, err, next); }
@@ -63,7 +63,7 @@ export const getLeadById = async (req, res, next) => {
 export const getLeadInquiredProperty = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
-    const leadMatch = await findOwnedLeadMatch(userId, req.params.id, { select: 'compatibility_factors' });
+    const leadMatch = await findOwnedVisibleLeadMatch(userId, req.params.id, { select: 'compatibility_factors' });
     const payload = await buildInquiredPropertyPayload(req, leadMatch);
     return res.json({ success: true, ...payload });
   } catch (err) { return handleLeadServiceError(res, err, next); }
@@ -72,7 +72,7 @@ export const getLeadInquiredProperty = async (req, res, next) => {
 export const getLeadConversation = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
-    const leadMatch = await findOwnedLeadMatch(userId, req.params.id);
+    const leadMatch = await findOwnedVisibleLeadMatch(userId, req.params.id);
     const payload = await buildLeadConversationPayload(req.params.id, leadMatch, req.query);
     return res.json({ success: true, ...payload });
   } catch (err) { return handleLeadServiceError(res, err, next); }
@@ -114,7 +114,7 @@ export const getLeadPropertyMatches = async (req, res, next) => {
   try {
     const { _id: userId } = req.user;
     const pagination = parsePageLimitPagination(req.query || {}, PAGINATION_PRESETS.propertyMatches);
-    const leadMatch = await findOwnedLeadMatch(userId, req.params.id);
+    const leadMatch = await findOwnedVisibleLeadMatch(userId, req.params.id);
     const payload = await buildLeadPropertyMatchesPayload({
       user: req.user,
       leadMatch,

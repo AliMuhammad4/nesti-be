@@ -186,7 +186,7 @@ export const scorePreview = async (req, res, next) => {
       : {
           timeline: formContact.timeline || formContact.mortgage_timeline || null,
           budget:   formContact.budget   || formContact.price || null,
-          location: formContact.location || null,
+          location: formContact.location || formContact.buy_property_location || null,
           beds:     formContact.beds  ? (parseInt(formContact.beds, 10)  || null) : null,
           baths:    formContact.baths ? (parseInt(formContact.baths, 10) || null) : null,
           area:     null,
@@ -262,6 +262,9 @@ export const scorePreview = async (req, res, next) => {
       };
       const parts = [];
       if (formContact.location) parts.push(`interested in ${formContact.location}`);
+      if (formContact.buy_property_location) {
+        parts.push(`looking to buy in ${formContact.buy_property_location}`);
+      }
       if (formContact.budget)  parts.push(`budget ${formContact.budget}`);
       if (formContact.timeline) parts.push(`timeline ${formContact.timeline}`);
       if (formContact.mortgage_status) parts.push(`mortgage ${formContact.mortgage_status.replace(/_/g, ' ')}`);

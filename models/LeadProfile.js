@@ -80,6 +80,7 @@ const leadProfileSchema = new mongoose.Schema(
         viewing_readiness: { type: String },
         living_situation: { type: String },
         urgency_readiness: { type: String },
+        buy_property_location: { type: String },
       },
       mortgage_broker: {
         mortgage_timeline: { type: String },

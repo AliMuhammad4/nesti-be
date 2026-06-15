@@ -125,6 +125,7 @@ export function mapLeadProfileForApi(profile, profType) {
               viewing_readiness: p.qualification?.agent?.viewing_readiness || null,
               living_situation: p.qualification?.agent?.living_situation || null,
               urgency_readiness: p.qualification?.agent?.urgency_readiness || null,
+              buy_property_location: p.qualification?.agent?.buy_property_location || null,
             },
   };
 }

@@ -1,6 +1,7 @@
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
+import { evaluateRoleConversionChecklist } from './leadConversionChecklist.js';
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
 import { extractInquiredPropertyContext } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
@@ -87,11 +88,46 @@ function buildConversion(leadMatch, profile, convo) {
 function formatCloseSummary(cf) {
   const cs = cf?.close_summary;
   if (!cs || typeof cs !== 'object') return null;
+  const agentChecklist = cs?.agent_closing_checklist;
+  const lawyerChecklist = cs?.lawyer_closing_checklist;
+  const mortgageChecklist = cs?.mortgage_closing_checklist;
   return {
     status: cs.status || null,
     reason: cs.reason || null,
-    note: cs.note || null,
     value: cs.value ?? null,
+    agent_closing_checklist:
+      agentChecklist && typeof agentChecklist === 'object'
+        ? {
+            client_ready_to_proceed: agentChecklist.client_ready_to_proceed || '',
+            property_identified: agentChecklist.property_identified || '',
+            price_captured: agentChecklist.price_captured || '',
+            target_closing_date: agentChecklist.target_closing_date || '',
+            remaining_conditions: agentChecklist.remaining_conditions || '',
+            next_step: agentChecklist.next_step || '',
+          }
+        : null,
+    lawyer_closing_checklist:
+      lawyerChecklist && typeof lawyerChecklist === 'object'
+        ? {
+            transaction_type: lawyerChecklist.transaction_type || '',
+            property_or_legal_matter: lawyerChecklist.property_or_legal_matter || '',
+            closing_date: lawyerChecklist.closing_date || '',
+            agreement_and_docs_received: lawyerChecklist.agreement_and_docs_received || '',
+            outstanding_legal_requirements: lawyerChecklist.outstanding_legal_requirements || '',
+            next_step: lawyerChecklist.next_step || '',
+          }
+        : null,
+    mortgage_closing_checklist:
+      mortgageChecklist && typeof mortgageChecklist === 'object'
+        ? {
+            client_ready_to_move_forward: mortgageChecklist.client_ready_to_move_forward || '',
+            property_value_and_mortgage_need: mortgageChecklist.property_value_and_mortgage_need || '',
+            financing_status: mortgageChecklist.financing_status || '',
+            income_docs_ready: mortgageChecklist.income_docs_ready || '',
+            funding_timeline: mortgageChecklist.funding_timeline || '',
+            next_step: mortgageChecklist.next_step || '',
+          }
+        : null,
     closed_at: cs.closed_at || null,
     closed_by_user_id: cs.closed_by_user_id || null,
     closed_by_label: cs.closed_by_label || null,
@@ -108,6 +144,11 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     null;
   const leadSource = leadMatch?.compatibility_factors?.source || null;
   const { inquiredProperty, linkedSellerLeadMatchId } = extractInquiredPropertyContext(leadMatch);
+  const conversionChecklist = evaluateRoleConversionChecklist({
+    role: leadMatch?.compatibility_factors?.professional_type || opts?.leadProfile?.ownership?.professional_type,
+    leadProfile: opts.leadProfile || null,
+    leadMatch,
+  });
   const core = {
     id: String(leadMatch._id),
     professional_type: null,
@@ -136,6 +177,8 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     updated_at: leadMatch.updatedAt,
     agent_notes: formatAgentNotesForApi(leadMatch.compatibility_factors),
     close_summary: formatCloseSummary(leadMatch.compatibility_factors),
+    conversionChecklist,
+    conversion_checklist: conversionChecklist,
   };
   if (includeIntentField) {
     core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);

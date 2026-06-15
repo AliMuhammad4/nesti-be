@@ -35,7 +35,12 @@ export async function findOwnedVisibleLeadMatch(userId, leadId, opts = {}) {
 
 export function handleLeadServiceError(res, err, next) {
   if (err?.statusCode) {
-    return res.status(err.statusCode).json({ success: false, message: err.message });
+    return res.status(err.statusCode).json({
+      success: false,
+      message: err.message,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.details ? { details: err.details } : {}),
+    });
   }
   return next(err);
 }
@@ -95,6 +100,8 @@ export function buildLeadsListMatchFilter(userId, q = {}) {
     match.match_status = { $in: ['converted', 'closed_lost'] };
   } else if (pipelineNorm === 'referrals') {
     match._id = { $in: [] };
+  } else {
+    match.match_status = { $nin: ['converted', 'closed_lost'] };
   }
   if (grade) match.lead_type = new RegExp(`^${grade}_`);
   if (intent === 'buy' || intent === 'sell') {

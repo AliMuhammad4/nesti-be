@@ -263,6 +263,7 @@ export const createLeadRecords = async ({
   const locCombined =
     signals.location ||
     formContact?.location ||
+    formContact?.buy_property_location ||
     aiDetails?.property_address ||
     '';
   const { budgetStr: buyerBudgetStr, financingStr: buyerFinancingFromBudget } =
@@ -342,6 +343,7 @@ export const createLeadRecords = async ({
           viewing_readiness: formContact?.viewing_readiness || aiDetails?.viewing_readiness || '',
           living_situation: formContact?.living_situation || aiDetails?.living_situation || '',
           urgency_readiness: formContact?.urgency_readiness || aiDetails?.urgency_readiness || '',
+          buy_property_location: formContact?.buy_property_location || '',
         },
       },
       source: 'chatbot',

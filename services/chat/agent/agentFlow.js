@@ -35,7 +35,7 @@ export const agentFlow = {
       timeline: storedForm.timeline || null,
       budget:   budgetStr || null,
       financing_signal: financingStr || null,
-      location: storedForm.location || null,
+      location: storedForm.location || storedForm.buy_property_location || null,
       beds:     storedForm.beds ? (parseInt(storedForm.beds, 10) || null) : null,
       baths:    storedForm.baths ? (parseInt(storedForm.baths, 10) || null) : null,
       area:     null,
@@ -157,8 +157,9 @@ export const agentFlow = {
       viewing_readiness:  ai.viewing_readiness  || derivedQual.viewing_readiness || fc.viewing_readiness,
       living_situation:   ai.living_situation   || derivedQual.living_situation || fc.living_situation,
       urgency_readiness:  ai.urgency_readiness  || derivedQual.urgency_readiness || fc.urgency_readiness,
+      buy_property_location: fc.buy_property_location,
       property_address:   ai.property_address   || fc.address,
-      location:           ai.property_address   || fc.location,
+      location:           ai.property_address   || fc.location || fc.buy_property_location,
       ...(hasAiBudget || hasFcBudget ? { budget: budgetStr } : {}),
       ...(hasAiBudget || hasFcBudget
         ? {}

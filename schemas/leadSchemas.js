@@ -49,8 +49,31 @@ export const leadAgentPatchSchema = Joi.object({
   match_status: Joi.string().valid(...MATCH_STATUSES).optional(),
   note: Joi.string().max(8000).allow('').optional(),
   close_reason: Joi.string().max(100).optional(),
-  close_note: Joi.string().max(2000).allow('').optional(),
   closed_value: Joi.number().min(0).max(999_999_999).optional(),
+  agent_closing_checklist: Joi.object({
+    client_ready_to_proceed: Joi.string().max(300).allow('').optional(),
+    property_identified: Joi.string().max(300).allow('').optional(),
+    price_captured: Joi.string().max(200).allow('').optional(),
+    target_closing_date: Joi.string().max(120).allow('').optional(),
+    remaining_conditions: Joi.string().max(500).allow('').optional(),
+    next_step: Joi.string().max(1000).allow('').optional(),
+  }).optional(),
+  lawyer_closing_checklist: Joi.object({
+    transaction_type: Joi.string().max(200).allow('').optional(),
+    property_or_legal_matter: Joi.string().max(300).allow('').optional(),
+    closing_date: Joi.string().max(120).allow('').optional(),
+    agreement_and_docs_received: Joi.string().max(300).allow('').optional(),
+    outstanding_legal_requirements: Joi.string().max(1000).allow('').optional(),
+    next_step: Joi.string().max(1000).allow('').optional(),
+  }).optional(),
+  mortgage_closing_checklist: Joi.object({
+    client_ready_to_move_forward: Joi.string().max(300).allow('').optional(),
+    property_value_and_mortgage_need: Joi.string().max(300).allow('').optional(),
+    financing_status: Joi.string().max(300).allow('').optional(),
+    income_docs_ready: Joi.string().max(300).allow('').optional(),
+    funding_timeline: Joi.string().max(300).allow('').optional(),
+    next_step: Joi.string().max(1000).allow('').optional(),
+  }).optional(),
 }).min(1);
 
 export const leadProfileCreateSchema = Joi.object({

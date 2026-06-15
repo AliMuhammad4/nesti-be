@@ -12,6 +12,7 @@ import { awardReferralPoints, REWARD_RULES } from '../referral/rewardService.js'
 import { awardInviterMilestoneForUser } from '../referral/inviteService.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
 import { assertValidLeadId, findOwnedVisibleLeadMatch } from './leadQueryUtils.js';
+import { evaluateRoleConversionChecklist } from './leadConversionChecklist.js';
 
 /**
  * Keeps LeadProfile.lifecycle.status aligned with aggregate outcomes of all
@@ -129,6 +130,93 @@ export function validateCloseReasonForLead({ lead, nextStatus, closeReason, prof
   return null;
 }
 
+function normalizeLawyerClosingChecklist(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    transaction_type: String(raw.transaction_type || '').trim(),
+    property_or_legal_matter: String(raw.property_or_legal_matter || '').trim(),
+    closing_date: String(raw.closing_date || '').trim(),
+    agreement_and_docs_received: String(raw.agreement_and_docs_received || '').trim(),
+    outstanding_legal_requirements: String(raw.outstanding_legal_requirements || '').trim(),
+    next_step: String(raw.next_step || '').trim(),
+  };
+}
+
+function normalizeAgentClosingChecklist(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    client_ready_to_proceed: String(raw.client_ready_to_proceed || '').trim(),
+    property_identified: String(raw.property_identified || '').trim(),
+    price_captured: String(raw.price_captured || '').trim(),
+    target_closing_date: String(raw.target_closing_date || '').trim(),
+    remaining_conditions: String(raw.remaining_conditions || '').trim(),
+    next_step: String(raw.next_step || '').trim(),
+  };
+}
+
+function normalizeMortgageClosingChecklist(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    client_ready_to_move_forward: String(raw.client_ready_to_move_forward || '').trim(),
+    property_value_and_mortgage_need: String(raw.property_value_and_mortgage_need || '').trim(),
+    financing_status: String(raw.financing_status || '').trim(),
+    income_docs_ready: String(raw.income_docs_ready || '').trim(),
+    funding_timeline: String(raw.funding_timeline || '').trim(),
+    next_step: String(raw.next_step || '').trim(),
+  };
+}
+
+function validateRequiredLawyerClosingChecklist(rawChecklist) {
+  const checklist = normalizeLawyerClosingChecklist(rawChecklist);
+  if (!checklist) {
+    return [
+      'transaction_type',
+      'property_or_legal_matter',
+      'closing_date',
+      'agreement_and_docs_received',
+      'outstanding_legal_requirements',
+      'next_step',
+    ];
+  }
+  return Object.entries(checklist)
+    .filter(([, value]) => !String(value || '').trim())
+    .map(([key]) => key);
+}
+
+function validateRequiredAgentClosingChecklist(rawChecklist) {
+  const checklist = normalizeAgentClosingChecklist(rawChecklist);
+  if (!checklist) {
+    return [
+      'client_ready_to_proceed',
+      'property_identified',
+      'price_captured',
+      'target_closing_date',
+      'remaining_conditions',
+      'next_step',
+    ];
+  }
+  return Object.entries(checklist)
+    .filter(([, value]) => !String(value || '').trim())
+    .map(([key]) => key);
+}
+
+function validateRequiredMortgageClosingChecklist(rawChecklist) {
+  const checklist = normalizeMortgageClosingChecklist(rawChecklist);
+  if (!checklist) {
+    return [
+      'client_ready_to_move_forward',
+      'property_value_and_mortgage_need',
+      'financing_status',
+      'income_docs_ready',
+      'funding_timeline',
+      'next_step',
+    ];
+  }
+  return Object.entries(checklist)
+    .filter(([, value]) => !String(value || '').trim())
+    .map(([key]) => key);
+}
+
 export function isReferralRecipientLead(lead) {
   const factors =
     lead?.compatibility_factors && typeof lead.compatibility_factors === 'object'
@@ -165,6 +253,16 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
   await assertLeadMatchPlanVisible(userId, lead._id, subscription);
 
   const prevStatus = lead.match_status;
+  const role = leadProfessionalType(lead, user?.role);
+  const pendingAgentClosingChecklist = normalizeAgentClosingChecklist(
+    body?.agent_closing_checklist
+  );
+  const pendingLawyerClosingChecklist = normalizeLawyerClosingChecklist(
+    body?.lawyer_closing_checklist
+  );
+  const pendingMortgageClosingChecklist = normalizeMortgageClosingChecklist(
+    body?.mortgage_closing_checklist
+  );
   if (hasStatus) assertMatchStatusTransition(prevStatus, nextStatus);
   if (hasStatus && nextStatus !== prevStatus && isReferralRecipientLead(lead)) {
     const closeValidationError = validateCloseReasonForLead({
@@ -176,6 +274,82 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
     if (closeValidationError) {
       const err = new Error(closeValidationError);
       err.statusCode = 400;
+      throw err;
+    }
+  }
+  if (hasStatus && nextStatus !== prevStatus && isTerminalMatchStatus(nextStatus) && role === PROFESSIONAL_TYPE.LAWYER) {
+    const missingLawyerCloseFields = validateRequiredLawyerClosingChecklist(
+      pendingLawyerClosingChecklist
+    );
+    if (missingLawyerCloseFields.length > 0) {
+      const err = new Error(
+        `Missing required lawyer_closing_checklist fields: ${missingLawyerCloseFields.join(', ')}`
+      );
+      err.statusCode = 400;
+      err.code = 'lawyer_closing_checklist_required';
+      err.details = { missing_fields: missingLawyerCloseFields };
+      throw err;
+    }
+  }
+  if (
+    hasStatus &&
+    nextStatus !== prevStatus &&
+    isTerminalMatchStatus(nextStatus) &&
+    role === PROFESSIONAL_TYPE.AGENT
+  ) {
+    const missingAgentCloseFields = validateRequiredAgentClosingChecklist(
+      pendingAgentClosingChecklist
+    );
+    if (missingAgentCloseFields.length > 0) {
+      const err = new Error(
+        `Missing required agent_closing_checklist fields: ${missingAgentCloseFields.join(', ')}`
+      );
+      err.statusCode = 400;
+      err.code = 'agent_closing_checklist_required';
+      err.details = { missing_fields: missingAgentCloseFields };
+      throw err;
+    }
+  }
+  if (
+    hasStatus &&
+    nextStatus !== prevStatus &&
+    isTerminalMatchStatus(nextStatus) &&
+    role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+  ) {
+    const missingMortgageCloseFields = validateRequiredMortgageClosingChecklist(
+      pendingMortgageClosingChecklist
+    );
+    if (missingMortgageCloseFields.length > 0) {
+      const err = new Error(
+        `Missing required mortgage_closing_checklist fields: ${missingMortgageCloseFields.join(', ')}`
+      );
+      err.statusCode = 400;
+      err.code = 'mortgage_closing_checklist_required';
+      err.details = { missing_fields: missingMortgageCloseFields };
+      throw err;
+    }
+  }
+  if (hasStatus && nextStatus === 'converted' && nextStatus !== prevStatus) {
+    const leadProfile = lead.lead_profile_id
+      ? await LeadProfile.findById(lead.lead_profile_id).lean()
+      : null;
+    const checklist = evaluateRoleConversionChecklist({
+      role,
+      leadProfile,
+      leadMatch: lead,
+      pendingAgentChecklist: pendingAgentClosingChecklist,
+      pendingLawyerChecklist: pendingLawyerClosingChecklist,
+      pendingMortgageChecklist: pendingMortgageClosingChecklist,
+    });
+    if (!checklist.canConvert) {
+      const missingLabels = checklist.missingItems.map((item) => item.label).join('; ');
+      const err = new Error(`Lead is not ready to convert. Missing: ${missingLabels}`);
+      err.statusCode = 400;
+      err.code = 'conversion_checklist_incomplete';
+      err.details = {
+        role: checklist.role,
+        missing_items: checklist.missingItems,
+      };
       throw err;
     }
   }
@@ -220,13 +394,32 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
 
   const wasTerminal = isTerminalMatchStatus(prevStatus);
   if (statusChanged && isTerminalMatchStatus(nextStatus)) {
+    const existingCloseSummary =
+      lead?.compatibility_factors?.close_summary &&
+      typeof lead.compatibility_factors.close_summary === 'object'
+        ? lead.compatibility_factors.close_summary
+        : {};
+    const lawyerClosingChecklist =
+      role === PROFESSIONAL_TYPE.LAWYER
+        ? (pendingLawyerClosingChecklist || normalizeLawyerClosingChecklist(existingCloseSummary.lawyer_closing_checklist))
+        : null;
+    const agentClosingChecklist =
+      role === PROFESSIONAL_TYPE.AGENT
+        ? (pendingAgentClosingChecklist || normalizeAgentClosingChecklist(existingCloseSummary.agent_closing_checklist))
+        : null;
+    const mortgageClosingChecklist =
+      role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+        ? (pendingMortgageClosingChecklist || normalizeMortgageClosingChecklist(existingCloseSummary.mortgage_closing_checklist))
+        : null;
     mongoUpdate.$set = {
       ...mongoUpdate.$set,
       'compatibility_factors.close_summary': {
         status: nextStatus,
         reason: body.close_reason || null,
-        note: body.close_note || null,
         value: body.closed_value ?? null,
+        ...(agentClosingChecklist ? { agent_closing_checklist: agentClosingChecklist } : {}),
+        ...(lawyerClosingChecklist ? { lawyer_closing_checklist: lawyerClosingChecklist } : {}),
+        ...(mortgageClosingChecklist ? { mortgage_closing_checklist: mortgageClosingChecklist } : {}),
         closed_at: now,
         closed_by_user_id: authorUserIdStr,
         closed_by_label: authorLabel,

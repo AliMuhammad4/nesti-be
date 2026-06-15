@@ -231,6 +231,7 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         viewing_readiness: payload.qualification?.agent?.viewing_readiness || '',
         living_situation: payload.qualification?.agent?.living_situation || '',
         urgency_readiness: payload.qualification?.agent?.urgency_readiness || '',
+        buy_property_location: payload.qualification?.agent?.buy_property_location || '',
       },
       mortgage_broker: {
         mortgage_timeline: payload.qualification?.mortgage_broker?.mortgage_timeline || '',

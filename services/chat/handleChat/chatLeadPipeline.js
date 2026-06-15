@@ -51,6 +51,7 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   viewing_readiness: 'qualification.agent.viewing_readiness',
   living_situation: 'qualification.agent.living_situation',
   urgency_readiness: 'qualification.agent.urgency_readiness',
+  buy_property_location: 'qualification.agent.buy_property_location',
   mortgage_timeline: 'qualification.mortgage_broker.mortgage_timeline',
   pre_approval_status: 'qualification.mortgage_broker.pre_approval_status',
   credit_score_range: 'qualification.mortgage_broker.credit_score_range',

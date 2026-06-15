@@ -17,6 +17,7 @@ const ROUTE_HANDLERS = [
 
 const LEAD_MODULES = [
   '../services/lead/leadQueryUtils.js',
+  '../services/lead/leadConversionChecklist.js',
   '../services/lead/leadResponseMappers.js',
   '../services/lead/leadProfileHelpers.js',
   '../services/lead/leadProfileSignals.js',
@@ -89,6 +90,10 @@ test('buildLeadsListMatchFilter applies intent regex', async () => {
   assert.match(String(buyFilter.lead_type), /buyer|client/);
   const sellFilter = buildLeadsListMatchFilter('uid', { intent: 'sell' });
   assert.match(String(sellFilter.lead_type), /seller/);
+  const defaultFilter = buildLeadsListMatchFilter('uid', {});
+  assert.deepEqual(defaultFilter.match_status, { $nin: ['converted', 'closed_lost'] });
+  const convertedFilter = buildLeadsListMatchFilter('uid', { status: 'converted' });
+  assert.equal(convertedFilter.match_status, 'converted');
 });
 
 test('mergeConvoWithWorkspaceBooking overlays workspace booking fields', async () => {
@@ -124,6 +129,8 @@ test('lead response mappers preserve core list/detail/seller shapes', async () =
   assert.equal(listRow.lead_type, 'buyer_hot');
   assert.equal(listRow.intent, 'buy');
   assert.equal(listRow.contact.full_name, 'Test User');
+  assert.equal(listRow.conversionChecklist?.role, 'agent');
+  assert.equal(listRow.conversionChecklist?.canConvert, false);
 
   const detail = mapLeadMatchToDetail(stubMatch, stubProfile, stubConvo, { includeIntentField: true });
   assert.equal(detail.id, listRow.id);
@@ -143,6 +150,77 @@ test('lead response mappers preserve core list/detail/seller shapes', async () =
   });
   assert.equal(underProfile.id, listRow.id);
   assert.equal(underProfile.professional_type, 'agent');
+});
+
+test('role conversion checklist matches role-specific requirements', async () => {
+  const { evaluateRoleConversionChecklist } = await import(
+    '../services/lead/leadConversionChecklist.js'
+  );
+
+  const baseLead = {
+    compatibility_factors: { professional_type: 'mortgage_broker' },
+  };
+  const incompleteMortgage = evaluateRoleConversionChecklist({
+    role: 'mortgage_broker',
+    leadMatch: baseLead,
+    leadProfile: {
+      property: { budget: '' },
+      qualification: { mortgage_broker: { pre_approval_status: '', mortgage_timeline: '' } },
+    },
+  });
+  assert.equal(incompleteMortgage.canConvert, false);
+  assert.ok(incompleteMortgage.missingItems.length >= 1);
+
+  const completeAgent = evaluateRoleConversionChecklist({
+    role: 'agent',
+    leadMatch: {
+      compatibility_factors: {
+        professional_type: 'agent',
+        agent_notes: [{ text: 'next step submit offer' }],
+      },
+    },
+    leadProfile: {
+      property: {
+        address: '123 Main St',
+        budget: '850000',
+        timeline: '2 months',
+      },
+      qualification: {
+        agent: {
+          urgency_readiness: 'yes_immediately',
+          mortgage_status: 'fully_pre_approved',
+        },
+      },
+      budget_profile: {},
+    },
+  });
+  assert.equal(completeAgent.canConvert, true);
+  assert.equal(completeAgent.missingItems.length, 0);
+
+  const completeLawyer = evaluateRoleConversionChecklist({
+    role: 'lawyer',
+    leadMatch: {
+      compatibility_factors: {
+        professional_type: 'lawyer',
+        agent_notes: [{ text: 'next step prepare closing package' }],
+      },
+    },
+    leadProfile: {
+      property: {
+        address: '12 King St',
+        timeline: '30_60_days',
+      },
+      qualification: {
+        lawyer: {
+          transaction_type: 'home_purchase',
+          closing_timeline: '30_60_days',
+          transaction_stage: 'offer_accepted',
+          legal_services_needed: 'full_closing',
+        },
+      },
+    },
+  });
+  assert.equal(completeLawyer.canConvert, true);
 });
 
 test('inquired property helpers normalize context and payload fields', async () => {

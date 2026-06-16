@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
-import { cloudinary, isCloudinaryConfigured } from '../services/media/cloudinaryClient.js';
+import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
 
 function safeId(bytes = 6) {
   try {
@@ -10,22 +10,12 @@ function safeId(bytes = 6) {
   }
 }
 
-function uploadBufferToCloudinary(buffer, options) {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(options, (err, result) => {
-      if (err) return reject(err);
-      resolve(result);
-    });
-    stream.end(buffer);
-  });
-}
-
 export async function postPropertyImagesUpload(req, res, next) {
   try {
-    if (!isCloudinaryConfigured()) {
+    if (!isR2Configured()) {
       return res.status(503).json({
         success: false,
-        message: 'Image upload is not configured (missing Cloudinary environment variables).',
+        message: 'Image upload is not configured (missing Cloudflare R2 environment variables).',
       });
     }
 
@@ -48,21 +38,20 @@ export async function postPropertyImagesUpload(req, res, next) {
     const folder = `nesti/property-leads/${String(embed.user_id)}/${sessionId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 96)}`;
     const uploaded = await Promise.all(
       files.slice(0, 8).map(async (file, idx) => {
-        const result = await uploadBufferToCloudinary(file.buffer, {
-          folder,
-          public_id: `property_${Date.now()}_${idx}_${safeId(4)}`,
-          overwrite: false,
-          resource_type: 'image',
+        const objectKey = `${folder}/property_${Date.now()}_${idx}_${safeId(4)}`;
+        const result = await uploadBufferToR2(file.buffer, {
+          key: objectKey,
+          mimeType: file.mimetype,
         });
         const url = result?.secure_url || result?.url || '';
         return {
           url,
           secure_url: url,
-          public_id: result?.public_id || '',
-          width: result?.width != null ? Number(result.width) : null,
-          height: result?.height != null ? Number(result.height) : null,
-          format: result?.format || '',
-          bytes: result?.bytes != null ? Number(result.bytes) : null,
+          public_id: result?.public_id || objectKey,
+          width: null,
+          height: null,
+          format: String(file.mimetype || '').split('/')[1] || '',
+          bytes: result?.bytes != null ? Number(result.bytes) : Number(file.size || 0) || null,
           original_filename: file.originalname || '',
           uploaded_at: new Date().toISOString(),
         };

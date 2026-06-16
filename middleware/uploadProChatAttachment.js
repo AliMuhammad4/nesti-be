@@ -1,7 +1,7 @@
 import multer from 'multer';
 
 // Keep modest to avoid memory pressure (multer memoryStorage keeps the full buffer).
-// Cloudinary supports bigger files, but this is a good default for chat.
+// Keep this conservative even with R2 so uploads stay responsive in chat.
 const MAX_BYTES = 12 * 1024 * 1024; // 12MB
 
 const ALLOWED = new Set([

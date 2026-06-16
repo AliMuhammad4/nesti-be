@@ -27,11 +27,11 @@ import propertyMatchScoringRoutes from './routes/agent/propertyMatchScoringRoute
 import proChatRoutes from './routes/proChatRoutes.js';
 import publicProfileRoutes from './routes/publicProfileRoutes.js';
 import professionalDashboardRoutes from './routes/professionalDashboardRoutes.js';
-import { configureCloudinary } from './services/media/cloudinaryClient.js';
+import { configureR2 } from './services/media/r2Client.js';
 
 // Load env
 dotenv.config();
-configureCloudinary();
+configureR2();
 
 const app = express();
 if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {

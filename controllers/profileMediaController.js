@@ -1,19 +1,19 @@
 import User from '../models/User.js';
-import { cloudinary, isCloudinaryConfigured } from '../services/media/cloudinaryClient.js';
+import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
 import logger from '../utils/logger.js';
 
 const KINDS = new Set(['profile', 'cover']);
 
 /**
  * POST multipart: field `file` (image), field `kind` = `profile` | `cover`
- * Uploads to Cloudinary and saves HTTPS URL on User.
+ * Uploads to R2 and saves HTTPS URL on User.
  */
 export async function postProfileImageUpload(req, res, next) {
   try {
-    if (!isCloudinaryConfigured()) {
+    if (!isR2Configured()) {
       return res.status(503).json({
         success: false,
-        message: 'Image upload is not configured (missing Cloudinary environment variables).',
+        message: 'Image upload is not configured (missing Cloudflare R2 environment variables).',
       });
     }
     if (!req.file?.buffer) {
@@ -28,16 +28,11 @@ export async function postProfileImageUpload(req, res, next) {
     }
 
     const userId = String(req.user._id);
-    const folder = `nesti/users/${userId}`;
-    const publicId = kind === 'cover' ? 'cover' : 'profile';
-    const b64 = req.file.buffer.toString('base64');
-    const dataUri = `data:${req.file.mimetype};base64,${b64}`;
-
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder,
-      public_id: publicId,
-      overwrite: true,
-      resource_type: 'image',
+    const objectKey = `nesti/users/${userId}/${kind === 'cover' ? 'cover' : 'profile'}`;
+    const result = await uploadBufferToR2(req.file.buffer, {
+      key: objectKey,
+      mimeType: req.file.mimetype,
+      cacheControl: 'public, max-age=3600',
     });
 
     const secureUrl = result.secure_url;

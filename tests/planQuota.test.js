@@ -31,8 +31,10 @@ function createRestoreBag() {
 test('resolvePlanLimit returns finite cap for basic and null for enterprise', () => {
   const basicSub = { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'active' };
   const enterpriseSub = { plan_key: SUBSCRIPTION_PLAN.ENTERPRISE, status: 'active' };
+  const trialSub = { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'free_trial' };
   assert.equal(resolvePlanLimit(basicSub, 'captured_leads'), 50);
   assert.equal(resolvePlanLimit(enterpriseSub, 'captured_leads'), null);
+  assert.equal(resolvePlanLimit(trialSub, 'captured_leads'), 10);
 });
 
 test('assertWithinPlanQuota passes under captured_leads limit', async () => {

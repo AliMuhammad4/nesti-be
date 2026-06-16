@@ -2,7 +2,7 @@ import Subscription from '../../models/Subscription.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { getPlan, getPlanByPriceId, getPlanTier, getStripePriceId } from './plans.js';
 import { getStripeClient } from './stripeClient.js';
-import { getEffectivePlan, getPlanLimits } from './entitlements.js';
+import { getPlanLimitsForSubscription } from './entitlements.js';
 import { getPlanUsageForUser } from './planQuota.js';
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const STRIPE_BLOCKING_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
@@ -540,11 +540,10 @@ export async function getSubscriptionPresentationForUser(user, { refreshFromStri
     ? await getFreshSubscriptionForUser(user)
     : await getOrCreateSubscriptionForUser(user);
   const serialized = serializeSubscription(subscription);
-  const planKey = getEffectivePlan(subscription);
   const [usage] = await Promise.all([getPlanUsageForUser(user._id)]);
   return {
     ...serialized,
-    planLimits: getPlanLimits(planKey),
+    planLimits: getPlanLimitsForSubscription(subscription),
     usage,
     isExpired: serialized.accountStatus === 'expired',
     raw: subscription,

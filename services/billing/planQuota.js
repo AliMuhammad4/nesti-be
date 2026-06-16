@@ -1,6 +1,6 @@
 import LeadMatch from '../../models/LeadMatch.js';
 import NurtureLog from '../../models/NurtureLog.js';
-import { getEffectivePlan, getPlanLimits } from './entitlements.js';
+import { getPlanLimitsForSubscription } from './entitlements.js';
 
 export class PlanQuotaError extends Error {
   constructor({ limitKey, used, max }) {
@@ -14,8 +14,7 @@ export class PlanQuotaError extends Error {
 }
 
 export function resolvePlanLimit(subscription, limitKey) {
-  const planKey = getEffectivePlan(subscription);
-  const limits = getPlanLimits(planKey);
+  const limits = getPlanLimitsForSubscription(subscription);
   return limits?.[limitKey] ?? null;
 }
 

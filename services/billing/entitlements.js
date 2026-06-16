@@ -99,7 +99,7 @@ export const PLAN_LIMITS = Object.freeze({
   }),
   [SUBSCRIPTION_PLAN.STANDARD]: Object.freeze({
     chatbot_conversations: 1000,
-    captured_leads: 1000,
+    captured_leads: 150,
     ai_actions: 300,
     followup_actions: 500,
     referral_analytics: 100,
@@ -111,6 +111,10 @@ export const PLAN_LIMITS = Object.freeze({
     followup_actions: null,
     referral_analytics: null,
   }),
+});
+
+const FREE_TRIAL_LIMIT_OVERRIDES = Object.freeze({
+  captured_leads: 10,
 });
 
 export function accountStatusFromSubscription(subscription) {
@@ -153,4 +157,16 @@ export function hasFeature(subscription, featureKey) {
 export function getPlanLimits(planKey) {
   const key = String(planKey || '').trim().toLowerCase();
   return PLAN_LIMITS[key] || PLAN_LIMITS[SUBSCRIPTION_PLAN.BASIC];
+}
+
+export function getPlanLimitsForSubscription(subscription) {
+  const planKey = getEffectivePlan(subscription);
+  const baseLimits = getPlanLimits(planKey);
+  if (accountStatusFromSubscription(subscription) !== ACCOUNT_STATUS.FREE_TRIAL) {
+    return baseLimits;
+  }
+  return Object.freeze({
+    ...baseLimits,
+    ...FREE_TRIAL_LIMIT_OVERRIDES,
+  });
 }

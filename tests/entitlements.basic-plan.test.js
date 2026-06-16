@@ -5,9 +5,9 @@ import {
   SUBSCRIPTION_PLAN,
   BASIC_FEATURES,
   STANDARD_FEATURES,
-  PLAN_LIMITS,
   hasFeature,
   getPlanLimits,
+  getPlanLimitsForSubscription,
   getEffectivePlan,
 } from '../services/billing/entitlements.js';
 
@@ -21,9 +21,9 @@ test('Basic plan limits are 50 leads and 50 nurture emails', () => {
   assert.equal(limits.followup_actions, 50);
 });
 
-test('Standard plan limits are 1000 leads and 500 nurture emails', () => {
+test('Standard plan limits are 150 leads and 500 nurture emails', () => {
   const limits = getPlanLimits(SUBSCRIPTION_PLAN.STANDARD);
-  assert.equal(limits.captured_leads, 1000);
+  assert.equal(limits.captured_leads, 150);
   assert.equal(limits.followup_actions, 500);
 });
 
@@ -81,4 +81,7 @@ test('free trial effective plan is enterprise', () => {
   };
   assert.equal(getEffectivePlan(trialSub), SUBSCRIPTION_PLAN.ENTERPRISE);
   assert.equal(hasFeature(trialSub, FEATURES.PUBLIC_PROFILE), true);
+  const trialLimits = getPlanLimitsForSubscription(trialSub);
+  assert.equal(trialLimits.captured_leads, 10);
+  assert.equal(trialLimits.followup_actions, null);
 });

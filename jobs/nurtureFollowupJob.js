@@ -1,15 +1,28 @@
 import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
+import ChatConversation from '../models/ChatConversation.js';
 import NurtureLog from '../models/NurtureLog.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import User from '../models/User.js';
-import { PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
+import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import sendEmail from '../utils/sendEmail.js';
 import logger from '../utils/logger.js';
 import { recordLeadKpiEvent } from '../services/analytics/leadKpiService.js';
-import { FEATURES, hasFeature } from '../services/billing/entitlements.js';
+import {
+  FEATURES,
+  SUBSCRIPTION_PLAN,
+  getEffectivePlan,
+  hasFeature,
+} from '../services/billing/entitlements.js';
 import { getOrCreateSubscriptionForUser } from '../services/billing/subscriptionService.js';
 import { assertWithinPlanQuota, PlanQuotaError } from '../services/billing/planQuota.js';
+import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
+import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurturePropertyMatchesContext.js';
+import { buildLeadContext, generateDraft } from '../services/nurture/nurtureEmailOpenAi.js';
+import {
+  composeNurtureEmailHtml,
+  prepareNurturePlainBodyForEmail,
+} from '../services/nurture/nurtureEmailTemplate.js';
 
 const AUTOMATION_TYPE = 'fifteen_day_followup';
 const TERMINAL_STATUSES = new Set(['converted', 'closed_lost']);
@@ -69,8 +82,32 @@ function professionalName(user, professionalProfile) {
   );
 }
 
-function buildFollowupEmail({ user, professionalProfile, profile }) {
-  const name = recipientName(profile) || 'there';
+function normalizeProfessionalType(raw) {
+  const role = String(raw || '').trim().toLowerCase();
+  if (role === PROFESSIONAL_TYPE.LAWYER) return PROFESSIONAL_TYPE.LAWYER;
+  if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return PROFESSIONAL_TYPE.MORTGAGE_BROKER;
+  if (role === PROFESSIONAL_TYPE.AGENT) return PROFESSIONAL_TYPE.AGENT;
+  return PROFESSIONAL_TYPE.AGENT;
+}
+
+function roleSpecificNurtureGoal(profType) {
+  if (profType === PROFESSIONAL_TYPE.LAWYER) {
+    return 'Follow up on their transaction progress, invite them to schedule a legal consultation, and include a concise meeting-preparation checklist with documents to bring and closing-related questions.';
+  }
+  if (profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    return 'Follow up on their financing timeline, invite them to schedule a mortgage review, and include a concise meeting-preparation checklist with income, tax, and banking documents to bring.';
+  }
+  return 'Send a professional follow-up to re-engage this client, invite them to schedule next steps, and include a concise meeting-preparation checklist with documents and priorities to bring to the meeting.';
+}
+
+function roleSpecificNurtureTone(profType) {
+  if (profType === PROFESSIONAL_TYPE.LAWYER) return 'formal, reassuring, attorney-office professional';
+  if (profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return 'clear, confident, financing-focused professional';
+  return 'executive, warm, concise, brokerage-grade professional';
+}
+
+function buildSimpleFollowupEmail({ user, professionalProfile, profile, leadMatch }) {
+  const name = recipientName(profile, leadMatch) || 'there';
   const senderName = professionalName(user, professionalProfile);
   const calendlyUrl = String(professionalProfile?.calendly_link || '').trim();
   const subject = `Checking in from ${senderName}`;
@@ -101,9 +138,81 @@ function buildFollowupEmail({ user, professionalProfile, profile }) {
   return { subject, message, htmlMessage };
 }
 
+async function buildFollowupEmail({ user, professionalProfile, profile, leadMatch, conversation }) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return buildSimpleFollowupEmail({ user, professionalProfile, profile, leadMatch });
+    }
+
+    const profType = normalizeProfessionalType(
+      leadMatch?.compatibility_factors?.professional_type || user?.role,
+    );
+    const includePropertyCards = profType === PROFESSIONAL_TYPE.AGENT;
+    const signature = {
+      display_name: professionalName(user, professionalProfile),
+      email: user?.email ? String(user.email).trim() : null,
+      phone: professionalProfile?.phone ? String(professionalProfile.phone).trim() : null,
+    };
+    const calendlyRaw = String(professionalProfile?.calendly_link || '').trim();
+    const calendlyUrl = withNestiNurtureCalendlyTracking(calendlyRaw, {
+      conversationId: leadMatch?.conversation_id || null,
+      ownerUserId: user?._id || null,
+    });
+    const propertyMatches = includePropertyCards
+      ? await loadPropertyMatchesForNurtureEmail({
+          userId: user?._id,
+          conversationId: leadMatch?.conversation_id,
+          leadProfessionalType: profType,
+          professionalProfile,
+          leadProfile: profile || null,
+          leadMatch: leadMatch || null,
+          enableProfileFallback: true,
+        })
+      : { listings: [], context: null, note: null };
+    const leadContext = buildLeadContext(leadMatch, profile, conversation, {
+      property_matches: propertyMatches,
+      viewer_professional_role: user?.role || null,
+    });
+    const draft = await generateDraft(leadContext, {
+      goal: roleSpecificNurtureGoal(profType),
+      tone: roleSpecificNurtureTone(profType),
+    });
+    const plainMessage = prepareNurturePlainBodyForEmail({
+      bodyPlain: draft.body_text,
+      listings: propertyMatches.listings || [],
+      includePropertyCards,
+    });
+    const htmlMessage = composeNurtureEmailHtml({
+      bodyPlain: draft.body_text,
+      listings: propertyMatches.listings || [],
+      includePropertyCards,
+      agentName: signature.display_name || 'Your Nesti professional',
+      propertyMatchesContext: propertyMatches.context || null,
+      propertyMatchesNote: propertyMatches.note || null,
+      schedulingUrl: calendlyUrl || null,
+      signature,
+      listingTableColumns: 'score_notes',
+    });
+    const subject = String(draft.subject || '').trim();
+    if (!subject || !plainMessage || !htmlMessage) {
+      return buildSimpleFollowupEmail({ user, professionalProfile, profile, leadMatch });
+    }
+    return { subject, message: plainMessage, htmlMessage };
+  } catch (err) {
+    logger.warn('automated nurture draft/template fallback to simple email', {
+      lead_match_id: String(leadMatch?._id || ''),
+      error: err?.message,
+    });
+    return buildSimpleFollowupEmail({ user, professionalProfile, profile, leadMatch });
+  }
+}
+
 async function userCanReceiveAutomatedFollowups(user) {
   const subscription = await getOrCreateSubscriptionForUser(user);
-  return hasFeature(subscription, FEATURES.LEADS_FOLLOWUP_AUTOMATED);
+  if (!hasFeature(subscription, FEATURES.LEADS_FOLLOWUP_AUTOMATED)) {
+    return false;
+  }
+  return getEffectivePlan(subscription) === SUBSCRIPTION_PLAN.ENTERPRISE;
 }
 
 async function latestNurtureLogForLead(leadMatch) {
@@ -117,11 +226,12 @@ async function latestNurtureLogForLead(leadMatch) {
 }
 
 async function sendFollowupForLead(leadMatch, now, followupDays) {
-  const [user, profile, professionalProfile, latestLog] = await Promise.all([
+  const [user, profile, professionalProfile, latestLog, conversation] = await Promise.all([
     User.findById(leadMatch.user_id).select('_id first_name last_name email role is_verified createdAt').lean(),
     leadMatch.lead_profile_id ? LeadProfile.findById(leadMatch.lead_profile_id).lean() : null,
     ProfessionalProfile.findOne({ user_id: leadMatch.user_id }).lean(),
     latestNurtureLogForLead(leadMatch),
+    leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).lean() : null,
   ]);
 
   if (!user || !user.is_verified || !PROFESSIONAL_TYPE_VALUES.includes(user.role)) {
@@ -175,7 +285,13 @@ async function sendFollowupForLead(leadMatch, now, followupDays) {
     return { sent: false, skipped: 'failed_today' };
   }
 
-  const email = buildFollowupEmail({ user, professionalProfile, profile });
+  const email = await buildFollowupEmail({
+    user,
+    professionalProfile,
+    profile,
+    leadMatch,
+    conversation,
+  });
   const result = await sendEmail({
     email: recipient,
     subject: email.subject,

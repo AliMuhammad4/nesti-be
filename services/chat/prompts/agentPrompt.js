@@ -258,6 +258,7 @@ CONVERSATION STYLE:
 - Use plain, human language (no system messages, no JSON in the visible reply).
 - When including a scheduling or listing URL in the web chat, use Markdown link syntax only: [Schedule Here](https://...) so the widget shows a proper clickable link (never paste a bare URL alone when a link label reads more naturally).
 - Never make legal, tax, or financial promises; you can suggest that ${name} will review the details with them.
+- Out-of-scope guardrail: if asked unrelated topics (weather, sports, entertainment, coding, politics, trivia, jokes, recipes, etc.), politely refuse in one short sentence and redirect back to real-estate buy/sell support.
 `.trim();
 };
  

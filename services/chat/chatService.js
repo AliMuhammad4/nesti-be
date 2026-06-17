@@ -46,6 +46,7 @@ import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPay
 import { appendCalendlyBookingLink } from './utils/chatBookingReply.js';
 import { shouldRefetchPropertyMatchesForMessage } from './utils/propertyMatchesRequestIntent.js';
 import { stripPropertyListingsFromReply } from './utils/stripPropertyListingsFromReply.js';
+import { buildOutOfScopeReply, detectOutOfScopeMessage } from './utils/chatScopeGuard.js';
 import {
   buildLeadRecapMarkdownLines,
   injectLeadRecapIntoReply,
@@ -538,36 +539,46 @@ export const handleChatService = async ({
   let aiIntent = intent;
   let emotionalState = 'neutral';
   let parsedAiDetails = {};
+  const isOutOfScopeMessage = detectOutOfScopeMessage(trimmedMessage, flow?.flowRole);
 
-  try {
-    const openAiStartedAt = Date.now();
-    const turn = await runChatOpenAiTurn({
-      openaiMessages,
-      sessionId,
-      flow,
-      formQualification,
-      seedSignals,
-      conversationText,
-      hasContact,
-      contactInfo,
-      interactionCount,
-      intent,
-    });
-    logger.info('Chat service: OpenAI turn completed', {
+  if (isOutOfScopeMessage) {
+    aiReply = buildOutOfScopeReply(flow?.flowRole, professionalProfile?.full_name);
+    logger.info('Chat service: out-of-scope message blocked', {
       op: 'chat.message',
       session_id: sessionId,
-      ms: Date.now() - openAiStartedAt,
+      flow_role: flow?.flowRole || 'agent',
     });
-    aiReply = turn.aiReply;
-    aiIntent = turn.aiIntent;
-    emotionalState = turn.emotionalState;
-    parsedAiDetails = turn.parsedAiDetails;
-    leadScore = turn.leadScore;
-    leadGrade = turn.leadGrade;
-    leadMeta = turn.leadMeta;
-  } catch (err) {
-    logger.error(`OpenAI error — session: ${sessionId} — ${err.message}`);
-    return { status: 500, body: { success: false, message: 'AI service unavailable. Please try again.' } };
+  } else {
+    try {
+      const openAiStartedAt = Date.now();
+      const turn = await runChatOpenAiTurn({
+        openaiMessages,
+        sessionId,
+        flow,
+        formQualification,
+        seedSignals,
+        conversationText,
+        hasContact,
+        contactInfo,
+        interactionCount,
+        intent,
+      });
+      logger.info('Chat service: OpenAI turn completed', {
+        op: 'chat.message',
+        session_id: sessionId,
+        ms: Date.now() - openAiStartedAt,
+      });
+      aiReply = turn.aiReply;
+      aiIntent = turn.aiIntent;
+      emotionalState = turn.emotionalState;
+      parsedAiDetails = turn.parsedAiDetails;
+      leadScore = turn.leadScore;
+      leadGrade = turn.leadGrade;
+      leadMeta = turn.leadMeta;
+    } catch (err) {
+      logger.error(`OpenAI error — session: ${sessionId} — ${err.message}`);
+      return { status: 500, body: { success: false, message: 'AI service unavailable. Please try again.' } };
+    }
   }
 
   coerceContactIdentityFields(contactInfo);

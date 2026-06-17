@@ -144,6 +144,8 @@ function compactListing(m) {
     address: m.address || null,
     location: m.location || null,
     price: m.price != null && Number.isFinite(Number(m.price)) ? Number(m.price) : null,
+    budget_display: m.budget_display || null,
+    financing_status: m.financing_status || null,
     bedrooms: m.bedrooms ?? null,
     bathrooms: m.bathrooms ?? null,
     property_type: m.property_type || null,
@@ -152,6 +154,7 @@ function compactListing(m) {
     match_score: m.match_score != null ? m.match_score : null,
     match_headline: m.match_headline || null,
     source: m.source || null,
+    matched_contact: m.matched_contact || null,
     ...(reasons.length ? { match_reasons: reasons } : {}),
   };
 }

@@ -585,10 +585,11 @@ ROLE-SPECIFIC STYLE (use professional_type, or referral_context.action_professio
 AGENT (professional_type = agent):
 - Executive brokerage tone: market-aware, action-oriented, focused on search fit and next showing steps.
 - Reference search criteria (location, budget, beds/baths, must-haves) and readiness to view.
-- If property_matches_email.listings has items: the send template appends a formatted HTML listings section. In body_text write ONE concise transition sentence directing them to review the matched listings below — no property listing bullets, no numbered listing lists (e.g. "1. Name - $700,000, 3 beds..."), no markdown tables (never use | pipe characters), and no property rows in the main message.
+- If lead_context.intent is "sell" or property_matches_email.context is "sell": write as a seller follow-up. Do NOT say the seller has "search criteria", "matched listings", "property matches", "showings", or a property "within your budget". If property_matches_email.listings has items, write ONE concise transition sentence about reviewing buyer interest or market comparables below to support the sale strategy.
+- If lead_context.intent is not "sell" and property_matches_email.listings has items: the send template appends a formatted HTML listings section. In body_text write ONE concise transition sentence directing them to review the matched listings below — no property listing bullets, no numbered listing lists (e.g. "1. Name - $700,000, 3 beds..."), no markdown tables (never use | pipe characters), and no property rows in the main message.
 - Budget consistency when referencing matches in prose: distinguish "within budget" vs "above budget/stretch" clearly; never contradict.
-- If listings is empty, do not mention or invent properties; focus on clarifying criteria and scheduling a search review.
-- CTA: confirm priorities, schedule a showing, or reply with updated criteria.
+- If listings is empty, do not mention or invent properties; for buyers focus on clarifying criteria and scheduling a search review, and for sellers focus on listing strategy, pricing expectations, and timing.
+- CTA: for buyers, confirm priorities, schedule a showing, or reply with updated criteria. For sellers, confirm sale priorities, pricing expectations, timeline, and next listing strategy discussion.
 - Meeting prep checklist themes (pick 3–5 only, tailored to lead_context): photo ID; financing pre-approval/pre-qual; updated must-haves and deal-breakers; preferred areas and budget; showing availability; for sellers — property details and ideal closing timeline.
 
 REAL ESTATE LAWYER (professional_type = lawyer):
@@ -630,7 +631,7 @@ const SYSTEM_REFINE = `You refine nurture emails to the same professional standa
 Keep main message only — no scheduling links, no closings, no contact block. The platform appends scheduling and signature.
 
 Refinement rules:
-- AGENT: executive brokerage tone; one transition sentence for listings if property_matches_email has items — no property listing bullets, no numbered listing lists, no markdown tables (never use | pipe characters), and no property rows in the main message.
+- AGENT: executive brokerage tone. For seller leads, remove buyer-search wording such as "matched listings", "property matches", "within your budget", and "showings"; reference buyer interest or market comparables only. For buyer leads, one transition sentence for listings if property_matches_email has items — no property listing bullets, no numbered listing lists, no markdown tables (never use | pipe characters), and no property rows in the main message.
 - LAWYER: formal attorney-office tone; transaction/closing focus only — remove any property search, listing, or sales language.
 - MORTGAGE BROKER: financing-focused tone — remove property pitch or listing language.
 - Preserve or improve the meeting preparation checklist (3–5 role-appropriate items with • lines). Use "Before our meeting" or "To make the most of our scheduled meeting" based on calendly_booking_status.

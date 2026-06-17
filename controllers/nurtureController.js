@@ -507,6 +507,7 @@ export async function postNurtureSend(req, res, next) {
         bodyPlain: bodyForTemplate,
         listings: propertyMatches.listings || [],
         includePropertyCards,
+        propertyMatchesContext: propertyMatches.context || null,
       });
       htmlForSend = composeNurtureEmailHtml({
         bodyPlain: bodyForTemplate,

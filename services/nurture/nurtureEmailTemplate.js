@@ -11,6 +11,8 @@ import {
 } from '../email/emailTheme.js';
 
 const NURTURE_LISTINGS_SECTION_TITLE = 'Recommended listings';
+const NURTURE_SELLER_BUYERS_SECTION_TITLE = 'Potential buyers for your property';
+const NURTURE_SELLER_COMPS_SECTION_TITLE = 'Market comparables for your sale';
 
 function escapeHtml(s) {
   return String(s)
@@ -329,12 +331,54 @@ export function sanitizeNurturePlainBodyForPropertyCards(plainBody) {
 }
 
 /** Plain body used for both HTML composition and the text part of sent nurture emails. */
-export function prepareNurturePlainBodyForEmail({ bodyPlain, listings, includePropertyCards }) {
+function sellerPropertyCardsTransition(listings) {
+  return hasSellerBuyerLeadMatches(listings)
+    ? 'I have included buyer-interest details below so we can discuss how your property may align with active clients and plan the right selling next steps.'
+    : 'I have included market comparables below to support our pricing and sale strategy discussion.';
+}
+
+function normalizeSellerPropertyCardTransition(plainBody, listings, propertyMatchesContext) {
+  if (propertyMatchesContext !== 'sell' || !Array.isArray(listings) || !listings.length) {
+    return String(plainBody || '').trim();
+  }
+  const transition = sellerPropertyCardsTransition(listings);
+  const blocks = String(plainBody || '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  let replaced = false;
+  const cleaned = blocks
+    .map((block) => {
+      const lower = block.toLowerCase();
+      const isBadSellerListingTransition =
+        /identified\s+a\s+property/.test(lower) ||
+        /matched\s+listing/.test(lower) ||
+        /property\s+listing/.test(lower) ||
+        /recommended\s+listing/.test(lower) ||
+        /within\s+your\s+budget/.test(lower) ||
+        /matches\s+your\s+criteria/.test(lower);
+      if (!isBadSellerListingTransition) return block;
+      if (replaced) return '';
+      replaced = true;
+      return transition;
+    })
+    .filter(Boolean);
+  return cleaned.join('\n\n').trim();
+}
+
+export function prepareNurturePlainBodyForEmail({
+  bodyPlain,
+  listings,
+  includePropertyCards,
+  propertyMatchesContext = null,
+}) {
   const listingRows = Array.isArray(listings) ? listings : [];
   let cleaned = String(bodyPlain ?? '');
   if (listingRows.length) {
     cleaned = sanitizeNurturePlainBodyForPropertyCards(cleaned);
   }
+  cleaned = normalizeSellerPropertyCardTransition(cleaned, listingRows, propertyMatchesContext);
   return stripInlineBookingCta(cleaned);
 }
 
@@ -402,16 +446,70 @@ function mapNurtureListingForMatchesTable(L) {
     rawHeadline && !/strong buyer match|interested buyer/i.test(rawHeadline) ? [rawHeadline] : [];
   const match_reasons = reasons.length ? reasons : fromHeadline;
   const propertyType = String(L.property_type || '').trim();
+  const isBuyerLead = String(L.source || '') === 'buyer_lead';
   return {
-    title: propertyType || 'Property',
+    title: isBuyerLead ? String(L.title || '').trim() || 'Buyer lead' : propertyType || 'Property',
     address: L.address || null,
     location: L.location || null,
     price: L.price,
+    budget_display: L.budget_display || null,
+    financing_status: L.financing_status || null,
     bedrooms: L.bedrooms,
     bathrooms: L.bathrooms,
     match_score: L.match_score,
     match_reasons,
+    source: L.source || null,
+    matched_contact: L.matched_contact || null,
   };
+}
+
+function hasSellerBuyerLeadMatches(listings) {
+  return Array.isArray(listings) && listings.some((L) => String(L?.source || '') === 'buyer_lead');
+}
+
+function buildSellerBuyerRowsHtml(listings) {
+  const th =
+    'padding:12px 14px;border:1px solid #dbe3ee;background:#f1f5f9;font-size:12px;font-weight:700;color:#334155;text-align:left;';
+  const td =
+    'padding:12px 14px;border:1px solid #e2e8f0;vertical-align:top;font-size:14px;line-height:1.5;color:#334155;background:#ffffff;';
+
+  const rows = listings
+    .map((L) => {
+      const reasons = Array.isArray(L.match_reasons)
+        ? L.match_reasons.map((r) => String(r || '').trim()).filter(Boolean).slice(0, 3)
+        : [];
+      const reasonsHtml = reasons.length
+        ? `<ul style="margin:0;padding-left:16px;">${reasons
+            .map((r) => `<li style="margin:0 0 4px;">${escapeHtml(r)}</li>`)
+            .join('')}</ul>`
+        : '<span style="color:#94a3b8;">-</span>';
+      const buyerName =
+        String(L.matched_contact?.full_name || '').trim() || String(L.title || '').trim() || 'Buyer lead';
+      const loc = String(L.location || L.address || '').trim();
+      const budget =
+        String(L.budget_display || '').trim() ||
+        (L.price != null && Number.isFinite(Number(L.price)) ? `Budget ${formatMoney(L.price)}` : '');
+      const needParts = [];
+      if (budget) needParts.push(budget);
+      if (L.financing_status) needParts.push(String(L.financing_status));
+      if (L.bedrooms != null && L.bedrooms !== '') needParts.push(`${L.bedrooms}+ bed search`);
+      if (L.property_type) needParts.push(String(L.property_type));
+
+      return `<tr>
+        <td style="${td}">
+          <strong style="color:#0f172a;">${escapeHtml(buyerName)}</strong>
+          ${loc ? `<br/><span style="color:#64748b;">${escapeHtml(loc)}</span>` : ''}
+        </td>
+        <td style="${td};font-size:13px;color:#475569;">${needParts.length ? escapeHtml(needParts.join(' · ')) : '-'}</td>
+        <td style="${td};font-size:13px;color:#475569;">${reasonsHtml}</td>
+      </tr>`;
+    })
+    .join('');
+
+  return `<table role="presentation" style="border-collapse:collapse;width:100%;max-width:640px;margin:0 0 6px;border-radius:10px;overflow:hidden;">
+      <thead><tr><th style="${th}">Buyer lead</th><th style="${th}">Budget / search</th><th style="${th}">Why they may fit</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 function consultationStyleMatchesSectionHtml(
@@ -427,18 +525,29 @@ function consultationStyleMatchesSectionHtml(
   const note = propertyMatchesNote != null && String(propertyMatchesNote).trim()
     ? String(propertyMatchesNote).trim()
     : '';
-  const intro =
-    propertyMatchesContext === 'sell'
-      ? `The comparable listings below are provided to support your market discussion with <strong>${escapeHtml(name)}</strong>.`
+  const isSellerContext = propertyMatchesContext === 'sell';
+  const hasBuyerMatches = isSellerContext && hasSellerBuyerLeadMatches(listings);
+  const sectionTitle = hasBuyerMatches
+    ? NURTURE_SELLER_BUYERS_SECTION_TITLE
+    : isSellerContext
+      ? NURTURE_SELLER_COMPS_SECTION_TITLE
+      : NURTURE_LISTINGS_SECTION_TITLE;
+  const intro = hasBuyerMatches
+    ? `The buyer leads below are actively looking for criteria that may align with your property. <strong>${escapeHtml(name)}</strong> can review fit and next steps with you.`
+    : isSellerContext
+      ? `The comparable market references below are provided to support your pricing and sale strategy discussion with <strong>${escapeHtml(name)}</strong>.`
       : `The listings below are matched to your stated preferences and are provided for your review with <strong>${escapeHtml(name)}</strong>.`;
   const divider =
     '<div style="height:1px;background:#e2e8f0;margin:26px 0;" role="separator"></div>';
   const columnsMode = listingTableColumns === 'location_budget' ? 'location_budget' : 'default';
+  const tableHtml = hasBuyerMatches
+    ? buildSellerBuyerRowsHtml(rows)
+    : matchesToHtml(rows, '', { includeContextHeading: false, columnsMode });
   return `${divider}
-<h2 style="font-size:15px;margin:0 0 14px;color:#0f172a;font-weight:600;letter-spacing:0.01em;">${escapeHtml(NURTURE_LISTINGS_SECTION_TITLE)}</h2>
+<h2 style="font-size:15px;margin:0 0 14px;color:#0f172a;font-weight:600;letter-spacing:0.01em;">${escapeHtml(sectionTitle)}</h2>
 <div style="font-size:14px;line-height:1.55;color:#334155;">
   <p style="margin:0 0 14px;">${intro}</p>
-  ${matchesToHtml(rows, '', { includeContextHeading: false, columnsMode })}
+  ${tableHtml}
   ${note ? `<p style="margin:14px 0 0;font-size:13px;line-height:1.5;color:#64748b;">${escapeHtml(note)}</p>` : ''}
 </div>`;
 }
@@ -469,6 +578,7 @@ export function composeNurtureEmailHtml(opts) {
     bodyPlain: bodyPlainRaw,
     listings,
     includePropertyCards,
+    propertyMatchesContext: opts.propertyMatchesContext || null,
   });
   const bodyFrag = plainBodyToHtmlFragment(bodyPlain);
   const listingTableColumns =

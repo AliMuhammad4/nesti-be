@@ -181,6 +181,7 @@ async function buildFollowupEmail({ user, professionalProfile, profile, leadMatc
       bodyPlain: draft.body_text,
       listings: propertyMatches.listings || [],
       includePropertyCards,
+      propertyMatchesContext: propertyMatches.context || null,
     });
     const htmlMessage = composeNurtureEmailHtml({
       bodyPlain: draft.body_text,

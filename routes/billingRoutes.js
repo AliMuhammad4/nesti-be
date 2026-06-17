@@ -6,7 +6,7 @@ import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import { checkoutSessionSchema, cancelSubscriptionSchema, changePlanSchema, resumeSubscriptionSchema } from '../schemas/billingSchemas.js';
 import Subscription from '../models/Subscription.js';
 import { getStripeClient } from '../services/billing/stripeClient.js';
-import { publicBillingPlans } from '../services/billing/plans.js';
+import { publicBillingPlans, publicBillingPlansFromStripe } from '../services/billing/plans.js';
 import {
   cancelSubscriptionForUser,
   changeSubscriptionPlanForUser,
@@ -33,7 +33,12 @@ const setupIntent = async (req, res) => {
 };
 
 const listPlans = async (req, res) => {
-  res.json({ success: true, plans: publicBillingPlans() });
+  try {
+    const plans = await publicBillingPlansFromStripe(getStripeClient());
+    res.json({ success: true, plans });
+  } catch {
+    res.json({ success: true, plans: publicBillingPlans() });
+  }
 };
 
 const createCheckoutSession = async (req, res) => {

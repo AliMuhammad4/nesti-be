@@ -75,6 +75,7 @@ const nurtureLogSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 nurtureLogSchema.index({ user_id: 1, createdAt: -1 });
+nurtureLogSchema.index({ user_id: 1, status: 1, createdAt: -1 });
 nurtureLogSchema.index({ user_id: 1, lead_match_id: 1, createdAt: -1 });
 nurtureLogSchema.index({ user_id: 1, lead_profile_id: 1, createdAt: -1 });
 nurtureLogSchema.index({ automation_type: 1, followup_due_for: 1, createdAt: -1 });

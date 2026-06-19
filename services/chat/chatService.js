@@ -113,37 +113,14 @@ async function shouldAwaitLeadSync({
   forceNewLead,
   canCreateLeads,
   hasContact,
-  conversation,
-  userId,
-  flow,
-  mergedFormContact,
-  aiIntent,
-  sessionId,
+  existingLeadMatch,
+  leadLookupFailed = false,
 }) {
   if (!canCreateLeads || !hasContact) return false;
   // Intake forms fork a fresh conversation; persist the lead in the background so the reply returns fast.
   if (forceNewLead) return false;
-
-  try {
-    const formIntent = String(mergedFormContact?.intent || '').trim().toLowerCase();
-    const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
-    const intentSuffix = flow.getIntentSuffix(leadIntent);
-    const existingLead = await LeadMatch.findOne({
-      conversation_id: conversation._id,
-      user_id: userId,
-      lead_type: new RegExp(`${intentSuffix}$`),
-    })
-      .select('_id')
-      .lean();
-    return !existingLead?._id;
-  } catch (err) {
-    logger.warn('Chat service: pre-sync lead existence check failed', {
-      session_id: sessionId,
-      user_id: String(userId),
-      error: err?.message || String(err),
-    });
-    return false;
-  }
+  if (leadLookupFailed) return false;
+  return !existingLeadMatch?._id;
 }
 
 export const getChatSessionMessagesService = async ({ id: sessionId, embedToken }) => {
@@ -506,6 +483,10 @@ export const handleChatService = async ({
     professionalProfile,
     conversation
   );
+  const conversationPromptSnapshot = {
+    calendly_booking_status: conversation?.calendly_booking_status ?? null,
+    lead_grade: conversation?.lead_grade ?? null,
+  };
   const deferCalendlyLink = shouldDeferCalendlyLink(
     flow,
     isAutomatedBookingEnabled,
@@ -519,6 +500,7 @@ export const handleChatService = async ({
     flow,
     professionalProfile,
     conversation,
+    conversationSnapshot: conversationPromptSnapshot,
     intent,
     leadGrade,
     deferCalendlyLink,
@@ -658,17 +640,39 @@ export const handleChatService = async ({
   conversation.last_interaction_at = new Date();
   conversation.form_data = mergedFormContact;
   await conversation.save();
+  const conversationMetaSnapshot = {
+    calendly_booking_status: conversation?.calendly_booking_status ?? null,
+    calendly_booking_at: conversation?.calendly_booking_at ?? null,
+  };
+
+  let existingLeadMatchForSync;
+  let leadLookupFailed = false;
+  if (canCreateLeads && hasContact && !forceNewLead) {
+    try {
+      const formIntent = String(mergedFormContact?.intent || '').trim().toLowerCase();
+      const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
+      const intentSuffix = flow.getIntentSuffix(leadIntent);
+      existingLeadMatchForSync = await LeadMatch.findOne({
+        conversation_id: conversation._id,
+        user_id: userId,
+        lead_type: new RegExp(`${intentSuffix}$`),
+      });
+    } catch (err) {
+      leadLookupFailed = true;
+      logger.warn('Chat service: pre-sync lead existence check failed', {
+        session_id: sessionId,
+        user_id: String(userId),
+        error: err?.message || String(err),
+      });
+    }
+  }
 
   const awaitLeadSync = await shouldAwaitLeadSync({
     forceNewLead,
     canCreateLeads,
     hasContact,
-    conversation,
-    userId,
-    flow,
-    mergedFormContact,
-    aiIntent,
-    sessionId,
+    existingLeadMatch: existingLeadMatchForSync,
+    leadLookupFailed,
   });
 
   const syncLeadTask = syncLeadMatchAfterTurn({
@@ -694,6 +698,7 @@ export const handleChatService = async ({
     leadMeta,
     aiIntent,
     forceCreateLead: Boolean(forceNewLead),
+    existingLeadMatchPrefetched: existingLeadMatchForSync,
   }).catch((err) => {
     logger.warn('Chat service: async lead sync failed', {
       session_id: sessionId,
@@ -705,6 +710,7 @@ export const handleChatService = async ({
   const responseMeta = await buildChatResponseMeta({
     flow,
     conversation,
+    conversationSnapshot: conversationMetaSnapshot,
     userId,
     professionalProfile,
     hasContact,

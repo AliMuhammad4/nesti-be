@@ -7,9 +7,10 @@ import {
   ACCOUNT_STATUS,
   accountStatusFromSubscription,
   getEffectivePlan,
-  getPlanLimits,
+  getPlanLimitsForSubscription,
   hasFeature,
 } from '../services/billing/entitlements.js';
+import { getPlanUsageForUser } from '../services/billing/planQuota.js';
 async function loadSubscription(req, { refresh = false } = {}) {
   if (req.subscription && !refresh) return req.subscription;
   const subscription = refresh
@@ -18,7 +19,7 @@ async function loadSubscription(req, { refresh = false } = {}) {
   req.subscription = subscription;
   req.subscriptionAccountStatus = accountStatusFromSubscription(subscription);
   req.subscriptionPlanKey = getEffectivePlan(subscription);
-  req.subscriptionLimits = getPlanLimits(req.subscriptionPlanKey);
+  req.subscriptionLimits = getPlanLimitsForSubscription(subscription);
   return subscription;
 }
 
@@ -41,7 +42,10 @@ export function requireActiveSubscriptionAccess(req, res, next) {
           message: 'Your subscription is not active. Please choose a plan to continue.',
         });
       }
-      return next();
+      return blockTrialQuotaExhaustedIfNeeded(req, res).then((blocked) => {
+        if (blocked) return null;
+        return next();
+      });
     })
     .catch(next);
 }
@@ -56,6 +60,32 @@ function featureDeniedResponse(req, featureKey) {
   };
 }
 
+function trialQuotaRequiredResponse(limitStates) {
+  return {
+    success: false,
+    code: 'TRIAL_QUOTA_EXHAUSTED',
+    limits: limitStates,
+    message: 'Your free trial quota has been used. Choose a subscription plan to continue.',
+  };
+}
+
+async function getTrialQuotaLimitStates(req) {
+  if (req.subscriptionAccountStatus !== ACCOUNT_STATUS.FREE_TRIAL) return [];
+  const [usage] = await Promise.all([getPlanUsageForUser(req.user._id)]);
+  req.subscriptionUsage = usage;
+  return Object.entries(req.subscriptionLimits || {})
+    .filter(([key]) => key === 'captured_leads' || key === 'followup_actions')
+    .map(([key, max]) => ({ key, used: Number(usage?.[key] ?? 0), max: Number(max) }))
+    .filter((state) => Number.isFinite(state.max) && state.used >= state.max);
+}
+
+async function blockTrialQuotaExhaustedIfNeeded(req, res) {
+  const limitStates = await getTrialQuotaLimitStates(req);
+  if (!limitStates.length) return false;
+  res.status(403).json(trialQuotaRequiredResponse(limitStates));
+  return true;
+}
+
 export function requireFeature(featureKey) {
   return async (req, res, next) => {
     if (!req.user) {
@@ -65,6 +95,7 @@ export function requireFeature(featureKey) {
 
     try {
       const subscription = await loadSubscription(req);
+      if (await blockTrialQuotaExhaustedIfNeeded(req, res)) return;
       if (!hasFeature(subscription, featureKey)) {
         return res.status(403).json(featureDeniedResponse(req, featureKey));
       }
@@ -85,6 +116,7 @@ export function requireAnyFeature(...featureKeys) {
 
     try {
       const subscription = await loadSubscription(req);
+      if (await blockTrialQuotaExhaustedIfNeeded(req, res)) return;
       const allowed = keys.some((key) => hasFeature(subscription, key));
       if (!allowed) {
         return res.status(403).json({

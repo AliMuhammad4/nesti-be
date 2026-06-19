@@ -1,7 +1,8 @@
-import { ProfessionalProfile, PublicProfile, ProfileViewEvent, LeadProfile, LeadMatch, ChatbotEmbedUrl, InviteLink } from '../../models/index.js';
+import { ProfessionalProfile, PublicProfile, ProfileViewEvent, LeadProfile, LeadMatch, ChatbotEmbedUrl, InviteLink, Subscription } from '../../models/index.js';
 import mongoose from 'mongoose';
 import { getLeadKpiSummary } from '../analytics/leadKpiService.js';
 import { determineTrafficSource } from '../../utils/analyticsHelpers.js';
+import { FEATURES, hasFeature } from '../billing/entitlements.js';
 import {
   bumpLeadProfileStats,
   createOrReuseLeadProfile,
@@ -14,6 +15,34 @@ import {
   normalizeInquiredProperty,
   resolveLinkedSellerLeadMatchId,
 } from '../lead/inquiredProperty.js';
+
+function publicProfileUnavailableResponse() {
+  return { status: 404, body: { success: false, message: 'Profile not found' } };
+}
+
+function normalizeUserId(value) {
+  return String(value?._id || value || '').trim();
+}
+
+async function userCanServePublicProfile(userId) {
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) return false;
+  const subscription = await Subscription.findOne({ user_id: normalizedUserId }).lean();
+  return hasFeature(subscription, FEATURES.PUBLIC_PROFILE);
+}
+
+async function filterPublicProfileAccessByUserId(userIds = []) {
+  const ids = [...new Set(userIds.map(normalizeUserId).filter(Boolean))];
+  if (!ids.length) return new Map();
+
+  const subscriptions = await Subscription.find({ user_id: { $in: ids } }).lean();
+  return new Map(
+    ids.map((id) => {
+      const subscription = subscriptions.find((sub) => normalizeUserId(sub.user_id) === id);
+      return [id, hasFeature(subscription, FEATURES.PUBLIC_PROFILE)];
+    }),
+  );
+}
 
 // Build a short engagement line from lead intent data
 function buildClientLine(lead) {
@@ -88,6 +117,10 @@ export const getPublicProfileBySlugService = async (slug) => {
   }
 
   const professionalUserId = profile.user_id?._id || profile.user_id;
+  if (!(await userCanServePublicProfile(professionalUserId))) {
+    return publicProfileUnavailableResponse();
+  }
+
   let dashboardKpis = null;
   let professionalProfile = null;
   let latestInviteLink = null;
@@ -245,11 +278,8 @@ export const trackProfileViewService = async (slug, visitorData) => {
 
   const profile = await PublicProfile.findOne({ slug: slug.toLowerCase().trim() }).lean();
   
-  if (!profile) {
-    return {
-      status: 404,
-      body: { success: false, message: 'Profile not found' },
-    };
+  if (!profile || !profile.enabled || !(await userCanServePublicProfile(profile.user_id))) {
+    return publicProfileUnavailableResponse();
   }
 
   const trafficSource = determineTrafficSource(visitorData.referrer);
@@ -325,8 +355,8 @@ export const submitPublicLeadService = async ({ slug, payload, requestMeta = {} 
     .select('_id user_id slug professional_type enabled')
     .lean();
 
-  if (!profile || !profile.enabled) {
-    return { status: 404, body: { success: false, message: 'Profile not found' } };
+  if (!profile || !profile.enabled || !(await userCanServePublicProfile(profile.user_id))) {
+    return publicProfileUnavailableResponse();
   }
 
   const professionalProfile = await ProfessionalProfile.findOne({ user_id: profile.user_id })
@@ -594,6 +624,7 @@ export const getPublicProfessionalsListService = async ({ role, limit = 12, excl
   const publicProfiles = await PublicProfile.find({ user_id: { $in: userIds } })
     .select('user_id slug headline profile_photo_url cover_photo_url enabled')
     .lean();
+  const accessByUserId = await filterPublicProfileAccessByUserId(userIds);
   const pubMap = {};
   for (const pp of publicProfiles) {
     pubMap[pp.user_id.toString()] = pp;
@@ -604,10 +635,12 @@ export const getPublicProfessionalsListService = async ({ role, limit = 12, excl
       const user = p.user_id || {};
       const uid = user._id?.toString();
       const pub = uid ? pubMap[uid] : null;
-      const slug = pub?.slug || null;
+      const canServeProfile = Boolean(uid && accessByUserId.get(uid));
+      const hasPublicProfile = Boolean(pub?.enabled && canServeProfile);
+      const slug = hasPublicProfile ? pub.slug : null;
 
       // Skip the current profile's professional from the list
-      if (exclude && slug === exclude) return null;
+      if (exclude && pub?.slug === exclude) return null;
 
       const name =
         p.full_name ||
@@ -623,7 +656,7 @@ export const getPublicProfessionalsListService = async ({ role, limit = 12, excl
         location: p.location || '',
         experience: p.experience || '',
         company_name: p.company_name || '',
-        has_public_profile: !!pub?.enabled,
+        has_public_profile: hasPublicProfile,
       };
     })
     .filter(Boolean)
@@ -657,6 +690,7 @@ export const getPublicProfessionalNetworkService = async ({ role, limit = 60, ex
   const publicProfiles = await PublicProfile.find({ user_id: { $in: userIds } })
     .select('user_id slug profile_photo_url cover_photo_url enabled')
     .lean();
+  const accessByUserId = await filterPublicProfileAccessByUserId(userIds);
 
   const publicProfileByUserId = new Map(
     publicProfiles.map((profile) => [profile.user_id.toString(), profile]),
@@ -666,6 +700,8 @@ export const getPublicProfessionalNetworkService = async ({ role, limit = 60, ex
     .map((profile) => {
       const user = profile.user_id;
       const publicProfile = publicProfileByUserId.get(user._id.toString());
+      const canServeProfile = Boolean(accessByUserId.get(user._id.toString()));
+      const hasPublicProfile = Boolean(publicProfile?.enabled && canServeProfile);
 
       if (exclude && publicProfile?.slug === exclude) return null;
 
@@ -675,7 +711,7 @@ export const getPublicProfessionalNetworkService = async ({ role, limit = 60, ex
         'Professional';
 
       return {
-        ...(publicProfile?.enabled && publicProfile.slug ? { slug: publicProfile.slug } : {}),
+        ...(hasPublicProfile && publicProfile.slug ? { slug: publicProfile.slug } : {}),
         professional_type: profile.professional_type,
         professional_name: professionalName,
         profile_photo_url: publicProfile?.profile_photo_url || user.profile_image || null,
@@ -683,7 +719,7 @@ export const getPublicProfessionalNetworkService = async ({ role, limit = 60, ex
         company_name: profile.company_name || '',
         location: profile.location || '',
         experience: profile.experience || '',
-        has_public_profile: Boolean(publicProfile?.enabled),
+        has_public_profile: hasPublicProfile,
       };
     })
     .filter(Boolean);
@@ -703,8 +739,8 @@ export const getSellerPropertiesBySlugService = async (slug) => {
     .populate('user_id', '_id')
     .lean();
 
-  if (!profile || !profile.enabled) {
-    return { status: 404, body: { success: false, message: 'Profile not found' } };
+  if (!profile || !profile.enabled || !(await userCanServePublicProfile(profile.user_id))) {
+    return publicProfileUnavailableResponse();
   }
 
   if (profile.professional_type !== 'agent') {

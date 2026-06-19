@@ -11,6 +11,7 @@ import {
   createFreeTrialSubscription,
   getSubscriptionPresentationForUser,
 } from '../billing/subscriptionService.js';
+import { disposableEmailErrorResponse, isDisposableEmail } from './disposableEmailGuard.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 
@@ -238,6 +239,9 @@ export const signupService = async (payload) => {
   if (!normalizedEmail || !password || !first_name || !last_name) {
     return { status: 400, body: { success: false, message: 'Please provide all required fields' } };
   }
+  if (isDisposableEmail(normalizedEmail)) {
+    return disposableEmailErrorResponse();
+  }
 
   const assignedRole = role && USER_ROLE_VALUES.includes(role) ? role : USER_ROLE.AGENT;
 
@@ -292,13 +296,16 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
     };
   }
   const decoded = verified.payload;
+  if (isDisposableEmail(decoded.email)) {
+    return disposableEmailErrorResponse();
+  }
 
   if (decoded.otp !== String(otp)) {
     return { status: 400, body: { success: false, message: 'Invalid OTP' } };
   }
 
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 3);
+  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
 
   if (await User.findOne({ email: decoded.email })) {
     return {
@@ -412,8 +419,11 @@ export const googleSignupService = async ({ token, token_type, role, invite_toke
   }
 
   const assignedRole = normalizeRole(role);
+  if (isDisposableEmail(googleProfile.email)) {
+    return disposableEmailErrorResponse();
+  }
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 3);
+  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
 
   let user;
   try {
@@ -612,6 +622,9 @@ export const checkEmailService = async ({ email }) => {
     return { status: 400, body: { success: false, message: 'Please provide a valid email' } };
   }
   const normalizedEmail = String(email).toLowerCase().trim();
+  if (isDisposableEmail(normalizedEmail)) {
+    return disposableEmailErrorResponse();
+  }
   const existing = await User.findOne({ email: normalizedEmail }).select('_id is_verified').lean();
   return {
     status: 200,
@@ -629,6 +642,9 @@ export const resendVerificationService = async ({ email, verification_token }) =
   }
 
   const normalizedEmail = String(email).toLowerCase().trim();
+  if (isDisposableEmail(normalizedEmail)) {
+    return disposableEmailErrorResponse();
+  }
   const alreadyVerified = await User.findOne({ email: normalizedEmail }).select('_id').lean();
   if (alreadyVerified) {
     return {

@@ -82,6 +82,6 @@ test('free trial effective plan is enterprise', () => {
   assert.equal(getEffectivePlan(trialSub), SUBSCRIPTION_PLAN.ENTERPRISE);
   assert.equal(hasFeature(trialSub, FEATURES.PUBLIC_PROFILE), true);
   const trialLimits = getPlanLimitsForSubscription(trialSub);
-  assert.equal(trialLimits.captured_leads, 10);
-  assert.equal(trialLimits.followup_actions, null);
+  assert.equal(trialLimits.captured_leads, 5);
+  assert.equal(trialLimits.followup_actions, 5);
 });

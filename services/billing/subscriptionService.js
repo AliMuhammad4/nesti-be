@@ -4,6 +4,9 @@ import { getPlan, getPlanByPriceId, getPlanTier, getStripePriceId } from './plan
 import { getStripeClient } from './stripeClient.js';
 import { getPlanLimitsForSubscription } from './entitlements.js';
 import { getPlanUsageForUser } from './planQuota.js';
+
+const FREE_TRIAL_DAYS = 2;
+
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const STRIPE_BLOCKING_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
 
@@ -493,7 +496,7 @@ export async function expireTrialIfNeeded(subscription) {
 
 export async function createFreeTrialSubscription(userId, trialEndsAt) {
   const now = new Date();
-  const trialEnd = trialEndsAt || new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+  const trialEnd = trialEndsAt || new Date(now.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
   return Subscription.findOneAndUpdate(
     { user_id: userId },
@@ -514,7 +517,7 @@ export async function getOrCreateSubscriptionForUser(user) {
   let subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription) {
     const createdAt = user.createdAt ? new Date(user.createdAt) : new Date();
-    const trialEnd = new Date(createdAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const trialEnd = new Date(createdAt.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
     subscription = await createFreeTrialSubscription(user._id, trialEnd);
   }
   return expireTrialIfNeeded(subscription);

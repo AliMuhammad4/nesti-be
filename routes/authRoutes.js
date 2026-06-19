@@ -34,22 +34,21 @@ import {
   authGlobalLimiter,
   authSensitiveLimiter,
   authOtpVerifyLimiter,
+  authUserLimiter,
 } from '../middleware/rateLimit.js';
 
-router.use(authGlobalLimiter);
-
-router.post('/signup', authSensitiveLimiter, validateBody(signupSchema), signup);
-router.post('/verify-email', authOtpVerifyLimiter, validateBody(verifyEmailSchema), verifyEmail);
-router.post('/login', authSensitiveLimiter, validateBody(loginSchema), login);
-router.post('/google', authSensitiveLimiter, validateBody(googleLoginSchema), google);
-router.post('/google-signup', authSensitiveLimiter, validateBody(googleSignupSchema), googleSignup);
-router.get('/profile', protect, profile);
-router.get('/public-profile', publicProfile);
-router.post('/change-password', protect, validateBody(changePasswordSchema), changePassword);
-router.post('/forgot-password', authSensitiveLimiter, validateBody(forgotPasswordSchema), forgotPassword);
-router.post('/reset-password', authSensitiveLimiter, validateBody(resetPasswordSchema), resetPassword);
-router.post('/verify-reset-otp', authSensitiveLimiter, validateBody(otpWithEmailSchema), verifyResetOtp);
-router.post('/check-email', authOtpVerifyLimiter, validateBody(emailOnlySchema), checkEmail);
-router.post('/resend-verification', authSensitiveLimiter, validateBody(resendVerificationSchema), resendVerification);
+router.post('/signup', authGlobalLimiter, authSensitiveLimiter, validateBody(signupSchema), signup);
+router.post('/verify-email', authGlobalLimiter, authOtpVerifyLimiter, validateBody(verifyEmailSchema), verifyEmail);
+router.post('/login', authGlobalLimiter, authSensitiveLimiter, validateBody(loginSchema), login);
+router.post('/google', authGlobalLimiter, authSensitiveLimiter, validateBody(googleLoginSchema), google);
+router.post('/google-signup', authGlobalLimiter, authSensitiveLimiter, validateBody(googleSignupSchema), googleSignup);
+router.get('/profile', protect, authUserLimiter, profile);
+router.get('/public-profile', authGlobalLimiter, publicProfile);
+router.post('/change-password', protect, authUserLimiter, validateBody(changePasswordSchema), changePassword);
+router.post('/forgot-password', authGlobalLimiter, authSensitiveLimiter, validateBody(forgotPasswordSchema), forgotPassword);
+router.post('/reset-password', authGlobalLimiter, authSensitiveLimiter, validateBody(resetPasswordSchema), resetPassword);
+router.post('/verify-reset-otp', authGlobalLimiter, authSensitiveLimiter, validateBody(otpWithEmailSchema), verifyResetOtp);
+router.post('/check-email', authGlobalLimiter, authOtpVerifyLimiter, validateBody(emailOnlySchema), checkEmail);
+router.post('/resend-verification', authGlobalLimiter, authSensitiveLimiter, validateBody(resendVerificationSchema), resendVerification);
 
 export default router;

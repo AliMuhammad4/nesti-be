@@ -512,6 +512,16 @@ function buildSellerBuyerRowsHtml(listings) {
     </table>`;
 }
 
+function hasScoreOrNotesData(rows) {
+  return rows.some((row) => {
+    const hasScore = row?.match_score != null && Number.isFinite(Number(row.match_score));
+    const hasReasons =
+      Array.isArray(row?.match_reasons) &&
+      row.match_reasons.some((reason) => String(reason || '').trim().length > 0);
+    return hasScore || hasReasons;
+  });
+}
+
 function consultationStyleMatchesSectionHtml(
   listings,
   agentName,
@@ -539,7 +549,12 @@ function consultationStyleMatchesSectionHtml(
       : `The listings below are matched to your stated preferences and are provided for your review with <strong>${escapeHtml(name)}</strong>.`;
   const divider =
     '<div style="height:1px;background:#e2e8f0;margin:26px 0;" role="separator"></div>';
-  const columnsMode = listingTableColumns === 'location_budget' ? 'location_budget' : 'default';
+  const requestedColumnsMode = listingTableColumns === 'location_budget' ? 'location_budget' : 'default';
+  // Fallback inventory listings can be intentionally unscored; switch columns to avoid empty Score/Match notes cells.
+  const columnsMode =
+    requestedColumnsMode === 'default' && !hasBuyerMatches && !hasScoreOrNotesData(rows)
+      ? 'location_budget'
+      : requestedColumnsMode;
   const tableHtml = hasBuyerMatches
     ? buildSellerBuyerRowsHtml(rows)
     : matchesToHtml(rows, '', { includeContextHeading: false, columnsMode });

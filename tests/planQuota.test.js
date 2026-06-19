@@ -34,7 +34,8 @@ test('resolvePlanLimit returns finite cap for basic and null for enterprise', ()
   const trialSub = { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'free_trial' };
   assert.equal(resolvePlanLimit(basicSub, 'captured_leads'), 50);
   assert.equal(resolvePlanLimit(enterpriseSub, 'captured_leads'), null);
-  assert.equal(resolvePlanLimit(trialSub, 'captured_leads'), 10);
+  assert.equal(resolvePlanLimit(trialSub, 'captured_leads'), 5);
+  assert.equal(resolvePlanLimit(trialSub, 'followup_actions'), 5);
 });
 
 test('assertWithinPlanQuota passes under captured_leads limit', async () => {

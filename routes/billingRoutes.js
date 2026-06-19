@@ -12,9 +12,8 @@ import {
   changeSubscriptionPlanForUser,
   createCheckoutSessionForUser,
   ensureStripeCustomerForUser,
-  getFreshSubscriptionForUser,
   getOrCreateSubscriptionForUser,
-  getSubscriptionForRead,
+  getSubscriptionPresentationForUser,
   listPaidInvoicesForUser,
   resumeSubscriptionForUser,
   serializeSubscription,
@@ -62,8 +61,8 @@ const createCheckoutSession = async (req, res) => {
 
 const getCurrentSubscription = async (req, res) => {
   const refresh = ['1', 'true', 'yes'].includes(String(req.query?.refresh || '').trim().toLowerCase());
-  const subscription = await getSubscriptionForRead(req.user, { refresh });
-  res.json({ success: true, subscription: serializeSubscription(subscription) });
+  const { raw: _raw, ...subscription } = await getSubscriptionPresentationForUser(req.user, { refreshFromStripe: refresh });
+  res.json({ success: true, subscription });
 };
 
 const cancelCurrentSubscription = async (req, res) => {

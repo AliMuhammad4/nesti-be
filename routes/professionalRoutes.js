@@ -1,6 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
+import { requireActiveSubscriptionAccess } from '../middleware/subscriptionAccess.js';
 import { validateBody } from '../middleware/validate.js';
 import { professionalUpsertBodySchema } from '../schemas/userProfileSchemas.js';
 import { ICP_SCHEMA_BY_ROLE } from '../schemas/icpSchemas.js';
@@ -42,16 +43,16 @@ function validateIcpByRole(req, res, next) {
   next();
 }
 
-router.get('/me', protect, getMyProfessionalProfile);
-router.get('/list', protect, listProfessionalsByRole);
-router.post('/upload-image', protect, runProfileUpload, postProfileImageUpload);
-router.get('/icp', protect, requireCompleteProfessionalProfile, getIdealClientProfile);
-router.post('/icp', protect, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
-router.put('/icp', protect, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
+router.get('/me', protect, requireActiveSubscriptionAccess, getMyProfessionalProfile);
+router.get('/list', protect, requireActiveSubscriptionAccess, listProfessionalsByRole);
+router.post('/upload-image', protect, requireActiveSubscriptionAccess, runProfileUpload, postProfileImageUpload);
+router.get('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, getIdealClientProfile);
+router.post('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
+router.put('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
 
-router.get('/:id', protect, getProfessionalById);
-router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.patch('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.get('/:id', protect, requireActiveSubscriptionAccess, getProfessionalById);
+router.post('/', protect, requireActiveSubscriptionAccess, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.put('/', protect, requireActiveSubscriptionAccess, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.patch('/', protect, requireActiveSubscriptionAccess, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
 
 export default router;

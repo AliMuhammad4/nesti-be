@@ -1,4 +1,3 @@
-import ChatConversation from '../../../models/ChatConversation.js';
 import CalendarIntegration from '../../../models/CalendarIntegration.js';
 import { calendlyWebhookAlignmentMeta } from '../../calendly/calendlyAlignmentService.js';
 import {
@@ -12,6 +11,7 @@ import { buildMortgageAffordabilitySnapshot } from '../mortgageBroker/mortgageAf
 export async function buildChatResponseMeta({
   flow,
   conversation,
+  conversationSnapshot = null,
   userId,
   professionalProfile,
   hasContact,
@@ -35,9 +35,10 @@ export async function buildChatResponseMeta({
     supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact,
   );
 
-  const calendlyBookingSnap = await ChatConversation.findById(conversation._id)
-    .select('calendly_booking_status calendly_booking_at')
-    .lean();
+  const calendlyBookingSnap = conversationSnapshot || {
+    calendly_booking_status: conversation?.calendly_booking_status ?? null,
+    calendly_booking_at: conversation?.calendly_booking_at ?? null,
+  };
 
   const calInt = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' })
     .select('access_token calendly_slug calendly_slug_mismatch')

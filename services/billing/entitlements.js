@@ -114,7 +114,8 @@ export const PLAN_LIMITS = Object.freeze({
 });
 
 const FREE_TRIAL_LIMIT_OVERRIDES = Object.freeze({
-  captured_leads: 10,
+  captured_leads: 5,
+  followup_actions: 5,
 });
 
 export function accountStatusFromSubscription(subscription) {
@@ -134,7 +135,7 @@ export function accountStatusFromSubscription(subscription) {
 
 export function getEffectivePlan(subscription) {
   const accountStatus = accountStatusFromSubscription(subscription);
-  // During the 3-day trial, users should be able to evaluate the complete product.
+  // During the 2-day trial, users can evaluate the complete product within trial quotas.
   if (accountStatus === ACCOUNT_STATUS.FREE_TRIAL) return SUBSCRIPTION_PLAN.ENTERPRISE;
 
   const planKey = String(subscription?.plan_key || '').trim().toLowerCase();

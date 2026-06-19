@@ -92,6 +92,7 @@ export async function syncLeadMatchAfterTurn({
   leadMeta,
   aiIntent,
   forceCreateLead = false,
+  existingLeadMatchPrefetched,
 }) {
   const formIntent =
     formContact?.intent === 'sell' || formContact?.intent === 'buy'
@@ -101,11 +102,13 @@ export async function syncLeadMatchAfterTurn({
   const intentSuffix = flow.getIntentSuffix(leadIntent);
   const existingLeadMatch =
     canCreateLeads && !forceCreateLead
-      ? await LeadMatch.findOne({
-          conversation_id: conversation._id,
-          user_id: userId,
-          lead_type: new RegExp(`${intentSuffix}$`),
-        })
+      ? (existingLeadMatchPrefetched !== undefined
+          ? existingLeadMatchPrefetched
+          : await LeadMatch.findOne({
+              conversation_id: conversation._id,
+              user_id: userId,
+              lead_type: new RegExp(`${intentSuffix}$`),
+            }))
       : null;
   const creatingNewLead = forceCreateLead || !existingLeadMatch;
 

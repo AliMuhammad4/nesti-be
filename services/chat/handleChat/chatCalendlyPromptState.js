@@ -1,4 +1,3 @@
-import ChatConversation from '../../../models/ChatConversation.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { visitorHasPreferredContactPrefs } from '../mortgageBroker/mortgageCalendlyUtils.js';
 import {
@@ -76,6 +75,7 @@ export async function buildFlowSystemPromptOptions({
   flow,
   professionalProfile,
   conversation,
+  conversationSnapshot = null,
   intent,
   leadGrade,
   deferCalendlyLink,
@@ -83,9 +83,10 @@ export async function buildFlowSystemPromptOptions({
   calendlyLinkForVisitor,
   propertyMatchesEnabled = true,
 }) {
-  const calendlySnapForPrompt = await ChatConversation.findById(conversation._id)
-    .select('calendly_booking_status lead_grade')
-    .lean();
+  const calendlySnapForPrompt = conversationSnapshot || {
+    calendly_booking_status: conversation?.calendly_booking_status ?? null,
+    lead_grade: conversation?.lead_grade ?? null,
+  };
   const calendlyBookedForPrompt = calendlySnapForPrompt?.calendly_booking_status === 'booked';
   const checklistGradeForPrompt = flow.bestGrade(
     leadGrade,

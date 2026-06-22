@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import InviteLink from '../../../models/InviteLink.js';
 import InviteAttribution from '../../../models/InviteAttribution.js';
 import { getReferralRewardsSummary } from '../rewardService.js';
+import { buildNetworkCircleMetrics } from '../networkCircle.js';
 import { clampWindowDays, sinceDaysAgo } from './helpers.js';
 
 function lookupInviterStages(uid, since, extraMatch = {}) {
@@ -63,6 +64,7 @@ export async function getInviteMetricsForUser(inviter_user_id, { days = 30 } = {
       totals: { invites_sent: 0, clicked: 0, pending: 0, completed: 0, conversion_rate: 0 },
       by_channel: [],
       points: { points_balance: 0, events_count: 0, last_event_at: null },
+      network_circle: await buildNetworkCircleMetrics(inviter_user_id, { days: 30 }),
     };
   }
 
@@ -103,6 +105,8 @@ export async function getInviteMetricsForUser(inviter_user_id, { days = 30 } = {
     .sort({ createdAt: -1 })
     .lean();
 
+  const network_circle = await buildNetworkCircleMetrics(uid, { days: windowDays });
+
   return {
     window_days: windowDays,
     totals: {
@@ -124,6 +128,7 @@ export async function getInviteMetricsForUser(inviter_user_id, { days = 30 } = {
       reputation_score: points.reputation_score ?? 50,
       referral_link: latestInvite?.metadata?.share_url || null,
     },
+    network_circle,
   };
 }
 

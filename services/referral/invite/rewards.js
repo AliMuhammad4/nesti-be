@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import InviteLink from '../../../models/InviteLink.js';
 import InviteAttribution from '../../../models/InviteAttribution.js';
 import { awardReferralPoints, REWARD_RULES, getReferralRewardsSummary } from '../rewardService.js';
+import { getRewardBalanceExtras } from '../networkCircle.js';
 
 const MILESTONE_POINTS = {
   pro_profile_complete: REWARD_RULES.pro_profile_complete,
@@ -41,11 +42,13 @@ export async function awardInviterMilestoneForUser(inviteeUserId, milestone, sou
 
 export async function getRewardsProfileForUser(userId) {
   const summary = await getReferralRewardsSummary(userId);
+  const balanceExtras = await getRewardBalanceExtras(userId);
   const latestInvite = await InviteLink.findOne({ inviter_user_id: userId, is_active: true })
     .sort({ createdAt: -1 })
     .lean();
   return {
     ...summary,
+    ...balanceExtras,
     referral_code: latestInvite?._id ? String(latestInvite._id).slice(-8).toUpperCase() : null,
     referral_link: latestInvite?.metadata?.share_url || null,
   };

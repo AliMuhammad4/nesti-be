@@ -343,7 +343,8 @@ export const getProfileAnalyticsService = async (userId, options) => {
     if (event.event_type === 'consultation_request') metrics.consultation_requests += 1;
     if (event.event_type === 'cta_click' && event.cta_type === 'lead_created') metrics.leads_generated += 1;
     if (event.visitor_id) bucket._visitorIds.add(String(event.visitor_id));
-    const source = event.traffic_source || 'direct';
+    const knownSources = new Set(['direct', 'referral', 'social', 'search', 'other']);
+    const source = knownSources.has(event.traffic_source) ? event.traffic_source : 'other';
     metrics.traffic_sources[source] = (metrics.traffic_sources[source] || 0) + 1;
   }
 

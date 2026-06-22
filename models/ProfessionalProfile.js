@@ -52,6 +52,14 @@ const professionalProfileSchema = new mongoose.Schema({
   avg_sale_price: {
     type: String,
   },
+  avg_home_price: {
+    type: Number,
+    default: null,
+  },
+  commission_rate_percent: {
+    type: Number,
+    default: null,
+  },
   response_time: {
     type: String,
   },

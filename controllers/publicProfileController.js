@@ -30,7 +30,7 @@ export const trackProfileView = async (req, res, next) => {
       event_type: req.body.event_type || 'profile_view',
       event_data: req.body.event_data || {},
       session_id: req.body.session_id,
-      referrer: req.get('Referer') || req.body.referrer,
+      referrer: String(req.body.referrer || '').trim() || req.get('Referer') || null,
       user_agent: req.get('User-Agent'),
       ip_address: req.ip,
       listing_id: req.body.listing_id || null,

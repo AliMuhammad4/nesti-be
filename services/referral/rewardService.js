@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import ReferralRewardEvent from '../../models/ReferralRewardEvent.js';
 import UserRewardBalance from '../../models/UserRewardBalance.js';
+import { formatUsdCreditAmount } from './networkCircle.js';
 
 /**
  * Rewards are enabled by default (no .env needed).
@@ -192,6 +193,9 @@ export async function getReferralRewardsSummary(user_id) {
       reputation_score: 50,
       events_count: 0,
       last_event_at: null,
+      pending_credit_cents: 0,
+      paid_referral_count: 0,
+      auto_apply_credits: false,
       rewards_enabled: false,
     };
   }
@@ -202,7 +206,7 @@ export async function getReferralRewardsSummary(user_id) {
 
   const [balance, eventsCount] = await Promise.all([
     UserRewardBalance.findOne({ user_id: uid })
-      .select('points_balance last_event_at tier reputation_score')
+      .select('points_balance last_event_at tier reputation_score pending_credit_cents paid_referral_count auto_apply_credits')
       .lean(),
     ReferralRewardEvent.countDocuments({ user_id: uid }),
   ]);
@@ -214,6 +218,9 @@ export async function getReferralRewardsSummary(user_id) {
     reputation_score: Number(balance?.reputation_score ?? 50),
     events_count: Number(eventsCount || 0),
     last_event_at: balance?.last_event_at || null,
+    pending_credit_cents: Number(balance?.pending_credit_cents || 0),
+    paid_referral_count: Number(balance?.paid_referral_count || 0),
+    auto_apply_credits: Boolean(balance?.auto_apply_credits),
     rewards_enabled: true,
   };
 }
@@ -224,6 +231,66 @@ export async function getRewardsProfile(user_id, { invite_code = null, referral_
     ...summary,
     referral_code: invite_code || null,
     referral_link: referral_link || null,
+  };
+}
+
+export function mapRewardEventToLedgerRow(row) {
+  const meta = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const eventType = String(row?.event_type || '').trim();
+  const rewardKind = String(meta.reward_kind || '').trim().toLowerCase();
+  const isCredit = rewardKind === 'credit' || eventType === 'referral_paid_invoice_credit';
+  const points = Number(row?.points_delta || 0);
+
+  const activityLabels = {
+    referral_paid_invoice_credit: meta.activity_description || 'Referral account activated',
+    invite_signup_converted: 'Invite signup converted',
+    referral_created: 'Outbound referral created',
+    referral_accepted: 'Inbound referral accepted',
+    deal_closed: 'Deal closed',
+    lead_active_client: 'Inbound network lead',
+    complete_profile_monthly: 'Monthly streak bonus',
+    pro_profile_complete: 'Profile completed',
+    collaboration_success: 'Collaboration success',
+  };
+
+  let activity = meta.activity_description || activityLabels[eventType] || eventType.replace(/_/g, ' ');
+  if (meta.invitee_name && eventType === 'referral_paid_invoice_credit') {
+    activity = meta.activity_description || `Ref: ${meta.invitee_name}${meta.invitee_role ? ` (${meta.invitee_role})` : ''}`;
+  }
+
+  let status = String(meta.status || '').trim();
+  if (!status) {
+    if (isCredit) status = 'Success';
+    else if (points > 0) status = 'Active';
+    else status = 'Pending';
+  }
+  status = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+  if (status === 'Success') status = 'Success';
+  if (status === 'Active') status = 'Active';
+  if (status === 'Pending') status = 'Pending';
+
+  let reward_earned = '';
+  if (isCredit) {
+    const cents = Number(meta.amount_cents || 500);
+    reward_earned = `+${formatUsdCreditAmount(cents)} USD Credit`;
+  } else if (points !== 0) {
+    reward_earned = `${points > 0 ? '+' : ''}${points} Nesti Points`;
+  } else {
+    reward_earned = '—';
+  }
+
+  return {
+    id: String(row._id),
+    event_type: eventType,
+    points_delta: points,
+    source_model: row.source_model || '',
+    source_id: row.source_id || '',
+    metadata: meta,
+    occurred_at: row.occurred_at || row.createdAt || null,
+    activity_description: activity,
+    status,
+    reward_earned,
+    reward_kind: isCredit ? 'credit' : 'points',
   };
 }
 
@@ -253,15 +320,7 @@ export async function listReferralRewardEvents(user_id, { page = 1, limit = 20 }
   ]);
 
   return {
-    items: items.map((row) => ({
-      id: String(row._id),
-      event_type: row.event_type,
-      points_delta: Number(row.points_delta || 0),
-      source_model: row.source_model || '',
-      source_id: row.source_id || '',
-      metadata: row.metadata || {},
-      occurred_at: row.occurred_at || row.createdAt || null,
-    })),
+    items: items.map((row) => mapRewardEventToLedgerRow(row)),
     pagination: { page: p, limit: l, total, total_pages: Math.max(1, Math.ceil(total / l)) },
     rewards_enabled: true,
   };

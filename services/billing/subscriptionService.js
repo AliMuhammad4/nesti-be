@@ -718,6 +718,19 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
     },
     { returnDocument: 'after', upsert: Boolean(userId) },
   );
+
+  const activeStatuses = new Set(['active']);
+  if (synced?.user_id && activeStatuses.has(String(stripeSubscription.status || ''))) {
+    try {
+      const { processPaidSubscriptionReferralCredit } = await import('../referral/networkCircle.js');
+      await processPaidSubscriptionReferralCredit(synced.user_id, {
+        stripeEventId: extra.last_stripe_event_id || '',
+      });
+    } catch (err) {
+      console.warn('[networkCircle] referral credit on subscription sync failed', err?.message || err);
+    }
+  }
+
   return synced;
 }
 
@@ -745,11 +758,26 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
   };
   if (paymentStatus === 'failed') update.status = 'past_due';
 
-  return Subscription.findOneAndUpdate(
+  const synced = await Subscription.findOneAndUpdate(
     { stripe_subscription_id: subscriptionId },
     { $set: update },
     { returnDocument: 'after' },
   );
+
+  if (paymentStatus === 'paid' && synced?.user_id) {
+    try {
+      const { processPaidSubscriptionReferralCredit } = await import('../referral/networkCircle.js');
+      const amountPaid = Number(invoice?.amount_paid ?? invoice?.total ?? 0);
+      await processPaidSubscriptionReferralCredit(synced.user_id, {
+        stripeEventId: eventId,
+        invoiceAmountPaid: amountPaid,
+      });
+    } catch (err) {
+      console.warn('[networkCircle] referral credit on invoice.paid failed', err?.message || err);
+    }
+  }
+
+  return synced;
 }
 
 export async function syncSubscriptionSchedule(schedule, eventId = '') {

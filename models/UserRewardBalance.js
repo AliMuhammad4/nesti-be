@@ -30,6 +30,20 @@ const userRewardBalanceSchema = new mongoose.Schema(
       min: 0,
       max: 100,
     },
+    pending_credit_cents: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    paid_referral_count: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    auto_apply_credits: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true },
 );

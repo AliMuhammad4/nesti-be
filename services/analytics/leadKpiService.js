@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import LeadKpiEvent from '../../models/LeadKpiEvent.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import Referral from '../../models/Referral.js';
+import ChatConversation from '../../models/ChatConversation.js';
+import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
 /**
@@ -57,7 +59,7 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
 
   // Run all three queries in parallel — each uses its own indexed $match at the top
   // so MongoDB can use the existing indexes efficiently (no full collection scan).
-  const [kpiRows, cohortAgg, closedWonAgg] = await Promise.all([
+  const [kpiRows, cohortAgg, closedWonAgg, aiConversations] = await Promise.all([
     LeadKpiEvent.aggregate([
       { $match: { user_id: uid, occurred_at: { $gte: since } } },
       { $group: { _id: '$event_type', count: { $sum: 1 } } },
@@ -85,6 +87,7 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
       },
       { $count: 'n' },
     ]),
+    ChatConversation.countDocuments({ user_id: uid, createdAt: { $gte: since } }),
   ]);
 
   const byType = Object.fromEntries(kpiRows.map((r) => [r._id, r.count]));
@@ -104,6 +107,7 @@ export async function getLeadKpiSummary(userId, { days = 30 } = {}) {
     window_days: parseDays(days),
     totals: {
       events: totalEvents,
+      ai_conversations: Number(aiConversations || 0),
       leads_created: created,
       leads_updated: updated,
       lead_views: views,
@@ -630,5 +634,105 @@ export async function getLeadKpiFunnel(userId, { days = 30 } = {}) {
   return {
     window_days: parseDays(days),
     stages: withRates,
+  };
+}
+
+function resolveCommissionRate(profile) {
+  const explicit = Number(profile?.commission_rate_percent);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return 2.5;
+}
+
+/**
+ * Pipeline value from actual lead budgets.
+ * For each hot lead: take their LeadProfile budget midpoint × commission rate.
+ * Sum across all hot leads to get total estimated pipeline value.
+ */
+export async function getPipelineValueEstimate(userId, { days = 30 } = {}) {
+  const uid = new mongoose.Types.ObjectId(String(userId));
+  const since = sinceDate(days);
+
+  const [profile, hotLeadsWithBudget] = await Promise.all([
+    ProfessionalProfile.findOne({ user_id: uid })
+      .select('commission_rate_percent')
+      .lean(),
+    LeadMatch.aggregate([
+      {
+        $match: {
+          user_id: uid,
+          createdAt: { $gte: since },
+          ...VISIBLE_LEAD_MATCH_FILTER,
+        },
+      },
+      {
+        $lookup: {
+          from: 'chatconversations',
+          localField: 'conversation_id',
+          foreignField: '_id',
+          as: 'conversation',
+        },
+      },
+      { $unwind: { path: '$conversation', preserveNullAndEmptyArrays: true } },
+      {
+        $match: {
+          $or: [
+            { 'conversation.lead_grade': 'hot' },
+            { match_score: { $gte: 75 } },
+          ],
+        },
+      },
+      {
+        $lookup: {
+          from: 'leadprofiles',
+          localField: 'lead_profile_id',
+          foreignField: '_id',
+          as: 'lead_profile',
+        },
+      },
+      { $unwind: { path: '$lead_profile', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          budget_min: { $ifNull: ['$lead_profile.budget_profile.min_budget', null] },
+          budget_max: { $ifNull: ['$lead_profile.budget_profile.max_budget', null] },
+        },
+      },
+    ]),
+  ]);
+
+  const commissionRatePercent = resolveCommissionRate(profile);
+  const hotLeads = hotLeadsWithBudget.length;
+  let totalPipelineValue = 0;
+  let leadsWithBudget = 0;
+
+  for (const lead of hotLeadsWithBudget) {
+    const min = Number(lead.budget_min);
+    const max = Number(lead.budget_max);
+    let dealValue = 0;
+
+    if (Number.isFinite(min) && min > 0 && Number.isFinite(max) && max > 0) {
+      dealValue = (min + max) / 2;
+    } else if (Number.isFinite(max) && max > 0) {
+      dealValue = max;
+    } else if (Number.isFinite(min) && min > 0) {
+      dealValue = min;
+    }
+
+    if (dealValue > 0) {
+      leadsWithBudget += 1;
+      totalPipelineValue += Math.round((dealValue * commissionRatePercent) / 100);
+    }
+  }
+
+  const avgDealValue = leadsWithBudget > 0
+    ? Math.round(totalPipelineValue / leadsWithBudget)
+    : 0;
+
+  return {
+    hot_leads: hotLeads,
+    hot_leads_with_budget: leadsWithBudget,
+    commission_rate_percent: commissionRatePercent,
+    avg_commission_per_deal: avgDealValue,
+    estimated_pipeline_value: totalPipelineValue,
+    currency: 'USD',
   };
 }

@@ -38,6 +38,8 @@ const professionalProfileCreateSchema = Joi.object({
   social_media: str,
   transaction_volume: str,
   avg_sale_price: str,
+  avg_home_price: Joi.number().min(0).allow(null).optional(),
+  commission_rate_percent: Joi.number().min(0).max(100).allow(null).optional(),
   response_time: str,
   availability: str,
   support_level: str,

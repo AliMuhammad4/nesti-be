@@ -18,6 +18,7 @@ import {
   createOrGetLeadReferralFromInvite,
 } from './leadReferral.js';
 import { awardInviterMilestoneForUser } from './rewards.js';
+import { awardReferralInviteSignupCredit } from '../networkCircle.js';
 
 export async function captureInviteAttribution(rawToken, payload = {}, requestContext = {}) {
   const loaded = await loadInviteByToken(rawToken);
@@ -187,6 +188,10 @@ export async function finalizeInviteAttribution({
   });
 
   await awardInviterMilestoneForUser(authUserId, 'pro_verified', String(attribution._id));
+  await awardReferralInviteSignupCredit(authUserId, {
+    sourceAttribution: attribution,
+    reason: 'invite_signup',
+  });
 
   return {
     ok: true,

@@ -179,8 +179,48 @@ export async function awardReferralInvoiceCredit(subscriberUserId, { stripeEvent
     return { awarded: false, reason: 'no_inviter' };
   }
 
+  return awardReferralInviteSignupCredit(subscriberOid, {
+    sourceAttribution: attribution,
+    stripeEventId,
+    reason: 'paid_invoice',
+  });
+}
+
+export async function processPaidSubscriptionReferralCredit(userId, options = {}) {
+  return awardReferralInvoiceCredit(userId, options);
+}
+
+/**
+ * Award $5 USD invoice credit to inviter when invitee completes signup conversion.
+ * Idempotent per converted invitee user id.
+ */
+export async function awardReferralInviteSignupCredit(inviteeUserId, { sourceAttribution = null, stripeEventId = '', reason = 'invite_signup' } = {}) {
+  if (!mongoose.Types.ObjectId.isValid(String(inviteeUserId))) {
+    return { awarded: false, reason: 'invalid_invitee' };
+  }
+
+  const inviteeOid = new mongoose.Types.ObjectId(String(inviteeUserId));
+
+  const attribution = sourceAttribution || await InviteAttribution.findOne({
+    consumed_by_user_id: inviteeOid,
+    status: 'converted',
+  })
+    .sort({ consumed_at: -1 })
+    .lean();
+
+  if (!attribution?.invite_link_id) {
+    return { awarded: false, reason: 'no_invite_attribution' };
+  }
+
+  const invite = await InviteLink.findById(attribution.invite_link_id)
+    .select('inviter_user_id')
+    .lean();
+  if (!invite?.inviter_user_id) {
+    return { awarded: false, reason: 'no_inviter' };
+  }
+
   const inviterId = invite.inviter_user_id;
-  const idempotencyKey = `referral:credit:paid:${String(subscriberOid)}`;
+  const idempotencyKey = `referral:credit:converted:${String(inviteeOid)}`;
 
   const existing = await ReferralRewardEvent.findOne({ idempotency_key: idempotencyKey })
     .select('_id')
@@ -189,7 +229,7 @@ export async function awardReferralInvoiceCredit(subscriberUserId, { stripeEvent
     return { awarded: false, duplicate: true, event_id: String(existing._id) };
   }
 
-  const invitee = await resolveInviteeDisplayName(subscriberOid);
+  const invitee = await resolveInviteeDisplayName(inviteeOid);
   const now = new Date();
 
   await ReferralRewardEvent.create({
@@ -204,10 +244,11 @@ export async function awardReferralInvoiceCredit(subscriberUserId, { stripeEvent
       amount_cents: CREDIT_PER_REFERRAL_CENTS,
       currency: REFERRAL_CREDIT_CURRENCY,
       status: 'success',
-      invitee_user_id: String(subscriberOid),
+      invitee_user_id: String(inviteeOid),
       invitee_name: invitee.name,
       invitee_role: invitee.role,
       stripe_event_id: stripeEventId || null,
+      reason: String(reason || 'invite_signup'),
       activity_description: `Ref: ${invitee.name} (${invitee.role})`,
     },
     occurred_at: now,
@@ -227,10 +268,7 @@ export async function awardReferralInvoiceCredit(subscriberUserId, { stripeEvent
   );
 
   const inviterSub = await Subscription.findOne({ user_id: inviterId })
-    .select('stripe_customer_id auto_apply_credits')
-    .lean();
-  const inviterBalance = await UserRewardBalance.findOne({ user_id: inviterId })
-    .select('auto_apply_credits')
+    .select('stripe_customer_id')
     .lean();
 
   const stripeCustomerId = String(inviterSub?.stripe_customer_id || '').trim();
@@ -240,9 +278,9 @@ export async function awardReferralInvoiceCredit(subscriberUserId, { stripeEvent
       await stripe.customers.createBalanceTransaction(stripeCustomerId, {
         amount: -CREDIT_PER_REFERRAL_CENTS,
         currency: 'usd',
-        description: `Nesti referral credit — ${invitee.name} subscribed`,
+        description: `Nesti referral credit — ${invitee.name} joined`,
         metadata: {
-          invitee_user_id: String(subscriberOid),
+          invitee_user_id: String(inviteeOid),
           idempotency_key: idempotencyKey,
         },
       });
@@ -257,8 +295,4 @@ export async function awardReferralInvoiceCredit(subscriberUserId, { stripeEvent
     inviter_user_id: String(inviterId),
     amount_cents: CREDIT_PER_REFERRAL_CENTS,
   };
-}
-
-export async function processPaidSubscriptionReferralCredit(userId, options = {}) {
-  return awardReferralInvoiceCredit(userId, options);
 }

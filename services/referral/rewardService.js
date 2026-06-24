@@ -242,18 +242,39 @@ export function mapRewardEventToLedgerRow(row) {
   const points = Number(row?.points_delta || 0);
 
   const activityLabels = {
-    referral_paid_invoice_credit: meta.activity_description || 'Referral account activated',
-    invite_signup_converted: 'Invite signup converted',
-    referral_created: 'Outbound referral created',
+    pro_signup: 'Professional signup',
+    pro_profile_complete: 'Profile completed',
+    pro_verified: 'Profile verified',
+    pro_first_engagement: 'First engagement',
+    pro_first_deal: 'First deal closed',
+    invite_link_created: 'Invite link created',
+    invite_click_captured: 'Invite link clicked',
+    invite_signup_converted: 'Invite signup',
+    referral_created: 'Outbound referral sent',
     referral_accepted: 'Inbound referral accepted',
+    referral_cross_role_bonus: 'Cross-role referral bonus',
+    referral_paid_invoice_credit: meta.activity_description || 'Referral subscription credit',
+    referral_transaction_complete: 'Referral transaction',
     deal_closed: 'Deal closed',
     lead_active_client: 'Inbound network lead',
-    complete_profile_monthly: 'Monthly streak bonus',
-    pro_profile_complete: 'Profile completed',
+    complete_profile_monthly: 'Monthly profile bonus',
     collaboration_success: 'Collaboration success',
+    positive_review: 'Positive review',
+    high_engagement_lead: 'High-engagement lead',
+    fast_response_monthly: 'Fast response bonus',
+    ai_tool_milestone: 'AI tool milestone',
+    education_complete: 'Education completed',
+    multi_pro_deal_bonus: 'Multi-pro deal bonus',
   };
 
-  let activity = meta.activity_description || activityLabels[eventType] || eventType.replace(/_/g, ' ');
+  const titleCase = (text) =>
+    String(text || '')
+      .trim()
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
+  let activity = meta.activity_description || activityLabels[eventType] || titleCase(eventType);
   if (meta.invitee_name && eventType === 'referral_paid_invoice_credit') {
     activity = meta.activity_description || `Ref: ${meta.invitee_name}${meta.invitee_role ? ` (${meta.invitee_role})` : ''}`;
   }
@@ -272,9 +293,10 @@ export function mapRewardEventToLedgerRow(row) {
   let reward_earned = '';
   if (isCredit) {
     const cents = Number(meta.amount_cents || 500);
-    reward_earned = `+${formatUsdCreditAmount(cents)} USD Credit`;
+    reward_earned = `+${formatUsdCreditAmount(cents)} credit`;
   } else if (points !== 0) {
-    reward_earned = `${points > 0 ? '+' : ''}${points} Nesti Points`;
+    const absPoints = Math.abs(points).toLocaleString('en-US');
+    reward_earned = `${points > 0 ? '+' : '−'}${absPoints} pts`;
   } else {
     reward_earned = '—';
   }

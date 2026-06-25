@@ -2,11 +2,6 @@ import mongoose from 'mongoose';
 import ReferralRewardEvent from '../../models/ReferralRewardEvent.js';
 import UserRewardBalance from '../../models/UserRewardBalance.js';
 import { formatUsdCreditAmount } from './networkCircle.js';
-
-/**
- * Rewards are enabled by default (no .env needed).
- * Set ENABLE_REFERRAL_REWARDS=false (or 0/no/off) to disable explicitly.
- */
 function parseEnabledFlag(raw, defaultValue = true) {
   if (raw === undefined || raw === null) return defaultValue;
   const s = String(raw).trim().toLowerCase();
@@ -15,10 +10,7 @@ function parseEnabledFlag(raw, defaultValue = true) {
   if (['1', 'true', 'yes', 'on'].includes(s)) return true;
   return defaultValue;
 }
-
 const REWARDS_ENABLED = parseEnabledFlag(process.env.ENABLE_REFERRAL_REWARDS, true);
-
-/** Client-spec point catalog — single source of truth. */
 export const REWARD_RULES = Object.freeze({
   pro_signup: 100,
   pro_profile_complete: 150,
@@ -44,8 +36,6 @@ export const REWARD_RULES = Object.freeze({
   referral_cross_role_bonus: 4,
   referral_accepted: 12,
 });
-
-/** @deprecated Use REWARD_RULES — kept for existing imports */
 export const REFERRAL_REWARD_POINTS = Object.freeze({
   invite_link_created: REWARD_RULES.invite_link_created,
   invite_click_captured: REWARD_RULES.invite_click_captured,
@@ -54,7 +44,6 @@ export const REFERRAL_REWARD_POINTS = Object.freeze({
   referral_cross_role_bonus: REWARD_RULES.referral_cross_role_bonus,
   referral_accepted: REWARD_RULES.referral_accepted,
 });
-
 export function tierFromPoints(points) {
   const p = Number(points) || 0;
   if (p >= 50000) return 'elite';
@@ -63,7 +52,6 @@ export function tierFromPoints(points) {
   if (p >= 1000) return 'silver';
   return 'bronze';
 }
-
 const REPUTATION_WEIGHTS = {
   deal_closed: 12,
   pro_first_deal: 15,
@@ -84,7 +72,6 @@ export function computeReputationDelta(event_type) {
   if (REPUTATION_PENALTIES[event_type]) return REPUTATION_PENALTIES[event_type];
   return 0;
 }
-
 export async function updateReputation(user_id, event_type, session = null) {
   const delta = computeReputationDelta(event_type);
   if (!delta) return;
@@ -99,7 +86,6 @@ export async function updateReputation(user_id, event_type, session = null) {
     { upsert: true, ...opts },
   );
 }
-
 export async function awardReferralPoints({
   user_id,
   event_type,
@@ -115,12 +101,10 @@ export async function awardReferralPoints({
 
   const points = Number(points_delta || 0);
   if (!Number.isFinite(points) || points === 0) return { awarded: false, reason: 'zero_points' };
-
   const uid = mongoose.Types.ObjectId.isValid(String(user_id))
     ? new mongoose.Types.ObjectId(String(user_id))
     : null;
   if (!uid) return { awarded: false, reason: 'invalid_user' };
-
   const existing = await ReferralRewardEvent.findOne({ idempotency_key })
     .select('_id points_delta')
     .lean();

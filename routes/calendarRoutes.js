@@ -30,6 +30,10 @@ import {
 import { applyCalendlyOAuthAlignment, calendlyWebhookAlignmentMeta } from '../services/calendly/calendlyAlignmentService.js';
 import { listCalendlyWebhookSubscriptions, registerCalendlyInviteeWebhook } from '../services/calendly/registerInviteeWebhook.js';
 import { applyCalendlyCancellationToLeadForUser, processCalendlyWebhook } from '../services/calendly/calendlyWebhookService.js';
+import {
+  notifyCalendlyPlanBlocked,
+  notifyCalendlySyncRestored,
+} from '../services/calendly/calendlyNotifications.js';
 import { calendlyWebhookErrorKind, userFacingCalendlyRegisterError } from '../utils/calendlyWebhookErrors.js';
 import { listBookedAppointmentsForUser } from '../services/calendar/calendarBookingsService.js';
 
@@ -162,6 +166,11 @@ function resolveCalendlyOAuthErrorBrowserRedirect() {
 }
 
 async function persistCalendlyWebhookState(userId, { targetUrl, error }) {
+  const prev = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' })
+    .select('calendly_webhook_error_kind')
+    .lean();
+  const previousKind = prev?.calendly_webhook_error_kind || null;
+
   const url = String(targetUrl || '').trim() || null;
   if (error) {
     const kind = calendlyWebhookErrorKind(String(error));
@@ -170,11 +179,15 @@ async function persistCalendlyWebhookState(userId, { targetUrl, error }) {
       { user_id: userId, provider: 'calendly' },
       { $set: { calendly_webhook_url: url, calendly_webhook_register_error: msg, calendly_webhook_error_kind: kind, calendly_webhook_registered_at: null } }
     );
+    if (kind === 'calendly_plan') {
+      await notifyCalendlyPlanBlocked(userId, { errorMessage: String(error), previousKind });
+    }
   } else {
     await CalendarIntegration.updateOne(
       { user_id: userId, provider: 'calendly' },
       { $set: { calendly_webhook_url: url, calendly_webhook_register_error: null, calendly_webhook_error_kind: null, calendly_webhook_registered_at: new Date() } }
     );
+    await notifyCalendlySyncRestored(userId, { previousKind });
   }
 }
 

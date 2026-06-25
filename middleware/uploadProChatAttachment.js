@@ -1,8 +1,7 @@
 import multer from 'multer';
+import { MAX_IMAGE_UPLOAD_BYTES } from '../constants/mediaLimits.js';
 
 // Keep modest to avoid memory pressure (multer memoryStorage keeps the full buffer).
-// Keep this conservative even with R2 so uploads stay responsive in chat.
-const MAX_BYTES = 12 * 1024 * 1024; // 12MB
 
 const ALLOWED = new Set([
   // images
@@ -25,7 +24,7 @@ const ALLOWED = new Set([
 
 export const uploadProChatAttachment = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_BYTES },
+  limits: { fileSize: MAX_IMAGE_UPLOAD_BYTES },
   fileFilter: (_req, file, cb) => {
     const mime = String(file?.mimetype || '').trim().toLowerCase();
     if (!mime || !ALLOWED.has(mime)) {

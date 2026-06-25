@@ -766,11 +766,17 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
 
   if (paymentStatus === 'paid' && synced?.user_id) {
     try {
-      const { processPaidSubscriptionReferralCredit } = await import('../referral/networkCircle.js');
+      const {
+        processPaidSubscriptionReferralCredit,
+        syncPendingCreditFromStripeBalance,
+      } = await import('../referral/networkCircle.js');
       const amountPaid = Number(invoice?.amount_paid ?? invoice?.total ?? 0);
       await processPaidSubscriptionReferralCredit(synced.user_id, {
         stripeEventId: eventId,
         invoiceAmountPaid: amountPaid,
+      });
+      await syncPendingCreditFromStripeBalance(synced.user_id, {
+        stripeCustomerId: synced.stripe_customer_id,
       });
     } catch (err) {
       console.warn('[networkCircle] referral credit on invoice.paid failed', err?.message || err);

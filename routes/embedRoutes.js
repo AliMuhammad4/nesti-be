@@ -14,6 +14,21 @@ import { FEATURES } from '../services/billing/entitlements.js';
 
 const generateEmbedToken = async (req, res, next) => {
   try {
+    // Enforce one embed token per user. Reuse existing until deleted.
+    const existingEmbed = await ChatbotEmbedUrl.findOne({ user_id: req.user._id })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (existingEmbed) {
+      return res.json({
+        success: true,
+        reused: true,
+        token: existingEmbed.token,
+        id: existingEmbed._id,
+        widget_role: existingEmbed.widget_role,
+        message: 'Existing embed token returned',
+      });
+    }
+
     const profile = await ProfessionalProfile.findOne({ user_id: req.user._id }).lean();
     const raw =
       req.body.widget_role != null && String(req.body.widget_role).trim() !== ''
@@ -35,6 +50,7 @@ const generateEmbedToken = async (req, res, next) => {
     });
     res.json({
       success: true,
+      reused: false,
       token: embed.token,
       id: embed._id,
       widget_role: embed.widget_role,

@@ -190,6 +190,46 @@ export async function processPaidSubscriptionReferralCredit(userId, options = {}
   return awardReferralInvoiceCredit(userId, options);
 }
 
+function pendingCreditFromStripeBalance(customerBalance) {
+  const balance = Number(customerBalance || 0);
+  if (!Number.isFinite(balance) || balance >= 0) return 0;
+  return Math.abs(balance);
+}
+
+export async function syncPendingCreditFromStripeBalance(userId, { stripeCustomerId = '' } = {}) {
+  if (!mongoose.Types.ObjectId.isValid(String(userId))) {
+    return { synced: false, reason: 'invalid_user' };
+  }
+
+  let customerId = String(stripeCustomerId || '').trim();
+  if (!customerId) {
+    const subscription = await Subscription.findOne({ user_id: userId })
+      .select('stripe_customer_id')
+      .lean();
+    customerId = String(subscription?.stripe_customer_id || '').trim();
+  }
+
+  if (!customerId) return { synced: false, reason: 'no_customer_id' };
+
+  try {
+    const stripe = getStripeClient();
+    const customer = await stripe.customers.retrieve(customerId);
+    const pendingCreditCents = pendingCreditFromStripeBalance(customer?.balance);
+    await UserRewardBalance.findOneAndUpdate(
+      { user_id: userId },
+      {
+        $setOnInsert: { user_id: userId, points_balance: 0, reputation_score: 50 },
+        $set: { pending_credit_cents: pendingCreditCents },
+      },
+      { upsert: true },
+    );
+    return { synced: true, pending_credit_cents: pendingCreditCents };
+  } catch (err) {
+    console.warn('[networkCircle] Failed to sync pending credit from Stripe balance', err?.message || err);
+    return { synced: false, reason: 'stripe_sync_failed', error: err?.message || String(err) };
+  }
+}
+
 /**
  * Award $5 USD invoice credit to inviter when invitee completes signup conversion.
  * Idempotent per converted invitee user id.
@@ -227,6 +267,17 @@ export async function awardReferralInviteSignupCredit(inviteeUserId, { sourceAtt
     .lean();
   if (existing) {
     return { awarded: false, duplicate: true, event_id: String(existing._id) };
+  }
+
+  const legacyExisting = await ReferralRewardEvent.findOne({
+    user_id: inviterId,
+    event_type: 'referral_paid_invoice_credit',
+    'metadata.invitee_user_id': String(inviteeOid),
+  })
+    .select('_id')
+    .lean();
+  if (legacyExisting) {
+    return { awarded: false, duplicate: true, event_id: String(legacyExisting._id) };
   }
 
   const invitee = await resolveInviteeDisplayName(inviteeOid);
@@ -284,6 +335,7 @@ export async function awardReferralInviteSignupCredit(inviteeUserId, { sourceAtt
           idempotency_key: idempotencyKey,
         },
       });
+      await syncPendingCreditFromStripeBalance(inviterId, { stripeCustomerId });
     } catch (err) {
       // Credit is tracked locally even if Stripe balance write fails (retry-safe via idempotency).
       console.warn('[networkCircle] Stripe balance transaction failed', err?.message || err);

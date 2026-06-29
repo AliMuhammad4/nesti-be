@@ -1,6 +1,6 @@
 import User from '../../models/User.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
-import { USER_ROLE, USER_ROLE_VALUES } from '../../constants/roles.js';
+import { USER_ROLE, USER_ROLE_VALUES, isProfessionalRole } from '../../constants/roles.js';
 import { evaluateProfessionalProfileSetup } from '../../utils/professionalProfileSetup.js';
 import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
@@ -161,7 +161,12 @@ const verifyGoogleToken = async ({ token, token_type }) => {
 };
 
 const bootstrapProfessionalProfile = async (user) => {
-  if (user.role === USER_ROLE.ADMIN) return;
+  // Skip profile creation for admins and clients
+  if (user.role === USER_ROLE.ADMIN || user.role === USER_ROLE.CLIENT) return;
+  
+  // Only create professional profile for actual professional roles
+  if (!isProfessionalRole(user.role)) return;
+  
   await ProfessionalProfile.create({
     user_id: user._id,
     professional_type: user.role,
@@ -352,6 +357,14 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       success: true,
       message: 'Email verified successfully and account created',
       token: signJwt({ id: user._id }, '30d'),
+      role: user.role,
+      user: {
+        id: String(user._id),
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+      },
     },
   };
 };
@@ -533,15 +546,27 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
   });
   const isExpired = subscription.isExpired;
 
-  const profileSetup =
-    user.role === USER_ROLE.ADMIN
-      ? {
-          personal_complete: true,
-          business_complete: true,
-          is_complete: true,
-          missing_fields: [],
-        }
-      : evaluateProfessionalProfileSetup(user, professionalProfile);
+  // Profile setup evaluation - only for professionals and admins
+  let profileSetup;
+  if (user.role === USER_ROLE.ADMIN) {
+    profileSetup = {
+      personal_complete: true,
+      business_complete: true,
+      is_complete: true,
+      missing_fields: [],
+    };
+  } else if (user.role === USER_ROLE.CLIENT) {
+    // Clients don't have professional profile requirements
+    profileSetup = {
+      personal_complete: true,
+      business_complete: true,
+      is_complete: true,
+      missing_fields: [],
+    };
+  } else {
+    // Professionals (agent, broker, lawyer)
+    profileSetup = evaluateProfessionalProfileSetup(user, professionalProfile);
+  }
 
   return {
     status: 200,

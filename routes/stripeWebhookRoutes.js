@@ -9,6 +9,7 @@ import {
   syncSubscriptionSchedule,
   updateInvoicePaymentState,
 } from '../services/billing/subscriptionService.js';
+import { syncClientStripeSubscription } from '../services/client/clientSubscriptionService.js';
 
 const router = express.Router();
 
@@ -92,7 +93,14 @@ async function processStripeEvent(event) {
     case 'customer.subscription.created':
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted':
-      result = await syncStripeSubscription(event.data.object, { last_stripe_event_id: event.id });
+      // Route to appropriate subscription service based on metadata
+      const subscriptionType = event.data.object?.metadata?.subscription_type;
+      if (subscriptionType === 'client') {
+        result = await syncClientStripeSubscription(event.data.object);
+      } else {
+        // Default to professional subscription
+        result = await syncStripeSubscription(event.data.object, { last_stripe_event_id: event.id });
+      }
       break;
     case 'subscription_schedule.created':
     case 'subscription_schedule.updated':

@@ -32,6 +32,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  phone: {
+    type: String,
+    default: '',
+  },
   role: {
     type: String,
     enum: USER_ROLE_VALUES,

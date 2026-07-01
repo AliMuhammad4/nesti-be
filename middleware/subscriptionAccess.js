@@ -71,6 +71,7 @@ function trialQuotaRequiredResponse(limitStates) {
 
 async function getTrialQuotaLimitStates(req) {
   if (req.subscriptionAccountStatus !== ACCOUNT_STATUS.FREE_TRIAL) return [];
+  if (req.subscription?.trial_end && new Date(req.subscription.trial_end) > new Date()) return [];
   const [usage] = await Promise.all([getPlanUsageForUser(req.user._id)]);
   req.subscriptionUsage = usage;
   return Object.entries(req.subscriptionLimits || {})

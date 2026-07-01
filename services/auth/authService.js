@@ -8,6 +8,7 @@ import logger from '../../utils/logger.js';
 import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
 import { finalizeInviteAttribution } from '../referral/inviteService.js';
 import {
+  FREE_TRIAL_DAYS,
   createFreeTrialSubscription,
   getSubscriptionPresentationForUser,
 } from '../billing/subscriptionService.js';
@@ -310,7 +311,7 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
   }
 
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
+  trialEndsAt.setDate(trialEndsAt.getDate() + FREE_TRIAL_DAYS);
 
   if (await User.findOne({ email: decoded.email })) {
     return {
@@ -436,7 +437,7 @@ export const googleSignupService = async ({ token, token_type, role, invite_toke
     return disposableEmailErrorResponse();
   }
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
+  trialEndsAt.setDate(trialEndsAt.getDate() + FREE_TRIAL_DAYS);
 
   let user;
   try {
@@ -581,11 +582,14 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         first_name: user.first_name,
         last_name: user.last_name,
         email: user.email,
+        phone: user.phone || '',
         role: user.role,
         auth_provider: user.auth_provider || 'local',
         authProvider: user.auth_provider || 'local',
         profile_image: user.profile_image || null,
         cover_image: user.cover_image || null,
+        cover_image_position: user.cover_image_position || { x: 50, y: 50 },
+        cover_image_zoom: user.cover_image_zoom || 1,
         accountStatus: subscription.accountStatus,
         trialEndsAt: subscription.trialEndsAt,
         subscriptionPlan: subscription.subscriptionPlan,

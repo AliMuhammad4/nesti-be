@@ -5,7 +5,7 @@ import { getStripeClient } from './stripeClient.js';
 import { getPlanLimitsForSubscription } from './entitlements.js';
 import { getPlanUsageForUser } from './planQuota.js';
 
-const FREE_TRIAL_DAYS = 2;
+export const FREE_TRIAL_DAYS = 3;
 
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const STRIPE_BLOCKING_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
@@ -482,7 +482,33 @@ export function serializeSubscription(subscription) {
   };
 }
 
+async function normalizeFreeTrialDuration(subscription) {
+  if (!subscription?.trial_start || !['free_trial', 'expired'].includes(subscription.status)) {
+    return subscription;
+  }
+
+  const trialStart = new Date(subscription.trial_start);
+  if (Number.isNaN(trialStart.getTime())) return subscription;
+
+  const expectedTrialEnd = new Date(trialStart.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
+  const currentTrialEnd = subscription.trial_end ? new Date(subscription.trial_end) : null;
+  const shouldExtend =
+    !currentTrialEnd ||
+    Number.isNaN(currentTrialEnd.getTime()) ||
+    currentTrialEnd.getTime() < expectedTrialEnd.getTime();
+
+  if (!shouldExtend) return subscription;
+
+  subscription.trial_end = expectedTrialEnd;
+  if (subscription.status === 'expired' && expectedTrialEnd > new Date()) {
+    subscription.status = 'free_trial';
+  }
+  await subscription.save();
+  return subscription;
+}
+
 export async function expireTrialIfNeeded(subscription) {
+  subscription = await normalizeFreeTrialDuration(subscription);
   if (
     subscription?.status === 'free_trial' &&
     subscription.trial_end &&

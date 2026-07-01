@@ -3,6 +3,8 @@ const router = express.Router();
 import { protect } from '../middleware/authMiddleware.js';
 import {
   getClientProfile,
+  getClientInquiries,
+  getClientRecommendations,
   upsertClientProfile,
   updateClientSettings,
   createClientSubscriptionCheckout,
@@ -11,6 +13,8 @@ import {
 } from '../controllers/clientController.js';
 
 router.get('/profile/me', protect, getClientProfile);
+router.get('/inquiries', protect, getClientInquiries);
+router.get('/recommendations', protect, getClientRecommendations);
 router.post('/profile', protect, upsertClientProfile);
 router.put('/profile', protect, upsertClientProfile);
 router.put('/settings', protect, updateClientSettings);

@@ -2,6 +2,7 @@ import ClientProfile from '../models/ClientProfile.js';
 import User from '../models/User.js';
 import {
   calculateHomeownershipMetrics,
+  sanitizeClientProfileData,
   updateClientProfileMetrics,
   validateClientProfileData,
 } from '../services/client/financialService.js';
@@ -10,6 +11,9 @@ import {
   getClientSubscriptionForUser,
   cancelClientSubscription,
 } from '../services/client/clientSubscriptionService.js';
+import { getClientRecommendationsForUser } from '../services/matching/matchRankingService.js';
+import { getClientInquiriesForUser } from '../services/client/clientInquiryService.js';
+import { USER_ROLE } from '../constants/roles.js';
 
 export async function getClientProfile(req, res) {
   try {
@@ -45,7 +49,7 @@ export async function getClientProfile(req, res) {
 export async function upsertClientProfile(req, res) {
   try {
     const userId = req.user._id;
-    const profileData = req.body;
+    const profileData = sanitizeClientProfileData(req.body || {});
 
     const validation = validateClientProfileData(profileData);
     if (!validation.valid) {
@@ -103,8 +107,25 @@ export async function updateClientSettings(req, res) {
       current_savings,
       monthly_savings,
       dream_home_price,
+      home_goal,
+      home_goals,
       preferred_location,
+      preferred_locations,
       purchase_timeline,
+      mortgage_status,
+      realtor_status,
+      viewing_readiness,
+      offer_readiness,
+      motivation_reason,
+      living_situation,
+      purchase_purpose,
+      preferred_contact_method,
+      best_time_to_contact,
+      working_styles,
+      priority_tags,
+      languages,
+      preferred_experience,
+      comfort_preferences,
     } = req.body || {};
 
     const userUpdates = {};
@@ -125,15 +146,34 @@ export async function updateClientSettings(req, res) {
       current_savings,
       monthly_savings,
       dream_home_price,
+      home_goal,
+      home_goals,
       preferred_location,
+      preferred_locations,
       purchase_timeline,
+      mortgage_status,
+      realtor_status,
+      viewing_readiness,
+      offer_readiness,
+      motivation_reason,
+      living_situation,
+      purchase_purpose,
+      preferred_contact_method,
+      best_time_to_contact,
+      working_styles,
+      priority_tags,
+      languages,
+      preferred_experience,
+      comfort_preferences,
     };
 
-    Object.keys(profileData).forEach((key) => {
-      if (profileData[key] === undefined) delete profileData[key];
+    const sanitizedProfileData = sanitizeClientProfileData(profileData);
+
+    Object.keys(sanitizedProfileData).forEach((key) => {
+      if (sanitizedProfileData[key] === undefined) delete sanitizedProfileData[key];
     });
 
-    const validation = validateClientProfileData(profileData);
+    const validation = validateClientProfileData(sanitizedProfileData);
     if (!validation.valid) {
       return res.status(400).json({
         success: false,
@@ -148,11 +188,11 @@ export async function updateClientSettings(req, res) {
 
     let profile = await ClientProfile.findOne({ user_id: userId });
     if (profile) {
-      Object.assign(profile, profileData);
+      Object.assign(profile, sanitizedProfileData);
       profile = updateClientProfileMetrics(profile);
       await profile.save();
     } else {
-      profile = new ClientProfile({ user_id: userId, ...profileData });
+      profile = new ClientProfile({ user_id: userId, ...sanitizedProfileData });
       profile = updateClientProfileMetrics(profile);
       await profile.save();
     }
@@ -173,6 +213,57 @@ export async function updateClientSettings(req, res) {
     return res.status(500).json({
       success: false,
       message: 'Failed to save client settings',
+      error: error.message,
+    });
+  }
+}
+
+export async function getClientInquiries(req, res) {
+  try {
+    if (String(req.user?.role || '').toLowerCase() !== USER_ROLE.CLIENT) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only clients can view inquiries',
+      });
+    }
+
+    const inquiries = await getClientInquiriesForUser(req.user._id, {
+      type: String(req.query.type || '').trim(),
+      limit: req.query.limit,
+      page: req.query.page,
+    });
+
+    return res.json({
+      success: true,
+      ...inquiries,
+    });
+  } catch (error) {
+    console.error('Error fetching client inquiries:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch client inquiries',
+      error: error.message,
+    });
+  }
+}
+
+export async function getClientRecommendations(req, res) {
+  try {
+    const userId = req.user._id;
+    const recommendations = await getClientRecommendationsForUser(userId, {
+      role: String(req.query.role || '').trim(),
+      limit: req.query.limit,
+    });
+
+    return res.json({
+      success: true,
+      ...recommendations,
+    });
+  } catch (error) {
+    console.error('Error fetching client recommendations:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch client recommendations',
       error: error.message,
     });
   }

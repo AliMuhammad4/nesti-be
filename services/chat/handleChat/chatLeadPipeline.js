@@ -14,6 +14,7 @@ import {
 import { buildLeadType, buildLawyerLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
+import { notifyClientsOfNewPropertyForSale } from '../../property/propertyService.js';
 
 function computeLeadTypeForMatch(flow, persistedGrade, aiIntent) {
   const role = flow?.flowRole;
@@ -214,6 +215,11 @@ export async function syncLeadMatchAfterTurn({
           conversion_preview,
         });
         await afterLeadCapturedNotifyOverQuota(userId);
+        if (leadIntent === 'sell' && newLeadMatch.lead_profile_id) {
+          void notifyClientsOfNewPropertyForSale(newLeadMatch.lead_profile_id).catch((err) => {
+            logger.warn('New property client notifications failed', { error: err?.message });
+          });
+        }
       } catch (e) {
         logger.warn('Workspace lead event (create) failed', { error: e.message });
       }

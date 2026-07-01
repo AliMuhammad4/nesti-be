@@ -170,6 +170,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     conversation_id: String(leadMatch.conversation_id || ''),
     source: leadSource,
     inquired_property: inquiredProperty,
+    client_profile: leadMatch?.compatibility_factors?.client_profile || null,
     linked_seller_lead_match_id: linkedSellerLeadMatchId,
     is_direct_public_inquiry:
       Boolean(leadMatch?.compatibility_factors?.direct_submission) || leadSource === 'public_web_form',

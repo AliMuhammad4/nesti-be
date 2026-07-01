@@ -9,6 +9,7 @@ export const USER_ROLE = Object.freeze({
   MORTGAGE_BROKER: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
   LAWYER: PROFESSIONAL_TYPE.LAWYER,
   ADMIN: 'admin',
+  CLIENT: 'client',
 });
 
 export const PROFESSIONAL_TYPE_VALUES = Object.freeze(Object.values(PROFESSIONAL_TYPE));
@@ -18,6 +19,7 @@ export const USER_ROLE_VALUES = Object.freeze([
   USER_ROLE.MORTGAGE_BROKER,
   USER_ROLE.LAWYER,
   USER_ROLE.ADMIN,
+  USER_ROLE.CLIENT,
 ]);
 export const WIDGET_AGENT_TYPE = Object.freeze({
   AGENT: 'agent',
@@ -29,6 +31,14 @@ export const WIDGET_AGENT_TYPE_VALUES = Object.freeze(Object.values(WIDGET_AGENT
 
 export function isValidProfessionalType(value) {
   return value != null && PROFESSIONAL_TYPE_VALUES.includes(value);
+}
+
+export function isClientRole(role) {
+  return role === USER_ROLE.CLIENT;
+}
+
+export function isProfessionalRole(role) {
+  return [USER_ROLE.AGENT, USER_ROLE.MORTGAGE_BROKER, USER_ROLE.LAWYER].includes(role);
 }
 
 export function resolveFlowTypeFromLegacySignals({ normalizedAgentType, professionalProfile }) {

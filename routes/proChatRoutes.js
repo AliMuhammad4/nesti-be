@@ -4,6 +4,7 @@ const router = express.Router();
 import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
 import { requireFeature } from '../middleware/subscriptionAccess.js';
 import { uploadProChatAttachment } from '../middleware/uploadProChatAttachment.js';
+import { USER_ROLE } from '../constants/roles.js';
 import { FEATURES } from '../services/billing/entitlements.js';
 import {
   createOrGetThread,
@@ -31,6 +32,21 @@ function runProChatUpload(req, res, next) {
     next();
   });
 }
+
+function ensureClient(req, res, next) {
+  if (!req.user) return res.status(401).json({ success: false, message: 'Not authenticated' });
+  if (String(req.user.role || '').toLowerCase() !== USER_ROLE.CLIENT) {
+    return res.status(403).json({ success: false, message: 'Client chat routes are only available to clients.' });
+  }
+  return next();
+}
+
+router.get('/client/threads', protect, ensureClient, listMyThreads);
+router.post('/client/threads', protect, ensureClient, createOrGetThread);
+router.get('/client/threads/:id', protect, ensureClient, getThreadById);
+router.get('/client/threads/:id/messages', protect, ensureClient, listThreadMessages);
+router.post('/client/threads/:id/messages', protect, ensureClient, postThreadMessage);
+router.post('/client/threads/:id/attachments', protect, ensureClient, runProChatUpload, postProChatAttachmentUpload);
 
 router.get('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), listMyThreads);
 router.post('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), createOrGetThread);

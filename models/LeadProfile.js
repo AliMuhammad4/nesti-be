@@ -123,6 +123,11 @@ const leadProfileSchema = new mongoose.Schema(
       last_seen_at: { type: Date, default: Date.now },
     },
     lead_refs: [{ type: mongoose.Schema.Types.ObjectId, ref: 'LeadMatch' }],
+    preferences: {
+      language_preference: [{ type: String }],
+      working_style_preference: { type: String },
+      experience_preference: { type: String },
+    },
   },
   { timestamps: true }
 );

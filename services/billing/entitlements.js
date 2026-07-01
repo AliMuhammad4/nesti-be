@@ -135,7 +135,7 @@ export function accountStatusFromSubscription(subscription) {
 
 export function getEffectivePlan(subscription) {
   const accountStatus = accountStatusFromSubscription(subscription);
-  // During the 2-day trial, users can evaluate the complete product within trial quotas.
+  // During the 3-day trial, users can evaluate the complete product within trial quotas.
   if (accountStatus === ACCOUNT_STATUS.FREE_TRIAL) return SUBSCRIPTION_PLAN.ENTERPRISE;
 
   const planKey = String(subscription?.plan_key || '').trim().toLowerCase();

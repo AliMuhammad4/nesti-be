@@ -122,6 +122,21 @@ const professionalProfileSchema = new mongoose.Schema({
       ref: 'IcpProfile',
     },
   ],
+  // New matching fields
+  languages_spoken: [
+    {
+      type: String,
+      enum: ['english', 'french', 'punjabi', 'mandarin', 'arabic', 'spanish', 'other'],
+    },
+  ],
+  working_style_structured: {
+    type: String,
+    enum: ['educational_advisor', 'fast_deal_closer', 'data_driven', 'relationship_focused', 'investor_oriented'],
+  },
+  experience_level: {
+    type: String,
+    enum: ['junior', 'mid', 'senior', 'elite'],
+  },
 }, { timestamps: true });
 
 export default mongoose.model('ProfessionalProfile', professionalProfileSchema);

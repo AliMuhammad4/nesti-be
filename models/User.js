@@ -32,6 +32,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  phone: {
+    type: String,
+    default: '',
+  },
   role: {
     type: String,
     enum: USER_ROLE_VALUES,
@@ -62,6 +66,17 @@ const userSchema = new mongoose.Schema({
   cover_image: {
     type: String,
     default: null,
+  },
+  /** Dashboard cover crop controls. Percent values match CSS object-position. */
+  cover_image_position: {
+    x: { type: Number, default: 50, min: 0, max: 100 },
+    y: { type: Number, default: 50, min: 0, max: 100 },
+  },
+  cover_image_zoom: {
+    type: Number,
+    default: 1,
+    min: 1,
+    max: 3,
   },
 }, { timestamps: true });
 userSchema.pre('save', async function () {

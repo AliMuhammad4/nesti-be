@@ -4,6 +4,12 @@ import logger from '../utils/logger.js';
 
 const KINDS = new Set(['profile', 'cover']);
 
+function clampNumber(value, { min, max, fallback }) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 /**
  * POST multipart: field `file` (image), field `kind` = `profile` | `cover`
  * Uploads to R2 and saves HTTPS URL on User.
@@ -46,6 +52,8 @@ export async function postProfileImageUpload(req, res, next) {
     }
     if (kind === 'cover') {
       user.cover_image = secureUrl;
+      user.cover_image_position = { x: 50, y: 50 };
+      user.cover_image_zoom = 1;
     } else {
       user.profile_image = secureUrl;
     }
@@ -58,9 +66,44 @@ export async function postProfileImageUpload(req, res, next) {
       kind,
       profile_image: user.profile_image || null,
       cover_image: user.cover_image || null,
+      cover_image_position: user.cover_image_position || { x: 50, y: 50 },
+      cover_image_zoom: user.cover_image_zoom || 1,
     });
   } catch (err) {
     logger.error('profile image upload', { error: err.message });
+    return next(err);
+  }
+}
+
+export async function postCoverImageAdjustments(req, res, next) {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const pos = req.body?.position || {};
+    user.cover_image_position = {
+      x: clampNumber(pos.x, { min: 0, max: 100, fallback: user.cover_image_position?.x ?? 50 }),
+      y: clampNumber(pos.y, { min: 0, max: 100, fallback: user.cover_image_position?.y ?? 50 }),
+    };
+    user.cover_image_zoom = clampNumber(req.body?.zoom, {
+      min: 1,
+      max: 3,
+      fallback: user.cover_image_zoom || 1,
+    });
+
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: 'Cover photo updated',
+      cover_image: user.cover_image || null,
+      cover_image_position: user.cover_image_position,
+      cover_image_zoom: user.cover_image_zoom,
+    });
+  } catch (err) {
+    logger.error('cover image adjustments', { error: err.message });
     return next(err);
   }
 }

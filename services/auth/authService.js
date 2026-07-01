@@ -1,6 +1,6 @@
 import User from '../../models/User.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
-import { USER_ROLE, USER_ROLE_VALUES } from '../../constants/roles.js';
+import { USER_ROLE, USER_ROLE_VALUES, isProfessionalRole } from '../../constants/roles.js';
 import { evaluateProfessionalProfileSetup } from '../../utils/professionalProfileSetup.js';
 import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
@@ -8,6 +8,7 @@ import logger from '../../utils/logger.js';
 import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
 import { finalizeInviteAttribution } from '../referral/inviteService.js';
 import {
+  FREE_TRIAL_DAYS,
   createFreeTrialSubscription,
   getSubscriptionPresentationForUser,
 } from '../billing/subscriptionService.js';
@@ -161,7 +162,12 @@ const verifyGoogleToken = async ({ token, token_type }) => {
 };
 
 const bootstrapProfessionalProfile = async (user) => {
-  if (user.role === USER_ROLE.ADMIN) return;
+  // Skip profile creation for admins and clients
+  if (user.role === USER_ROLE.ADMIN || user.role === USER_ROLE.CLIENT) return;
+  
+  // Only create professional profile for actual professional roles
+  if (!isProfessionalRole(user.role)) return;
+  
   await ProfessionalProfile.create({
     user_id: user._id,
     professional_type: user.role,
@@ -305,7 +311,7 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
   }
 
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
+  trialEndsAt.setDate(trialEndsAt.getDate() + FREE_TRIAL_DAYS);
 
   if (await User.findOne({ email: decoded.email })) {
     return {
@@ -352,6 +358,14 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       success: true,
       message: 'Email verified successfully and account created',
       token: signJwt({ id: user._id }, '30d'),
+      role: user.role,
+      user: {
+        id: String(user._id),
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+      },
     },
   };
 };
@@ -423,7 +437,7 @@ export const googleSignupService = async ({ token, token_type, role, invite_toke
     return disposableEmailErrorResponse();
   }
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
+  trialEndsAt.setDate(trialEndsAt.getDate() + FREE_TRIAL_DAYS);
 
   let user;
   try {
@@ -533,15 +547,27 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
   });
   const isExpired = subscription.isExpired;
 
-  const profileSetup =
-    user.role === USER_ROLE.ADMIN
-      ? {
-          personal_complete: true,
-          business_complete: true,
-          is_complete: true,
-          missing_fields: [],
-        }
-      : evaluateProfessionalProfileSetup(user, professionalProfile);
+  // Profile setup evaluation - only for professionals and admins
+  let profileSetup;
+  if (user.role === USER_ROLE.ADMIN) {
+    profileSetup = {
+      personal_complete: true,
+      business_complete: true,
+      is_complete: true,
+      missing_fields: [],
+    };
+  } else if (user.role === USER_ROLE.CLIENT) {
+    // Clients don't have professional profile requirements
+    profileSetup = {
+      personal_complete: true,
+      business_complete: true,
+      is_complete: true,
+      missing_fields: [],
+    };
+  } else {
+    // Professionals (agent, broker, lawyer)
+    profileSetup = evaluateProfessionalProfileSetup(user, professionalProfile);
+  }
 
   return {
     status: 200,
@@ -556,11 +582,14 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         first_name: user.first_name,
         last_name: user.last_name,
         email: user.email,
+        phone: user.phone || '',
         role: user.role,
         auth_provider: user.auth_provider || 'local',
         authProvider: user.auth_provider || 'local',
         profile_image: user.profile_image || null,
         cover_image: user.cover_image || null,
+        cover_image_position: user.cover_image_position || { x: 50, y: 50 },
+        cover_image_zoom: user.cover_image_zoom || 1,
         accountStatus: subscription.accountStatus,
         trialEndsAt: subscription.trialEndsAt,
         subscriptionPlan: subscription.subscriptionPlan,

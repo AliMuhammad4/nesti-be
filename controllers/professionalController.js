@@ -8,6 +8,8 @@ import { awardInviterMilestoneForUser } from '../services/referral/inviteService
 import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import IcpProfile from '../models/IcpProfile.js';
+import ClientProfile from '../models/ClientProfile.js';
+import { calculateAiCompatibilityScore } from '../services/matching/matchRankingService.js';
 
 function normalizeProfessionalProfile(profileDoc) {
   const p = profileDoc ? (typeof profileDoc.toObject === 'function' ? profileDoc.toObject() : profileDoc) : {};
@@ -525,7 +527,7 @@ export const getProfessionalById = async (req, res, next) => {
 
     const profile = await ProfessionalProfile.findOne({ user_id: user._id })
       .select(
-        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio',
+        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price avg_home_price response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken working_style_structured experience_level',
       )
       .lean();
 
@@ -548,6 +550,11 @@ export const getProfessionalById = async (req, res, next) => {
       },
     ]);
     const stats = leadStats?.[0] || {};
+    const clientProfile =
+      req.user?.role === 'client'
+        ? await ClientProfile.findOne({ user_id: req.user._id }).lean()
+        : null;
+    const aiMatch = clientProfile && profile ? calculateAiCompatibilityScore(clientProfile, profile) : {};
 
     return res.json({
       success: true,
@@ -585,10 +592,14 @@ export const getProfessionalById = async (req, res, next) => {
         specializations: Array.isArray(profile?.specializations) ? profile.specializations : [],
         communication_channels: Array.isArray(profile?.communication_channels) ? profile.communication_channels : [],
         preferred_clients: Array.isArray(profile?.preferred_clients) ? profile.preferred_clients : [],
+        languages_spoken: Array.isArray(profile?.languages_spoken) ? profile.languages_spoken : [],
+        working_style_structured: profile?.working_style_structured || '',
+        experience_level: profile?.experience_level || '',
         total_leads: Number(stats.total_leads || 0),
         total_deals: Number(stats.total_deals || 0),
         created_at: user.createdAt || null,
         updated_at: user.updatedAt || null,
+        ...aiMatch,
       },
     });
   } catch (error) {

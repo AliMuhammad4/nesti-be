@@ -33,21 +33,33 @@ function toProfessionalProfileSummary(profile) {
 }
 
 export const getOwnPublicProfileService = async (userId) => {
+  // Get user first to check role
+  const user = await User.findById(userId).lean();
+  
+  if (!user) {
+    return {
+      status: 404,
+      body: { success: false, message: 'User not found' },
+    };
+  }
+
+  // Clients don't have professional profiles/public pages
+  if (user.role === 'client') {
+    return {
+      status: 403,
+      body: { 
+        success: false, 
+        message: 'Public profiles are only available for professionals (agents, brokers, lawyers)' 
+      },
+    };
+  }
+
   let profile = await PublicProfile.findOne({ user_id: userId })
     .populate('user_id', 'first_name last_name email profile_image cover_image')
     .lean();
   const professionalProfile = await ProfessionalProfile.findOne({ user_id: userId }).lean();
 
   if (!profile) {
-    const user = await User.findById(userId).lean();
-    
-    if (!user) {
-      return {
-        status: 404,
-        body: { success: false, message: 'User not found' },
-      };
-    }
-
     const suggestedSlug = await generateSlugFromName(
       `${user.first_name}-${user.last_name}`,
       userId
@@ -59,7 +71,7 @@ export const getOwnPublicProfileService = async (userId) => {
         success: true,
         profile: null,
         suggested_slug: suggestedSlug,
-        professional_type: professionalProfile?.professional_type || 'agent',
+        professional_type: professionalProfile?.professional_type || user.role,
         professional_profile: toProfessionalProfileSummary(professionalProfile),
         user: {
           first_name: user.first_name,

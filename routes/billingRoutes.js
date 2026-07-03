@@ -68,6 +68,14 @@ const getCurrentSubscription = async (req, res) => {
 const cancelCurrentSubscription = async (req, res) => {
   const result = await cancelSubscriptionForUser(req.user);
   if (!result.ok) {
+    if (result.subscription) {
+      return res.json({
+        success: true,
+        message: result.message,
+        subscription: serializeSubscription(result.subscription),
+        reset: true,
+      });
+    }
     return res.status(result.code || 400).json({ success: false, message: result.message });
   }
   res.json({ success: true, subscription: serializeSubscription(result.subscription) });
@@ -76,6 +84,14 @@ const cancelCurrentSubscription = async (req, res) => {
 const resumeCurrentSubscription = async (req, res) => {
   const result = await resumeSubscriptionForUser(req.user);
   if (!result.ok) {
+    if (result.subscription) {
+      return res.json({
+        success: true,
+        message: result.message,
+        subscription: serializeSubscription(result.subscription),
+        reset: true,
+      });
+    }
     return res.status(result.code || 400).json({ success: false, message: result.message });
   }
   res.json({
@@ -89,6 +105,14 @@ const changeCurrentSubscriptionPlan = async (req, res) => {
   try {
     const result = await changeSubscriptionPlanForUser(req.user, req.body.plan_key);
     if (!result.ok) {
+      if (result.subscription) {
+        return res.json({
+          success: true,
+          message: result.message,
+          subscription: serializeSubscription(result.subscription),
+          reset: true,
+        });
+      }
       return res.status(result.code || 400).json({ success: false, message: result.message });
     }
     res.json({

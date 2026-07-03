@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "lint": "node scripts/lint.mjs",
+    "backfill:professional:signals": "node scripts/backfillProfessionalStructuredFields.js",
     "stripe:listen": "stripe listen --forward-to http://localhost:5000/api/billing/stripe/webhook --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,subscription_schedule.updated,subscription_schedule.completed,subscription_schedule.released,subscription_schedule.canceled,invoice.paid,invoice.payment_failed",
     "test": "node scripts/test.mjs"
   },

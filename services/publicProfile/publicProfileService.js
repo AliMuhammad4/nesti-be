@@ -132,7 +132,7 @@ export const getPublicProfileBySlugService = async (slug) => {
   }
   try {
     professionalProfile = await ProfessionalProfile.findOne({ user_id: professionalUserId })
-      .select('company_name phone calendly_link location target_neighborhoods experience awards specializations certificates preferred_clients practice_areas professional_type response_time availability support_level negotiation_style sales_approach energy_style personality_tag')
+      .select('company_name phone calendly_link location target_neighborhoods experience awards specializations certificates preferred_clients practice_areas professional_type response_time availability support_level negotiation_style sales_approach energy_style personality_tag core_specialization_tags specialty_strength_tags working_style_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions languages_spoken experience_level')
       .lean();
   } catch {
     professionalProfile = null;
@@ -257,6 +257,34 @@ export const getPublicProfileBySlugService = async (slug) => {
               preferred_clients: Array.isArray(professionalProfile.preferred_clients)
                 ? professionalProfile.preferred_clients
                 : [],
+              core_specialization_tags: Array.isArray(professionalProfile.core_specialization_tags)
+                ? professionalProfile.core_specialization_tags
+                : [],
+              specialty_strength_tags: Array.isArray(professionalProfile.specialty_strength_tags)
+                ? professionalProfile.specialty_strength_tags
+                : [],
+              working_style_tags: Array.isArray(professionalProfile.working_style_tags)
+                ? professionalProfile.working_style_tags
+                : [],
+              personality_style_tags: Array.isArray(professionalProfile.personality_style_tags)
+                ? professionalProfile.personality_style_tags
+                : [],
+              service_area_primary_zones: Array.isArray(professionalProfile.service_area_primary_zones)
+                ? professionalProfile.service_area_primary_zones
+                : [],
+              service_area_secondary_zones: Array.isArray(professionalProfile.service_area_secondary_zones)
+                ? professionalProfile.service_area_secondary_zones
+                : [],
+              service_area_cities: Array.isArray(professionalProfile.service_area_cities)
+                ? professionalProfile.service_area_cities
+                : [],
+              service_area_regions: Array.isArray(professionalProfile.service_area_regions)
+                ? professionalProfile.service_area_regions
+                : [],
+              languages_spoken: Array.isArray(professionalProfile.languages_spoken)
+                ? professionalProfile.languages_spoken
+                : [],
+              experience_level: professionalProfile.experience_level || '',
             }
           : null,
         

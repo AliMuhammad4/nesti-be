@@ -126,17 +126,79 @@ const professionalProfileSchema = new mongoose.Schema({
   languages_spoken: [
     {
       type: String,
-      enum: ['english', 'french', 'punjabi', 'mandarin', 'arabic', 'spanish', 'other'],
+      enum: [
+        'english',
+        'french',
+        'punjabi',
+        'mandarin',
+        'arabic',
+        'spanish',
+        'hindi',
+        'urdu',
+        'portuguese',
+        'russian',
+        'tagalog',
+        'italian',
+        'german',
+        'korean',
+        'japanese',
+        'vietnamese',
+        'other',
+      ],
     },
   ],
+  other_language_text: {
+    type: String,
+    default: '',
+  },
   working_style_structured: {
     type: String,
     enum: ['educational_advisor', 'fast_deal_closer', 'data_driven', 'relationship_focused', 'investor_oriented'],
   },
+  working_style_tags: [
+    {
+      type: String,
+    },
+  ],
   experience_level: {
     type: String,
     enum: ['junior', 'mid', 'senior', 'elite'],
   },
+  core_specialization_tags: [
+    {
+      type: String,
+    },
+  ],
+  specialty_strength_tags: [
+    {
+      type: String,
+    },
+  ],
+  personality_style_tags: [
+    {
+      type: String,
+    },
+  ],
+  service_area_primary_zones: [
+    {
+      type: String,
+    },
+  ],
+  service_area_secondary_zones: [
+    {
+      type: String,
+    },
+  ],
+  service_area_cities: [
+    {
+      type: String,
+    },
+  ],
+  service_area_regions: [
+    {
+      type: String,
+    },
+  ],
 }, { timestamps: true });
 
 export default mongoose.model('ProfessionalProfile', professionalProfileSchema);

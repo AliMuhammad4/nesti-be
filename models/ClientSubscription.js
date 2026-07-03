@@ -56,6 +56,20 @@ const clientSubscriptionSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    pending_tier: {
+      type: String,
+      enum: [...CLIENT_TIER_KEYS, ''],
+      default: '',
+      index: true,
+    },
+    pending_tier_effective_at: {
+      type: Date,
+      default: null,
+    },
+    stripe_subscription_schedule_id: {
+      type: String,
+      default: '',
+    },
     last_synced_at: {
       type: Date,
       default: null,

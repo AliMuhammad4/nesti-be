@@ -14,6 +14,9 @@ const SEMANTIC_GROUPS = Object.freeze({
   eco: ['eco', 'eco_friendly', 'green', 'sustainable'],
   pet: ['pet', 'pet_friendly'],
   transit: ['transit', 'transit_access', 'walkable', 'walkable_communities'],
+  newcomer: ['newcomer', 'immigrant', 'relocation', 'new_to_canada'],
+  commercial: ['commercial', 'commercial_client', 'commercial_deal'],
+  financing: ['finance', 'financing', 'mortgage', 'credit'],
 });
 
 const WORKING_STYLE_TO_PRO = Object.freeze({
@@ -26,6 +29,15 @@ const WORKING_STYLE_TO_PRO = Object.freeze({
   friendly_approachable: ['relationship_focused', 'friendly', 'approachable'],
   quick_responder: ['fast_deal_closer', 'fast', 'quick', '24', 'same day'],
   straight_to_point: ['fast_deal_closer', 'direct', 'straight', 'efficient'],
+  educational_advisor: ['educational_advisor', 'educational', 'advisor', 'guide'],
+  fast_deal_closer: ['fast_deal_closer', 'fast', 'quick', 'closer', 'efficient'],
+  data_driven_strategist: ['data_driven', 'data', 'analytical', 'strategist'],
+  relationship_focused: ['relationship_focused', 'relationship', 'friendly', 'warm'],
+  investor_oriented: ['investor_oriented', 'investor', 'investment'],
+  analytical_decision_maker: ['analytical', 'data', 'decision'],
+  transactional_efficient: ['transactional', 'efficient', 'direct'],
+  high_responsiveness: ['responsive', 'quick', 'same day', '24'],
+  calm_patient_guide: ['calm', 'patient', 'guide', 'educational'],
 });
 
 export const toText = (value) => String(value || '').toLowerCase();
@@ -103,7 +115,7 @@ export function locationMatchScore(clientLocations = [], professionalText = '') 
 export function scoreWorkingStyleMatch(clientStyles = [], professional = {}) {
   if (!clientStyles.length) return null;
   const proText = toText(
-    `${professional.working_style_structured || ''} ${professional.communication_channels || ''} ${professional.support_level || ''} ${professional.bio || ''}`,
+    `${professional.working_style_structured || ''} ${professional.working_style_tags || ''} ${professional.personality_style_tags || ''} ${professional.communication_channels || ''} ${professional.support_level || ''} ${professional.bio || ''}`,
   );
   if (!proText.trim()) return 0;
 

@@ -8,8 +8,11 @@ import {
 } from '../services/client/financialService.js';
 import {
   createClientCheckoutSession,
-  getClientSubscriptionForUser,
+  getClientSubscriptionPresentationForUser,
+  listClientPaidInvoicesForUser,
   cancelClientSubscription,
+  changeClientSubscriptionPlan,
+  resumeClientSubscription,
 } from '../services/client/clientSubscriptionService.js';
 import { getClientRecommendationsForUser } from '../services/matching/matchRankingService.js';
 import { getClientInquiriesForUser } from '../services/client/clientInquiryService.js';
@@ -299,7 +302,8 @@ export async function createClientSubscriptionCheckout(req, res) {
 export async function getClientSubscription(req, res) {
   try {
     const userId = req.user._id;
-    const subscription = await getClientSubscriptionForUser(userId);
+    const refresh = ['1', 'true', 'yes'].includes(String(req.query?.refresh || '').trim().toLowerCase());
+    const subscription = await getClientSubscriptionPresentationForUser(userId, { refreshFromStripe: refresh });
 
     return res.json({
       success: true,
@@ -310,6 +314,25 @@ export async function getClientSubscription(req, res) {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch subscription',
+      error: error.message,
+    });
+  }
+}
+
+export async function getClientSubscriptionInvoices(req, res) {
+  try {
+    const userId = req.user._id;
+    const invoices = await listClientPaidInvoicesForUser(userId, req.query?.limit);
+
+    return res.json({
+      success: true,
+      data: invoices,
+    });
+  } catch (error) {
+    console.error('Error fetching client subscription invoices:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch subscription invoices',
       error: error.message,
     });
   }
@@ -330,6 +353,66 @@ export async function cancelClientSubscriptionEndpoint(req, res) {
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to cancel subscription',
+    });
+  }
+}
+
+export async function resumeClientSubscriptionEndpoint(req, res) {
+  try {
+    const userId = req.user._id;
+    const subscription = await resumeClientSubscription(userId);
+
+    return res.json({
+      success: true,
+      message: 'Subscription will continue renewing automatically',
+      data: subscription,
+    });
+  } catch (error) {
+    console.error('Error resuming client subscription:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to resume subscription',
+    });
+  }
+}
+
+export async function changeClientSubscriptionPlanEndpoint(req, res) {
+  try {
+    const userId = req.user._id;
+    const { tier } = req.body;
+
+    if (!tier || !['basic', 'standard', 'pro'].includes(tier)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid tier. Must be basic, standard, or pro',
+      });
+    }
+
+    const result = await changeClientSubscriptionPlan(userId, tier);
+    if (!result.ok) {
+      return res.status(result.code || 400).json({
+        success: false,
+        message: result.message,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: result.changeType === 'downgrade'
+        ? `${result.planName} will start on your next renewal date.`
+        : result.changeType === 'revert_unpaid_upgrade'
+          ? `Restored to ${result.planName}. The unpaid upgrade invoice was removed.`
+          : `Upgraded to ${result.planName}. Stripe will invoice the prorated difference today.`,
+      changeType: result.changeType,
+      effectiveAt: result.effectiveAt || null,
+      invoice: result.invoice || null,
+      data: result.subscription,
+    });
+  } catch (error) {
+    console.error('Error changing client subscription plan:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to change subscription plan',
     });
   }
 }

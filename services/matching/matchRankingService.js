@@ -35,22 +35,22 @@ const ROLE_WEIGHTS = Object.freeze({
     personality_preference_fit: 5,
   },
   [PROFESSIONAL_TYPE.MORTGAGE_BROKER]: {
-    financial_fit: 30,
-    location_fit: 10,
-    timeline_fit: 20,
-    specialization_fit: 25,
+    financial_fit: 25,
+    location_fit: 20,
+    timeline_fit: 15,
+    specialization_fit: 15,
     communication_language_fit: 10,
-    experience_fit: 5,
-    personality_preference_fit: 0,
+    experience_fit: 10,
+    personality_preference_fit: 5,
   },
   [PROFESSIONAL_TYPE.LAWYER]: {
-    financial_fit: 20,
-    location_fit: 25,
+    financial_fit: 25,
+    location_fit: 20,
     timeline_fit: 15,
-    specialization_fit: 25,
+    specialization_fit: 15,
     communication_language_fit: 10,
-    experience_fit: 5,
-    personality_preference_fit: 0,
+    experience_fit: 10,
+    personality_preference_fit: 5,
   },
 });
 
@@ -79,17 +79,51 @@ function scoreFinancialFit(client, professional, max) {
 
 function scoreLocationFit(client, professional, max) {
   const locations = [...toArray(client?.preferred_locations), ...toArray(client?.preferred_location)];
-  const professionalText = `${professional?.location || ''} ${professional?.target_neighborhoods || ''}`;
+  const primaryZones = toArray(professional?.service_area_primary_zones);
+  const secondaryZones = toArray(professional?.service_area_secondary_zones);
+  const cities = toArray(professional?.service_area_cities);
+  const regions = toArray(professional?.service_area_regions);
+  const professionalText = [
+    professional?.location || '',
+    professional?.target_neighborhoods || '',
+    ...primaryZones,
+    ...secondaryZones,
+    ...cities,
+    ...regions,
+  ].join(' ');
   const clientReady = locations.length > 0;
   const proReady = Boolean(String(professionalText).trim());
   if (!clientReady) return scoreCategory({ clientReady, proReady, ratio: 0 });
   if (!proReady) return { score: 0, applicable: true, reason: 'pro_missing' };
-  const ratio = locationMatchScore(locations, professionalText);
+  const joinedClient = locations.join(' ');
+  const primaryRatio = primaryZones.length ? locationMatchScore(locations, primaryZones.join(' ')) : 0;
+  const secondaryRatio = secondaryZones.length ? locationMatchScore(locations, secondaryZones.join(' ')) : 0;
+  const cityRatio = cities.length ? locationMatchScore(locations, cities.join(' ')) : 0;
+  const regionRatio = regions.length ? locationMatchScore(locations, regions.join(' ')) : 0;
+  const fallbackRatio = locationMatchScore(locations, professionalText);
+
+  const weightedPrimary = primaryRatio * 1;
+  const weightedSecondary = secondaryRatio * 0.7;
+  const weightedCity = cityRatio * 0.85;
+  const weightedRegion = regionRatio * 0.6;
+  const weightedFallback = (fallbackRatio || 0) * 0.5;
+  const ratio = Math.min(
+    1,
+    Math.max(weightedPrimary, weightedSecondary, weightedCity, weightedRegion, weightedFallback),
+  );
+  const exactPrimary = primaryZones.length > 0 && locationMatchScore([joinedClient], primaryZones.join(' ')) === 1;
+  const detail = exactPrimary
+    ? 'serves your preferred area directly'
+    : ratio >= 0.8
+      ? 'strong service area overlap'
+      : ratio >= 0.5
+        ? 'secondary area overlap'
+        : 'limited area overlap';
   return {
     score: Math.round((ratio || 0) * max),
     applicable: true,
     reason: 'scored',
-    detail: ratio >= 0.8 ? 'serves your preferred area' : ratio >= 0.5 ? 'partial area overlap' : 'limited area overlap',
+    detail,
   };
 }
 
@@ -121,6 +155,8 @@ function scoreAgentSpecialization(client, professional, max) {
     client?.motivation_reason,
   );
   const professionalTokens = expandSemanticTokens(
+    professional?.core_specialization_tags,
+    professional?.specialty_strength_tags,
     professional?.specializations,
     professional?.preferred_clients,
     professional?.bio,
@@ -141,6 +177,8 @@ function scoreAgentSpecialization(client, professional, max) {
 function scoreBrokerSpecialization(client, professional, max) {
   const goals = expandSemanticTokens(client?.home_goals, client?.home_goal, client?.priority_tags);
   const proTokens = expandSemanticTokens(
+    professional?.core_specialization_tags,
+    professional?.specialty_strength_tags,
     professional?.specializations,
     professional?.preferred_clients,
     professional?.bio,
@@ -171,6 +209,8 @@ function scoreBrokerSpecialization(client, professional, max) {
 function scoreLawyerSpecialization(client, professional, max) {
   const goals = expandSemanticTokens(client?.home_goals, client?.home_goal);
   const proTokens = expandSemanticTokens(
+    professional?.core_specialization_tags,
+    professional?.specialty_strength_tags,
     professional?.specializations,
     professional?.preferred_clients,
     professional?.bio,
@@ -207,7 +247,13 @@ function scoreCommunicationFit(client, professional, max) {
   const clientLanguages = toArray(client?.languages).filter((lang) => lang && lang !== 'other');
   const proLanguages = normalizeProfessionalLanguages(professional?.languages_spoken);
   const clientReady = clientLanguages.length > 0 || (client?.working_styles || []).length > 0;
-  const proReady = proLanguages.length > 0 || Boolean(professional?.working_style_structured || professional?.bio);
+  const proReady =
+    proLanguages.length > 0 ||
+    Boolean(
+      professional?.working_style_structured ||
+        (Array.isArray(professional?.working_style_tags) && professional.working_style_tags.length) ||
+        professional?.bio,
+    );
 
   if (!clientReady) return scoreCategory({ clientReady, proReady, ratio: 0 });
   if (!proReady) return { score: 0, applicable: true, reason: 'pro_missing' };
@@ -240,9 +286,9 @@ function scoreExperienceFit(client, professional, max) {
 
   let ratio = 0.2;
   if (preference.includes('beginner') && /junior|mid|educational|advisor|support/.test(level)) ratio = 1;
-  else if (preference.includes('top') && /senior|elite|award|top|volume/.test(level)) ratio = 1;
+  else if (preference.includes('top') && /elite|senior|award|top|volume/.test(level)) ratio = 1;
   else if (preference.includes('luxury') && /elite|luxury|senior/.test(level)) ratio = 1;
-  else if (preference.includes('investor') && /invest|elite|senior/.test(level)) ratio = 1;
+  else if (preference.includes('investor') && /invest|elite|senior|mid/.test(level)) ratio = 1;
   else if (preference.includes('experienced') && /mid|senior|elite|year/.test(level)) ratio = 0.85;
 
   return {
@@ -257,7 +303,7 @@ function scorePersonalityFit(client, professional, max) {
   if (!max) return { score: 0, applicable: false, reason: 'not_used' };
   const preferences = toArray(client?.comfort_preferences);
   const text = toText(
-    `${professional?.personality_tag || ''} ${professional?.energy_style || ''} ${professional?.sales_approach || ''} ${professional?.support_level || ''} ${professional?.bio || ''}`,
+    `${professional?.personality_style_tags || ''} ${professional?.personality_tag || ''} ${professional?.energy_style || ''} ${professional?.sales_approach || ''} ${professional?.support_level || ''} ${professional?.working_style_tags || ''} ${professional?.bio || ''}`,
   );
   const clientReady = preferences.length > 0 && !preferences.includes('no_preference');
   const proReady = Boolean(text.trim());
@@ -271,6 +317,23 @@ function scorePersonalityFit(client, professional, max) {
     reason: 'scored',
     detail: overlap ? 'comfort preferences align' : 'limited comfort preference overlap',
   };
+}
+
+function empathyCompatibilityBoost(client, professional) {
+  const clientSignals = expandSemanticTokens(client?.comfort_preferences, client?.working_styles, client?.priority_tags);
+  const proSignals = expandSemanticTokens(
+    professional?.personality_style_tags,
+    professional?.working_style_tags,
+    professional?.personality_tag,
+    professional?.support_level,
+    professional?.bio,
+  );
+  if (!clientSignals.size || !proSignals.size) return 1;
+  const overlapRatio = tokenOverlapScore(clientSignals, proSignals) ?? 0;
+  if (overlapRatio >= 0.75) return 1.05;
+  if (overlapRatio >= 0.45) return 1.02;
+  if (overlapRatio >= 0.2) return 1;
+  return 0.97;
 }
 
 function buildBreakdownItem(key, label, weight, result) {
@@ -371,7 +434,8 @@ export function calculateAiCompatibilityScore(clientProfile, professionalProfile
   const signalCoverage = maxWeight > 0 ? preference.applicable_weight / maxWeight : 0;
   const coverageMultiplier = 0.42 + signalCoverage * 0.38 + (clientConfidence / 100) * 0.2;
   const proMultiplier = 0.78 + (proConfidence / 100) * 0.22;
-  const confidenceAdjustedScore = clampScore(blendedScore * coverageMultiplier * proMultiplier);
+  const empathyBoost = empathyCompatibilityBoost(clientProfile, professionalProfile);
+  const confidenceAdjustedScore = clampScore(blendedScore * coverageMultiplier * proMultiplier * empathyBoost);
 
   const explanation = buildMatchExplanation({
     score: confidenceAdjustedScore,

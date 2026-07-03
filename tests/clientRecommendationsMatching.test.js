@@ -34,9 +34,15 @@ const strongAgent = {
   availability: 'Available immediately',
   response_time: 'Within 24 hours',
   specializations: ['first_time_buyers', 'family homes'],
+  core_specialization_tags: ['first_time_home_buyers', 'family_home_buyers'],
+  specialty_strength_tags: ['first_time_buyer_expert', 'family_housing_expert'],
+  service_area_primary_zones: ['Toronto'],
+  service_area_secondary_zones: ['Mississauga'],
   preferred_clients: ['first_time_buyers'],
   languages_spoken: ['english', 'punjabi'],
   working_style_structured: 'educational_advisor',
+  working_style_tags: ['educational_advisor', 'calm_patient_guide', 'high_responsiveness'],
+  personality_style_tags: ['friendly_and_warm', 'calm_and_patient'],
   experience_level: 'senior',
   experience: '12 years',
   bio: 'Helping first-time buyers in Toronto and Mississauga.',
@@ -89,7 +95,7 @@ test('strong agent scores higher than sparse agent for same client', () => {
   assert.ok(strong.preference_score > 50);
 });
 
-test('role-specific weights change broker vs agent emphasis', () => {
+test('weights align with revised unified model', () => {
   const broker = {
     ...strongAgent,
     professional_type: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
@@ -97,10 +103,14 @@ test('role-specific weights change broker vs agent emphasis', () => {
   };
   const agentPref = calculatePreferenceMatchScore(baseClient, strongAgent);
   const brokerPref = calculatePreferenceMatchScore(baseClient, broker);
+  const agentLocation = agentPref.breakdown.find((item) => item.key === 'location_fit');
+  const brokerLocation = brokerPref.breakdown.find((item) => item.key === 'location_fit');
   const agentSpec = agentPref.breakdown.find((item) => item.key === 'specialization_fit');
   const brokerSpec = brokerPref.breakdown.find((item) => item.key === 'specialization_fit');
+  assert.equal(agentLocation.weight, 20);
+  assert.equal(brokerLocation.weight, 20);
   assert.equal(agentSpec.weight, 15);
-  assert.equal(brokerSpec.weight, 25);
+  assert.equal(brokerSpec.weight, 15);
 });
 
 test('icp fit blend adjusts score and exposes icp fit metadata', () => {
@@ -131,4 +141,25 @@ test('missing client data does not inflate score via fallback defaults', () => {
   const result = calculateAiCompatibilityScore(sparseClient, strongAgent);
   assert.ok(result.ai_match_score < 75);
   assert.ok(result.client_profile_completeness < 30);
+});
+
+test('primary zones score higher than secondary zones', () => {
+  const secondaryOnly = {
+    ...strongAgent,
+    service_area_primary_zones: ['Hamilton'],
+    service_area_secondary_zones: ['Toronto'],
+    location: 'Hamilton',
+    target_neighborhoods: 'Hamilton',
+  };
+  const primary = calculatePreferenceMatchScore(baseClient, strongAgent);
+  const secondary = calculatePreferenceMatchScore(baseClient, secondaryOnly);
+  const primaryLocation = primary.breakdown.find((item) => item.key === 'location_fit');
+  const secondaryLocation = secondary.breakdown.find((item) => item.key === 'location_fit');
+  assert.ok(primaryLocation.score > secondaryLocation.score);
+});
+
+test('expanded language taxonomy supports non-legacy language choices', () => {
+  const hindiPro = { ...strongAgent, languages_spoken: ['hindi'] };
+  assert.equal(passesLanguageRequirement(['hindi'], hindiPro.languages_spoken), true);
+  assert.equal(passesLanguageRequirement(['vietnamese'], hindiPro.languages_spoken), false);
 });

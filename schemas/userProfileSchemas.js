@@ -23,6 +23,28 @@ const calendlyUrl = Joi.string()
     'any.invalid': 'calendly_link must be a Calendly URL (calendly.com)',
   });
 
+const PROFESSIONAL_LANGUAGE_VALUES = [
+  'english',
+  'french',
+  'punjabi',
+  'mandarin',
+  'arabic',
+  'spanish',
+  'hindi',
+  'urdu',
+  'portuguese',
+  'russian',
+  'tagalog',
+  'italian',
+  'german',
+  'korean',
+  'japanese',
+  'vietnamese',
+  'other',
+];
+
+const EXPERIENCE_LEVEL_VALUES = ['junior', 'mid', 'senior', 'elite'];
+
 const professionalProfileCreateSchema = Joi.object({
   user_id: objectId.required(),
   professional_type: Joi.string().valid(...PROFESSIONAL_TYPE_VALUES),
@@ -53,6 +75,23 @@ const professionalProfileCreateSchema = Joi.object({
   preferred_clients: Joi.array().items(Joi.string()).default([]),
   calendly_link: calendlyUrl,
   bio: str,
+  languages_spoken: Joi.array()
+    .items(Joi.string().valid(...PROFESSIONAL_LANGUAGE_VALUES))
+    .max(8)
+    .default([]),
+  other_language_text: Joi.string().trim().max(80).allow('', null),
+  working_style_structured: Joi.string()
+    .valid('educational_advisor', 'fast_deal_closer', 'data_driven', 'relationship_focused', 'investor_oriented')
+    .allow('', null),
+  working_style_tags: Joi.array().items(Joi.string()).max(5).default([]),
+  experience_level: Joi.string().valid(...EXPERIENCE_LEVEL_VALUES).allow('', null),
+  core_specialization_tags: Joi.array().items(Joi.string()).max(5).default([]),
+  specialty_strength_tags: Joi.array().items(Joi.string()).max(5).default([]),
+  personality_style_tags: Joi.array().items(Joi.string()).max(5).default([]),
+  service_area_primary_zones: Joi.array().items(Joi.string()).max(8).default([]),
+  service_area_secondary_zones: Joi.array().items(Joi.string()).max(12).default([]),
+  service_area_cities: Joi.array().items(Joi.string()).max(15).default([]),
+  service_area_regions: Joi.array().items(Joi.string()).max(15).default([]),
   property_match_scoring: anyObj,
 });
 

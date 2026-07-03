@@ -10,8 +10,36 @@ export const FREE_TRIAL_DAYS = 3;
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const STRIPE_BLOCKING_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
 
+function isStripeResourceMissing(error) {
+  return error?.code === 'resource_missing' || error?.raw?.code === 'resource_missing';
+}
+
 function userHasActiveSubscriptionAccess(subscription) {
   return accountStatusFromSubscription(subscription) === 'subscribed';
+}
+
+async function markSubscriptionStripeStateExpired(userId) {
+  return Subscription.findOneAndUpdate(
+    { user_id: userId },
+    {
+      $set: {
+        stripe_customer_id: '',
+        stripe_subscription_id: '',
+        stripe_price_id: '',
+        stripe_subscription_schedule_id: '',
+        pending_plan_key: '',
+        pending_plan_effective_at: null,
+        status: 'expired',
+        cancel_at_period_end: false,
+        current_period_start: null,
+        current_period_end: null,
+        latest_invoice_id: '',
+        last_payment_status: '',
+        last_synced_at: new Date(),
+      },
+    },
+    { returnDocument: 'after' },
+  );
 }
 
 async function findBlockingStripeSubscription(customerId) {
@@ -33,13 +61,29 @@ async function refreshSubscriptionFromStripeForUser(user) {
   const customerId = String(subscription?.stripe_customer_id || '').trim();
   if (!customerId) return subscription;
 
-  const activeStripeSubscription = await findBlockingStripeSubscription(customerId);
+  let activeStripeSubscription;
+  try {
+    activeStripeSubscription = await findBlockingStripeSubscription(customerId);
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      return markSubscriptionStripeStateExpired(user._id);
+    }
+    throw error;
+  }
   if (!activeStripeSubscription) return subscription;
 
   const stripe = getStripeClient();
-  const detailedStripeSubscription = await stripe.subscriptions.retrieve(activeStripeSubscription.id, {
-    expand: ['latest_invoice'],
-  });
+  let detailedStripeSubscription;
+  try {
+    detailedStripeSubscription = await stripe.subscriptions.retrieve(activeStripeSubscription.id, {
+      expand: ['latest_invoice'],
+    });
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      return markSubscriptionStripeStateExpired(user._id);
+    }
+    throw error;
+  }
   const repairResult = await repairUnpaidUpgradeIfNeeded(stripe, user, subscription, detailedStripeSubscription);
   if (repairResult.repaired) {
     return repairResult.subscription;
@@ -619,8 +663,12 @@ export async function ensureStripeCustomerForUser(user, subscription, options = 
   const stripe = getStripeClient();
 
   if (subscription?.stripe_customer_id) {
-    await stripe.customers.update(subscription.stripe_customer_id, customerDetails);
-    return subscription.stripe_customer_id;
+    try {
+      await stripe.customers.update(subscription.stripe_customer_id, customerDetails);
+      return subscription.stripe_customer_id;
+    } catch (error) {
+      if (!isStripeResourceMissing(error)) throw error;
+    }
   }
 
   const customer = await stripe.customers.create(customerDetails);
@@ -645,7 +693,7 @@ export async function createCheckoutSessionForUser(user, planKey) {
     return { ok: false, code: 503, message: `${plan.name} Stripe price is not configured.` };
   }
 
-  const subscription = await getOrCreateSubscriptionForUser(user);
+  const subscription = await getFreshSubscriptionForUser(user);
   await ensureStripeCustomerForUser(user, subscription, { planKey: plan.plan_key });
   const freshSubscription = await Subscription.findOne({ user_id: user._id });
   const purchaseEligibility = await assertUserCanPurchasePlan(user, freshSubscription);
@@ -883,7 +931,21 @@ export async function cancelSubscriptionForUser(user) {
   }
 
   const stripe = getStripeClient();
-  const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+  let stripeSubscription;
+  try {
+    stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return {
+        ok: false,
+        code: 409,
+        message: 'The previous Stripe subscription no longer exists for the current Stripe account. The local subscription state has been reset; please subscribe again.',
+        subscription: cleared,
+      };
+    }
+    throw error;
+  }
   const attachedScheduleId = normalizeStripeId(stripeSubscription.schedule);
 
   if (subscription.stripe_subscription_schedule_id || attachedScheduleId) {
@@ -908,9 +970,23 @@ export async function resumeSubscriptionForUser(user) {
   }
 
   const stripe = getStripeClient();
-  const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-    cancel_at_period_end: false,
-  });
+  let updated;
+  try {
+    updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+      cancel_at_period_end: false,
+    });
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return {
+        ok: false,
+        code: 409,
+        message: 'The previous Stripe subscription no longer exists for the current Stripe account. The local subscription state has been reset; please subscribe again.',
+        subscription: cleared,
+      };
+    }
+    throw error;
+  }
   const synced = await syncStripeSubscription(updated);
   return { ok: true, subscription: synced };
 }
@@ -951,9 +1027,23 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
   }
 
   const stripe = getStripeClient();
-  const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id, {
-    expand: ['latest_invoice'],
-  });
+  let stripeSubscription;
+  try {
+    stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id, {
+      expand: ['latest_invoice'],
+    });
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return {
+        ok: false,
+        code: 409,
+        message: 'The previous Stripe subscription no longer exists for the current Stripe account. The local subscription state has been reset; please subscribe again.',
+        subscription: cleared,
+      };
+    }
+    throw error;
+  }
   const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
   if (!subscriptionItemId) {
     return { ok: false, code: 500, message: 'Unable to read subscription items from Stripe.' };

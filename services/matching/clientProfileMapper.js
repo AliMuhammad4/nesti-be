@@ -90,17 +90,85 @@ export function mapClientProfileToLeadShape(client = {}) {
   };
 }
 
+function hasLocation(client = {}) {
+  const locations = [...(client.preferred_locations || []), client.preferred_location].filter(Boolean);
+  return locations.some((entry) => String(entry).trim());
+}
+
+function hasNumericValue(value) {
+  if (value === null || value === undefined || value === '') return false;
+  return Number.isFinite(Number(value));
+}
+
+const CLIENT_PROFILE_COMPLETION_FIELDS = [
+  { key: 'annual_income', label: 'Annual Income', complete: (client) => Number(client.annual_income) > 0 },
+  { key: 'employment_status', label: 'Employment Status', complete: (client) => Boolean(client.employment_status) },
+  {
+    key: 'current_savings',
+    label: 'Current Savings',
+    complete: (client) => hasNumericValue(client.current_savings),
+  },
+  {
+    key: 'monthly_savings',
+    label: 'Monthly Savings',
+    complete: (client) => hasNumericValue(client.monthly_savings),
+  },
+  {
+    key: 'home_goal',
+    label: 'Home Goal',
+    complete: (client) => Boolean(client.home_goal) || (Array.isArray(client.home_goals) && client.home_goals.length > 0),
+  },
+  { key: 'dream_home_price', label: 'Target Home Price', complete: (client) => Number(client.dream_home_price) > 0 },
+  { key: 'preferred_location', label: 'Preferred Location', complete: hasLocation },
+  { key: 'purchase_timeline', label: 'Purchase Timeline', complete: (client) => Boolean(client.purchase_timeline) },
+  {
+    key: 'working_styles',
+    label: 'Working Style',
+    complete: (client) => Array.isArray(client.working_styles) && client.working_styles.length > 0,
+  },
+  {
+    key: 'priority_tags',
+    label: 'What Matters Most',
+    complete: (client) => Array.isArray(client.priority_tags) && client.priority_tags.length > 0,
+  },
+  {
+    key: 'languages',
+    label: 'Languages',
+    complete: (client) => Array.isArray(client.languages) && client.languages.length > 0,
+  },
+  { key: 'preferred_experience', label: 'Preferred Experience', complete: (client) => Boolean(client.preferred_experience) },
+  {
+    key: 'preferred_contact_method',
+    label: 'Preferred Contact Method',
+    complete: (client) => Boolean(client.preferred_contact_method),
+  },
+  {
+    key: 'best_time_to_contact',
+    label: 'Best Time to Contact',
+    complete: (client) => Boolean(client.best_time_to_contact),
+  },
+];
+
+export function getClientProfileCompleteness(client = {}) {
+  const fields = CLIENT_PROFILE_COMPLETION_FIELDS.map((field) => ({
+    key: field.key,
+    label: field.label,
+    complete: field.complete(client),
+  }));
+  const completed = fields.filter((field) => field.complete);
+  const missing = fields.filter((field) => !field.complete);
+  const total = fields.length;
+  const percentage = total > 0 ? Math.round((completed.length / total) * 100) : 0;
+
+  return {
+    percentage,
+    completed,
+    missing,
+    fields,
+    total,
+  };
+}
+
 export function calculateClientProfileCompleteness(client = {}) {
-  const signals = [
-    Boolean((client.home_goals || []).length || client.home_goal),
-    Boolean(client.dream_home_price),
-    Boolean((client.preferred_locations || []).length || client.preferred_location),
-    Boolean(client.purchase_timeline),
-    Boolean((client.working_styles || []).length),
-    Boolean((client.priority_tags || []).length),
-    Boolean((client.languages || []).length),
-    Boolean(client.preferred_experience),
-  ];
-  const filled = signals.filter(Boolean).length;
-  return Math.round((filled / signals.length) * 100);
+  return getClientProfileCompleteness(client).percentage;
 }

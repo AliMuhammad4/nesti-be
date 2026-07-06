@@ -3,7 +3,7 @@ import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.j
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { evaluateRoleConversionChecklist } from './leadConversionChecklist.js';
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
-import { extractInquiredPropertyContext } from './inquiredProperty.js';
+import { extractInquiredPropertyContext, normalizeInquiredProperty } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
 import { resolveListIntent } from './leadQueryUtils.js';
 
@@ -135,6 +135,73 @@ function formatCloseSummary(cf) {
   };
 }
 
+function isListedPropertyInquirySource(leadMatch, leadSource) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const source = String(leadSource || cf.source || '').trim().toLowerCase();
+  return source === 'client_property_inquiry';
+}
+
+function emptyAgentQualification() {
+  return {
+    mortgage_status: null,
+    realtor_status: null,
+    motivation_reason: null,
+    viewing_readiness: null,
+    living_situation: null,
+    urgency_readiness: null,
+    buy_property_location: null,
+  };
+}
+
+function applyListedPropertyInquiryView(core, leadMatch, profile) {
+  if (!isListedPropertyInquirySource(leadMatch, core.source)) return core;
+
+  const cf = leadMatch?.compatibility_factors || {};
+  const rawProp = profile?.property || {};
+  let inquiredProperty = core.inquired_property;
+  if (!inquiredProperty) {
+    inquiredProperty = normalizeInquiredProperty({
+      id: cf.inquired_property_id,
+      title: cf.inquired_property_title,
+      address: rawProp.address,
+      location: rawProp.location || rawProp.address,
+      expected_price: rawProp.expected_price,
+      property_type: rawProp.property_type,
+      bedrooms: rawProp.bedrooms,
+      bathrooms: rawProp.bathrooms,
+      square_footage: rawProp.square_footage,
+    });
+  }
+
+  const inquiryMessage = String(cf.inquiry_message || rawProp.must_have_features || '').trim();
+  const profType =
+    leadMatch?.compatibility_factors?.professional_type || profile?.ownership?.professional_type;
+
+  return {
+    ...core,
+    inquired_property: inquiredProperty,
+    inquiry_message: inquiryMessage || null,
+    is_listed_property_inquiry: true,
+    property: {
+      ...core.property,
+      location: inquiredProperty?.location || inquiredProperty?.address || rawProp.address || null,
+      address: inquiredProperty?.address || rawProp.address || null,
+      budget: inquiredProperty?.expected_price || rawProp.expected_price || null,
+      expected_price: inquiredProperty?.expected_price || rawProp.expected_price || null,
+      timeline: null,
+      bedrooms: inquiredProperty?.bedrooms || rawProp.bedrooms || null,
+      bathrooms: inquiredProperty?.bathrooms || rawProp.bathrooms || null,
+      property_type: inquiredProperty?.property_type || rawProp.property_type || null,
+      must_have_features: inquiryMessage || null,
+      parking_required: null,
+      backyard_needed: null,
+      school_district_important: null,
+    },
+    qualification:
+      profType === PROFESSIONAL_TYPE.AGENT ? emptyAgentQualification() : core.qualification,
+  };
+}
+
 function leadCore(leadMatch, profileView, convo, opts = {}) {
   const { includeIntentField = true } = opts;
   const grade = leadMatch.lead_type?.split('_')[0] || null;
@@ -184,7 +251,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
   if (includeIntentField) {
     core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);
   }
-  return core;
+  return applyListedPropertyInquiryView(core, leadMatch, opts.leadProfile || null);
 }
 
 export function mapLeadMatchToListRow(leadMatch, profile, convo, includeConversion, opts = {}) {

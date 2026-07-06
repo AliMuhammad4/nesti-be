@@ -276,10 +276,7 @@ function normalizeProfessionalProfile(profileDoc) {
       8,
     ),
     service_area_secondary_zones: toCleanArray(p.service_area_secondary_zones, 12),
-    service_area_cities: toCleanArray(
-      p.service_area_cities?.length ? p.service_area_cities : splitToArray(p.location, 15),
-      15,
-    ),
+    service_area_cities: toCleanArray(p.service_area_cities, 15),
     service_area_regions: toCleanArray(p.service_area_regions, 15),
   };
 }

@@ -146,11 +146,26 @@ export function passesLanguageRequirement(clientLanguages = [], proLanguages = [
 
 export function calculateProfessionalDataConfidence(professional = {}) {
   const signals = [
-    Boolean(professional.location || professional.target_neighborhoods),
-    Boolean(professional.specializations?.length || professional.preferred_clients?.length),
+    Boolean(
+      professional.service_area_primary_zones?.length ||
+        professional.service_area_cities?.length ||
+        professional.service_area_regions?.length ||
+        professional.location ||
+        professional.target_neighborhoods,
+    ),
+    Boolean(
+      professional.core_specialization_tags?.length ||
+        professional.specialty_strength_tags?.length ||
+        professional.specializations?.length ||
+        professional.preferred_clients?.length,
+    ),
     Boolean(professional.languages_spoken?.length),
     Boolean(professional.experience_level || professional.experience),
-    Boolean(professional.working_style_structured || professional.bio),
+    Boolean(
+      professional.working_style_tags?.length ||
+        professional.working_style_structured ||
+        professional.bio,
+    ),
     Boolean(parsePrice(professional.avg_home_price) || parsePrice(professional.avg_sale_price)),
     Boolean(professional.availability || professional.response_time),
   ];

@@ -6,6 +6,7 @@ import {
   updateClientProfileMetrics,
   validateClientProfileData,
 } from '../services/client/financialService.js';
+import { getClientProfileCompleteness } from '../services/matching/clientProfileMapper.js';
 import {
   createClientCheckoutSession,
   getClientSubscriptionPresentationForUser,
@@ -31,12 +32,15 @@ export async function getClientProfile(req, res) {
     }
 
     const metrics = calculateHomeownershipMetrics(profile);
+    const completeness = getClientProfileCompleteness(profile?.toObject?.() || profile || {});
 
     return res.json({
       success: true,
       data: {
         ...profile.toObject(),
         ...metrics,
+        profile_completeness: completeness.percentage,
+        profile_completion_missing: completeness.missing.map((field) => field.label),
       },
     });
   } catch (error) {
@@ -79,6 +83,7 @@ export async function upsertClientProfile(req, res) {
     }
 
     const metrics = calculateHomeownershipMetrics(profile);
+    const completeness = getClientProfileCompleteness(profile?.toObject?.() || profile || {});
 
     return res.json({
       success: true,
@@ -86,6 +91,8 @@ export async function upsertClientProfile(req, res) {
       data: {
         ...profile.toObject(),
         ...metrics,
+        profile_completeness: completeness.percentage,
+        profile_completion_missing: completeness.missing.map((field) => field.label),
       },
     });
   } catch (error) {
@@ -201,6 +208,7 @@ export async function updateClientSettings(req, res) {
     }
 
     const metrics = calculateHomeownershipMetrics(profile);
+    const completeness = getClientProfileCompleteness(profile?.toObject?.() || profile || {});
 
     return res.json({
       success: true,
@@ -209,6 +217,8 @@ export async function updateClientSettings(req, res) {
       data: {
         ...profile.toObject(),
         ...metrics,
+        profile_completeness: completeness.percentage,
+        profile_completion_missing: completeness.missing.map((field) => field.label),
       },
     });
   } catch (error) {
@@ -252,10 +262,18 @@ export async function getClientInquiries(req, res) {
 
 export async function getClientRecommendations(req, res) {
   try {
+    if (String(req.user?.role || '').toLowerCase() !== USER_ROLE.CLIENT) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only clients can view professional recommendations',
+      });
+    }
+
     const userId = req.user._id;
     const recommendations = await getClientRecommendationsForUser(userId, {
       role: String(req.query.role || '').trim(),
       limit: req.query.limit,
+      page: req.query.page,
     });
 
     return res.json({
@@ -341,7 +359,15 @@ export async function getClientSubscriptionInvoices(req, res) {
 export async function cancelClientSubscriptionEndpoint(req, res) {
   try {
     const userId = req.user._id;
-    const subscription = await cancelClientSubscription(userId);
+    const cancellationReason = String(req.body?.reason || "").trim();
+    if (!cancellationReason) {
+      return res.status(400).json({
+        success: false,
+        message: "Cancellation reason is required.",
+      });
+    }
+
+    const subscription = await cancelClientSubscription(userId, cancellationReason);
 
     return res.json({
       success: true,

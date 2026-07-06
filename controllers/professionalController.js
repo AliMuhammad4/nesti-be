@@ -9,7 +9,7 @@ import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import IcpProfile from '../models/IcpProfile.js';
 import ClientProfile from '../models/ClientProfile.js';
-import { calculateAiCompatibilityScore } from '../services/matching/matchRankingService.js';
+import { calculateClientProfessionalAiMatch } from '../services/matching/matchRankingService.js';
 
 function toCleanArray(value, limit = 0) {
   const items = (Array.isArray(value) ? value : [])
@@ -45,7 +45,7 @@ function normalizeProfessionalProfile(profileDoc) {
     p.personality_style_tags?.length ? p.personality_style_tags : p.personality_tag ? [p.personality_tag] : [],
     5,
   );
-  const serviceAreaCities = toCleanArray(p.service_area_cities?.length ? p.service_area_cities : splitToArray(p.location, 15), 15);
+  const serviceAreaCities = toCleanArray(p.service_area_cities, 15);
   const serviceAreaRegions = toCleanArray(p.service_area_regions, 15);
   const serviceAreaPrimaryZones = toCleanArray(
     p.service_area_primary_zones?.length ? p.service_area_primary_zones : splitToArray(p.target_neighborhoods, 8),
@@ -617,7 +617,7 @@ export const getProfessionalById = async (req, res, next) => {
 
     const profile = await ProfessionalProfile.findOne({ user_id: user._id })
       .select(
-        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price avg_home_price response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken other_language_text working_style_structured experience_level core_specialization_tags working_style_tags specialty_strength_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions',
+        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price avg_home_price response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken other_language_text working_style_structured experience_level core_specialization_tags working_style_tags specialty_strength_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions active_icp_profile_id',
       )
       .lean();
 
@@ -644,7 +644,10 @@ export const getProfessionalById = async (req, res, next) => {
       req.user?.role === 'client'
         ? await ClientProfile.findOne({ user_id: req.user._id }).lean()
         : null;
-    const aiMatch = clientProfile && profile ? calculateAiCompatibilityScore(clientProfile, profile) : {};
+    const aiMatch =
+      clientProfile && profile
+        ? await calculateClientProfessionalAiMatch(clientProfile, profile)
+        : {};
 
     return res.json({
       success: true,

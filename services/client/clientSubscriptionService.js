@@ -348,6 +348,26 @@ function formatInvoiceAmount(amount, currency = 'usd') {
   }
 }
 
+function buildClientInvoiceDescription(invoice = {}, subscription = null) {
+  const lineDescriptions = Array.isArray(invoice?.lines?.data)
+    ? invoice.lines.data
+        .map((line) => String(line?.description || '').trim())
+        .filter(Boolean)
+    : [];
+  if (lineDescriptions.length > 0) return lineDescriptions.join(' + ');
+
+  const directDescription = String(invoice?.description || '').trim();
+  if (directDescription) return directDescription;
+
+  const tier = String(subscription?.tier || '').trim().toLowerCase();
+  const plan = tier ? getClientPlan(tier) : null;
+  if (plan?.name && plan?.amount) {
+    return `1 × ${plan.name.toLowerCase()} (${formatInvoiceAmount(plan.amount, plan.currency)} / month)`;
+  }
+  if (plan?.name) return `1 × ${plan.name.toLowerCase()} plan`;
+  return 'Subscription payment';
+}
+
 export async function listClientPaidInvoicesForUser(userId, limit = 24) {
   const subscription = await ClientSubscription.findOne({ user_id: userId }).lean();
   const customerId = String(subscription?.stripe_customer_id || '').trim();
@@ -372,7 +392,7 @@ export async function listClientPaidInvoicesForUser(userId, limit = 24) {
     periodEnd: invoice.period_end ? new Date(invoice.period_end * 1000).toISOString() : null,
     hostedInvoiceUrl: invoice.hosted_invoice_url || '',
     invoicePdf: invoice.invoice_pdf || '',
-    description: invoice.description || '',
+    description: buildClientInvoiceDescription(invoice, subscription),
     billingReason: invoice.billing_reason || '',
   }));
 }
@@ -650,7 +670,7 @@ export async function syncClientStripeSubscription(stripeSubscription) {
   return clientSubscription;
 }
 
-export async function cancelClientSubscription(userId) {
+export async function cancelClientSubscription(userId, cancellationReason = '') {
   const clientSubscription = await ClientSubscription.findOne({ user_id: userId });
   if (!clientSubscription) {
     throw new Error('No client subscription found');
@@ -660,12 +680,22 @@ export async function cancelClientSubscription(userId) {
     throw new Error('No Stripe subscription ID found');
   }
 
+  const safeReason = String(cancellationReason || '').trim();
+  if (!safeReason) {
+    throw new Error('Cancellation reason is required');
+  }
+
   const stripe = getStripeClient();
   await stripe.subscriptions.update(clientSubscription.stripe_subscription_id, {
     cancel_at_period_end: true,
   });
 
   clientSubscription.cancel_at_period_end = true;
+  clientSubscription.metadata = {
+    ...(clientSubscription.metadata || {}),
+    cancellation_reason: safeReason,
+    cancellation_reason_recorded_at: new Date().toISOString(),
+  };
   await clientSubscription.save();
 
   return clientSubscription;
@@ -689,6 +719,13 @@ export async function resumeClientSubscription(userId) {
   const updated = await stripe.subscriptions.update(clientSubscription.stripe_subscription_id, {
     cancel_at_period_end: false,
   });
+
+  clientSubscription.metadata = {
+    ...(clientSubscription.metadata || {}),
+    cancellation_reason: '',
+    cancellation_reason_recorded_at: null,
+  };
+  await clientSubscription.save();
 
   return syncClientStripeSubscription(updated);
 }

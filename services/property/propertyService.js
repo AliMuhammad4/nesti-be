@@ -12,6 +12,7 @@ import { createOrGetDirectThread } from '../proChat/threadService.js';
 import { postThreadMessage } from '../proChat/messageService.js';
 import { scoreLead } from '../chat/scoring/agentScoring.js';
 import { buildLeadType } from '../chat/scoring/common.js';
+import { normalizeInquiredProperty, resolveLinkedSellerLeadMatchId } from '../lead/inquiredProperty.js';
 
 const USER_SELECT = 'first_name last_name email role profile_image phone';
 
@@ -394,36 +395,45 @@ export async function createPropertyInquiry(req, res) {
     const clientProfileSnapshot = buildClientProfileSnapshot(clientProfile);
     const clientName = clientDisplayName(clientUser);
     const title = propertyTitle(property);
+    const listingFields = property.property || {};
+    const listingProfessional = await buildListingProfessional(property);
+    const sellerIdentity = property.identity || {};
+    const inquiredPropertySnapshot = normalizeInquiredProperty({
+      id: String(property._id),
+      title,
+      address: listingFields.address || '',
+      location: listingFields.location || listingFields.address || '',
+      expected_price: listingFields.expected_price || listingFields.budget || '',
+      property_type: listingFields.property_type || '',
+      bedrooms: listingFields.bedrooms,
+      bathrooms: listingFields.bathrooms,
+      square_footage: listingFields.square_footage,
+      seller_name: sellerIdentity.full_name || '',
+      seller_email: sellerIdentity.email || '',
+      seller_phone: sellerIdentity.phone || '',
+      listed_by_name: listingProfessional?.name || '',
+      images: listingFields.images,
+    });
+    const linkedSellerLeadMatchId = await resolveLinkedSellerLeadMatchId({
+      ownerUserId: listingOwnerId,
+      inquiredProperty: inquiredPropertySnapshot,
+    });
     const dedupeKey = `client_property_inquiry:${String(clientUser._id)}:${String(property._id)}`;
-    const targetBudget = moneyString(clientProfile?.dream_home_price) || property.property?.expected_price || property.property?.budget || '';
-    const preferredLocation = clientProfile?.preferred_location || property.property?.location || '';
-    const purchaseTimeline = normalizeAgentTimeline(clientProfile?.purchase_timeline || property.property?.timeline || '');
-    const mortgageTimeline = mapAgentTimelineToMortgage(purchaseTimeline);
-    const lawyerClosingTimeline = mapAgentTimelineToLawyerClosing(purchaseTimeline);
-    const profileMortgageStatus = clientProfile?.mortgage_status || '';
-    const brokerPreApprovalStatus = mapAgentMortgageToBroker(profileMortgageStatus);
-    const profileRealtorStatus = clientProfile?.realtor_status || '';
-    const profileMotivation = clientProfile?.motivation_reason || inquiryText;
-    const profileViewingReadiness = clientProfile?.viewing_readiness || '';
-    const profileLivingSituation = clientProfile?.living_situation || '';
-    const profileOfferReadiness = clientProfile?.offer_readiness || purchaseTimeline;
+    const listingBudget = listingFields.expected_price || listingFields.budget || '';
+    const listingLocation = listingFields.location || listingFields.address || '';
     const profileContactPreference = String(contact_preference || clientProfile?.preferred_contact_method || '').trim();
     const profileBestTimeToContact = clientProfile?.best_time_to_contact || '';
-    const profilePurchasePurpose = clientProfile?.purchase_purpose || 'primary_residence';
     const scoringMessage = [
       inquiryText,
       title,
-      preferredLocation,
-      targetBudget,
-      purchaseTimeline,
-      profileMortgageStatus,
-      profileRealtorStatus,
-      profileMotivation,
-      profileViewingReadiness,
-      profileLivingSituation,
-      profileOfferReadiness,
-      profilePurchasePurpose,
-    ].filter(Boolean).join(' ');
+      listingLocation,
+      listingBudget,
+      listingFields.property_type,
+      listingFields.bedrooms != null && listingFields.bedrooms !== '' ? `${listingFields.bedrooms} bed` : '',
+      listingFields.bathrooms != null && listingFields.bathrooms !== '' ? `${listingFields.bathrooms} bath` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
     const scoring = scoreLead({
       message: scoringMessage,
       hasContact: true,
@@ -434,18 +444,10 @@ export async function createPropertyInquiry(req, res) {
       },
       interactionCount: 1,
       seedSignals: {
-        ...(targetBudget ? { budget: targetBudget } : {}),
-        ...(preferredLocation ? { location: preferredLocation } : {}),
-        ...(purchaseTimeline ? { timeline: purchaseTimeline } : {}),
+        ...(listingBudget ? { budget: listingBudget } : {}),
+        ...(listingLocation ? { location: listingLocation } : {}),
       },
-      formQualification: {
-        mortgage_status: profileMortgageStatus,
-        realtor_status: profileRealtorStatus,
-        motivation_reason: profileMotivation,
-        viewing_readiness: profileViewingReadiness,
-        living_situation: profileLivingSituation,
-        urgency_readiness: profileOfferReadiness,
-      },
+      formQualification: {},
     });
     const leadScore = Number(scoring.leadScore || 0);
     const leadGrade = scoring.leadGrade || 'cold';
@@ -483,47 +485,22 @@ export async function createPropertyInquiry(req, res) {
         client_count: 1,
       },
       property: {
-        address: property.property?.address || '',
-        location: preferredLocation,
-        budget: targetBudget,
-        expected_price: property.property?.expected_price || '',
-        timeline: purchaseTimeline,
-        bedrooms: property.property?.bedrooms || '',
-        bathrooms: property.property?.bathrooms || '',
-        square_footage: property.property?.square_footage || '',
-        property_type: property.property?.property_type || '',
+        address: listingFields.address || '',
+        location: listingFields.location || listingFields.address || '',
+        budget: listingFields.expected_price || listingFields.budget || '',
+        expected_price: listingFields.expected_price || '',
+        timeline: '',
+        bedrooms: listingFields.bedrooms || '',
+        bathrooms: listingFields.bathrooms || '',
+        square_footage: listingFields.square_footage || '',
+        property_type: listingFields.property_type || '',
         must_have_features: inquiryText,
       },
       qualification: {
-        agent: {
-          mortgage_status: profileMortgageStatus,
-          realtor_status: profileRealtorStatus,
-          motivation_reason: profileMotivation,
-          viewing_readiness: profileViewingReadiness,
-          living_situation: profileLivingSituation,
-          urgency_readiness: profileOfferReadiness,
-          buy_property_location: preferredLocation,
-        },
-        mortgage_broker: {
-          mortgage_timeline: mortgageTimeline,
-          pre_approval_status: brokerPreApprovalStatus,
-          credit_score_range: '',
-          employment_status: clientProfile?.employment_status || '',
-          household_income: moneyString(clientProfile?.annual_income),
-          down_payment_readiness: moneyString(clientProfile?.current_savings),
-          purchase_purpose: profilePurchasePurpose,
-          urgency_signal: profileOfferReadiness,
-          property_budget: targetBudget,
-        },
+        agent: {},
+        mortgage_broker: {},
         lawyer: {
           transaction_stage: 'property_inquiry',
-          closing_timeline: lawyerClosingTimeline,
-          transaction_type: profilePurchasePurpose === 'refinance' ? 'refinance' : 'home_purchase',
-          property_value: targetBudget,
-          mortgage_status: profileMortgageStatus,
-          realtor_involved: profileRealtorStatus,
-          first_time_buyer: '',
-          legal_services_needed: '',
         },
       },
       source: 'client_property_inquiry',
@@ -601,6 +578,8 @@ export async function createPropertyInquiry(req, res) {
         lead_grade: leadGrade,
         lead_reasons: leadMeta.lead_reasons || [],
         sub_scores: leadMeta.sub_scores || {},
+        inquired_property: inquiredPropertySnapshot,
+        linked_seller_lead_match_id: linkedSellerLeadMatchId || null,
         inquired_property_id: String(property._id),
         inquired_property_title: title,
         inquiry_message: inquiryText,
@@ -645,6 +624,7 @@ export async function createPropertyInquiry(req, res) {
       severity: 'high',
       lead_match_id: leadMatch._id,
       lead_profile_id: inquiryProfile._id,
+      grade: leadGrade,
       score: leadMatch.match_score,
       intent: 'buy',
       action: {

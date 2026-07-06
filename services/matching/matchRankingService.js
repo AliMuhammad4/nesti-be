@@ -16,7 +16,6 @@ import {
   locationMatchScore,
   normalizeProfessionalLanguages,
   parsePrice,
-  passesLanguageRequirement,
   scoreCategory,
   scoreWorkingStyleMatch,
   toArray,
@@ -56,6 +55,41 @@ const ROLE_WEIGHTS = Object.freeze({
 
 const DEFAULT_WEIGHTS = ROLE_WEIGHTS[PROFESSIONAL_TYPE.AGENT];
 const ICP_BLEND_RATIO = 0.4;
+const MIN_RECOMMENDED_MATCH_SCORE = 60;
+const MIN_CLIENT_PROFILE_COMPLETENESS_FOR_RECOMMENDATIONS = 70;
+const RECOMMENDATION_PROFILE_FIELDS = [
+  'professional_type',
+  'full_name',
+  'company_name',
+  'phone',
+  'location',
+  'target_neighborhoods',
+  'experience',
+  'experience_level',
+  'specializations',
+  'languages_spoken',
+  'active_icp_profile_id',
+  'service_area_primary_zones',
+  'service_area_secondary_zones',
+  'service_area_cities',
+  'service_area_regions',
+  'avg_home_price',
+  'avg_sale_price',
+  'availability',
+  'response_time',
+  'working_style_structured',
+  'working_style_tags',
+  'core_specialization_tags',
+  'specialty_strength_tags',
+  'preferred_clients',
+  'bio',
+  'personality_style_tags',
+  'personality_tag',
+  'energy_style',
+  'sales_approach',
+  'support_level',
+  'awards',
+].join(' ');
 
 function getRoleWeights(professionalType) {
   return ROLE_WEIGHTS[professionalType] || DEFAULT_WEIGHTS;
@@ -465,8 +499,35 @@ export function calculateAiCompatibilityScore(clientProfile, professionalProfile
   };
 }
 
+/** Resolve configured ICP fit for a client ↔ professional pair (shared by list + detail scoring). */
+export async function resolveIcpFitForClientMatch(clientProfile, professionalProfile) {
+  const icpId = professionalProfile?.active_icp_profile_id;
+  if (!icpId) return null;
+
+  const icp = await IcpProfile.findOne({ _id: icpId, is_configured: true }).lean();
+  if (!icp) return null;
+
+  const leadShape = mapClientProfileToLeadShape(clientProfile || {});
+  return scoreLeadAgainstIcp(
+    { ...leadShape, ownership: { professional_type: professionalProfile.professional_type } },
+    icp,
+  );
+}
+
+/** Client-facing match score aligned with recommendation list scoring (includes ICP blend). */
+export async function calculateClientProfessionalAiMatch(clientProfile, professionalProfile) {
+  const icpFit = await resolveIcpFitForClientMatch(clientProfile, professionalProfile);
+  return calculateAiCompatibilityScore(clientProfile || {}, professionalProfile, { icpFit });
+}
+
 function rankByRoleGroups(scoredItems, limit) {
-  const perRole = Math.max(3, Math.ceil(limit / 3));
+  if (!scoredItems.length) return [];
+
+  // When everything fits, return the full ranked list (no artificial per-role cap).
+  if (scoredItems.length <= limit) {
+    return scoredItems.slice(0, limit);
+  }
+
   const groups = new Map();
   for (const item of scoredItems) {
     const role = item.professional_type || 'agent';
@@ -474,6 +535,8 @@ function rankByRoleGroups(scoredItems, limit) {
     groups.get(role).push(item);
   }
 
+  const roleCount = groups.size || 1;
+  const perRole = Math.ceil(limit / roleCount);
   const selected = [];
   for (const [, items] of groups) {
     selected.push(...items.slice(0, perRole));
@@ -482,10 +545,162 @@ function rankByRoleGroups(scoredItems, limit) {
   return selected.sort((a, b) => b.ai_match_score - a.ai_match_score).slice(0, limit);
 }
 
-export async function getClientRecommendationsForUser(userId, { role, limit = 24 } = {}) {
+function toSafeText(value) {
+  return String(value ?? '').trim();
+}
+
+function toSafeNullableText(value) {
+  const safe = toSafeText(value);
+  return safe || null;
+}
+
+function toSafeNumber(value, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function toSafeBoolean(value) {
+  return Boolean(value);
+}
+
+function toSafeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => toSafeText(item)).filter(Boolean);
+}
+
+function toSafeBreakdown(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      key: toSafeText(item?.key),
+      label: toSafeText(item?.label),
+      weight: toSafeNumber(item?.weight),
+      score: toSafeNumber(item?.score),
+      detail: toSafeText(item?.detail),
+    }))
+    .filter((item) => item.key);
+}
+
+export function sanitizeRecommendationItem(item = {}) {
+  const safeFullName = toSafeText(item.full_name);
+  const safeProfessionalName = toSafeText(item.professional_name);
+  const resolvedName = safeFullName || safeProfessionalName || 'Professional';
+  return {
+    id: toSafeText(item.id),
+    user_id: toSafeText(item.user_id),
+    full_name: resolvedName,
+    professional_name: resolvedName,
+    professional_type: toSafeText(item.professional_type || 'agent'),
+    email: toSafeText(item.email),
+    phone: toSafeText(item.phone),
+    company_name: toSafeText(item.company_name),
+    location: toSafeText(item.location),
+    target_neighborhoods: toSafeText(item.target_neighborhoods),
+    experience: toSafeText(item.experience),
+    experience_level: toSafeText(item.experience_level),
+    specializations: toSafeStringArray(item.specializations),
+    languages_spoken: toSafeStringArray(item.languages_spoken),
+    profile_image: toSafeNullableText(item.profile_image),
+    cover_image: toSafeNullableText(item.cover_image),
+    headline: toSafeText(item.headline),
+    slug: toSafeNullableText(item.slug),
+    has_public_profile: toSafeBoolean(item.has_public_profile),
+    has_icp_profile: toSafeBoolean(item.has_icp_profile),
+    ai_match_score: toSafeNumber(item.ai_match_score),
+    preference_score: toSafeNumber(item.preference_score),
+    icp_fit_score: item.icp_fit_score == null ? null : toSafeNumber(item.icp_fit_score),
+    data_confidence_score: toSafeNumber(item.data_confidence_score),
+    client_profile_completeness: toSafeNumber(item.client_profile_completeness),
+    professional_profile_completeness: toSafeNumber(item.professional_profile_completeness),
+    ai_match_breakdown: toSafeBreakdown(item.ai_match_breakdown),
+    ai_match_explanation: toSafeText(item.ai_match_explanation),
+    ai_match_factors: toSafeStringArray(item.ai_match_factors),
+    ai_match_tier: toSafeText(item.ai_match_tier || 'explore_match'),
+  };
+}
+
+function sanitizeRecommendationsMeta(meta = {}) {
+  return {
+    algorithm_version: toSafeText(meta.algorithm_version || 'v2'),
+    role_filter: toSafeText(meta.role_filter || 'all'),
+    icp_blend_ratio: toSafeNumber(meta.icp_blend_ratio),
+    matching_enabled: toSafeBoolean(meta.matching_enabled),
+    min_profile_completeness: toSafeNumber(meta.min_profile_completeness),
+    total_candidates: toSafeNumber(meta.total_candidates),
+    min_recommended_score: toSafeNumber(meta.min_recommended_score),
+    qualified_candidates: toSafeNumber(meta.qualified_candidates),
+    recommendation_candidates: toSafeNumber(meta.recommendation_candidates),
+    used_low_score_fallback: toSafeBoolean(meta.used_low_score_fallback),
+  };
+}
+
+function sanitizeRecommendationsPagination(pagination = {}) {
+  return {
+    page: Math.max(1, Math.trunc(toSafeNumber(pagination.page, 1))),
+    limit: Math.max(1, Math.trunc(toSafeNumber(pagination.limit, 24))),
+    total: Math.max(0, Math.trunc(toSafeNumber(pagination.total))),
+    total_pages: Math.max(1, Math.trunc(toSafeNumber(pagination.total_pages, 1))),
+    has_prev_page: toSafeBoolean(pagination.has_prev_page),
+    has_next_page: toSafeBoolean(pagination.has_next_page),
+    qualified_total: Math.max(0, Math.trunc(toSafeNumber(pagination.qualified_total))),
+    recommendation_total: Math.max(0, Math.trunc(toSafeNumber(pagination.recommendation_total))),
+  };
+}
+
+export function paginateRecommendations(items, page, limit) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 24, 1), 60);
+  const safePage = Math.max(Number(page) || 1, 1);
+  const total = items.length;
+  const totalPages = Math.max(Math.ceil(total / safeLimit), 1);
+  const normalizedPage = Math.min(safePage, totalPages);
+  const start = (normalizedPage - 1) * safeLimit;
+  const end = start + safeLimit;
+
+  return {
+    items: items.slice(start, end),
+    page: normalizedPage,
+    limit: safeLimit,
+    total,
+    total_pages: totalPages,
+    has_prev_page: normalizedPage > 1,
+    has_next_page: normalizedPage < totalPages,
+  };
+}
+
+export function isRecommendationQualified(item, minScore = MIN_RECOMMENDED_MATCH_SCORE) {
+  return Number(item?.ai_match_score || 0) >= Number(minScore || 0);
+}
+
+export function resolveRecommendationPool(
+  scoredItems,
+  {
+    minScore = MIN_RECOMMENDED_MATCH_SCORE,
+    topUpTo = 0,
+  } = {},
+) {
+  const qualified = scoredItems.filter((item) => isRecommendationQualified(item, minScore));
+  const shouldTopUp = topUpTo > 0 && qualified.length > 0 && qualified.length < topUpTo && scoredItems.length > qualified.length;
+  const usingLowScoreFallback = (qualified.length === 0 && scoredItems.length > 0) || shouldTopUp;
+  return {
+    qualified,
+    pool: usingLowScoreFallback ? scoredItems : qualified,
+    usingLowScoreFallback,
+  };
+}
+
+export function isClientProfileReadyForRecommendations(
+  profileCompleteness,
+  minCompleteness = MIN_CLIENT_PROFILE_COMPLETENESS_FOR_RECOMMENDATIONS,
+) {
+  return Number(profileCompleteness || 0) >= Number(minCompleteness || 0);
+}
+
+export async function getClientRecommendationsForUser(userId, { role, limit = 24, page = 1 } = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || 24, 1), 60);
   const clientProfile = await ClientProfile.findOne({ user_id: userId }).lean();
   const leadShape = mapClientProfileToLeadShape(clientProfile || {});
+  const profileCompleteness = calculateClientProfileCompleteness(clientProfile || {});
+  const matchingEnabled = isClientProfileReadyForRecommendations(profileCompleteness);
 
   const filter = {};
   if (role && ['agent', 'lawyer', 'mortgage_broker'].includes(role)) {
@@ -493,9 +708,9 @@ export async function getClientRecommendationsForUser(userId, { role, limit = 24
   }
 
   const professionalProfiles = await ProfessionalProfile.find(filter)
+    .select(RECOMMENDATION_PROFILE_FIELDS)
     .populate('user_id', 'first_name last_name email profile_image cover_image role')
     .sort({ updatedAt: -1 })
-    .limit(safeLimit * 8)
     .lean();
 
   const icpIds = professionalProfiles.map((p) => p.active_icp_profile_id).filter(Boolean);
@@ -514,10 +729,6 @@ export async function getClientRecommendationsForUser(userId, { role, limit = 24
     .map((profile) => {
       const user = profile.user_id || {};
       if (!user._id) return null;
-
-      if (!passesLanguageRequirement(clientProfile?.languages, profile.languages_spoken)) {
-        return null;
-      }
 
       const icp = profile.active_icp_profile_id
         ? icpById.get(profile.active_icp_profile_id.toString())
@@ -563,27 +774,55 @@ export async function getClientRecommendationsForUser(userId, { role, limit = 24
     .filter(Boolean)
     .sort((a, b) => b.ai_match_score - a.ai_match_score);
 
-  const recommendations = role ? scored.slice(0, safeLimit) : rankByRoleGroups(scored, safeLimit);
+  const recommendationSet = resolveRecommendationPool(scored, { topUpTo: safeLimit });
+  const rankedSource = recommendationSet.pool;
+  const ranked = role ? rankedSource : rankByRoleGroups(rankedSource, rankedSource.length || safeLimit);
+  const pagination = paginateRecommendations(ranked, page, limit);
+
+  const matchingMeta = sanitizeRecommendationsMeta({
+    algorithm_version: 'v2',
+    role_filter: role || 'all',
+    icp_blend_ratio: ICP_BLEND_RATIO,
+    matching_enabled: matchingEnabled,
+    min_profile_completeness: MIN_CLIENT_PROFILE_COMPLETENESS_FOR_RECOMMENDATIONS,
+    total_candidates: professionalProfiles.length,
+    min_recommended_score: MIN_RECOMMENDED_MATCH_SCORE,
+    qualified_candidates: scored.length,
+    recommendation_candidates: recommendationSet.pool.length,
+    used_low_score_fallback: recommendationSet.usingLowScoreFallback,
+  });
+
+  const effectiveItems = matchingEnabled ? pagination.items : [];
+  const effectivePagination = matchingEnabled
+    ? pagination
+    : sanitizeRecommendationsPagination({
+        page: 1,
+        limit: safeLimit,
+        total: 0,
+        total_pages: 1,
+        has_prev_page: false,
+        has_next_page: false,
+        qualified_total: scored.length,
+        recommendation_total: 0,
+      });
+
+  const paginationMeta = sanitizeRecommendationsPagination({
+    page: effectivePagination.page,
+    limit: effectivePagination.limit,
+    total: effectivePagination.total,
+    total_pages: effectivePagination.total_pages,
+    has_prev_page: effectivePagination.has_prev_page,
+    has_next_page: effectivePagination.has_next_page,
+    qualified_total: scored.length,
+    recommendation_total: matchingEnabled ? recommendationSet.pool.length : 0,
+  });
 
   return {
     profile: clientProfile || null,
-    client_profile_completeness: calculateClientProfileCompleteness(clientProfile || {}),
-    matching_meta: {
-      algorithm_version: 'v2',
-      role_filter: role || 'all',
-      icp_blend_ratio: ICP_BLEND_RATIO,
-      total_candidates: professionalProfiles.length,
-      qualified_candidates: scored.length,
-    },
-    items: recommendations,
-    pagination: {
-      page: 1,
-      limit: safeLimit,
-      total: recommendations.length,
-      total_pages: 1,
-      has_prev_page: false,
-      has_next_page: false,
-    },
+    client_profile_completeness: Math.max(0, Math.min(100, toSafeNumber(profileCompleteness))),
+    matching_meta: matchingMeta,
+    items: effectiveItems.map((item) => sanitizeRecommendationItem(item)).filter((item) => item.id),
+    pagination: paginationMeta,
   };
 }
 

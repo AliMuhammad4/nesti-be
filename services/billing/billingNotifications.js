@@ -1,5 +1,6 @@
 import ProfessionalNotification from '../../models/ProfessionalNotification.js';
 import Subscription from '../../models/Subscription.js';
+import ClientSubscription from '../../models/ClientSubscription.js';
 import logger from '../../utils/logger.js';
 import { emitNotification } from '../realtime/workspaceSocket.js';
 import { getPlanByPriceId } from './plans.js';
@@ -43,18 +44,22 @@ async function findUserIdForStripeObject(object = {}) {
 
   const subscriptionId = normalizeStripeId(object.subscription || object.id);
   if (subscriptionId) {
-    const sub = await Subscription.findOne({ stripe_subscription_id: subscriptionId })
-      .select('user_id')
-      .lean();
-    if (sub?.user_id) return String(sub.user_id);
+    const [proSub, clientSub] = await Promise.all([
+      Subscription.findOne({ stripe_subscription_id: subscriptionId }).select('user_id').lean(),
+      ClientSubscription.findOne({ stripe_subscription_id: subscriptionId }).select('user_id').lean(),
+    ]);
+    if (proSub?.user_id) return String(proSub.user_id);
+    if (clientSub?.user_id) return String(clientSub.user_id);
   }
 
   const customerId = normalizeStripeId(object.customer);
   if (customerId) {
-    const sub = await Subscription.findOne({ stripe_customer_id: customerId })
-      .select('user_id')
-      .lean();
-    if (sub?.user_id) return String(sub.user_id);
+    const [proSub, clientSub] = await Promise.all([
+      Subscription.findOne({ stripe_customer_id: customerId }).select('user_id').lean(),
+      ClientSubscription.findOne({ stripe_customer_id: customerId }).select('user_id').lean(),
+    ]);
+    if (proSub?.user_id) return String(proSub.user_id);
+    if (clientSub?.user_id) return String(clientSub.user_id);
   }
 
   return '';

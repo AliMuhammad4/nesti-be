@@ -30,13 +30,23 @@ export function evaluateProfessionalProfileSetup(user, professionalProfile) {
   const company = trimStr(p.company_name);
   const location = trimStr(p.location);
   const targetNeighborhoods = trimStr(p.target_neighborhoods);
-  /** Basics "Location" or Style & Metrics "target neighborhoods" both count as service area. */
-  const serviceArea = location.length > 0 || targetNeighborhoods.length > 0;
+  const serviceAreaCities = Array.isArray(p.service_area_cities)
+    ? p.service_area_cities.map((item) => trimStr(item)).filter(Boolean)
+    : [];
+  const serviceAreaRegions = Array.isArray(p.service_area_regions)
+    ? p.service_area_regions.map((item) => trimStr(item)).filter(Boolean)
+    : [];
+  /** Company plus at least one service area (city, region, primary location, or legacy neighborhoods). */
+  const serviceArea =
+    location.length > 0 ||
+    targetNeighborhoods.length > 0 ||
+    serviceAreaCities.length > 0 ||
+    serviceAreaRegions.length > 0;
 
   const emailOk = EMAIL_RE.test(email);
   const phoneOk = phoneSatisfies(phoneRaw);
-  const personalComplete = first.length > 0 && last.length > 0 && emailOk && phoneOk;
-  const businessComplete = company.length > 0 && serviceArea;
+  const personalComplete = first.length > 0 && last.length > 0 && emailOk && phoneOk && company.length > 0;
+  const businessComplete = serviceArea;
 
   const missingFields = [];
   if (!first) missingFields.push('first_name');
@@ -44,7 +54,7 @@ export function evaluateProfessionalProfileSetup(user, professionalProfile) {
   if (!emailOk) missingFields.push('email');
   if (!phoneOk) missingFields.push('phone');
   if (!company) missingFields.push('company_name');
-  if (!serviceArea) missingFields.push('location_or_target_neighborhoods');
+  if (!serviceArea) missingFields.push('service_area');
 
   return {
     personal_complete: personalComplete,

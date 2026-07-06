@@ -4,6 +4,11 @@ import { mapClientProfileToLeadShape, calculateClientProfileCompleteness } from 
 import {
   calculateAiCompatibilityScore,
   calculatePreferenceMatchScore,
+  isClientProfileReadyForRecommendations,
+  isRecommendationQualified,
+  paginateRecommendations,
+  resolveRecommendationPool,
+  sanitizeRecommendationItem,
 } from '../services/matching/matchRankingService.js';
 import {
   expandSemanticTokens,
@@ -63,8 +68,17 @@ test('client profile mapper produces lead-compatible shape', () => {
 });
 
 test('profile completeness reflects filled onboarding signals', () => {
-  assert.equal(calculateClientProfileCompleteness(baseClient), 100);
+  const completeClient = {
+    ...baseClient,
+    annual_income: 120_000,
+    current_savings: 40_000,
+    monthly_savings: 1_500,
+    preferred_contact_method: 'email',
+    best_time_to_contact: 'evening',
+  };
+  assert.equal(calculateClientProfileCompleteness(completeClient), 100);
   assert.ok(calculateClientProfileCompleteness({}) < 30);
+  assert.ok(calculateClientProfileCompleteness(baseClient) < 100);
 });
 
 test('semantic token expansion improves specialization overlap', () => {
@@ -162,4 +176,104 @@ test('expanded language taxonomy supports non-legacy language choices', () => {
   const hindiPro = { ...strongAgent, languages_spoken: ['hindi'] };
   assert.equal(passesLanguageRequirement(['hindi'], hindiPro.languages_spoken), true);
   assert.equal(passesLanguageRequirement(['vietnamese'], hindiPro.languages_spoken), false);
+});
+
+test('paginateRecommendations returns expected slice and flags', () => {
+  const items = Array.from({ length: 25 }, (_, index) => ({ id: index + 1 }));
+  const paged = paginateRecommendations(items, 2, 12);
+
+  assert.equal(paged.page, 2);
+  assert.equal(paged.limit, 12);
+  assert.equal(paged.total, 25);
+  assert.equal(paged.total_pages, 3);
+  assert.equal(paged.has_prev_page, true);
+  assert.equal(paged.has_next_page, true);
+  assert.deepEqual(paged.items.map((item) => item.id), [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+});
+
+test('paginateRecommendations clamps page to last page', () => {
+  const items = Array.from({ length: 7 }, (_, index) => ({ id: index + 1 }));
+  const paged = paginateRecommendations(items, 99, 3);
+
+  assert.equal(paged.page, 3);
+  assert.equal(paged.total_pages, 3);
+  assert.equal(paged.has_prev_page, true);
+  assert.equal(paged.has_next_page, false);
+  assert.deepEqual(paged.items.map((item) => item.id), [7]);
+});
+
+test('paginateRecommendations returns stable metadata for empty lists', () => {
+  const paged = paginateRecommendations([], 4, 12);
+
+  assert.equal(paged.page, 1);
+  assert.equal(paged.limit, 12);
+  assert.equal(paged.total, 0);
+  assert.equal(paged.total_pages, 1);
+  assert.equal(paged.has_prev_page, false);
+  assert.equal(paged.has_next_page, false);
+  assert.deepEqual(paged.items, []);
+});
+
+test('recommendation qualification enforces minimum score threshold', () => {
+  assert.equal(isRecommendationQualified({ ai_match_score: 60 }), true);
+  assert.equal(isRecommendationQualified({ ai_match_score: 59 }), false);
+  assert.equal(isRecommendationQualified({ ai_match_score: 75 }), true);
+});
+
+test('profile readiness requires minimum completeness for recommendations', () => {
+  assert.equal(isClientProfileReadyForRecommendations(70), true);
+  assert.equal(isClientProfileReadyForRecommendations(69), false);
+  assert.equal(isClientProfileReadyForRecommendations(0), false);
+});
+
+test('recommendation pool keeps qualified matches when available', () => {
+  const scored = [{ id: 'a', ai_match_score: 72 }, { id: 'b', ai_match_score: 58 }];
+  const resolved = resolveRecommendationPool(scored, { topUpTo: 1 });
+
+  assert.equal(resolved.usingLowScoreFallback, false);
+  assert.deepEqual(resolved.qualified.map((item) => item.id), ['a']);
+  assert.deepEqual(resolved.pool.map((item) => item.id), ['a']);
+});
+
+test('recommendation pool falls back to lower scores when no qualified matches', () => {
+  const scored = [{ id: 'a', ai_match_score: 45 }, { id: 'b', ai_match_score: 39 }];
+  const resolved = resolveRecommendationPool(scored, { topUpTo: 12 });
+
+  assert.equal(resolved.usingLowScoreFallback, true);
+  assert.deepEqual(resolved.qualified, []);
+  assert.deepEqual(resolved.pool.map((item) => item.id), ['a', 'b']);
+});
+
+test('recommendation pool tops up with lower scores when qualified are below page size', () => {
+  const scored = [{ id: 'a', ai_match_score: 75 }, { id: 'b', ai_match_score: 59 }, { id: 'c', ai_match_score: 40 }];
+  const resolved = resolveRecommendationPool(scored, { topUpTo: 12 });
+
+  assert.equal(resolved.usingLowScoreFallback, true);
+  assert.deepEqual(resolved.qualified.map((item) => item.id), ['a']);
+  assert.deepEqual(resolved.pool.map((item) => item.id), ['a', 'b', 'c']);
+});
+
+test('sanitizeRecommendationItem normalizes output types', () => {
+  const item = sanitizeRecommendationItem({
+    id: 123,
+    user_id: 456,
+    full_name: '  ',
+    professional_name: '  Jane Doe  ',
+    professional_type: 'agent',
+    email: null,
+    specializations: [' first_time ', '', 'investor'],
+    ai_match_score: '72',
+    icp_fit_score: undefined,
+    ai_match_breakdown: [{ key: 'location_fit', label: 'Location Fit', weight: '20', score: '15', detail: 'good' }],
+    ai_match_factors: [' timeline ', null],
+  });
+
+  assert.equal(item.id, '123');
+  assert.equal(item.user_id, '456');
+  assert.equal(item.full_name, 'Jane Doe');
+  assert.equal(item.ai_match_score, 72);
+  assert.equal(item.icp_fit_score, null);
+  assert.deepEqual(item.specializations, ['first_time', 'investor']);
+  assert.deepEqual(item.ai_match_factors, ['timeline']);
+  assert.equal(item.ai_match_breakdown[0].weight, 20);
 });

@@ -17,6 +17,12 @@ const SEMANTIC_GROUPS = Object.freeze({
   newcomer: ['newcomer', 'immigrant', 'relocation', 'new_to_canada'],
   commercial: ['commercial', 'commercial_client', 'commercial_deal'],
   financing: ['finance', 'financing', 'mortgage', 'credit'],
+  home_purchase: ['home_purchase', 'purchase', 'purchase_transaction', 'purchase_transactions', 'buyer', 'buyers', 'closing', 'closing_document_review'],
+  home_sale: ['home_sale', 'sale', 'sale_transaction', 'sale_transactions', 'seller', 'selling'],
+  refinance: ['refinance', 'refinance_transaction', 'refinance_transactions', 'private_lending', 'private_lending_files'],
+  title_transfer: ['title', 'title_transfer', 'title_transfers', 'transfer'],
+  pre_construction: ['pre_construction', 'pre_construction_contracts', 'assignment', 'assignment_sale', 'assignment_sales'],
+  real_estate_dispute: ['dispute', 'disputes', 'real_estate_dispute', 'real_estate_disputes', 'landlord', 'tenant', 'landlord_tenant_matters'],
 });
 
 const WORKING_STYLE_TO_PRO = Object.freeze({
@@ -166,7 +172,6 @@ export function calculateProfessionalDataConfidence(professional = {}) {
         professional.working_style_structured ||
         professional.bio,
     ),
-    Boolean(parsePrice(professional.avg_home_price) || parsePrice(professional.avg_sale_price)),
     Boolean(professional.availability || professional.response_time),
   ];
   const filled = signals.filter(Boolean).length;

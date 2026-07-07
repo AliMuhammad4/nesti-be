@@ -97,6 +97,12 @@ export function sanitizeClientProfileData(data = {}) {
       out.preferred_locations = normalizeStringArray([location]);
     }
   }
+  if (Object.prototype.hasOwnProperty.call(out, 'preferred_locations')) {
+    const first = normalizeStringArray(out.preferred_locations)[0] || '';
+    if (first && !String(out.preferred_location || '').trim()) {
+      out.preferred_location = first;
+    }
+  }
   if (
     Object.keys(out).some((key) =>
       [...ARRAY_FIELDS, ...STRING_FIELDS].includes(key)

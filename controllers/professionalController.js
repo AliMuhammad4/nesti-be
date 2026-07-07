@@ -67,6 +67,8 @@ function normalizeProfessionalProfile(profileDoc) {
     social_media: p.social_media || '',
     transaction_volume: p.transaction_volume || '',
     avg_sale_price: p.avg_sale_price || '',
+    avg_home_price: p.avg_home_price ?? null,
+    commission_rate_percent: p.commission_rate_percent ?? null,
     response_time: p.response_time || '',
     availability: p.availability || '',
     support_level: p.support_level || '',
@@ -184,6 +186,8 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       company_name,
       transaction_volume,
       avg_sale_price,
+      avg_home_price,
+      commission_rate_percent,
       response_time,
       availability,
       support_level,
@@ -269,6 +273,15 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (company_name !== undefined) update.company_name = company_name;
     if (transaction_volume !== undefined) update.transaction_volume = transaction_volume;
     if (avg_sale_price !== undefined) update.avg_sale_price = avg_sale_price;
+    if (avg_home_price !== undefined) {
+      const parsedAvgHomePrice = Number(avg_home_price);
+      update.avg_home_price = Number.isFinite(parsedAvgHomePrice) && parsedAvgHomePrice >= 0 ? parsedAvgHomePrice : null;
+    }
+    if (commission_rate_percent !== undefined) {
+      const parsedCommissionRate = Number(commission_rate_percent);
+      update.commission_rate_percent =
+        Number.isFinite(parsedCommissionRate) && parsedCommissionRate >= 0 ? parsedCommissionRate : null;
+    }
     if (response_time !== undefined) update.response_time = response_time;
     if (availability !== undefined) update.availability = availability;
     if (support_level !== undefined) update.support_level = support_level;
@@ -617,7 +630,7 @@ export const getProfessionalById = async (req, res, next) => {
 
     const profile = await ProfessionalProfile.findOne({ user_id: user._id })
       .select(
-        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price avg_home_price response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken other_language_text working_style_structured experience_level core_specialization_tags working_style_tags specialty_strength_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions active_icp_profile_id',
+        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price avg_home_price commission_rate_percent response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken other_language_text working_style_structured experience_level core_specialization_tags working_style_tags specialty_strength_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions active_icp_profile_id',
       )
       .lean();
 
@@ -674,6 +687,8 @@ export const getProfessionalById = async (req, res, next) => {
         social_media: profile?.social_media || '',
         transaction_volume: profile?.transaction_volume || '',
         avg_sale_price: profile?.avg_sale_price || '',
+        avg_home_price: profile?.avg_home_price ?? null,
+        commission_rate_percent: profile?.commission_rate_percent ?? null,
         response_time: profile?.response_time || '',
         availability: profile?.availability || '',
         support_level: profile?.support_level || '',

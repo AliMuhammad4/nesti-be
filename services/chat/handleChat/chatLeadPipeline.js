@@ -14,7 +14,7 @@ import {
 import { buildLeadType, buildLawyerLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
-import { notifyClientsOfNewPropertyForSale } from '../../property/propertyService.js';
+import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
 
 function computeLeadTypeForMatch(flow, persistedGrade, aiIntent) {
   const role = flow?.flowRole;
@@ -70,6 +70,30 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   first_time_buyer: 'qualification.lawyer.first_time_buyer',
   legal_services_needed: 'qualification.lawyer.legal_services_needed',
 };
+
+function hasMeaningfulSellerListingUpdate(previousProfile = {}, mergedQual = {}) {
+  const prevProperty = previousProfile?.property || {};
+  const prevAddress = String(prevProperty.address || '').trim().toLowerCase();
+  const prevLocation = String(prevProperty.location || '').trim().toLowerCase();
+  const prevPrice = String(prevProperty.expected_price || '').trim();
+  const prevImages = Array.isArray(prevProperty.images) ? prevProperty.images.length : 0;
+
+  const nextAddress = String(mergedQual.property_address || '').trim();
+  const nextLocation = String(mergedQual.location || '').trim();
+  const nextPrice = String(mergedQual.expected_price || mergedQual.budget || '').trim();
+
+  const nowHasCoreListing =
+    Boolean(nextAddress) || Boolean(nextLocation) || Boolean(nextPrice);
+  const hadCoreListing =
+    Boolean(prevAddress) || Boolean(prevLocation) || Boolean(prevPrice) || prevImages > 0;
+
+  if (nowHasCoreListing && !hadCoreListing) return true;
+  if (nextAddress && nextAddress.toLowerCase() !== prevAddress) return true;
+  if (nextLocation && nextLocation.toLowerCase() !== prevLocation) return true;
+  if (nextPrice && nextPrice !== prevPrice) return true;
+  return false;
+}
+
 export async function syncLeadMatchAfterTurn({
   flow,
   flowType,
@@ -215,11 +239,6 @@ export async function syncLeadMatchAfterTurn({
           conversion_preview,
         });
         await afterLeadCapturedNotifyOverQuota(userId);
-        if (leadIntent === 'sell' && newLeadMatch.lead_profile_id) {
-          void notifyClientsOfNewPropertyForSale(newLeadMatch.lead_profile_id).catch((err) => {
-            logger.warn('New property client notifications failed', { error: err?.message });
-          });
-        }
       } catch (e) {
         logger.warn('Workspace lead event (create) failed', { error: e.message });
       }
@@ -256,6 +275,9 @@ export async function syncLeadMatchAfterTurn({
   if (existingLeadMatch.lead_profile_id) {
     const derivedQual = flow.deriveQualificationFromText(conversationText);
     const mergedQual = flow.getLeadProfileUpdate(parsedAiDetails, derivedQual, formContact);
+    const previousLeadProfile = await LeadProfile.findById(existingLeadMatch.lead_profile_id)
+      .select('property.address property.location property.expected_price property.images')
+      .lean();
     const qualUpdate = {};
     for (const [k, v] of Object.entries(mergedQual)) {
       if (v === undefined) continue;
@@ -309,6 +331,15 @@ export async function syncLeadMatchAfterTurn({
       } catch (err) {
         logger.warn('ICP rescore after lead profile update failed', { error: err.message });
       }
+    }
+
+    if (
+      leadIntent === 'sell' &&
+      hasMeaningfulSellerListingUpdate(previousLeadProfile, mergedQual)
+    ) {
+      void notifyClientsOfNewPropertyForSale(existingLeadMatch.lead_profile_id).catch((err) => {
+        logger.warn('New property client notifications failed (lead update)', { error: err?.message });
+      });
     }
   }
 

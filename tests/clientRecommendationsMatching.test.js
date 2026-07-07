@@ -35,7 +35,6 @@ const strongAgent = {
   full_name: 'Alex Agent',
   location: 'Toronto',
   target_neighborhoods: 'Mississauga, Etobicoke',
-  avg_home_price: 640_000,
   availability: 'Available immediately',
   response_time: 'Within 24 hours',
   specializations: ['first_time_buyers', 'family homes'],
@@ -58,6 +57,40 @@ const weakAgent = {
   full_name: 'Sparse Agent',
 };
 
+const strongLawyer = {
+  professional_type: PROFESSIONAL_TYPE.LAWYER,
+  full_name: 'Priya Lawyer',
+  location: 'Toronto',
+  target_neighborhoods: 'Toronto, Mississauga',
+  availability: 'Available immediately',
+  response_time: 'Same day',
+  core_specialization_tags: ['purchase_transactions', 'closing_document_review'],
+  specialty_strength_tags: ['first_time_buyer_expert'],
+  service_area_primary_zones: ['Toronto'],
+  service_area_secondary_zones: ['Mississauga'],
+  languages_spoken: ['english', 'punjabi'],
+  working_style_tags: ['calm_patient_guide', 'high_responsiveness'],
+  personality_style_tags: ['calm_and_patient'],
+  experience_level: 'senior',
+  experience: '10 years',
+  bio: 'Real estate lawyer for first-time home purchase closings.',
+};
+
+const unrelatedLawyer = {
+  ...strongLawyer,
+  full_name: 'Dispute Lawyer',
+  location: 'Vancouver',
+  target_neighborhoods: 'Vancouver',
+  core_specialization_tags: ['real_estate_disputes', 'landlord_tenant_matters'],
+  specialty_strength_tags: [],
+  service_area_primary_zones: ['Vancouver'],
+  service_area_secondary_zones: [],
+  languages_spoken: ['english'],
+  experience_level: 'junior',
+  experience: '1 year',
+  bio: 'Focused on landlord tenant disputes and real estate litigation.',
+};
+
 test('client profile mapper produces lead-compatible shape', () => {
   const lead = mapClientProfileToLeadShape(baseClient);
   assert.equal(lead.intent, 'buy');
@@ -75,6 +108,12 @@ test('profile completeness reflects filled onboarding signals', () => {
     monthly_savings: 1_500,
     preferred_contact_method: 'email',
     best_time_to_contact: 'evening',
+    mortgage_status: 'fully_pre_approved',
+    realtor_status: 'no_agent',
+    viewing_readiness: 'asap',
+    living_situation: 'renting',
+    offer_readiness: 'maybe',
+    motivation_reason: 'relocation',
   };
   assert.equal(calculateClientProfileCompleteness(completeClient), 100);
   assert.ok(calculateClientProfileCompleteness({}) < 30);
@@ -109,6 +148,17 @@ test('strong agent scores higher than sparse agent for same client', () => {
   assert.ok(strong.preference_score > 50);
 });
 
+test('strong purchase lawyer scores higher than unrelated lawyer for same client', () => {
+  const strong = calculateAiCompatibilityScore(baseClient, strongLawyer);
+  const unrelated = calculateAiCompatibilityScore(baseClient, unrelatedLawyer);
+  const strongSpecialization = strong.ai_match_breakdown.find((item) => item.key === 'specialization_fit');
+  const unrelatedSpecialization = unrelated.ai_match_breakdown.find((item) => item.key === 'specialization_fit');
+
+  assert.ok(strong.ai_match_score > unrelated.ai_match_score);
+  assert.ok(strongSpecialization.score > unrelatedSpecialization.score);
+  assert.ok(strong.ai_match_score >= 60);
+});
+
 test('weights align with revised unified model', () => {
   const broker = {
     ...strongAgent,
@@ -121,20 +171,31 @@ test('weights align with revised unified model', () => {
   const brokerLocation = brokerPref.breakdown.find((item) => item.key === 'location_fit');
   const agentSpec = agentPref.breakdown.find((item) => item.key === 'specialization_fit');
   const brokerSpec = brokerPref.breakdown.find((item) => item.key === 'specialization_fit');
-  assert.equal(agentLocation.weight, 20);
-  assert.equal(brokerLocation.weight, 20);
-  assert.equal(agentSpec.weight, 15);
-  assert.equal(brokerSpec.weight, 15);
+  assert.equal(agentPref.breakdown.some((item) => item.key === 'financial_fit'), false);
+  assert.equal(brokerPref.breakdown.some((item) => item.key === 'financial_fit'), false);
+  assert.equal(agentLocation.weight, 25);
+  assert.equal(brokerLocation.weight, 25);
+  assert.equal(agentSpec.weight, 25);
+  assert.equal(brokerSpec.weight, 25);
 });
 
 test('icp fit blend adjusts score and exposes icp fit metadata', () => {
   const lowerPreferenceAgent = {
     ...strongAgent,
-    avg_home_price: 820_000,
     location: 'Hamilton',
     target_neighborhoods: '',
+    service_area_primary_zones: ['Hamilton'],
+    service_area_secondary_zones: [],
     specializations: ['commercial'],
+    core_specialization_tags: ['commercial_clients'],
+    specialty_strength_tags: [],
     preferred_clients: ['investors'],
+    languages_spoken: ['english'],
+    working_style_structured: 'fast_deal_closer',
+    working_style_tags: ['transactional_efficient'],
+    personality_style_tags: ['direct_transactional'],
+    experience_level: 'junior',
+    experience: '1 year',
     bio: 'Commercial investor specialist outside the GTA.',
   };
   const icpFit = {

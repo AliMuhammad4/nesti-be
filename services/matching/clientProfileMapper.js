@@ -113,6 +113,7 @@ const CLIENT_PROFILE_COMPLETION_FIELDS = [
     label: 'Monthly Savings',
     complete: (client) => hasNumericValue(client.monthly_savings),
   },
+  { key: 'mortgage_status', label: 'Mortgage Status', complete: (client) => Boolean(client.mortgage_status) },
   {
     key: 'home_goal',
     label: 'Home Goal',
@@ -121,6 +122,11 @@ const CLIENT_PROFILE_COMPLETION_FIELDS = [
   { key: 'dream_home_price', label: 'Target Home Price', complete: (client) => Number(client.dream_home_price) > 0 },
   { key: 'preferred_location', label: 'Preferred Location', complete: hasLocation },
   { key: 'purchase_timeline', label: 'Purchase Timeline', complete: (client) => Boolean(client.purchase_timeline) },
+  { key: 'realtor_status', label: 'Realtor Status', complete: (client) => Boolean(client.realtor_status) },
+  { key: 'viewing_readiness', label: 'Viewing Readiness', complete: (client) => Boolean(client.viewing_readiness) },
+  { key: 'living_situation', label: 'Living Situation', complete: (client) => Boolean(client.living_situation) },
+  { key: 'offer_readiness', label: 'Offer Readiness', complete: (client) => Boolean(client.offer_readiness) },
+  { key: 'motivation_reason', label: 'Search Motivation', complete: (client) => Boolean(client.motivation_reason) },
   {
     key: 'working_styles',
     label: 'Working Style',

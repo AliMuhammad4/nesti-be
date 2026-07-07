@@ -15,6 +15,7 @@ import {
   normalizeInquiredProperty,
   resolveLinkedSellerLeadMatchId,
 } from '../lead/inquiredProperty.js';
+import { notifyClientsOfNewPropertyForSale } from '../property/propertyClientNotifications.js';
 
 function publicProfileUnavailableResponse() {
   return { status: 404, body: { success: false, message: 'Profile not found' } };
@@ -562,6 +563,11 @@ export const submitPublicLeadService = async ({ slug, payload, requestMeta = {} 
     appointment_status: null,
     conversion_preview: null,
   });
+
+  // Keep seller listing notifications consistent with chatbot-created seller leads.
+  if (intent === 'sell' && leadProfile?._id) {
+    void notifyClientsOfNewPropertyForSale(leadProfile._id).catch(() => {});
+  }
 
   await afterLeadCapturedNotifyOverQuota(profile.user_id);
 

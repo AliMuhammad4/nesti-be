@@ -15,7 +15,6 @@ import {
   expandSemanticTokens,
   locationMatchScore,
   normalizeProfessionalLanguages,
-  parsePrice,
   scoreCategory,
   scoreWorkingStyleMatch,
   toArray,
@@ -25,31 +24,28 @@ import {
 
 const ROLE_WEIGHTS = Object.freeze({
   [PROFESSIONAL_TYPE.AGENT]: {
-    financial_fit: 25,
-    location_fit: 20,
+    location_fit: 25,
     timeline_fit: 15,
-    specialization_fit: 15,
-    communication_language_fit: 10,
+    specialization_fit: 25,
+    communication_language_fit: 15,
     experience_fit: 10,
-    personality_preference_fit: 5,
+    personality_preference_fit: 10,
   },
   [PROFESSIONAL_TYPE.MORTGAGE_BROKER]: {
-    financial_fit: 25,
-    location_fit: 20,
+    location_fit: 25,
     timeline_fit: 15,
-    specialization_fit: 15,
-    communication_language_fit: 10,
+    specialization_fit: 25,
+    communication_language_fit: 15,
     experience_fit: 10,
-    personality_preference_fit: 5,
+    personality_preference_fit: 10,
   },
   [PROFESSIONAL_TYPE.LAWYER]: {
-    financial_fit: 25,
-    location_fit: 20,
+    location_fit: 25,
     timeline_fit: 15,
-    specialization_fit: 15,
-    communication_language_fit: 10,
+    specialization_fit: 25,
+    communication_language_fit: 15,
     experience_fit: 10,
-    personality_preference_fit: 5,
+    personality_preference_fit: 10,
   },
 });
 
@@ -73,8 +69,6 @@ const RECOMMENDATION_PROFILE_FIELDS = [
   'service_area_secondary_zones',
   'service_area_cities',
   'service_area_regions',
-  'avg_home_price',
-  'avg_sale_price',
   'availability',
   'response_time',
   'working_style_structured',
@@ -93,22 +87,6 @@ const RECOMMENDATION_PROFILE_FIELDS = [
 
 function getRoleWeights(professionalType) {
   return ROLE_WEIGHTS[professionalType] || DEFAULT_WEIGHTS;
-}
-
-function scoreFinancialFit(client, professional, max) {
-  const budget = parsePrice(client?.dream_home_price);
-  const professionalPrice = parsePrice(professional?.avg_home_price) || parsePrice(professional?.avg_sale_price);
-  const clientReady = Boolean(budget);
-  const proReady = Boolean(professionalPrice);
-  if (!clientReady || !proReady) {
-    return scoreCategory({ clientReady, proReady, ratio: 0 });
-  }
-  const ratio = Math.abs(professionalPrice - budget) / Math.max(budget, professionalPrice);
-  if (ratio <= 0.1) return { score: max, applicable: true, reason: 'scored', detail: 'budget aligned' };
-  if (ratio <= 0.2) return { score: Math.round(max * 0.85), applicable: true, reason: 'scored', detail: 'close budget fit' };
-  if (ratio <= 0.35) return { score: Math.round(max * 0.65), applicable: true, reason: 'scored', detail: 'moderate budget fit' };
-  if (ratio <= 0.5) return { score: Math.round(max * 0.4), applicable: true, reason: 'scored', detail: 'stretch budget fit' };
-  return { score: Math.round(max * 0.15), applicable: true, reason: 'scored', detail: 'budget mismatch' };
 }
 
 function scoreLocationFit(client, professional, max) {
@@ -241,25 +219,26 @@ function scoreBrokerSpecialization(client, professional, max) {
 }
 
 function scoreLawyerSpecialization(client, professional, max) {
-  const goals = expandSemanticTokens(client?.home_goals, client?.home_goal);
+  const goals = expandSemanticTokens(client?.home_goals, client?.home_goal, client?.purchase_purpose, client?.motivation_reason);
   const proTokens = expandSemanticTokens(
     professional?.core_specialization_tags,
     professional?.specialty_strength_tags,
     professional?.specializations,
     professional?.preferred_clients,
     professional?.bio,
-    'home_purchase',
-    'title',
-    'closing',
   );
   const clientReady = goals.size > 0;
   const proReady = proTokens.size > 0;
   if (!clientReady) return scoreCategory({ clientReady, proReady, ratio: 0 });
   if (!proReady) return { score: 0, applicable: true, reason: 'pro_missing' };
 
+  const isInvestment = goals.has('investor') || goals.has('investment') || goals.has('commercial');
+  const isFirstTime = goals.has('first_time');
   const clientTxTokens = expandSemanticTokens(
-    goals.has('investor') ? 'investment' : 'home_purchase',
-    goals.has('first_time') ? 'first_time' : '',
+    isInvestment
+      ? ['investment', 'commercial', 'commercial_real_estate_closings', 'private_lending_files', 'assignment_sales']
+      : ['home_purchase', 'purchase_transactions', 'closing_document_review'],
+    isFirstTime ? ['first_time', 'purchase_transactions', 'closing_document_review'] : '',
   );
   const ratio = tokenOverlapScore(clientTxTokens, proTokens) ?? 0;
   return {
@@ -416,7 +395,6 @@ export function calculatePreferenceMatchScore(clientProfile, professionalProfile
   const weights = getRoleWeights(role);
 
   const rawResults = {
-    financial_fit: scoreFinancialFit(clientProfile, professionalProfile, weights.financial_fit),
     location_fit: scoreLocationFit(clientProfile, professionalProfile, weights.location_fit),
     timeline_fit: scoreTimelineFit(clientProfile, professionalProfile, weights.timeline_fit),
     specialization_fit: scoreSpecializationFit(clientProfile, professionalProfile, weights.specialization_fit),
@@ -426,7 +404,6 @@ export function calculatePreferenceMatchScore(clientProfile, professionalProfile
   };
 
   const breakdown = [
-    buildBreakdownItem('financial_fit', 'Financial Fit', weights.financial_fit, rawResults.financial_fit),
     buildBreakdownItem('location_fit', 'Location Fit', weights.location_fit, rawResults.location_fit),
     buildBreakdownItem('timeline_fit', 'Timeline Fit', weights.timeline_fit, rawResults.timeline_fit),
     buildBreakdownItem('specialization_fit', 'Specialization Fit', weights.specialization_fit, rawResults.specialization_fit),

@@ -153,6 +153,13 @@ function emptyAgentQualification() {
   };
 }
 
+function hasAgentQualificationData(qualification) {
+  if (!qualification || typeof qualification !== 'object') return false;
+  return Object.values(qualification).some(
+    (value) => value != null && String(value).trim() !== '',
+  );
+}
+
 function applyListedPropertyInquiryView(core, leadMatch, profile) {
   if (!isListedPropertyInquirySource(leadMatch, core.source)) return core;
 
@@ -198,7 +205,9 @@ function applyListedPropertyInquiryView(core, leadMatch, profile) {
       school_district_important: null,
     },
     qualification:
-      profType === PROFESSIONAL_TYPE.AGENT ? emptyAgentQualification() : core.qualification,
+      profType === PROFESSIONAL_TYPE.AGENT && !hasAgentQualificationData(core.qualification)
+        ? emptyAgentQualification()
+        : core.qualification,
   };
 }
 

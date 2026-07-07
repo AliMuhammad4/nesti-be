@@ -21,11 +21,42 @@ function firstString(...values) {
   return '';
 }
 
+function imageDedupeKeyFromInput(img) {
+  if (img && typeof img === 'object') {
+    const publicId = String(img.public_id || '').trim();
+    if (publicId) return `pid:${publicId.toLowerCase()}`;
+  }
+  const url = String(typeof img === 'string' ? img : img?.secure_url || img?.url || '')
+    .trim();
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname;
+    const uploadIdx = path.indexOf('/upload/');
+    if (uploadIdx >= 0) {
+      let rest = path.slice(uploadIdx + '/upload/'.length);
+      rest = rest.replace(/(?:[^/]+\/)*v\d+\//, '');
+      if (rest) return `url:${rest.toLowerCase()}`;
+    }
+    return `url:${path.toLowerCase()}`;
+  } catch {
+    return `url:${url.split('?')[0].toLowerCase()}`;
+  }
+}
+
 function normalizeImageUrls(input) {
+  const seen = new Set();
   return (Array.isArray(input) ? input : [])
-    .map((img) => (typeof img === 'string' ? img : img?.secure_url || img?.url || ''))
-    .map((url) => String(url || '').trim())
-    .filter(Boolean)
+    .map((img) => ({
+      key: imageDedupeKeyFromInput(img),
+      url: String(typeof img === 'string' ? img : img?.secure_url || img?.url || '').trim(),
+    }))
+    .filter(({ key, url }) => {
+      if (!url || !key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(({ url }) => url)
     .slice(0, 8);
 }
 

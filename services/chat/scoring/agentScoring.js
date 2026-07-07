@@ -14,6 +14,7 @@ import {
   createOrReuseLeadProfile,
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
+import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
 
 export const bestGrade = (a, b) =>
   (GRADE_ORDER[a] || 0) >= (GRADE_ORDER[b] || 0) ? a : b;
@@ -236,6 +237,115 @@ export const scoreLead = ({ message, hasContact, contactInfo, interactionCount, 
   };
 };
 
+const CLIENT_PURCHASE_TIMELINE_MAP = {
+  '1_year': '1-3 months',
+  '2_years': '3-6 months',
+  '3_years': '6-12 months',
+  '5_years': 'browsing',
+  exploring: 'browsing',
+};
+
+function clientPreferredLocation(clientProfile) {
+  if (!clientProfile || typeof clientProfile !== 'object') return '';
+  const direct = String(clientProfile.preferred_location || '').trim();
+  if (direct) return direct;
+  if (Array.isArray(clientProfile.preferred_locations) && clientProfile.preferred_locations[0]) {
+    return String(clientProfile.preferred_locations[0]).trim();
+  }
+  return '';
+}
+
+/** Map client-dashboard purchase timeline to agent scoring timeline signal. */
+export function clientPurchaseTimelineToSignal(value) {
+  if (!value) return null;
+  const normalized = normalizeTimeline(String(value));
+  if (normalized) return normalized;
+  return CLIENT_PURCHASE_TIMELINE_MAP[String(value).trim().toLowerCase()] || null;
+}
+
+/** Agent qualification fields from a saved client profile (for inquiry leads). */
+export function buildInquiryFormQualificationFromClientProfile(clientProfile) {
+  if (!clientProfile || typeof clientProfile !== 'object') return {};
+  const pick = (key) => String(clientProfile[key] || '').trim();
+  const offer = pick('offer_readiness');
+  return {
+    mortgage_status: pick('mortgage_status'),
+    realtor_status: pick('realtor_status'),
+    motivation_reason: pick('motivation_reason'),
+    viewing_readiness: pick('viewing_readiness'),
+    living_situation: pick('living_situation'),
+    urgency_readiness: offer || '',
+  };
+}
+
+export function buildInquiryAgentQualificationFromClientProfile(clientProfile) {
+  const fq = buildInquiryFormQualificationFromClientProfile(clientProfile);
+  return {
+    ...fq,
+    buy_property_location: clientPreferredLocation(clientProfile),
+  };
+}
+
+/**
+ * Score a client-dashboard property inquiry using the same `scoreLead` path as chat intake.
+ * Maps client profile + listing fields into seedSignals and formQualification.
+ */
+export function scoreClientPropertyInquiry({
+  inquiryText = '',
+  clientProfile = null,
+  listingFields = {},
+  clientName = '',
+  clientEmail = '',
+  clientPhone = '',
+  isRepeatInquiry = false,
+}) {
+  const formQualification = buildInquiryFormQualificationFromClientProfile(clientProfile);
+  const listingBudget = String(listingFields.expected_price || listingFields.budget || '').trim();
+  const budget =
+    listingBudget ||
+    (clientProfile?.dream_home_price != null ? String(clientProfile.dream_home_price) : '');
+  const location =
+    String(listingFields.location || listingFields.address || '').trim() ||
+    clientPreferredLocation(clientProfile);
+  const timeline = clientPurchaseTimelineToSignal(clientProfile?.purchase_timeline);
+
+  const scoringMessage = [
+    inquiryText,
+    listingFields.address,
+    listingFields.location,
+    clientPreferredLocation(clientProfile),
+    budget,
+    listingFields.property_type,
+    listingFields.bedrooms != null && listingFields.bedrooms !== '' ? `${listingFields.bedrooms} bed` : '',
+    listingFields.bathrooms != null && listingFields.bathrooms !== '' ? `${listingFields.bathrooms} bath` : '',
+    timeline,
+    ...Object.values(formQualification)
+      .filter(Boolean)
+      .map((value) => String(value).replace(/_/g, ' ')),
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return scoreLead({
+    message: scoringMessage,
+    hasContact: true,
+    contactInfo: {
+      name: clientName,
+      email: clientEmail,
+      phone: clientPhone,
+    },
+    interactionCount: isRepeatInquiry ? 2 : 1,
+    seedSignals: {
+      ...(budget ? { budget: String(budget) } : {}),
+      ...(location ? { location } : {}),
+      ...(timeline ? { timeline } : {}),
+      ...(listingFields.bedrooms != null && listingFields.bedrooms !== '' ? { beds: listingFields.bedrooms } : {}),
+      ...(listingFields.bathrooms != null && listingFields.bathrooms !== '' ? { baths: listingFields.bathrooms } : {}),
+    },
+    formQualification,
+  });
+}
+
 export const createLeadRecords = async ({
   conversation,
   intent,
@@ -410,6 +520,12 @@ export const createLeadRecords = async ({
   await bumpLeadProfileStats(leadProfile._id, intent, leadType);
 
   logger.info(`Agent lead created: ${leadType} | score: ${leadScore} | conversation: ${conversation._id}`);
+
+  if (intent === 'sell' && leadProfile?._id) {
+    void notifyClientsOfNewPropertyForSale(leadProfile._id).catch((err) => {
+      logger.warn('New property client notifications failed (lead create)', { error: err?.message });
+    });
+  }
 
   return leadMatch;
 };

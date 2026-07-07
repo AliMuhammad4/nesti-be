@@ -7,10 +7,11 @@ import ClientProfile from '../../models/ClientProfile.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import User from '../../models/User.js';
 import { USER_ROLE, isProfessionalRole } from '../../constants/roles.js';
-import { createLeadLifecycleNotification } from '../notifications/notificationService.js';
+import { emitLeadLifecycleNotification } from '../realtime/leadCreatedNotify.js';
+import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
 import { createOrGetDirectThread } from '../proChat/threadService.js';
 import { postThreadMessage } from '../proChat/messageService.js';
-import { scoreLead } from '../chat/scoring/agentScoring.js';
+import { scoreClientPropertyInquiry, buildInquiryAgentQualificationFromClientProfile } from '../chat/scoring/agentScoring.js';
 import { buildLeadType } from '../chat/scoring/common.js';
 import { normalizeInquiredProperty, resolveLinkedSellerLeadMatchId } from '../lead/inquiredProperty.js';
 
@@ -423,37 +424,21 @@ export async function createPropertyInquiry(req, res) {
     const listingLocation = listingFields.location || listingFields.address || '';
     const profileContactPreference = String(contact_preference || clientProfile?.preferred_contact_method || '').trim();
     const profileBestTimeToContact = clientProfile?.best_time_to_contact || '';
-    const scoringMessage = [
-      inquiryText,
-      title,
-      listingLocation,
-      listingBudget,
-      listingFields.property_type,
-      listingFields.bedrooms != null && listingFields.bedrooms !== '' ? `${listingFields.bedrooms} bed` : '',
-      listingFields.bathrooms != null && listingFields.bathrooms !== '' ? `${listingFields.bathrooms} bath` : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
-    const scoring = scoreLead({
-      message: scoringMessage,
-      hasContact: true,
-      contactInfo: {
-        name: clientName,
-        email: clientUser.email || '',
-        phone: clientUser.phone || '',
-      },
-      interactionCount: 1,
-      seedSignals: {
-        ...(listingBudget ? { budget: listingBudget } : {}),
-        ...(listingLocation ? { location: listingLocation } : {}),
-      },
-      formQualification: {},
-    });
-    const leadScore = Number(scoring.leadScore || 0);
-    const leadGrade = scoring.leadGrade || 'cold';
-    const leadMeta = scoring.leadMeta || {};
+    const agentQualification = buildInquiryAgentQualificationFromClientProfile(clientProfile);
 
     let inquiryProfile = await LeadProfile.findOne({ 'ownership.dedupe_key': dedupeKey });
+    const scoring = scoreClientPropertyInquiry({
+      inquiryText,
+      clientProfile,
+      listingFields,
+      clientName,
+      clientEmail: clientUser.email || '',
+      clientPhone: clientUser.phone || '',
+      isRepeatInquiry: Boolean(inquiryProfile),
+    });
+    const leadScore = Number(scoring.leadScore || 0);
+    const leadGrade = scoring.leadGrade || 'interested';
+    const leadMeta = scoring.leadMeta || {};
     const profilePayload = {
       intent: 'buy',
       ownership: {
@@ -497,7 +482,7 @@ export async function createPropertyInquiry(req, res) {
         must_have_features: inquiryText,
       },
       qualification: {
-        agent: {},
+        agent: agentQualification,
         mortgage_broker: {},
         lawyer: {
           transaction_stage: 'property_inquiry',
@@ -617,13 +602,27 @@ export async function createPropertyInquiry(req, res) {
       { $addToSet: { lead_refs: leadMatch._id } }
     );
 
-    await createLeadLifecycleNotification(listingOwnerId, {
+    emitWorkspaceLeadEvent(listingOwnerId, {
+      kind: 'lead_created',
+      lead_match_id: String(leadMatch._id),
+      lead_profile_id: String(inquiryProfile._id),
+      conversation_id: null,
+      session_id: null,
+      grade: leadGrade,
+      score: Number(leadMatch.match_score ?? leadScore),
+      intent: 'buy',
+      appointment_status: 'none',
+      high_intent: leadGrade === 'hot' || leadGrade === 'warm',
+      conversion_preview: null,
+    });
+
+    await emitLeadLifecycleNotification(listingOwnerId, {
       notification_type: 'property_inquiry_created',
       title: 'New property inquiry',
       body: `${clientName} asked about ${title}.`,
       severity: 'high',
-      lead_match_id: leadMatch._id,
-      lead_profile_id: inquiryProfile._id,
+      lead_match_id: String(leadMatch._id),
+      lead_profile_id: String(inquiryProfile._id),
       grade: leadGrade,
       score: leadMatch.match_score,
       intent: 'buy',
@@ -701,56 +700,4 @@ export async function createPropertyConversation(req, res) {
   }
 }
 
-export async function notifyClientsOfNewPropertyForSale(leadProfileId) {
-  const property = await loadAvailablePropertyById(leadProfileId);
-  if (!property) return;
-
-  const location = String(property.property?.location || property.property?.address || '').trim();
-  const price = parsePrice(property.property?.expected_price || property.property?.budget);
-  const query = {};
-
-  if (location) {
-    query.$or = [
-      { preferred_location: { $regex: location.split(',')[0].trim(), $options: 'i' } },
-      { preferred_location: '' },
-      { preferred_location: { $exists: false } },
-    ];
-  }
-  if (price) {
-    query.$and = [
-      ...(query.$and || []),
-      {
-        $or: [
-          { dream_home_price: { $gte: price * 0.85 } },
-          { dream_home_price: null },
-          { dream_home_price: { $exists: false } },
-        ],
-      },
-    ];
-  }
-
-  const profiles = await ClientProfile.find(query).select('user_id').limit(50).lean();
-  const title = propertyTitle(property);
-  await Promise.all(
-    profiles
-      .filter((profile) => profile?.user_id)
-      .map((profile) =>
-        createLeadLifecycleNotification(profile.user_id, {
-          notification_type: 'new_property_for_sale',
-          title: 'New property for sale',
-          body: `${title} is now available.`,
-          severity: 'info',
-          lead_profile_id: property._id,
-          intent: 'sell',
-          action: {
-            type: 'open_property',
-            property_id: String(property._id),
-          },
-          primary_next_action: {
-            label: 'View property',
-            href: `/client-dashboard/properties/${String(property._id)}`,
-          },
-        })
-      )
-  );
-}
+export { notifyClientsOfNewPropertyForSale } from './propertyClientNotifications.js';

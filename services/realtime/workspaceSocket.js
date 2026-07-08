@@ -151,7 +151,10 @@ export function initWorkspaceSocket(httpServer) {
           err.code = attachmentLimit.code;
           throw err;
         }
-        const { participants } = await assertThreadMembership(thread_id);
+        const { participants, thread } = await assertThreadMembership(thread_id);
+        const participantsKey = String(thread?.participants_key || '');
+        const isLeadThread = participantsKey.startsWith('lead:');
+        const leadId = isLeadThread ? (participantsKey.split(':')[1] || null) : null;
         const msg = await ProfessionalChatMessage.create({
           thread_id,
           sender_user_id: uid,
@@ -202,6 +205,8 @@ export function initWorkspaceSocket(httpServer) {
             schema: 1,
             occurred_at: new Date().toISOString(),
             thread_id: String(thread_id),
+            is_lead_thread: isLeadThread,
+            lead_id: leadId,
             message: out,
           });
         }

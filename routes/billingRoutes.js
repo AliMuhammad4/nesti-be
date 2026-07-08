@@ -66,7 +66,7 @@ const getCurrentSubscription = async (req, res) => {
 };
 
 const cancelCurrentSubscription = async (req, res) => {
-  const result = await cancelSubscriptionForUser(req.user);
+  const result = await cancelSubscriptionForUser(req.user, req.body?.reason);
   if (!result.ok) {
     if (result.subscription) {
       return res.json({

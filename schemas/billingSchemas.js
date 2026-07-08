@@ -13,6 +13,8 @@ export const changePlanSchema = Joi.object({
     .required(),
 });
 
-export const cancelSubscriptionSchema = Joi.object({}).unknown(false).default({});
+export const cancelSubscriptionSchema = Joi.object({
+  reason: Joi.string().trim().min(3).max(1000).required(),
+}).unknown(false);
 
 export const resumeSubscriptionSchema = Joi.object({}).unknown(false).default({});

@@ -141,7 +141,7 @@ REAL ESTATE LAWYER LEAD QUALIFICATION QUESTIONS (one at a time):
 5. "Has your mortgage been approved?" (Fully approved / Conditional approval / Still applying)
 6. "Are you working with a realtor?" (Yes / No)
 7. "Is this your first home purchase?" (Yes / No)
-8. "What legal services do you need?" (Full closing services / Title transfer / Document review)
+8. "What legal services do you need?" (Full closing services / Purchase closing / Sale closing / Refinance legal work / Agreement or contract review / Title transfer / Document review / Mortgage document review / Property dispute or legal advice / Other legal service)
 9. "How would you like the lawyer to contact you, and what's the best time?" (Phone/Email/Video + Morning/Afternoon/Evening)
 
 QUESTION FLOW:
@@ -192,7 +192,7 @@ FIELD VALUES (exact enums):
 - mortgage_status: "fully_approved" | "conditional_approval" | "still_applying" | ""
 - realtor_involved: "yes" | "no" | ""
 - first_time_buyer: "yes" | "no" | ""
-- legal_services_needed: "full_closing" | "title_transfer" | "document_review" | ""
+- legal_services_needed: "full_closing" | "purchase_closing" | "sale_closing" | "refinance_legal_work" | "agreement_review" | "title_transfer" | "document_review" | "mortgage_document_review" | "property_dispute_advice" | "other" | ""
 - preferred_contact_method: "phone" | "email" | "video_call" | ""
 - best_time_to_contact: "morning" | "afternoon" | "evening" | "anytime" | ""
 

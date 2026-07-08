@@ -91,8 +91,20 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
   const normalizedType = String(type || '').trim().toLowerCase();
 
   const threadParticipantFilter = clientObjectId
-    ? { participants: clientObjectId, thread_type: 'dm' }
-    : { participants: userId, thread_type: 'dm' };
+    ? {
+        participants: clientObjectId,
+        $or: [
+          { thread_type: 'dm' },
+          { thread_type: 'group', participants_key: /^lead:/ },
+        ],
+      }
+    : {
+        participants: userId,
+        $or: [
+          { thread_type: 'dm' },
+          { thread_type: 'group', participants_key: /^lead:/ },
+        ],
+      };
 
   const [propertyMatches, clientProfiles, threads] = await Promise.all([
     LeadMatch.find({ 'compatibility_factors.client_user_id': clientId })

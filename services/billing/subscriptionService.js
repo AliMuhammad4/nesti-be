@@ -924,7 +924,8 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
   return synced;
 }
 
-export async function cancelSubscriptionForUser(user) {
+export async function cancelSubscriptionForUser(user, cancellationReason = '') {
+  const reason = String(cancellationReason || '').trim();
   const subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription?.stripe_subscription_id) {
     return { ok: false, code: 404, message: 'No active Stripe subscription found.' };
@@ -954,8 +955,23 @@ export async function cancelSubscriptionForUser(user) {
 
   const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
     cancel_at_period_end: true,
+    metadata: {
+      ...(stripeSubscription.metadata || {}),
+      cancellation_reason: reason.slice(0, 500),
+      cancellation_requested_at: new Date().toISOString(),
+    },
   });
-  const synced = await syncStripeSubscription(updated, { clearPendingPlan: true });
+  let synced = await syncStripeSubscription(updated, { clearPendingPlan: true });
+  synced = await Subscription.findOneAndUpdate(
+    { user_id: user._id },
+    {
+      $set: {
+        'metadata.cancellation_reason': reason,
+        'metadata.cancellation_requested_at': new Date(),
+      },
+    },
+    { returnDocument: 'after' },
+  );
   return { ok: true, subscription: synced };
 }
 

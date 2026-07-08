@@ -20,6 +20,7 @@ export async function createLeadCreatedNotification(ownerUserId, ctx) {
     socketIntent,
     appointment_status,
     conversion_preview,
+    details = null,
   } = ctx;
 
   return ProfessionalNotification.create({
@@ -43,6 +44,7 @@ export async function createLeadCreatedNotification(ownerUserId, ctx) {
     outcomes_headline: conversion_preview?.outcomes_headline ?? null,
     booking_cta: conversion_preview?.booking_cta ?? null,
     primary_next_action: primaryNextActionFromPreview(conversion_preview),
+    details,
   });
 }
 
@@ -67,6 +69,7 @@ export async function createLeadLifecycleNotification(ownerUserId, payload = {})
     booking_cta = null,
     primary_next_action = null,
     action = null,
+    details = null,
   } = payload;
 
   return ProfessionalNotification.create({
@@ -90,6 +93,7 @@ export async function createLeadLifecycleNotification(ownerUserId, payload = {})
     outcomes_headline,
     booking_cta,
     primary_next_action,
+    details,
   });
 }
 
@@ -118,6 +122,7 @@ function toDto(doc) {
     outcomes_headline: o.outcomes_headline ?? null,
     booking_cta: o.booking_cta ?? null,
     primary_next_action: o.primary_next_action ?? null,
+    details: o.details ?? null,
     decision_support: {
       why_this_match: o.body || null,
       do_this_now: o.primary_next_action || null,

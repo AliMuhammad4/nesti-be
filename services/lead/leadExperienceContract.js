@@ -10,8 +10,16 @@ export function urgencyWindowLabel(minsOrPreview) {
     typeof minsOrPreview === 'number'
       ? minsOrPreview
       : minsOrPreview?.recommended_response_within_minutes ?? null;
-  if (!mins) return null;
-  return mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} hr`;
+  return formatResponseWindow(mins);
+}
+
+function formatResponseWindow(mins) {
+  const value = Number(mins);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (value < 60) return `${Math.round(value)} min`;
+  const hours = value / 60;
+  if (Number.isInteger(hours)) return `${hours} hr`;
+  return `${Number(hours.toFixed(1))} hr`;
 }
 
 export function buildSpeedToLeadTip(gradeOrPreview, preview) {
@@ -23,9 +31,10 @@ export function buildSpeedToLeadTip(gradeOrPreview, preview) {
     mins = gradeOrPreview?.recommended_response_within_minutes;
     urgency = gradeOrPreview?.urgency;
   }
-  if (urgency === 'immediate') return `Hot lead — respond within ${mins ?? 5} min to maximise conversion.`;
-  if (urgency === 'same_day') return `Warm lead — follow up within ${mins ?? 30} min while interest is high.`;
-  if (mins) return `Reach out within ${mins} min for best results.`;
+  const windowLabel = formatResponseWindow(mins);
+  if (urgency === 'immediate') return `Hot lead — respond within ${windowLabel || '5 min'} to maximise conversion.`;
+  if (urgency === 'same_day') return `Warm lead — follow up within ${windowLabel || '30 min'} while interest is high.`;
+  if (windowLabel) return `Reach out within ${windowLabel} for best results.`;
   return null;
 }
 

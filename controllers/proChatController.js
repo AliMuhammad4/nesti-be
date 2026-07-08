@@ -183,6 +183,7 @@ export const listMyThreads = async (req, res, next) => {
       currentUserId: req.user?._id,
       limitRaw: req.query?.limit,
       pageRaw: req.query?.page,
+      includeLeadThreadsRaw: req.query?.include_lead_threads,
     });
     return res.json(body);
   } catch (error) {

@@ -5,6 +5,7 @@ import {
   getClientProfile,
   getClientInquiries,
   getClientRecommendations,
+  submitClientLawyerInquiryFromProfile,
   upsertClientProfile,
   updateClientSettings,
   createClientSubscriptionCheckout,
@@ -18,6 +19,7 @@ import {
 router.get('/profile/me', protect, getClientProfile);
 router.get('/inquiries', protect, getClientInquiries);
 router.get('/recommendations', protect, getClientRecommendations);
+router.post('/professionals/:professionalId/lawyer-inquiry', protect, submitClientLawyerInquiryFromProfile);
 router.post('/profile', protect, upsertClientProfile);
 router.put('/profile', protect, upsertClientProfile);
 router.put('/settings', protect, updateClientSettings);

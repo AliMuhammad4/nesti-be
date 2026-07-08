@@ -9,7 +9,7 @@ import {
 import { requireFeature } from '../middleware/subscriptionAccess.js';
 import { validateBody } from '../middleware/validate.js';
 import { FEATURES } from '../services/billing/entitlements.js';
-import { leadAgentPatchSchema } from '../schemas/leadSchemas.js';
+import { leadAgentPatchSchema, leadConversationMessageSchema } from '../schemas/leadSchemas.js';
 import {
   deleteLeadById,
   getLeadById,
@@ -20,6 +20,7 @@ import {
   getLeadProfileById,
   getLeads,
   getLeadPropertyMatches,
+  postLeadConversationMessage,
   recordLeadView,
   updateLeadMatch,
 } from '../services/lead/leadService.js';
@@ -41,6 +42,7 @@ router.post('/:id/view', protect, requireCompleteProfessionalProfile, requireFea
 router.patch('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_STATUS), ensureAgentOrMortgageBroker, validateBody(leadAgentPatchSchema), updateLeadMatch);
 router.get('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_LIST), ensureAgentOrMortgageBroker, getLeadById);
 router.get('/:id/conversation', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_LEAD_CONVERSATION), ensureAgentOrMortgageBroker, getLeadConversation);
+router.post('/:id/conversation/message', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_LEAD_CONVERSATION), ensureAgentOrMortgageBroker, validateBody(leadConversationMessageSchema), postLeadConversationMessage);
 router.delete('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CRM_BASIC_STATUS), ensureAgentOrMortgageBroker, deleteLeadById);
 
 export default router;

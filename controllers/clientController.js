@@ -17,6 +17,7 @@ import {
 } from '../services/client/clientSubscriptionService.js';
 import { getClientRecommendationsForUser } from '../services/matching/matchRankingService.js';
 import { getClientInquiriesForUser } from '../services/client/clientInquiryService.js';
+import { submitClientLawyerInquiry } from '../services/client/clientProfessionalInquiryService.js';
 import { USER_ROLE } from '../constants/roles.js';
 
 export async function getClientProfile(req, res) {
@@ -285,6 +286,31 @@ export async function getClientRecommendations(req, res) {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch client recommendations',
+      error: error.message,
+    });
+  }
+}
+
+export async function submitClientLawyerInquiryFromProfile(req, res) {
+  try {
+    if (String(req.user?.role || '').toLowerCase() !== USER_ROLE.CLIENT) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only clients can submit lawyer inquiries',
+      });
+    }
+
+    const result = await submitClientLawyerInquiry({
+      clientUserId: req.user._id,
+      professionalUserId: String(req.params?.professionalId || '').trim(),
+      body: req.body || {},
+    });
+    return res.status(result.status || 200).json(result.body || result);
+  } catch (error) {
+    console.error('Error submitting client lawyer inquiry:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to submit inquiry',
       error: error.message,
     });
   }

@@ -636,6 +636,28 @@ export async function createPropertyInquiry(req, res) {
         label: 'Review inquiry',
         href: `/leads/${String(leadMatch._id)}`,
       },
+      details: {
+        type: 'property_inquiry',
+        client_name: clientName,
+        inquiry_message: inquiryText,
+        contact_preference: profileContactPreference,
+        best_time_to_contact: profileBestTimeToContact,
+        lead_reasons: leadMeta.lead_reasons || [],
+        property: {
+          ...inquiredPropertySnapshot,
+          id: String(property._id),
+          title,
+          address: listingFields.address || '',
+          location: listingFields.location || listingFields.address || '',
+          expected_price: listingFields.expected_price || listingFields.budget || '',
+          property_type: listingFields.property_type || '',
+          bedrooms: listingFields.bedrooms || '',
+          bathrooms: listingFields.bathrooms || '',
+          square_footage: listingFields.square_footage || '',
+        },
+        client_profile: clientProfileSnapshot,
+        chat_thread_id: thread?.id || null,
+      },
     });
 
     return res.status(201).json({

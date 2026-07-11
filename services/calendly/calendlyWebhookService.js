@@ -244,6 +244,13 @@ async function findLeadForBooking(email, trackingUtm, ownerUserId = null) {
   const filter = ownerFilter(ownerUserId);
 
   if (trackingUtm && mongoose.Types.ObjectId.isValid(trackingUtm)) {
+    const byLeadMatchId = await LeadMatch.findOne({
+      _id: new mongoose.Types.ObjectId(trackingUtm),
+      ...filter,
+      ...SELLER_LEAD_MATCH_EXCLUSION,
+    });
+    if (byLeadMatchId) return { lead: byLeadMatchId, matchedVia: 'utm_lead_match' };
+
     const lead = await LeadMatch.findOne({ conversation_id: new mongoose.Types.ObjectId(trackingUtm), ...filter });
     if (lead) return { lead, matchedVia: 'utm_conversation' };
   }
@@ -277,9 +284,15 @@ async function findLeadForBooking(email, trackingUtm, ownerUserId = null) {
   return { lead: null, matchedVia: null };
 }
 
-function resolveConversationId(lead, trackingUtm) {
+function resolveConversationId(lead, trackingUtm, matchedVia = '') {
   if (lead?.conversation_id) return lead.conversation_id;
-  if (trackingUtm && mongoose.Types.ObjectId.isValid(trackingUtm)) return new mongoose.Types.ObjectId(trackingUtm);
+  if (
+    trackingUtm &&
+    mongoose.Types.ObjectId.isValid(trackingUtm) &&
+    String(matchedVia || '').includes('conversation')
+  ) {
+    return new mongoose.Types.ObjectId(trackingUtm);
+  }
   return null;
 }
 
@@ -346,7 +359,7 @@ async function resolveInviteeMatchContext(email, trackingUtm, ownerUserIdFromCal
   return {
     match,
     matchedVia,
-    conversationId: resolveConversationId(match, trackingUtm),
+    conversationId: resolveConversationId(match, trackingUtm, matchedVia),
   };
 }
 
@@ -522,7 +535,7 @@ async function handleInviteeCreated({
       ? (await LeadMatch.findById(match._id).select('conversation_id').lean())?.conversation_id
       : null) ||
     conversationId ||
-    (trackingUtm && mongoose.Types.ObjectId.isValid(String(trackingUtm))
+    (!match && trackingUtm && mongoose.Types.ObjectId.isValid(String(trackingUtm))
       ? new mongoose.Types.ObjectId(String(trackingUtm))
       : null);
 

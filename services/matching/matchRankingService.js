@@ -187,16 +187,21 @@ function scoreAgentSpecialization(client, professional, max) {
 }
 
 function scoreBrokerSpecialization(client, professional, max) {
+  const clientGoalText = toText([
+    ...(Array.isArray(client?.home_goals) ? client.home_goals : [client?.home_goals]),
+    client?.home_goal,
+    ...(Array.isArray(client?.priority_tags) ? client.priority_tags : [client?.priority_tags]),
+    client?.purchase_purpose,
+  ].filter(Boolean).join(' '));
   const goals = expandSemanticTokens(client?.home_goals, client?.home_goal, client?.priority_tags);
+  const isInvestorGoal = /\b(invest|investor|investment|rental|commercial)\b/.test(clientGoalText);
+  const isFirstTimeGoal = /first[_\s-]*time|new[_\s-]*(buyer|borrower)|beginner|starter/.test(clientGoalText);
   const proTokens = expandSemanticTokens(
     professional?.core_specialization_tags,
     professional?.specialty_strength_tags,
     professional?.specializations,
     professional?.preferred_clients,
     professional?.bio,
-    client?.employment_status === 'self_employed' ? 'self_employed_borrowers' : '',
-    goals.has('investor') ? 'investment_properties' : '',
-    goals.has('first_time') ? 'first_time_buyers' : '',
   );
   const clientReady = goals.size > 0 || Boolean(client?.employment_status);
   const proReady = proTokens.size > 0;
@@ -205,9 +210,10 @@ function scoreBrokerSpecialization(client, professional, max) {
 
   const clientLoanTokens = expandSemanticTokens(
     client?.employment_status === 'self_employed' ? 'self_employed' : '',
-    goals.has('investor') ? 'investment' : '',
-    goals.has('first_time') ? 'first_time' : '',
+    isInvestorGoal ? 'investment' : '',
+    isFirstTimeGoal ? 'first_time' : '',
     client?.purchase_purpose,
+    client?.mortgage_status,
   );
   const ratio = tokenOverlapScore(clientLoanTokens, proTokens) ?? 0;
   return {

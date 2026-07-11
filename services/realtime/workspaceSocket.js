@@ -6,13 +6,29 @@ import ProfessionalChatMessage from '../../models/ProfessionalChatMessage.js';
 import logger from '../../utils/logger.js';
 import { normalizeAttachments, validateProChatAttachmentLimits } from '../../utils/proChatUtils.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 let io = null;
 function userRoom(userId) {
   return `user:${String(userId)}`;
 }
 function proChatRoom(threadId) {
   return `prochat:${String(threadId)}`;
+}
+
+function normalizeCallRoomName(threadId, value) {
+  const base = proChatRoom(threadId);
+  const roomName = String(value || '').trim();
+  if (roomName === base) return roomName; // Backward compatibility for an in-flight legacy call.
+  if (roomName.startsWith(`${base}:`)) {
+    const callId = roomName.slice(base.length + 1);
+    if (/^[a-zA-Z0-9_-]{8,128}$/.test(callId)) return roomName;
+  }
+  const error = new Error('invalid_call_room');
+  error.code = 'invalid_call_room';
+  throw error;
+}
+
+function normalizeCallType(value) {
+  return String(value || '').trim().toLowerCase() === 'video' ? 'video' : 'voice';
 }
 
 function normalizeHandshakeToken(raw) {
@@ -22,8 +38,12 @@ function normalizeHandshakeToken(raw) {
   return t || null;
 }
 function parseOrigins() {
-  const raw = process.env.CLIENT_ORIGIN || process.env.SOCKET_CORS_ORIGIN || '';
-  if (!raw.trim()) return true;
+  const raw =
+    process.env.CLIENT_ORIGIN ||
+    process.env.SOCKET_CORS_ORIGIN ||
+    process.env.FRONTEND_URL ||
+    '';
+  if (!raw.trim()) return process.env.NODE_ENV !== 'production';
   const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
   if (process.env.NODE_ENV !== 'production') {
     const devDefaults = [
@@ -41,6 +61,10 @@ function parseOrigins() {
 
 export function initWorkspaceSocket(httpServer) {
   if (io) return io;
+  const jwtSecret = String(process.env.JWT_SECRET || '').trim();
+  if (!jwtSecret) {
+    throw new Error('JWT_SECRET is required to initialize Workspace Socket.IO');
+  }
   io = new Server(httpServer, {
     path: '/socket.io',
     cors: {
@@ -51,12 +75,12 @@ export function initWorkspaceSocket(httpServer) {
   io.use(async (socket, next) => {
     try {
       const token = normalizeHandshakeToken(
-        socket.handshake.auth?.token || socket.handshake.query?.token || null
+        socket.handshake.auth?.token || null
       );
       if (!token) {
         return next(new Error('auth_required'));
       }
-      const decoded = jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, jwtSecret);
       const user = await User.findById(decoded.id).select('_id role');
       if (!user) return next(new Error('user_not_found'));
       socket.data.userId = String(user._id);
@@ -97,7 +121,7 @@ export function initWorkspaceSocket(httpServer) {
         err.code = 'missing_thread_id';
         throw err;
       }
-      const thread = await ProfessionalChatThread.findById(tid).select('participants').lean();
+      const thread = await ProfessionalChatThread.findById(tid).select('participants participants_key').lean();
       if (!thread) {
         const err = new Error('thread_not_found');
         err.code = 'thread_not_found';
@@ -231,6 +255,111 @@ export function initWorkspaceSocket(httpServer) {
         safeAck(ack, { success: true });
       } catch (e) {
         safeAck(ack, { success: false, code: e.code || 'typing_failed', message: e.message });
+      }
+    });
+
+    socket.on('prochat:call_invite', async (payload, ack) => {
+      try {
+        const { thread_id, room_name, call_type } = payload || {};
+        const { participants, thread } = await assertThreadMembership(thread_id);
+        const participantsKey = String(thread?.participants_key || '');
+        const isLeadThread = participantsKey.startsWith('lead:');
+        const leadId = isLeadThread ? (participantsKey.split(':')[1] || null) : null;
+        const sender = await User.findById(uid).select('first_name last_name email').lean();
+        const senderName =
+          [sender?.first_name, sender?.last_name].filter(Boolean).join(' ').trim() ||
+          sender?.email ||
+          'Participant';
+        const body = {
+          thread_id: String(thread_id),
+          room_name: normalizeCallRoomName(thread_id, room_name),
+          call_type: normalizeCallType(call_type),
+          user_id: String(uid),
+          sender_name: senderName,
+          occurred_at: new Date().toISOString(),
+        };
+        socket.to(proChatRoom(thread_id)).emit('prochat:call_invite', body);
+        for (const pid of participants) {
+          if (String(pid) === String(uid)) continue;
+          io.to(userRoom(pid)).emit('prochat:inbox', {
+            schema: 1,
+            occurred_at: body.occurred_at,
+            thread_id: String(thread_id),
+            is_lead_thread: isLeadThread,
+            lead_id: leadId,
+            kind: 'call_invite',
+            call: body,
+          });
+        }
+        safeAck(ack, { success: true, call: body });
+      } catch (e) {
+        safeAck(ack, { success: false, code: e.code || 'call_invite_failed', message: e.message });
+      }
+    });
+
+    socket.on('prochat:call_decline', async (payload, ack) => {
+      try {
+        const { thread_id, room_name, call_type } = payload || {};
+        const { participants, thread } = await assertThreadMembership(thread_id);
+        const participantsKey = String(thread?.participants_key || '');
+        const isLeadThread = participantsKey.startsWith('lead:');
+        const leadId = isLeadThread ? (participantsKey.split(':')[1] || null) : null;
+        const body = {
+          thread_id: String(thread_id),
+          room_name: normalizeCallRoomName(thread_id, room_name),
+          call_type: normalizeCallType(call_type),
+          user_id: String(uid),
+          occurred_at: new Date().toISOString(),
+        };
+        socket.to(proChatRoom(thread_id)).emit('prochat:call_decline', body);
+        for (const pid of participants) {
+          if (String(pid) === String(uid)) continue;
+          io.to(userRoom(pid)).emit('prochat:inbox', {
+            schema: 1,
+            occurred_at: body.occurred_at,
+            thread_id: String(thread_id),
+            is_lead_thread: isLeadThread,
+            lead_id: leadId,
+            kind: 'call_decline',
+            call: body,
+          });
+        }
+        safeAck(ack, { success: true, call: body });
+      } catch (e) {
+        safeAck(ack, { success: false, code: e.code || 'call_decline_failed', message: e.message });
+      }
+    });
+
+    socket.on('prochat:call_ended', async (payload, ack) => {
+      try {
+        const { thread_id, room_name, call_type } = payload || {};
+        const { participants, thread } = await assertThreadMembership(thread_id);
+        const participantsKey = String(thread?.participants_key || '');
+        const isLeadThread = participantsKey.startsWith('lead:');
+        const leadId = isLeadThread ? (participantsKey.split(':')[1] || null) : null;
+        const body = {
+          thread_id: String(thread_id),
+          room_name: normalizeCallRoomName(thread_id, room_name),
+          call_type: normalizeCallType(call_type),
+          user_id: String(uid),
+          occurred_at: new Date().toISOString(),
+        };
+        socket.to(proChatRoom(thread_id)).emit('prochat:call_ended', body);
+        for (const pid of participants) {
+          if (String(pid) === String(uid)) continue;
+          io.to(userRoom(pid)).emit('prochat:inbox', {
+            schema: 1,
+            occurred_at: body.occurred_at,
+            thread_id: String(thread_id),
+            is_lead_thread: isLeadThread,
+            lead_id: leadId,
+            kind: 'call_ended',
+            call: body,
+          });
+        }
+        safeAck(ack, { success: true, call: body });
+      } catch (e) {
+        safeAck(ack, { success: false, code: e.code || 'call_end_failed', message: e.message });
       }
     });
 

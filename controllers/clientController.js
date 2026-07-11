@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import ClientProfile from '../models/ClientProfile.js';
 import User from '../models/User.js';
 import {
@@ -17,8 +18,21 @@ import {
 } from '../services/client/clientSubscriptionService.js';
 import { getClientRecommendationsForUser } from '../services/matching/matchRankingService.js';
 import { getClientInquiriesForUser } from '../services/client/clientInquiryService.js';
-import { submitClientLawyerInquiry } from '../services/client/clientProfessionalInquiryService.js';
+import {
+  submitClientAgentInquiry,
+  submitClientLawyerInquiry,
+  submitClientMortgageBrokerInquiry,
+} from '../services/client/clientProfessionalInquiryService.js';
 import { USER_ROLE } from '../constants/roles.js';
+import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
+
+function safeUploadId(bytes = 6) {
+  try {
+    return crypto.randomBytes(bytes).toString('hex');
+  } catch {
+    return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+}
 
 export async function getClientProfile(req, res) {
   try {
@@ -245,6 +259,7 @@ export async function getClientInquiries(req, res) {
       type: String(req.query.type || '').trim(),
       limit: req.query.limit,
       page: req.query.page,
+      threadId: req.query.thread_id,
     });
 
     return res.json({
@@ -308,6 +323,110 @@ export async function submitClientLawyerInquiryFromProfile(req, res) {
     return res.status(result.status || 200).json(result.body || result);
   } catch (error) {
     console.error('Error submitting client lawyer inquiry:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to submit inquiry',
+      error: error.message,
+    });
+  }
+}
+
+export async function uploadClientAgentInquiryPropertyImages(req, res) {
+  try {
+    if (String(req.user?.role || '').toLowerCase() !== USER_ROLE.CLIENT) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only clients can upload property images',
+      });
+    }
+
+    if (!isR2Configured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Image upload is not configured (missing Cloudflare R2 environment variables).',
+      });
+    }
+
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) {
+      return res.status(400).json({ success: false, message: 'Upload at least one property image.' });
+    }
+
+    const folder = `nesti/client-agent-inquiries/${String(req.user._id)}/${Date.now()}_${safeUploadId(4)}`;
+    const uploaded = await Promise.all(
+      files.slice(0, 8).map(async (file, idx) => {
+        const objectKey = `${folder}/property_${idx}_${safeUploadId(4)}`;
+        const result = await uploadBufferToR2(file.buffer, {
+          key: objectKey,
+          mimeType: file.mimetype,
+        });
+        const url = result?.secure_url || result?.url || '';
+        return {
+          url,
+          secure_url: url,
+          public_id: result?.public_id || objectKey,
+          width: null,
+          height: null,
+          format: String(file.mimetype || '').split('/')[1] || '',
+          bytes: result?.bytes != null ? Number(result.bytes) : Number(file.size || 0) || null,
+          original_filename: file.originalname || '',
+          uploaded_at: new Date().toISOString(),
+        };
+      }),
+    );
+
+    return res.json({ success: true, images: uploaded.filter((img) => img.url) });
+  } catch (error) {
+    console.error('Error uploading client agent inquiry images:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to upload property images',
+    });
+  }
+}
+
+export async function submitClientAgentInquiryFromProfile(req, res) {
+  try {
+    if (String(req.user?.role || '').toLowerCase() !== USER_ROLE.CLIENT) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only clients can submit agent inquiries',
+      });
+    }
+
+    const result = await submitClientAgentInquiry({
+      clientUserId: req.user._id,
+      professionalUserId: String(req.params?.professionalId || '').trim(),
+      body: req.body || {},
+    });
+    return res.status(result.status || 200).json(result.body || result);
+  } catch (error) {
+    console.error('Error submitting client agent inquiry:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to submit inquiry',
+      error: error.message,
+    });
+  }
+}
+
+export async function submitClientMortgageBrokerInquiryFromProfile(req, res) {
+  try {
+    if (String(req.user?.role || '').toLowerCase() !== USER_ROLE.CLIENT) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only clients can submit mortgage broker inquiries',
+      });
+    }
+
+    const result = await submitClientMortgageBrokerInquiry({
+      clientUserId: req.user._id,
+      professionalUserId: String(req.params?.professionalId || '').trim(),
+      body: req.body || {},
+    });
+    return res.status(result.status || 200).json(result.body || result);
+  } catch (error) {
+    console.error('Error submitting client mortgage broker inquiry:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to submit inquiry',

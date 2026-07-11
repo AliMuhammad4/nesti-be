@@ -21,6 +21,7 @@ import {
   listMyThreads,
   listThreadMessages,
   postThreadMessage,
+  createThreadCallToken,
 } from '../controllers/proChatController.js';
 import { postProChatAttachmentUpload } from '../controllers/proChatMediaController.js';
 
@@ -46,7 +47,17 @@ router.post('/client/threads', protect, ensureClient, createOrGetThread);
 router.get('/client/threads/:id', protect, ensureClient, getThreadById);
 router.get('/client/threads/:id/messages', protect, ensureClient, listThreadMessages);
 router.post('/client/threads/:id/messages', protect, ensureClient, postThreadMessage);
+router.post('/client/threads/:id/call-token', protect, ensureClient, createThreadCallToken);
 router.post('/client/threads/:id/attachments', protect, ensureClient, runProChatUpload, postProChatAttachmentUpload);
+router.post('/client/groups', protect, ensureClient, createGroupThread);
+router.patch('/client/groups/:id', protect, ensureClient, updateGroupThread);
+router.delete('/client/groups/:id', protect, ensureClient, deleteGroupThread);
+router.post('/client/groups/:id/members', protect, ensureClient, addGroupMembers);
+router.delete('/client/groups/:id/members/:userId', protect, ensureClient, removeGroupMember);
+router.post('/client/groups/:id/leave', protect, ensureClient, leaveGroupThread);
+router.post('/client/groups/:id/rejoin-request', protect, ensureClient, requestRejoinGroupThread);
+router.get('/client/groups/:id/rejoin-requests', protect, ensureClient, listGroupRejoinRequests);
+router.post('/client/groups/:id/rejoin-requests/:userId/:action', protect, ensureClient, resolveGroupRejoinRequest);
 
 router.get('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), listMyThreads);
 router.post('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), createOrGetThread);
@@ -62,6 +73,7 @@ router.post('/groups/:id/rejoin-requests/:userId/:action', protect, requireCompl
 router.get('/threads/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), getThreadById);
 router.get('/threads/:id/messages', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), listThreadMessages);
 router.post('/threads/:id/messages', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), postThreadMessage);
+router.post('/threads/:id/call-token', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), createThreadCallToken);
 router.post('/threads/:id/attachments', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), runProChatUpload, postProChatAttachmentUpload);
 
 export default router;

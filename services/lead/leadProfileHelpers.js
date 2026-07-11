@@ -381,10 +381,18 @@ async function isLeadScopedThread(threadId, leadId) {
   return String(thread?.participants_key || '').startsWith(`lead:${String(leadId)}:`);
 }
 
-async function createLeadScopedClientInquiryThread({ userId, clientUserId, leadId }) {
+function clientInquiryThreadTitle(leadMatch) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const role = String(cf.professional_type || '').trim().toLowerCase();
+  if (role === 'mortgage_broker' || role === 'broker') return 'Mortgage inquiry';
+  if (role === 'agent') return 'Agent inquiry';
+  return 'Legal inquiry';
+}
+
+async function createLeadScopedClientInquiryThread({ userId, clientUserId, leadId, title = 'Legal inquiry' }) {
   const thread = await ProfessionalChatThread.create({
     thread_type: 'group',
-    title: 'Legal inquiry',
+    title,
     participants: [userId, clientUserId],
     participants_key: `lead:${String(leadId)}:${String(new mongoose.Types.ObjectId())}`,
     created_by: userId,
@@ -398,7 +406,12 @@ async function ensureClientInquiryThread({ userId, leadMatch }) {
   let threadId = String(leadMatch?.compatibility_factors?.chat_thread_id || '').trim();
   if (!(await isLeadScopedThread(threadId, leadId))) {
     threadId = clientUserId && leadId
-      ? await createLeadScopedClientInquiryThread({ userId, clientUserId, leadId })
+      ? await createLeadScopedClientInquiryThread({
+          userId,
+          clientUserId,
+          leadId,
+          title: clientInquiryThreadTitle(leadMatch),
+        })
       : null;
     if (threadId && mongoose.Types.ObjectId.isValid(threadId)) {
       await LeadMatch.updateOne(

@@ -33,17 +33,95 @@ function buildProfessionalSummary(userId, userById, proByUserId, publicByUserId)
 
 function buildPropertySummary(matchFactors = {}, leadProfile = null) {
   const property = leadProfile?.property || {};
+  const propertyType = String(matchFactors.property_type || property.property_type || '').trim();
   return {
     id: matchFactors.inquired_property_id || null,
     title:
       matchFactors.inquired_property_title ||
       property.address ||
       property.location ||
-      property.property_type ||
+      propertyType ||
       'Property inquiry',
     location: property.location || property.address || '',
     price: property.expected_price || property.budget || '',
+    property_type: propertyType || '',
   };
+}
+
+function matchInquirySource(match = {}, leadProfile = null) {
+  return String(
+    match?.compatibility_factors?.source ||
+      leadProfile?.source ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+/** True only for listing/property inquiries — not lawyer/professional profile inquiries. */
+export function isPropertyInquiryMatch(match = {}, leadProfile = null) {
+  const factors = match?.compatibility_factors || {};
+  const source = matchInquirySource(match, leadProfile);
+  if (source === 'client_professional_inquiry') return false;
+  if (source === 'client_property_inquiry') return true;
+  if (factors.inquired_property_id) return true;
+  return false;
+}
+
+const LEGAL_SERVICE_LABELS = {
+  full_closing: 'Full closing services',
+  purchase_closing: 'Purchase closing',
+  sale_closing: 'Sale closing',
+  refinance_legal_work: 'Refinance legal work',
+  agreement_review: 'Agreement / contract review',
+  title_transfer: 'Title transfer',
+  document_review: 'Document review',
+  mortgage_document_review: 'Mortgage document review',
+  property_dispute_advice: 'Property dispute / legal advice',
+  other: 'Other legal service',
+};
+
+export function legalServiceLabel(value) {
+  const key = String(value || '').trim().toLowerCase();
+  if (!key) return '';
+  if (LEGAL_SERVICE_LABELS[key]) return LEGAL_SERVICE_LABELS[key];
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function resolveLegalServicesNeeded(match = {}) {
+  // Only use per-match factors. Never fall back to LeadProfile qualification —
+  // lawyer inquiries for the same client+lawyer share one profile that is
+  // overwritten by the latest submission, which would rewrite every row's title.
+  return String(match?.compatibility_factors?.legal_services_needed || '').trim();
+}
+
+export function resolveMortgageServiceLabel(match = {}) {
+  const factors = match?.compatibility_factors || {};
+  const purpose = String(factors.purchase_purpose || '').trim();
+  if (purpose === 'primary_residence') return 'Primary residence';
+  if (purpose === 'investment') return 'Investment property';
+  if (purpose === 'refinance') return 'Refinance';
+  if (purpose === 'vacation_home') return 'Vacation / second home';
+  const explicit = String(factors.mortgage_service_label || '').trim();
+  if (explicit) return explicit;
+  if (String(factors.pre_approval_status || '').trim() === 'need_now') return 'Pre-approval guidance';
+  return '';
+}
+
+export function resolveAgentServiceLabel(match = {}) {
+  const factors = match?.compatibility_factors || {};
+  const explicit = String(factors.agent_service_label || '').trim();
+  if (explicit) return explicit;
+  const intent = String(factors.intent || '').trim();
+  if (intent === 'buy') return 'Buying help';
+  if (intent === 'sell') return 'Selling help';
+  const goal = String(factors.inquiry_goal || '').trim();
+  if (goal === 'buying_help') return 'Buying help';
+  if (goal === 'selling_help') return 'Selling help';
+  if (goal === 'home_valuation') return 'Home valuation';
+  if (goal === 'showings') return 'Showings / tours';
+  if (goal === 'market_advice') return 'Market advice';
+  return '';
 }
 
 export function dedupeInquiryItemsForAllView(items) {
@@ -65,30 +143,73 @@ export function dedupeInquiryItemsForAllView(items) {
   });
 }
 
+function normalizeProfessionalRole(value) {
+  const key = String(value || '').trim().toLowerCase();
+  if (key === 'lawyer') return 'lawyer';
+  if (key === 'mortgage_broker' || key === 'broker') return 'broker';
+  if (key === 'agent') return 'agent';
+  return key || 'agent';
+}
+
 export function computeInquiryCounts(items) {
+  const list = Array.isArray(items) ? items : [];
+  const propertyItems = list.filter((item) => item.inquiry_type === 'property');
+  const professionalItems = list.filter((item) => item.inquiry_type === 'professional');
+  const deduped = dedupeInquiryItemsForAllView(list);
+
+  let agents = 0;
+  let lawyers = 0;
+  let brokers = 0;
+
+  // Property inquiries belong to agents. Count from the same deduped list as Total
+  // so Agents + Lawyers + Brokers matches Total.
+  for (const item of deduped) {
+    if (item.inquiry_type === 'property') {
+      agents += 1;
+      continue;
+    }
+    const role = normalizeProfessionalRole(item?.professional?.professional_type);
+    if (role === 'lawyer') lawyers += 1;
+    else if (role === 'broker') brokers += 1;
+    else agents += 1;
+  }
+
   return {
-    total: dedupeInquiryItemsForAllView(items).length,
-    property: items.filter((item) => item.inquiry_type === 'property').length,
-    professional: items.filter((item) => item.inquiry_type === 'professional').length,
+    total: deduped.length,
+    property: propertyItems.length,
+    professional: professionalItems.length,
+    agents,
+    lawyers,
+    brokers,
   };
 }
 
-function filterInquiriesByType(items, normalizedType) {
-  if (normalizedType === 'property') {
-    return items.filter((item) => item.inquiry_type === 'property');
-  }
-  if (normalizedType === 'professional') {
-    return items.filter((item) => item.inquiry_type === 'professional');
-  }
-  return dedupeInquiryItemsForAllView(items);
+function inquiryRoleBucket(item) {
+  if (item?.inquiry_type === 'property') return 'agent';
+  return normalizeProfessionalRole(item?.professional?.professional_type);
 }
 
-export async function getClientInquiriesForUser(userId, { type = '', limit = 50, page = 1 } = {}) {
+function filterInquiriesByType(items, normalizedType) {
+  const list = Array.isArray(items) ? items : [];
+  if (normalizedType === 'property') {
+    return list.filter((item) => item.inquiry_type === 'property');
+  }
+  if (normalizedType === 'professional') {
+    return list.filter((item) => item.inquiry_type === 'professional');
+  }
+  if (normalizedType === 'agent' || normalizedType === 'lawyer' || normalizedType === 'broker') {
+    return dedupeInquiryItemsForAllView(list).filter((item) => inquiryRoleBucket(item) === normalizedType);
+  }
+  return dedupeInquiryItemsForAllView(list);
+}
+
+export async function getClientInquiriesForUser(userId, { type = '', limit = 50, page = 1, threadId = '' } = {}) {
   const clientId = String(userId);
   const clientObjectId = toObjectId(userId);
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const safePage = Math.max(Number(page) || 1, 1);
   const normalizedType = String(type || '').trim().toLowerCase();
+  const targetThreadId = String(threadId || '').trim();
 
   const threadParticipantFilter = clientObjectId
     ? {
@@ -106,7 +227,7 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
         ],
       };
 
-  const [propertyMatches, clientProfiles, threads] = await Promise.all([
+  const [clientMatches, clientProfiles, threads] = await Promise.all([
     LeadMatch.find({ 'compatibility_factors.client_user_id': clientId })
       .sort({ updatedAt: -1 })
       .lean(),
@@ -121,10 +242,20 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
       .lean(),
   ]);
 
-  const profileById = new Map(clientProfiles.map((profile) => [String(profile._id), profile]));
+  const matchProfileIds = clientMatches
+    .map((match) => match.lead_profile_id)
+    .filter(Boolean);
+  const matchProfiles = matchProfileIds.length
+    ? await LeadProfile.find({ _id: { $in: matchProfileIds } }).lean()
+    : [];
+
+  const profileById = new Map([
+    ...clientProfiles.map((profile) => [String(profile._id), profile]),
+    ...matchProfiles.map((profile) => [String(profile._id), profile]),
+  ]);
   const proUserIds = new Set();
 
-  for (const match of propertyMatches) {
+  for (const match of clientMatches) {
     if (match.user_id) proUserIds.add(String(match.user_id));
   }
   for (const thread of threads) {
@@ -150,30 +281,54 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
 
   const items = [];
   const seenKeys = new Set();
+  const seenThreadIds = new Set();
+  const threadById = new Map(threads.map((thread) => [String(thread._id), thread]));
 
-  for (const match of propertyMatches) {
+  for (const match of clientMatches) {
     const factors = match.compatibility_factors || {};
     const proUserId = String(match.user_id || '');
+    const leadProfile = match.lead_profile_id ? profileById.get(String(match.lead_profile_id)) : null;
+    const isProperty = isPropertyInquiryMatch(match, leadProfile);
     const propertyId = factors.inquired_property_id ? String(factors.inquired_property_id) : '';
-    const dedupeKey = `property:${propertyId || match.lead_profile_id}:${proUserId}`;
+    // Keep every distinct match/thread. Only collapse exact same property+pro or same match id.
+    const dedupeKey = isProperty
+      ? `property:${propertyId || match.lead_profile_id}:${proUserId}`
+      : `professional-match:${String(match._id)}`;
     if (seenKeys.has(dedupeKey)) continue;
     seenKeys.add(dedupeKey);
 
     const professional = buildProfessionalSummary(proUserId, userById, proByUserId, publicByUserId);
     if (!professional) continue;
 
-    const leadProfile = match.lead_profile_id ? profileById.get(String(match.lead_profile_id)) : null;
+    const threadId = factors.chat_thread_id ? String(factors.chat_thread_id) : null;
+    const thread = threadId ? threadById.get(threadId) : null;
+    if (threadId) seenThreadIds.add(threadId);
+
+    const legalServicesNeeded = isProperty ? '' : resolveLegalServicesNeeded(match);
+    const mortgageServiceLabel = isProperty ? '' : resolveMortgageServiceLabel(match);
+    const agentServiceLabel = isProperty ? '' : resolveAgentServiceLabel(match);
+    const propertyType = String(factors.property_type || leadProfile?.property?.property_type || '').trim();
+    // Prefer this match's own inquiry message — never the shared profile's latest message.
+    const matchMessage = String(factors.inquiry_message || '').trim();
+    const lastMessage = String(thread?.last_message_text || '').trim();
 
     items.push({
       id: String(match._id),
-      inquiry_type: 'property',
+      inquiry_type: isProperty ? 'property' : 'professional',
       status: match.match_status || 'new',
-      message: String(factors.inquiry_message || leadProfile?.property?.must_have_features || '').trim(),
+      message: lastMessage || matchMessage || (isProperty ? String(leadProfile?.property?.must_have_features || '').trim() : ''),
+      last_message_text: lastMessage || null,
+      initial_inquiry_message: matchMessage || null,
       created_at: match.createdAt,
-      updated_at: match.updatedAt || match.last_contact_at || match.createdAt,
+      updated_at: thread?.last_message_at || thread?.updatedAt || match.updatedAt || match.last_contact_at || match.createdAt,
       professional,
-      property: buildPropertySummary(factors, leadProfile),
-      thread_id: factors.chat_thread_id ? String(factors.chat_thread_id) : null,
+      property: isProperty ? buildPropertySummary(factors, leadProfile) : null,
+      legal_services_needed: legalServicesNeeded || null,
+      legal_service_label: legalServicesNeeded ? legalServiceLabel(legalServicesNeeded) : null,
+      mortgage_service_label: mortgageServiceLabel || null,
+      agent_service_label: agentServiceLabel || null,
+      property_type: propertyType || null,
+      thread_id: threadId,
       lead_match_id: String(match._id),
       lead_profile_id: match.lead_profile_id ? String(match.lead_profile_id) : null,
     });
@@ -197,6 +352,10 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
       updated_at: profile.updatedAt || profile.lifecycle?.last_inquiry_at || profile.createdAt,
       professional: null,
       property: buildPropertySummary({}, profile),
+      legal_services_needed: null,
+      legal_service_label: null,
+      mortgage_service_label: null,
+      agent_service_label: null,
       thread_id: null,
       lead_match_id: refs[0] || null,
       lead_profile_id: String(profile._id),
@@ -208,6 +367,9 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
     if (!otherParticipant) continue;
 
     const threadId = String(thread._id);
+    // Only skip a thread if it is already represented by a LeadMatch chat_thread_id.
+    if (seenThreadIds.has(threadId)) continue;
+
     const proUserId = String(otherParticipant);
     const professional = buildProfessionalSummary(proUserId, userById, proByUserId, publicByUserId);
     if (!professional) continue;
@@ -225,6 +387,10 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
       updated_at: thread.last_message_at || thread.updatedAt || thread.createdAt,
       professional,
       property: null,
+      legal_services_needed: null,
+      legal_service_label: null,
+      mortgage_service_label: null,
+      agent_service_label: null,
       thread_id: threadId,
       lead_match_id: null,
       lead_profile_id: null,
@@ -243,19 +409,28 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
   );
 
   const total = filtered.length;
-  const start = (safePage - 1) * safeLimit;
+  let effectivePage = safePage;
+  if (targetThreadId) {
+    const targetIndex = filtered.findIndex((item) => String(item?.thread_id || '').trim() === targetThreadId);
+    if (targetIndex >= 0) {
+      effectivePage = Math.floor(targetIndex / safeLimit) + 1;
+    }
+  }
+  const totalPages = Math.max(Math.ceil(total / safeLimit), 1);
+  effectivePage = Math.min(effectivePage, totalPages);
+  const start = (effectivePage - 1) * safeLimit;
   const pagedItems = filtered.slice(start, start + safeLimit);
 
   return {
     items: pagedItems,
     counts,
     pagination: {
-      page: safePage,
+      page: effectivePage,
       limit: safeLimit,
       total,
-      total_pages: Math.max(Math.ceil(total / safeLimit), 1),
-      has_prev_page: safePage > 1,
-      has_next_page: safePage * safeLimit < total,
+      total_pages: totalPages,
+      has_prev_page: effectivePage > 1,
+      has_next_page: effectivePage * safeLimit < total,
     },
   };
 }

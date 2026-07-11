@@ -141,6 +141,17 @@ function isListedPropertyInquirySource(leadMatch, leadSource) {
   return source === 'client_property_inquiry';
 }
 
+function isClientProfessionalInquirySource(leadMatch, leadSource) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const source = String(leadSource || cf.source || '').trim().toLowerCase();
+  return source === 'client_professional_inquiry';
+}
+
+function resolveClientProfessionalInquiryLocation(leadMatch) {
+  const cf = leadMatch?.compatibility_factors || {};
+  return String(cf.property_address || '').trim();
+}
+
 function emptyAgentQualification() {
   return {
     mortgage_status: null,
@@ -158,6 +169,25 @@ function hasAgentQualificationData(qualification) {
   return Object.values(qualification).some(
     (value) => value != null && String(value).trim() !== '',
   );
+}
+
+function applyClientProfessionalInquiryView(core, leadMatch) {
+  if (!isClientProfessionalInquirySource(leadMatch, core.source)) return core;
+
+  const location = resolveClientProfessionalInquiryLocation(leadMatch) || null;
+  // Use only the exact per-inquiry address. Do not fall back to shared LeadProfile
+  // location because it can be overwritten by newer inquiries.
+  return {
+    ...core,
+    location,
+    address: location,
+    city: location,
+    property: {
+      ...core.property,
+      location,
+      address: location,
+    },
+  };
 }
 
 function applyListedPropertyInquiryView(core, leadMatch, profile) {
@@ -260,7 +290,9 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
   if (includeIntentField) {
     core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);
   }
-  return applyListedPropertyInquiryView(core, leadMatch, opts.leadProfile || null);
+  let row = applyListedPropertyInquiryView(core, leadMatch, opts.leadProfile || null);
+  row = applyClientProfessionalInquiryView(row, leadMatch);
+  return row;
 }
 
 export function mapLeadMatchToListRow(leadMatch, profile, convo, includeConversion, opts = {}) {

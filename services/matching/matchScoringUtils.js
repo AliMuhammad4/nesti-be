@@ -17,6 +17,14 @@ const SEMANTIC_GROUPS = Object.freeze({
   newcomer: ['newcomer', 'immigrant', 'relocation', 'new_to_canada'],
   commercial: ['commercial', 'commercial_client', 'commercial_deal'],
   financing: ['finance', 'financing', 'mortgage', 'credit'],
+  pre_approval: ['pre_approval', 'preapproval', 'pre-approved', 'pre approved', 'pre_approval_guidance'],
+  self_employed: ['self_employed', 'self employed', 'self_employed_borrowers'],
+  alternative_lending: ['alternative_lending', 'alternative lender', 'alternative_lender_access', 'private_lending', 'private lender'],
+  credit_challenged: ['credit_challenged', 'credit challenged', 'credit_challenged_borrowers', 'credit_repair'],
+  insured_mortgage: ['insured_mortgage', 'insured mortgages', 'high_ratio', 'high-ratio', 'high_ratio_insured_mortgages'],
+  debt_consolidation: ['debt_consolidation', 'debt consolidation', 'debt_consolidation_refinance'],
+  construction_financing: ['construction', 'renovation', 'construction_renovation_loans'],
+  mortgage_renewal: ['renewal', 'mortgage_renewal', 'renewal_refinance_specialist'],
   home_purchase: ['home_purchase', 'purchase', 'purchase_transaction', 'purchase_transactions', 'buyer', 'buyers', 'closing', 'closing_document_review'],
   home_sale: ['home_sale', 'sale', 'sale_transaction', 'sale_transactions', 'seller', 'selling'],
   refinance: ['refinance', 'refinance_transaction', 'refinance_transactions', 'private_lending', 'private_lending_files'],
@@ -71,7 +79,7 @@ export function expandSemanticTokens(...values) {
       .forEach((word) => tokens.add(word));
 
     for (const [group, synonyms] of Object.entries(SEMANTIC_GROUPS)) {
-      if (synonyms.some((syn) => item.includes(syn) || syn.includes(item))) {
+      if (synonyms.some((syn) => item.includes(syn) || (item.length >= 12 && syn.includes(item)))) {
         tokens.add(group);
         synonyms.forEach((syn) => tokens.add(syn.replace(/[\s-]+/g, '_')));
       }

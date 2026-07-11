@@ -152,6 +152,55 @@ test('lead response mappers preserve core list/detail/seller shapes', async () =
   assert.equal(underProfile.professional_type, 'agent');
 });
 
+test('lawyer client professional inquiry list rows use per-match property_address for location', async () => {
+  const { mapLeadMatchToListRow } = await import('../services/lead/leadResponseMappers.js');
+  const sharedProfile = {
+    _id: '507f1f77bcf86cd799439099',
+    intent: 'unspecified',
+    identity: { full_name: 'Muhamamd Ahmed', email: 'client@example.com', phone: '555' },
+    contact_preferences: {},
+    property: { location: 'rtyuio', address: 'rtyuio' },
+    qualification: { lawyer: { legal_services_needed: 'sale_closing' } },
+    ownership: { professional_type: 'lawyer' },
+    source: 'client_professional_inquiry',
+  };
+
+  const olderMatch = {
+    ...stubMatch,
+    _id: '507f1f77bcf86cd799439021',
+    lead_type: 'client_warm',
+    compatibility_factors: {
+      source: 'client_professional_inquiry',
+      professional_type: 'lawyer',
+      property_address: 'Johar Town, Lahore',
+    },
+  };
+  const newerMatch = {
+    ...stubMatch,
+    _id: '507f1f77bcf86cd799439022',
+    lead_type: 'client_hot',
+    compatibility_factors: {
+      source: 'client_professional_inquiry',
+      professional_type: 'lawyer',
+      property_address: 'DHA Phase 5',
+    },
+  };
+
+  const olderRow = mapLeadMatchToListRow(olderMatch, sharedProfile, stubConvo, false, {
+    includeIntentField: false,
+    includeExperienceBlocks: false,
+  });
+  const newerRow = mapLeadMatchToListRow(newerMatch, sharedProfile, stubConvo, false, {
+    includeIntentField: false,
+    includeExperienceBlocks: false,
+  });
+
+  assert.equal(olderRow.location, 'Johar Town, Lahore');
+  assert.equal(olderRow.property.location, 'Johar Town, Lahore');
+  assert.equal(newerRow.location, 'DHA Phase 5');
+  assert.equal(newerRow.property.location, 'DHA Phase 5');
+});
+
 test('role conversion checklist matches role-specific requirements', async () => {
   const { evaluateRoleConversionChecklist } = await import(
     '../services/lead/leadConversionChecklist.js'

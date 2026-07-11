@@ -23,6 +23,7 @@ import {
   listThreadMessages as listThreadMessagesService,
   postThreadMessage as postThreadMessageService,
 } from '../services/proChat/messageService.js';
+import { createCallTokenForThread } from '../services/proChat/callService.js';
 
 function sendServiceResult(res, result) {
   return res.status(result?.status || 200).json(result?.body || result);
@@ -217,6 +218,20 @@ export const postThreadMessage = async (req, res, next) => {
     return sendServiceResult(res, result);
   } catch (error) {
     logger.warn('postThreadMessage failed', { err: error?.message });
+    next(error);
+  }
+};
+
+export const createThreadCallToken = async (req, res, next) => {
+  try {
+    const result = await createCallTokenForThread({
+      currentUserId: req.user?._id,
+      threadId: normalizeId(req.params?.id),
+      callType: req.body?.call_type,
+      roomName: req.body?.room_name,
+    });
+    return sendServiceResult(res, result);
+  } catch (error) {
     next(error);
   }
 };

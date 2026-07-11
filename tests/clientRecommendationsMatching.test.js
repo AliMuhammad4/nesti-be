@@ -159,6 +159,39 @@ test('strong purchase lawyer scores higher than unrelated lawyer for same client
   assert.ok(strong.ai_match_score >= 60);
 });
 
+test('mortgage broker business tags drive borrower matching', () => {
+  const mortgageClient = {
+    ...baseClient,
+    home_goals: ['first_time_buyer'],
+    employment_status: 'self_employed',
+    mortgage_status: 'needs_pre_approval',
+  };
+  const strongBroker = {
+    ...strongAgent,
+    professional_type: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
+    core_specialization_tags: ['first_time_home_buyer_financing', 'pre_approval_guidance', 'self_employed_borrowers'],
+    specialty_strength_tags: ['fast_pre_approval_turnaround', 'income_document_strategist'],
+    specializations: ['first_time_home_buyer_financing', 'self_employed_borrowers'],
+    preferred_clients: ['first_time_buyers', 'self_employed_borrowers'],
+  };
+  const genericBroker = {
+    ...strongBroker,
+    core_specialization_tags: ['commercial_mortgage_financing'],
+    specialty_strength_tags: ['debt_service_optimization'],
+    specializations: ['commercial_mortgage_financing'],
+    preferred_clients: [],
+    bio: 'Commercial mortgage files for experienced investors.',
+  };
+
+  const strong = calculateAiCompatibilityScore(mortgageClient, strongBroker);
+  const generic = calculateAiCompatibilityScore(mortgageClient, genericBroker);
+  const strongSpecialization = strong.ai_match_breakdown.find((item) => item.key === 'specialization_fit');
+  const genericSpecialization = generic.ai_match_breakdown.find((item) => item.key === 'specialization_fit');
+
+  assert.ok(strongSpecialization.score > genericSpecialization.score);
+  assert.ok(strong.ai_match_score > generic.ai_match_score);
+});
+
 test('weights align with revised unified model', () => {
   const broker = {
     ...strongAgent,

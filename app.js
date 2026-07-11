@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -5,7 +6,6 @@ import cors from 'cors';
 import { Resend } from 'resend';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-import dotenv from 'dotenv';
 import morgan from 'morgan';
 import logger from './utils/logger.js';
 import { planQuotaErrorResponse } from './services/billing/planQuota.js';
@@ -32,8 +32,6 @@ import publicProfileRoutes from './routes/publicProfileRoutes.js';
 import professionalDashboardRoutes from './routes/professionalDashboardRoutes.js';
 import { configureR2 } from './services/media/r2Client.js';
 
-// Load env
-dotenv.config();
 configureR2();
 
 const app = express();

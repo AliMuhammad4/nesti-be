@@ -6,14 +6,121 @@ import {
 } from '../services/chat/scoring/lawyerScoring.js';
 import {
   buildClientProfileSnapshot,
+  normalizeAgentInquiryBody,
+  normalizeMortgageBrokerInquiryBody,
   normalizeLawyerInquiryBody,
+  resolveMortgageBrokerQualification,
   resolveLawyerQualification,
+  submitClientAgentInquiry,
+  submitClientMortgageBrokerInquiry,
+  validateAgentInquiryInput,
+  validateMortgageBrokerInquiryInput,
   validateLawyerInquiryInput,
   submitClientLawyerInquiry,
 } from '../services/client/clientProfessionalInquiryService.js';
 
 test('client professional inquiry service exports submit function', () => {
+  assert.equal(typeof submitClientAgentInquiry, 'function');
   assert.equal(typeof submitClientLawyerInquiry, 'function');
+  assert.equal(typeof submitClientMortgageBrokerInquiry, 'function');
+});
+
+test('normalizeAgentInquiryBody trims and maps profile inquiry fields', () => {
+  const payload = normalizeAgentInquiryBody({
+    message: ' Need buying help ',
+    intent: ' buy ',
+    purchase_timeline: ' asap ',
+    location: ' Toronto ',
+    property_budget: ' $750K ',
+  });
+
+  assert.equal(payload.message, 'Need buying help');
+  assert.equal(payload.intent, 'buy');
+  assert.equal(payload.inquiry_goal, 'buying_help');
+  assert.equal(payload.timeline, 'asap');
+  assert.equal(payload.preferred_location, 'Toronto');
+  assert.equal(payload.budget, '$750K');
+});
+
+test('validateAgentInquiryInput enforces required minimal fields', () => {
+  assert.equal(validateAgentInquiryInput({}), 'Please enter your question.');
+  assert.equal(
+    validateAgentInquiryInput({
+      message: 'Need an agent',
+      intent: '',
+    }),
+    'Intent is required.',
+  );
+  assert.equal(
+    validateAgentInquiryInput({
+      message: 'Need an agent',
+      intent: 'buy',
+    }),
+    'Preferred location is required.',
+  );
+  assert.equal(
+    validateAgentInquiryInput({
+      message: 'Need an agent',
+      intent: 'buy',
+      preferred_location: 'Toronto',
+      budget: '400k_700k',
+      property_type: 'Condo',
+      bedrooms: '2',
+      bathrooms: '2',
+      must_have_features: 'garage',
+      parking_required: 'yes',
+      backyard_needed: 'no',
+      school_district_important: 'yes',
+    }),
+    '',
+  );
+});
+
+test('agent seller inquiries require property details and images', () => {
+  assert.equal(
+    validateAgentInquiryInput({
+      message: 'I want to sell',
+      intent: 'sell',
+    }),
+    'Property address is required.',
+  );
+  assert.equal(
+    validateAgentInquiryInput({
+      message: 'I want a valuation',
+      intent: 'sell',
+      property_address: '123 King St',
+      property_type: 'Condo',
+      bedrooms: '2',
+      bathrooms: '2',
+      expected_price: '$800K',
+      must_have_features: 'garage',
+      property_images: [],
+    }),
+    'At least one property image is required.',
+  );
+
+  const payload = normalizeAgentInquiryBody({
+    message: ' Please value my condo ',
+    intent: ' sell ',
+    property_address: ' 123 King St ',
+    property_type: ' Condo ',
+    beds: ' 2 ',
+    baths: ' 2 ',
+    expected_price: ' $800K ',
+    must_have_features: ' garage ',
+    property_images: [{ secure_url: 'https://cdn.example.com/property.jpg', public_id: 'property-1' }],
+  });
+
+  assert.equal(payload.property_address, '123 King St');
+  assert.equal(payload.intent, 'sell');
+  assert.equal(payload.inquiry_goal, 'selling_help');
+  assert.equal(payload.property_type, 'Condo');
+  assert.equal(payload.bedrooms, '2');
+  assert.equal(payload.bathrooms, '2');
+  assert.equal(payload.expected_price, '$800K');
+  assert.equal(payload.must_have_features, 'garage');
+  assert.equal(payload.property_images.length, 1);
+  assert.equal(validateAgentInquiryInput(payload), '');
 });
 
 test('normalizeLawyerInquiryBody trims and maps location field', () => {
@@ -49,6 +156,69 @@ test('validateLawyerInquiryInput enforces required minimal fields', () => {
     }),
     '',
   );
+});
+
+test('normalizeMortgageBrokerInquiryBody trims and maps location field', () => {
+  const payload = normalizeMortgageBrokerInquiryBody({
+    message: ' Need pre approval ',
+    mortgage_timeline: ' 1_2_months ',
+    pre_approval_status: ' need_now ',
+    purchase_purpose: ' primary_residence ',
+    location: ' Toronto ',
+  });
+
+  assert.equal(payload.message, 'Need pre approval');
+  assert.equal(payload.property_address, 'Toronto');
+  assert.equal(payload.pre_approval_status, 'need_now');
+});
+
+test('validateMortgageBrokerInquiryInput enforces required minimal fields', () => {
+  assert.equal(validateMortgageBrokerInquiryInput({}), 'Please enter your question.');
+  assert.equal(
+    validateMortgageBrokerInquiryInput({
+      message: 'Need financing help',
+      mortgage_timeline: '',
+      pre_approval_status: 'need_now',
+      purchase_purpose: 'primary_residence',
+    }),
+    'Mortgage timeline is required.',
+  );
+  assert.equal(
+    validateMortgageBrokerInquiryInput({
+      message: 'Need financing help',
+      mortgage_timeline: '1_2_months',
+      pre_approval_status: 'need_now',
+      purchase_purpose: 'primary_residence',
+    }),
+    '',
+  );
+});
+
+test('resolveMortgageBrokerQualification infers missing fields from client profile', () => {
+  const resolved = resolveMortgageBrokerQualification(
+    {
+      message: 'I am self employed and need pre approval',
+      mortgage_timeline: '',
+      pre_approval_status: '',
+      purchase_purpose: '',
+    },
+    {
+      purchase_timeline: 'asap',
+      dream_home_price: 680_000,
+      mortgage_status: 'not_started',
+      employment_status: 'self_employed',
+      annual_income: 125_000,
+      current_savings: 50_000,
+      preferred_contact_method: 'email',
+      home_goals: ['first_time_buyer'],
+    },
+  );
+
+  assert.equal(resolved.mortgage_timeline, 'immediately');
+  assert.equal(resolved.pre_approval_status, 'need_now');
+  assert.equal(resolved.employment_status, 'self_employed');
+  assert.equal(resolved.household_income, '100k_150k');
+  assert.equal(resolved.purchase_purpose, 'primary_residence');
 });
 
 test('resolveLawyerQualification infers missing fields from client profile', () => {

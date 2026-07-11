@@ -5,7 +5,7 @@ import { getStripeClient } from './stripeClient.js';
 import { getPlanLimitsForSubscription } from './entitlements.js';
 import { getPlanUsageForUser } from './planQuota.js';
 
-const FREE_TRIAL_DAYS = 2;
+export const FREE_TRIAL_DAYS = 3;
 
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const STRIPE_BLOCKING_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);

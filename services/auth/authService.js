@@ -8,6 +8,7 @@ import logger from '../../utils/logger.js';
 import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
 import { finalizeInviteAttribution } from '../referral/inviteService.js';
 import {
+  FREE_TRIAL_DAYS,
   createFreeTrialSubscription,
   getSubscriptionPresentationForUser,
 } from '../billing/subscriptionService.js';
@@ -305,7 +306,7 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
   }
 
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
+  trialEndsAt.setDate(trialEndsAt.getDate() + FREE_TRIAL_DAYS);
 
   if (await User.findOne({ email: decoded.email })) {
     return {
@@ -423,7 +424,7 @@ export const googleSignupService = async ({ token, token_type, role, invite_toke
     return disposableEmailErrorResponse();
   }
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 2);
+  trialEndsAt.setDate(trialEndsAt.getDate() + FREE_TRIAL_DAYS);
 
   let user;
   try {

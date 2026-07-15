@@ -4,6 +4,42 @@ import {
 } from '../services/featured/featuredPlacementService.js';
 import { USER_ROLE } from '../constants/roles.js';
 
+function serializeFeaturedProfessional(placement) {
+  const user = placement.user || {};
+  const professionalProfile = placement.professionalProfile || {};
+  const publicProfile = placement.publicProfile || null;
+  const name =
+    String(professionalProfile.full_name || '').trim() ||
+    [user.first_name, user.last_name].filter(Boolean).join(' ').trim() ||
+    'Professional';
+
+  return {
+    id: user._id,
+    name,
+    role: user.role,
+    profile_image:
+      String(publicProfile?.profile_photo_url || user.profile_image || '').trim() || null,
+    plan_key: placement.subscription.plan_key,
+    placement_priority: placement.subscription.placement_priority,
+    profile: {
+      bio: professionalProfile.bio || '',
+      specializations: professionalProfile.specializations || [],
+      location: professionalProfile.location || {},
+      languages_spoken: professionalProfile.languages_spoken || [],
+      experience_level: professionalProfile.experience_level || '',
+      working_style: professionalProfile.working_style || '',
+    },
+    publicProfile: publicProfile?.slug
+      ? {
+          slug: publicProfile.slug,
+          bio: publicProfile.bio,
+          stats: publicProfile.stats || {},
+          testimonials: publicProfile.testimonials || [],
+        }
+      : null,
+  };
+}
+
 export async function getFeaturedProfessionals(req, res) {
   try {
     const limit = parseInt(req.query.limit) || 6;
@@ -11,30 +47,7 @@ export async function getFeaturedProfessionals(req, res) {
 
     return res.json({
       success: true,
-      data: professionals.map((p) => ({
-        id: p.user._id,
-        name: p.user.name,
-        email: p.user.email,
-        role: p.user.role,
-        plan_key: p.subscription.plan_key,
-        placement_priority: p.subscription.placement_priority,
-        profile: {
-          bio: p.professionalProfile.bio || '',
-          specializations: p.professionalProfile.specializations || [],
-          location: p.professionalProfile.location || {},
-          languages_spoken: p.professionalProfile.languages_spoken || [],
-          experience_level: p.professionalProfile.experience_level || '',
-          working_style: p.professionalProfile.working_style || '',
-        },
-        publicProfile: p.publicProfile
-          ? {
-              slug: p.publicProfile.slug,
-              bio: p.publicProfile.bio,
-              stats: p.publicProfile.stats || {},
-              testimonials: p.publicProfile.testimonials || [],
-            }
-          : null,
-      })),
+      data: professionals.map(serializeFeaturedProfessional),
     });
   } catch (error) {
     console.error('Error in getFeaturedProfessionals:', error);
@@ -63,30 +76,7 @@ export async function getFeaturedProfessionalsByRoleEndpoint(req, res) {
 
     return res.json({
       success: true,
-      data: professionals.map((p) => ({
-        id: p.user._id,
-        name: p.user.name,
-        email: p.user.email,
-        role: p.user.role,
-        plan_key: p.subscription.plan_key,
-        placement_priority: p.subscription.placement_priority,
-        profile: {
-          bio: p.professionalProfile.bio || '',
-          specializations: p.professionalProfile.specializations || [],
-          location: p.professionalProfile.location || {},
-          languages_spoken: p.professionalProfile.languages_spoken || [],
-          experience_level: p.professionalProfile.experience_level || '',
-          working_style: p.professionalProfile.working_style || '',
-        },
-        publicProfile: p.publicProfile
-          ? {
-              slug: p.publicProfile.slug,
-              bio: p.publicProfile.bio,
-              stats: p.publicProfile.stats || {},
-              testimonials: p.publicProfile.testimonials || [],
-            }
-          : null,
-      })),
+      data: professionals.map(serializeFeaturedProfessional),
     });
   } catch (error) {
     console.error(`Error in getFeaturedProfessionalsByRole for ${req.params.role}:`, error);

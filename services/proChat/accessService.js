@@ -1,10 +1,14 @@
 import ProfessionalChatThread from '../../models/ProfessionalChatThread.js';
+import { isValidObjectId } from 'mongoose';
 import { normalizeId } from '../../utils/proChatUtils.js';
 
 export async function assertThreadMembership(threadId, userId, options = {}) {
   const allowLeftParticipant = Boolean(options?.allowLeftParticipant);
   const tid = normalizeId(threadId);
   if (!tid) return { status: 400, body: { success: false, message: 'Missing thread id' } };
+  if (!isValidObjectId(tid)) {
+    return { status: 400, body: { success: false, message: 'Invalid thread id' } };
+  }
   const thread = await ProfessionalChatThread.findById(tid).lean();
   if (!thread) return { status: 404, body: { success: false, message: 'Thread not found' } };
   const me = String(userId);

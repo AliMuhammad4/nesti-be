@@ -1,3 +1,9 @@
+import {
+  isMinutesMetaFluff,
+  refineTranscriptSegmentText,
+  stripMinutesMarkup,
+} from './transcriptTextCleaning.js';
+
 function text(value) {
   return String(value || '').trim();
 }
@@ -16,7 +22,23 @@ function timestamp(milliseconds) {
 }
 
 function transcriptLine(segment) {
-  return `[${timestamp(segment.start_time_ms)}] ${text(segment.speaker_name) || 'Participant'}: ${text(segment.text)}`;
+  const body = refineTranscriptSegmentText(segment?.text);
+  if (!body) return '';
+  return `[${timestamp(segment.start_time_ms)}] ${text(segment.speaker_name) || 'Participant'}: ${body}`;
+}
+
+function splitLongLine(line, limit) {
+  if (line.length <= limit) return [line];
+  const parts = [];
+  let remaining = line;
+  while (remaining.length > limit) {
+    let cut = remaining.lastIndexOf(' ', limit);
+    if (cut < Math.floor(limit * 0.55)) cut = limit;
+    parts.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining) parts.push(remaining);
+  return parts.filter(Boolean);
 }
 
 export function chunkTranscriptSegments(segments, maxCharacters = 12000) {
@@ -25,11 +47,8 @@ export function chunkTranscriptSegments(segments, maxCharacters = 12000) {
   let current = '';
   for (const segment of segments || []) {
     const line = transcriptLine(segment);
-    const parts = [];
-    for (let offset = 0; offset < line.length; offset += limit) {
-      parts.push(line.slice(offset, offset + limit));
-    }
-    for (const part of parts) {
+    if (!line) continue;
+    for (const part of splitLongLine(line, limit)) {
       const candidate = current ? `${current}\n${part}` : part;
       if (candidate.length > limit && current) {
         chunks.push(current);
@@ -43,21 +62,30 @@ export function chunkTranscriptSegments(segments, maxCharacters = 12000) {
   return chunks;
 }
 
+function cleanListItem(value) {
+  const cleaned = stripMinutesMarkup(value);
+  if (!cleaned || isMinutesMetaFluff(cleaned)) return '';
+  return cleaned;
+}
+
 function stringArray(value) {
-  return Array.isArray(value) ? value.map(text).filter(Boolean).slice(0, 100) : [];
+  return Array.isArray(value)
+    ? value.map(cleanListItem).filter(Boolean).slice(0, 100)
+    : [];
 }
 
 export function normalizeMinutes(value) {
   const source = value && typeof value === 'object' ? value : {};
+  const summary = cleanListItem(source.summary).slice(0, 12000);
   return {
-    summary: text(source.summary).slice(0, 12000),
+    summary,
     topics: stringArray(source.topics),
     decisions: stringArray(source.decisions),
     action_items: (Array.isArray(source.action_items) ? source.action_items : [])
       .map((item) => ({
-        owner: text(item?.owner),
-        task: text(item?.task),
-        due_date: text(item?.due_date),
+        owner: stripMinutesMarkup(item?.owner).slice(0, 200),
+        task: cleanListItem(item?.task).slice(0, 800),
+        due_date: stripMinutesMarkup(item?.due_date).slice(0, 100),
       }))
       .filter((item) => item.task)
       .slice(0, 100),

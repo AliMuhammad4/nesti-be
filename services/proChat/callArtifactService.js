@@ -5,6 +5,7 @@ import ProfessionalCallTranscriptSegment from '../../models/ProfessionalCallTran
 import {
   sanitizeArtifactErrorMessage,
   serializeCallArtifactStatus,
+  viewerCanAccessCallNotes,
 } from './callArtifactFields.js';
 
 const MAX_PAGE_SIZE = 200;
@@ -18,7 +19,7 @@ function positiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function authorizedCall(currentUserId, callId) {
+async function authorizedCall(currentUserId, callId, { requireNotesConsent = false } = {}) {
   const normalizedCallId = text(callId);
   if (!isValidObjectId(normalizedCallId)) {
     return {
@@ -32,6 +33,19 @@ async function authorizedCall(currentUserId, callId) {
   if (!call) {
     return {
       error: { status: 404, body: { success: false, message: 'Call record not found' } },
+    };
+  }
+  if (requireNotesConsent && !viewerCanAccessCallNotes(call, currentUserId)) {
+    return {
+      error: {
+        status: 403,
+        body: {
+          success: false,
+          code: 'viewer_no_transcription_consent',
+          message:
+            'Minutes of meeting and transcript are only available if you allowed minutes on this call.',
+        },
+      },
     };
   }
   return { call };
@@ -77,7 +91,7 @@ function serializeMinutes(minutes) {
 }
 
 export async function getCallArtifactStatus({ currentUserId, callId }) {
-  const auth = await authorizedCall(currentUserId, callId);
+  const auth = await authorizedCall(currentUserId, callId, { requireNotesConsent: true });
   if (auth.error) return auth.error;
   const storedCount = Number(auth.call.transcript_segment_count || 0);
   const segmentCount =
@@ -100,7 +114,7 @@ export async function getCallArtifactStatus({ currentUserId, callId }) {
 }
 
 export async function getCallTranscript({ currentUserId, callId, page, limit }) {
-  const auth = await authorizedCall(currentUserId, callId);
+  const auth = await authorizedCall(currentUserId, callId, { requireNotesConsent: true });
   if (auth.error) return auth.error;
   const pageNumber = positiveInt(page, 1);
   const pageSize = Math.min(MAX_PAGE_SIZE, positiveInt(limit, 100));
@@ -130,7 +144,7 @@ export async function getCallTranscript({ currentUserId, callId, page, limit }) 
 }
 
 export async function getCallMinutes({ currentUserId, callId }) {
-  const auth = await authorizedCall(currentUserId, callId);
+  const auth = await authorizedCall(currentUserId, callId, { requireNotesConsent: true });
   if (auth.error) return auth.error;
   const minutes = await ProfessionalCallMinutes.findOne({ call_id: auth.call._id }).lean();
   return {

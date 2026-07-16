@@ -11,6 +11,28 @@ let consent = false;
 let participantStatus = 'invited';
 let callStatus = 'active';
 let hasJoinedAt = false;
+let transcriptionStatus = 'active';
+let drainDeadline = null;
+
+function statusAllowedByFilter(filter) {
+  const clauses = Array.isArray(filter.$or) ? filter.$or : [];
+  return clauses.some((clause) => {
+    if (clause.status === 'active') return callStatus === 'active';
+    if (clause.status?.$in?.includes(callStatus)) {
+      const statusOk = ['pending', 'dispatching', 'active'].includes(transcriptionStatus);
+      if (!statusOk) return false;
+      const drainOk =
+        !drainDeadline ||
+        (clause.$or || []).some(
+          (item) =>
+            (item.transcription_drain_deadline?.$gt && drainDeadline > item.transcription_drain_deadline.$gt) ||
+            item.transcription_drain_deadline === null,
+        );
+      return drainOk || drainDeadline === null;
+    }
+    return false;
+  });
+}
 
 test.before(() => {
   mock.method(ProfessionalCall, 'findOne', (filter) => {
@@ -20,13 +42,15 @@ test.before(() => {
     assert.equal(filter.participant_states.$elemMatch.user_id, 'user-3');
     assert.equal(filter.participant_states.$elemMatch.transcription_consent, true);
     assert.ok(Array.isArray(filter.participant_states.$elemMatch.$or));
+    assert.ok(Array.isArray(filter.$or));
     return {
       select() {
         return this;
       },
       lean: async () => {
-        const statusAllowed = ['invited', 'joined'].includes(participantStatus) || hasJoinedAt;
-        return consent && callStatus === filter.status && statusAllowed
+        const statusAllowed =
+          ['invited', 'joined'].includes(participantStatus) || hasJoinedAt;
+        return consent && statusAllowedByFilter(filter) && statusAllowed
           ? {
               _id: callId,
               started_at: startedAt,
@@ -44,6 +68,8 @@ test.beforeEach(() => {
   participantStatus = 'invited';
   callStatus = 'active';
   hasJoinedAt = false;
+  transcriptionStatus = 'active';
+  drainDeadline = null;
 });
 
 test('late group joiner is authorized only after current server-side consent', async () => {
@@ -87,6 +113,7 @@ test('stale rejoin state and dispatch snapshot tampering are rejected', async ()
   );
 
   callStatus = 'ended';
+  transcriptionStatus = 'completed';
   assert.equal(
     await authorizeParticipantTranscriptionSession({
       callId,
@@ -96,4 +123,19 @@ test('stale rejoin state and dispatch snapshot tampering are rejected', async ()
     }),
     null,
   );
+});
+
+test('ended call stays authorized while transcription drain is active', async () => {
+  consent = true;
+  callStatus = 'ended';
+  transcriptionStatus = 'active';
+  drainDeadline = new Date(Date.now() + 60_000);
+
+  const authorized = await authorizeParticipantTranscriptionSession({
+    callId,
+    roomName,
+    participantIdentity: 'user-3',
+    expectedParticipantIds: participantIds,
+  });
+  assert.equal(authorized.participant_identity, 'user-3');
 });

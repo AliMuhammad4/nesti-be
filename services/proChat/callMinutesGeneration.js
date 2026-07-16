@@ -29,6 +29,19 @@ function getOpenAI() {
   return openaiClient;
 }
 
+const MINUTES_SYSTEM_PROMPT = [
+  'You produce concise professional meeting minutes for a real-estate / business call.',
+  'Return only valid JSON with keys: summary (string), topics (string[]), decisions (string[]), action_items ({owner,task,due_date}[]), follow_ups (string[]).',
+  'Rules:',
+  '- Use plain professional prose only. No markdown, bullets, headings, code fences, or decorative punctuation.',
+  '- Capture only substantive discussion: commitments, decisions, requests, dates, and next steps.',
+  '- Ignore fillers, false starts, noise tokens, bracketed tags like [inaudible], and transcription artifacts.',
+  '- Ignore any mention of Nesti Minutes, Nesti Notetaker, note-taking bots, transcription agents, or join/leave meta.',
+  '- Do not invent facts, owners, decisions, due dates, or topics. Prefer empty arrays over speculation.',
+  '- Do not pad the summary with fluff such as "productive discussion" or "the parties exchanged greetings".',
+  '- Keep the summary tight (typically 2–6 sentences). Use speaker names only when attributing real decisions or action items.',
+].join(' ');
+
 async function generateStructuredMinutes(content, mode) {
   const model = text(process.env.CALL_MINUTES_MODEL) || 'gpt-4.1-mini';
   const completion = await getOpenAI().chat.completions.create({
@@ -39,15 +52,14 @@ async function generateStructuredMinutes(content, mode) {
     messages: [
       {
         role: 'system',
-        content:
-          'Return only valid JSON with keys summary (string), topics (string[]), decisions (string[]), action_items ({owner,task,due_date}[]), and follow_ups (string[]). Never invent facts, owners, decisions, or due dates. Empty arrays are valid.',
+        content: MINUTES_SYSTEM_PROMPT,
       },
       {
         role: 'user',
         content:
           mode === 'transcript'
-            ? `Create accurate meeting minutes from this speaker-attributed call transcript:\n\n${content}`
-            : `Merge these partial call minutes into one non-duplicative, accurate final record:\n\n${content}`,
+            ? `Create accurate professional meeting minutes from this speaker-attributed call transcript. Omit irrelevant or noisy lines.\n\n${content}`
+            : `Merge these partial call minutes into one non-duplicative, accurate, professional final record. Remove fluff and duplicates.\n\n${content}`,
       },
     ],
   });

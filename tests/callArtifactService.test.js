@@ -10,10 +10,15 @@ import {
 } from '../services/proChat/callArtifactService.js';
 
 const userId = '64b000000000000000000001';
+const otherUserId = '64b000000000000000000002';
 const callId = '64b000000000000000000004';
 const call = {
   _id: callId,
-  participant_ids: [userId, '64b000000000000000000002'],
+  participant_ids: [userId, otherUserId],
+  participant_states: [
+    { user_id: userId, transcription_consent: true },
+    { user_id: otherUserId, transcription_consent: false },
+  ],
   transcription_policy_version: '2026-07',
   transcription_status: 'completed',
   minutes_status: 'ready',
@@ -48,7 +53,9 @@ function transcriptQuery(result) {
 test.before(() => {
   mock.method(ProfessionalCall, 'findOne', (filter) => ({
     lean: async () =>
-      filter._id === callId && filter.participant_ids === userId ? call : null,
+      filter._id === callId && call.participant_ids.includes(filter.participant_ids)
+        ? call
+        : null,
   }));
   mock.method(ProfessionalCallTranscriptSegment, 'find', () => transcriptQuery([segment]));
   mock.method(ProfessionalCallTranscriptSegment, 'countDocuments', async () => 1);
@@ -68,7 +75,7 @@ test.before(() => {
   }));
 });
 
-test('participant can read artifact status, transcript, and minutes', async () => {
+test('consenting participant can read artifact status, transcript, and minutes', async () => {
   const status = await getCallArtifactStatus({ currentUserId: userId, callId });
   assert.equal(status.status, 200);
   assert.equal(status.body.artifacts.transcript_segment_count, 1);
@@ -88,6 +95,23 @@ test('participant can read artifact status, transcript, and minutes', async () =
   assert.equal(minutes.status, 200);
   assert.equal(minutes.body.minutes.summary, 'Documents will be sent.');
   assert.equal(minutes.body.minutes.action_items[0].task, 'Send documents');
+});
+
+test('non-consenting participant cannot read transcript or minutes', async () => {
+  const status = await getCallArtifactStatus({ currentUserId: otherUserId, callId });
+  assert.equal(status.status, 403);
+  assert.equal(status.body.code, 'viewer_no_transcription_consent');
+
+  const transcript = await getCallTranscript({
+    currentUserId: otherUserId,
+    callId,
+  });
+  assert.equal(transcript.status, 403);
+  assert.equal(transcript.body.code, 'viewer_no_transcription_consent');
+
+  const minutes = await getCallMinutes({ currentUserId: otherUserId, callId });
+  assert.equal(minutes.status, 403);
+  assert.equal(minutes.body.code, 'viewer_no_transcription_consent');
 });
 
 test('non-participants and malformed ids cannot access artifacts', async () => {

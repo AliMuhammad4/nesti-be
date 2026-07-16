@@ -53,8 +53,11 @@ export async function transcribeParticipant(ctx, participant, metadata) {
   }
 
   logger.info({ trackSid: publication.sid }, 'Starting OpenAI STT for participant');
-  const timestampOffsetMs = Math.max(0, Date.now() - authorization.started_at_ms);
+  const callStartedAtMs = authorization.started_at_ms;
+  const timestampOffsetMs = Math.max(0, Date.now() - callStartedAtMs);
   const model = text(process.env.CALL_TRANSCRIPTION_MODEL) || 'gpt-4o-mini-transcribe';
+  const noiseReductionType =
+    text(process.env.CALL_TRANSCRIPTION_NOISE_REDUCTION) || 'near_field';
   const speechToText = new OpenAISTT({
     apiKey: text(process.env.OPENAI_API_KEY),
     model,
@@ -62,6 +65,19 @@ export async function transcribeParticipant(ctx, participant, metadata) {
     detectLanguage:
       text(process.env.CALL_TRANSCRIPTION_DETECT_LANGUAGE).toLowerCase() === 'true',
     useRealtime: true,
+    prompt:
+      text(process.env.CALL_TRANSCRIPTION_PROMPT) ||
+      'Professional business call. Transcribe clear spoken words only. Do not invent speech during silence or background noise. Ignore music, beeps, and non-speech sounds. Prefer concise wording; omit lone filler sounds.',
+    noiseReductionType:
+      noiseReductionType === 'far_field' || noiseReductionType === 'near_field'
+        ? noiseReductionType
+        : 'near_field',
+    turnDetection: {
+      type: 'server_vad',
+      threshold: 0.55,
+      prefix_padding_ms: 400,
+      silence_duration_ms: 550,
+    },
   });
   const speechStream = speechToText.stream();
   const audioStream = new AudioStream(publication.track, {
@@ -73,7 +89,10 @@ export async function transcribeParticipant(ctx, participant, metadata) {
   let finals = 0;
   const nextSegmentId = (alternative) => {
     sequence += 1;
-    const { startTimeMs } = callRelativeTranscriptTimes(alternative, timestampOffsetMs);
+    const { startTimeMs } = callRelativeTranscriptTimes(alternative, timestampOffsetMs, {
+      nowMs: Date.now(),
+      callStartedAtMs,
+    });
     return `${participant.sid || participant.identity}:${publication.sid || 'mic'}:${startTimeMs}:${sequence}`;
   };
 
@@ -115,6 +134,8 @@ export async function transcribeParticipant(ctx, participant, metadata) {
           alternative,
           model,
           timestampOffsetMs,
+          callStartedAtMs,
+          nowMs: Date.now(),
         });
         finals += 1;
         logger.info(

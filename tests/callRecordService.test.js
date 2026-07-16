@@ -18,8 +18,14 @@ const call = {
   room_name: `prochat:${threadId}:call-12345678`,
   caller_id: userId,
   participant_ids: [userId, otherUserId],
+  participant_states: [
+    { user_id: userId, transcription_consent: true },
+    { user_id: otherUserId, transcription_consent: false },
+  ],
   call_type: 'voice',
   status: 'ended',
+  transcription_status: 'completed',
+  minutes_status: 'ready',
   createdAt: new Date('2026-07-01T10:00:00.000Z'),
   started_at: new Date('2026-07-01T10:00:05.000Z'),
   ended_at: new Date('2026-07-01T10:02:05.000Z'),
@@ -83,6 +89,9 @@ test('lists only the authenticated participant call records with details', async
   assert.equal(result.body.records[0].direction, 'outgoing');
   assert.equal(result.body.records[0].duration_seconds, 120);
   assert.equal(result.body.records[0].other_participants[0].full_name, 'Casey Client');
+  assert.equal(result.body.records[0].viewer_can_access_notes, true);
+  assert.equal(result.body.records[0].viewer_transcription_consent, true);
+  assert.equal(result.body.records[0].artifacts.minutes_status, 'ready');
 });
 
 test('returns an authorized call detail and rejects malformed ids', async () => {
@@ -91,6 +100,27 @@ test('returns an authorized call detail and rejects malformed ids', async () => 
   assert.equal(detail.body.record.id, callId);
   const invalid = await getCallRecord({ currentUserId: userId, callId: 'invalid' });
   assert.equal(invalid.status, 400);
+});
+
+test('non-consenting viewer gets redacted artifacts and cannot access notes', async () => {
+  mock.method(ProfessionalCall, 'findOne', (filter) => ({
+    lean: async () =>
+      filter._id === callId && filter.participant_ids === otherUserId ? call : null,
+  }));
+  const detail = await getCallRecord({ currentUserId: otherUserId, callId });
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.record.viewer_can_access_notes, false);
+  assert.equal(detail.body.record.viewer_transcription_consent, false);
+  assert.equal(
+    detail.body.record.artifacts.transcription_error_code,
+    'viewer_no_transcription_consent',
+  );
+  assert.equal(detail.body.record.artifacts.minutes_status, 'not_ready');
+  // Restore consenting-viewer lookup for later tests in this file.
+  mock.method(ProfessionalCall, 'findOne', (filter) => ({
+    lean: async () =>
+      filter._id === callId && filter.participant_ids === userId ? call : null,
+  }));
 });
 
 test('classifies ended calls without a connection by direction', async () => {

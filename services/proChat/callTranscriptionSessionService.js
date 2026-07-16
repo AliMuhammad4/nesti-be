@@ -39,12 +39,23 @@ export async function authorizeParticipantTranscriptionSession({
   const userId = text(participantIdentity);
   if (!normalizedCallId || !normalizedRoomName || !userId) return null;
 
+  const now = new Date();
   const call = await ProfessionalCall.findOne({
     _id: normalizedCallId,
     room_name: normalizedRoomName,
-    status: 'active',
     started_at: { $ne: null },
     participant_ids: userId,
+    $or: [
+      { status: 'active' },
+      {
+        status: { $in: ['ended', 'expired'] },
+        transcription_status: { $in: ['pending', 'dispatching', 'active'] },
+        $or: [
+          { transcription_drain_deadline: { $gt: now } },
+          { transcription_drain_deadline: null },
+        ],
+      },
+    ],
     participant_states: {
       $elemMatch: {
         user_id: userId,

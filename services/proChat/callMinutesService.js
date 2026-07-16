@@ -22,7 +22,7 @@ export {
   setCallMinutesOpenAIClientForTests,
 };
 
-const PROMPT_VERSION = 'call-minutes-v1';
+const PROMPT_VERSION = 'call-minutes-v2';
 const TERMINAL_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 const workerId = `${process.pid}:${randomUUID()}`;
 let reconciliationTimer = null;
@@ -65,11 +65,13 @@ export async function processMinutesForCall(call) {
     await Promise.all([
       ProfessionalCallMinutes.deleteOne({ call_id: call._id }),
       ProfessionalCall.updateOne(
-        { _id: call._id, transcription_status: 'completed' },
+        {
+          _id: call._id,
+          transcription_status: { $in: ['completed', 'disabled'] },
+        },
         {
           $set: {
-            transcription_status: 'disabled',
-            transcription_completed_at: null,
+            transcription_status: 'completed',
             transcription_error_code: 'no_transcript_segments',
             transcription_error_message:
               'No consenting participant transcript was produced for this call.',
@@ -143,6 +145,39 @@ export async function processMinutesForCall(call) {
   leaseHeartbeat.unref?.();
   try {
     const generated = await generateMinutesFromSegments(segments);
+    const minutes = normalizeMinutes(generated.minutes);
+    const minutesEmpty =
+      !minutes.summary &&
+      !minutes.topics.length &&
+      !minutes.decisions.length &&
+      !minutes.action_items.length &&
+      !minutes.follow_ups.length;
+    if (minutesEmpty) {
+      await ProfessionalCallMinutes.updateOne(
+        { _id: claim._id, status: 'processing', lease_owner: workerId },
+        {
+          $set: {
+            status: 'failed',
+            lease_owner: '',
+            lease_until: null,
+            next_attempt_at: null,
+            last_error: 'empty_minutes: No substantive minutes could be produced.',
+          },
+        },
+      );
+      await ProfessionalCall.updateOne(
+        { _id: call._id },
+        {
+          $set: {
+            minutes_status: 'failed',
+            transcription_error_code: 'empty_minutes',
+            transcription_error_message:
+              'No substantive minutes could be produced from this transcript.',
+          },
+        },
+      );
+      return false;
+    }
     const characterCount = segments.reduce(
       (sum, segment) => sum + text(segment.text).length,
       0,
@@ -157,7 +192,7 @@ export async function processMinutesForCall(call) {
       {
         $set: {
           status: 'ready',
-          ...generated.minutes,
+          ...minutes,
           model: generated.model,
           prompt_version: PROMPT_VERSION,
           transcript_segment_count: segments.length,

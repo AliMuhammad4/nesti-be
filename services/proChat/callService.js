@@ -15,7 +15,8 @@ import { emitCallAccepted } from '../realtime/workspaceSocket.js';
 
 // Tokens only authorize joining; keep the window short so removed members
 // cannot reuse an old token hours after a call has ended.
-const TOKEN_TTL_SECONDS = 60;
+// Must outlast video preview (50s) plus ICE/connect headroom.
+const TOKEN_TTL_SECONDS = 180;
 
 function getLiveKitConfig() {
   return {
@@ -101,6 +102,10 @@ export async function createCallTokenForThread({
     return { status: 400, body: { success: false, message: 'Invalid thread id' } };
   }
 
+  const userPromise = User.findById(currentUserId)
+    .select('first_name last_name email profile_image')
+    .lean();
+
   const registryResult =
     normalizedAction === 'start'
       ? await createPendingCall({
@@ -142,7 +147,7 @@ export async function createCallTokenForThread({
     };
   }
 
-  const user = await User.findById(currentUserId).select('first_name last_name email').lean();
+  const user = await userPromise;
   const userId = String(currentUserId);
   const callId = String(registryResult.call?.call_id || '');
   const identity = userId;
@@ -159,6 +164,7 @@ export async function createCallTokenForThread({
     metadata: JSON.stringify({
       user_id: userId,
       call_id: callId,
+      profile_image: String(user?.profile_image || '').trim() || null,
       transcription_consent: participantState?.transcription_consent === true,
       transcription_consent_version: consentVersion,
       transcription_policy_version: registryResult.call?.transcription_policy_version || '1',
@@ -168,6 +174,7 @@ export async function createCallTokenForThread({
   token.addGrant({
     roomJoin: true,
     room: effectiveRoomName,
+    canPublish: true,
     canPublishSources:
       effectiveCallType === 'video'
         ? [
@@ -227,18 +234,16 @@ export async function createCallTokenForThread({
       (participant) => participant.transcription_consent === true,
     )
   ) {
-    try {
-      await ensureTranscriptionForActiveCall({
-        ...finalState.call,
-        call_id: callId,
-        status: 'active',
-      });
-    } catch (error) {
+    void ensureTranscriptionForActiveCall({
+      ...finalState.call,
+      call_id: callId,
+      status: 'active',
+    }).catch((error) => {
       logger.warn('Transcription dispatch failed during call token issue', {
         call_id: callId,
         message: error?.message,
       });
-    }
+    });
   }
 
   return {

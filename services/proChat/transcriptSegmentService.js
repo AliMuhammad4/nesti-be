@@ -1,5 +1,6 @@
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import ProfessionalCallTranscriptSegment from '../../models/ProfessionalCallTranscriptSegment.js';
+import { refineTranscriptSegmentText } from './transcriptTextCleaning.js';
 
 const DEFAULT_SEGMENT_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -14,13 +15,35 @@ async function resolveSegmentDeleteAt(callId) {
   return new Date(base + DEFAULT_SEGMENT_RETENTION_MS);
 }
 
-export function callRelativeTranscriptTimes(alternative, timestampOffsetMs = 0) {
+export function callRelativeTranscriptTimes(
+  alternative,
+  timestampOffsetMs = 0,
+  { nowMs = Date.now(), callStartedAtMs = null } = {},
+) {
+  const altStartSec = Number(alternative?.startTime || 0);
+  const altEndSec = Number(alternative?.endTime || 0);
+  const hasProviderTiming =
+    Number.isFinite(altStartSec) &&
+    Number.isFinite(altEndSec) &&
+    (altStartSec > 0 || altEndSec > 0);
+
+  // OpenAI realtime STT in @livekit/agents-plugin-openai currently emits start/end as 0.
+  // Fall back to wall-clock elapsed since call start so consecutive segments advance.
+  if (!hasProviderTiming) {
+    const callStart = Number(callStartedAtMs);
+    if (Number.isFinite(callStart) && callStart > 0) {
+      const elapsed = Math.max(0, Math.round(Number(nowMs) - callStart));
+      return { startTimeMs: elapsed, endTimeMs: elapsed };
+    }
+    const offset = Math.max(0, Math.round(Number(timestampOffsetMs || 0)));
+    return { startTimeMs: offset, endTimeMs: offset };
+  }
+
   const offset = Math.max(0, Math.round(Number(timestampOffsetMs || 0)));
-  const startTimeMs =
-    offset + Math.max(0, Math.round(Number(alternative?.startTime || 0) * 1000));
+  const startTimeMs = offset + Math.max(0, Math.round(altStartSec * 1000));
   const endTimeMs = Math.max(
     startTimeMs,
-    offset + Math.max(0, Math.round(Number(alternative?.endTime || 0) * 1000)),
+    offset + Math.max(0, Math.round(altEndSec * 1000)),
   );
   return { startTimeMs, endTimeMs };
 }
@@ -33,12 +56,15 @@ export async function persistFinalTranscriptSegment({
   alternative,
   model,
   timestampOffsetMs = 0,
+  callStartedAtMs = null,
+  nowMs = Date.now(),
 }) {
-  const finalText = text(alternative?.text);
+  const finalText = refineTranscriptSegmentText(alternative?.text);
   if (!finalText) return false;
   const { startTimeMs, endTimeMs } = callRelativeTranscriptTimes(
     alternative,
     timestampOffsetMs,
+    { nowMs, callStartedAtMs },
   );
   const deleteAt = await resolveSegmentDeleteAt(callId);
   const result = await ProfessionalCallTranscriptSegment.updateOne(
@@ -77,10 +103,16 @@ export async function persistFinalTranscriptSegment({
       {
         _id: callId,
         status: { $in: ['ended', 'expired'] },
-        transcription_status: 'completed',
-        minutes_status: 'ready',
+        transcription_status: { $in: ['completed', 'disabled'] },
       },
-      { $set: { minutes_status: 'pending' } },
+      {
+        $set: {
+          transcription_status: 'completed',
+          transcription_error_code: '',
+          transcription_error_message: '',
+          minutes_status: 'pending',
+        },
+      },
     );
   }
   return Boolean(result.upsertedCount || result.matchedCount);

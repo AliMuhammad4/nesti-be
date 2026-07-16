@@ -116,6 +116,23 @@ test.before(() => {
   mock.method(ProfessionalCall, 'findOne', (filter) => {
     return queryResult(records.find((record) => matches(record, filter)) || null);
   });
+  mock.method(ProfessionalCall, 'find', (filter) => {
+    const matched = records.filter((record) => matches(record, filter));
+    const query = {
+      select() {
+        return query;
+      },
+      limit(count) {
+        query._limit = count;
+        return query;
+      },
+      lean: async () => {
+        const rows = matched.map((record) => structuredClone(record));
+        return Number.isFinite(query._limit) ? rows.slice(0, query._limit) : rows;
+      },
+    };
+    return query;
+  });
   mock.method(ProfessionalCall, 'findOneAndUpdate', (filter, update, options) => {
     if (Array.isArray(update)) assert.equal(options?.updatePipeline, true);
     const record = records.find((item) => matches(item, filter)) || null;

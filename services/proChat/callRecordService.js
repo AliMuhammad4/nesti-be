@@ -4,7 +4,9 @@ import ProfessionalChatThread from '../../models/ProfessionalChatThread.js';
 import User from '../../models/User.js';
 import {
   participantConsentFields,
+  redactCallArtifactsForViewer,
   serializeCallArtifacts,
+  viewerCanAccessCallNotes,
 } from './callArtifactFields.js';
 
 const CALL_STATUSES = new Set([
@@ -80,6 +82,8 @@ function serializeCall(call, currentUserId, usersById, thread) {
     ...(consentByUserId.get(id) || participantConsentFields()),
   }));
   const callId = text(call._id);
+  const canAccessNotes = viewerCanAccessCallNotes(call, uid);
+  const myConsent = participants.find((participant) => participant.id === uid);
   return {
     id: callId,
     call_id: callId,
@@ -105,7 +109,16 @@ function serializeCall(call, currentUserId, usersById, thread) {
     ended_at: call.ended_at || null,
     ended_by_id: text(call.ended_by_id),
     duration_seconds: durationSeconds(call),
-    artifacts: serializeCallArtifacts(call),
+    viewer_transcription_consent:
+      myConsent?.transcription_consent === true
+        ? true
+        : myConsent?.transcription_consent === false
+          ? false
+          : null,
+    viewer_can_access_notes: canAccessNotes,
+    artifacts: canAccessNotes
+      ? serializeCallArtifacts(call)
+      : redactCallArtifactsForViewer(call),
   };
 }
 

@@ -175,22 +175,35 @@ export async function initWorkspaceSocket(httpServer) {
       transport: socket.conn?.transport?.name,
     });
     void (async () => {
-      const ringingCalls = await ProfessionalCall.find({
+      // Replay unanswered rings, including mid-call reinvites while the room is active.
+      const pendingInvites = await ProfessionalCall.find({
         participant_ids: uid,
         caller_id: { $ne: uid },
-        status: { $in: ['ringing', 'connecting'] },
+        status: { $in: ['ringing', 'connecting', 'active'] },
         expires_at: { $gt: new Date() },
+        participant_states: {
+          $elemMatch: {
+            user_id: uid,
+            status: 'invited',
+          },
+        },
       })
         .sort({ createdAt: -1 })
         .limit(5)
         .lean();
-      const callerIds = [...new Set(ringingCalls.map((call) => String(call.caller_id)))];
+      const callerIds = [...new Set(pendingInvites.map((call) => String(call.caller_id)))];
       const callers = await User.find({ _id: { $in: callerIds } })
         .select('first_name last_name email')
         .lean();
       const callerById = new Map(callers.map((caller) => [String(caller._id), caller]));
-      for (const call of ringingCalls) {
+      for (const call of pendingInvites) {
         const caller = callerById.get(String(call.caller_id));
+        const myState = (call.participant_states || []).find(
+          (participant) => String(participant?.user_id || '') === String(uid),
+        );
+        const inviteOccurredAt = myState?.invited_at
+          ? new Date(myState.invited_at).toISOString()
+          : new Date().toISOString();
         socket.emit('prochat:call_invite', {
           schema: 2,
           call_id: String(call._id),
@@ -208,7 +221,7 @@ export async function initWorkspaceSocket(httpServer) {
             [caller?.first_name, caller?.last_name].filter(Boolean).join(' ').trim() ||
             caller?.email ||
             'Participant',
-          occurred_at: new Date().toISOString(),
+          occurred_at: inviteOccurredAt,
           replayed: true,
         });
       }
@@ -416,6 +429,16 @@ export async function initWorkspaceSocket(httpServer) {
           [sender?.first_name, sender?.last_name].filter(Boolean).join(' ').trim() ||
           sender?.email ||
           'Participant';
+        const inviteOccurredAt = (() => {
+          const inviteeId = String(
+            target_user_id || (registryResult.invitee_ids || [])[0] || '',
+          );
+          const state = (registryResult.call?.participant_states || []).find(
+            (participant) => String(participant?.user_id || '') === inviteeId,
+          );
+          if (state?.invited_at) return new Date(state.invited_at).toISOString();
+          return new Date().toISOString();
+        })();
         const body = {
           schema: 2,
           call_id: registryResult.call.call_id,
@@ -434,7 +457,8 @@ export async function initWorkspaceSocket(httpServer) {
           target_user_id: target_user_id ? String(target_user_id) : null,
           user_id: String(uid),
           sender_name: senderName,
-          occurred_at: new Date().toISOString(),
+          // Prefer DB invited_at so reinvites always outrank a prior local "handled" stamp.
+          occurred_at: inviteOccurredAt,
         };
         for (const pid of registryResult.invitee_ids || []) {
           io.to(userRoom(pid)).emit('prochat:call_invite', body);
@@ -583,7 +607,16 @@ export async function initWorkspaceSocket(httpServer) {
     socket.on('prochat:call_leave', async (payload, ack) => {
       try {
         const { thread_id, room_name } = payload || {};
-        await assertCallEventRate('leave', thread_id);
+        try {
+          await assertCallEventRate('leave', thread_id);
+        } catch (rateError) {
+          if (rateError?.code === 'call_action_rate_limited') {
+            // Duplicate leave/end from multi-tab close — treat as confirmed.
+            safeAck(ack, { success: true, code: 'call_action_rate_limited' });
+            return;
+          }
+          throw rateError;
+        }
         await assertThreadMembership(thread_id);
         const normalizedRoomName = normalizeCallRoomName(thread_id, room_name);
         const registryResult = await leaveCall({
@@ -630,7 +663,16 @@ export async function initWorkspaceSocket(httpServer) {
     socket.on('prochat:call_ended', async (payload, ack) => {
       try {
         const { thread_id, room_name } = payload || {};
-        await assertCallEventRate('ended', thread_id);
+        try {
+          await assertCallEventRate('ended', thread_id);
+        } catch (rateError) {
+          if (rateError?.code === 'call_action_rate_limited') {
+            // Duplicate end from pagehide + UI close (or multi-tab) — already closing.
+            safeAck(ack, { success: true, code: 'call_action_rate_limited' });
+            return;
+          }
+          throw rateError;
+        }
         const { participants, thread } = await assertThreadMembership(thread_id);
         const participantsKey = String(thread?.participants_key || '');
         const isLeadThread = participantsKey.startsWith('lead:');

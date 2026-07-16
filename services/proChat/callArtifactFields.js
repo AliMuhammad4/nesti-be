@@ -66,6 +66,27 @@ export function participantConsentFields(participant = {}) {
   };
 }
 
+/** True only when this viewer explicitly allowed minutes on the call. */
+export function viewerCanAccessCallNotes(call, currentUserId) {
+  const uid = text(currentUserId);
+  if (!uid) return false;
+  const states = Array.isArray(call?.participant_states) ? call.participant_states : [];
+  const mine = states.find((participant) => text(participant?.user_id) === uid);
+  return mine?.transcription_consent === true;
+}
+
+/** Artifacts shown to participants who opted out — hides readiness of others' notes. */
+export function redactCallArtifactsForViewer(call = {}) {
+  return {
+    transcription_policy_version: text(call.transcription_policy_version) || '1',
+    transcription_status: 'disabled',
+    transcription_error_code: 'viewer_no_transcription_consent',
+    transcription_error_message:
+      'Minutes of meeting are only available if you allowed minutes on this call.',
+    minutes_status: 'not_ready',
+  };
+}
+
 /** Client-safe minutes/processing errors — never leak provider internals. */
 export function sanitizeArtifactErrorMessage(message, fallback = 'Something went wrong while preparing notes.') {
   const value = text(message);

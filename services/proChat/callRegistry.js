@@ -13,6 +13,8 @@ import { scheduleTranscriptionWorkerDispatch } from './callTranscriptionDispatch
 import { verifyLiveKitCallPresence } from './liveKitRoomService.js';
 
 const PREPARING_TTL_MS = 60 * 1000;
+// Video hosts can spend up to ~50s in private preview before connect + invite.
+const VIDEO_PREPARING_TTL_MS = 150 * 1000;
 const RINGING_TTL_MS = 90 * 1000;
 const ACTIVE_TTL_MS = 4 * 60 * 60 * 1000;
 const CONNECTING_TTL_MS = 2 * 60 * 1000;
@@ -76,45 +78,69 @@ async function expireStaleCalls({ threadId, roomName } = {}) {
     if (threadId) filter.$or.push({ active_thread_key: normalize(threadId) });
     if (roomName) filter.$or.push({ room_name: normalize(roomName) });
   }
-  await ProfessionalCall.updateMany(filter, {
-    $set: {
-      status: 'expired',
-      ended_at: now,
-      cleanup_status: 'pending',
-      cleanup_next_attempt_at: now,
-      cleanup_final_after: new Date(now.getTime() + TOKEN_REJOIN_GUARD_MS),
-      expires_at: now,
-      delete_at: new Date(now.getTime() + TERMINAL_RETENTION_MS),
+  const expiring = await ProfessionalCall.find(filter)
+    .select('_id room_name thread_id participant_ids started_at')
+    .limit(100)
+    .lean();
+  if (!expiring.length) return;
+
+  const ids = expiring.map((call) => call._id);
+  await ProfessionalCall.updateMany(
+    { _id: { $in: ids }, status: { $in: LIVE_STATUSES } },
+    {
+      $set: {
+        status: 'expired',
+        ended_at: now,
+        cleanup_status: 'pending',
+        cleanup_next_attempt_at: now,
+        cleanup_final_after: new Date(now.getTime() + TOKEN_REJOIN_GUARD_MS),
+        expires_at: now,
+        delete_at: new Date(now.getTime() + TERMINAL_RETENTION_MS),
+      },
+      $unset: { active_thread_key: 1 },
     },
-    $unset: { active_thread_key: 1 },
-  });
-  const artifactFilter = {
-    status: 'expired',
-    started_at: { $ne: null },
-    transcription_status: { $in: ['pending', 'dispatching', 'active'] },
-  };
-  if (threadId || roomName) {
-    artifactFilter.$or = [];
-    if (threadId) artifactFilter.$or.push({ thread_id: normalize(threadId) });
-    if (roomName) artifactFilter.$or.push({ room_name: normalize(roomName) });
-  }
+  );
   await ProfessionalCall.updateMany(
     {
-      ...artifactFilter,
+      _id: { $in: ids },
+      status: 'expired',
+      started_at: { $ne: null },
+      transcription_status: { $in: ['pending', 'dispatching', 'active'] },
       participant_states: { $not: { $elemMatch: { transcription_consent: true } } },
     },
     { $set: noConsentArtifactSet() },
   );
-  await ProfessionalCall.updateMany({
-    ...artifactFilter,
-    participant_states: { $elemMatch: { transcription_consent: true } },
-  }, {
-    $set: {
-      transcription_status: 'active',
-      transcription_drain_deadline: new Date(now.getTime() + 30_000),
-      minutes_status: 'pending',
+  await ProfessionalCall.updateMany(
+    {
+      _id: { $in: ids },
+      status: 'expired',
+      started_at: { $ne: null },
+      transcription_status: { $in: ['pending', 'dispatching', 'active'] },
+      participant_states: { $elemMatch: { transcription_consent: true } },
     },
-  });
+    {
+      $set: {
+        transcription_status: 'active',
+        transcription_drain_deadline: new Date(now.getTime() + 30_000),
+        minutes_status: 'pending',
+      },
+    },
+  );
+  try {
+    const { emitCallTerminal } = await import('../realtime/workspaceSocket.js');
+    const { scheduleCallRoomCleanup } = await import('./liveKitRoomService.js');
+    for (const call of expiring) {
+      emitCallTerminal(call.participant_ids, {
+        call_id: String(call._id),
+        room_name: call.room_name,
+        thread_id: call.thread_id,
+        status: 'expired',
+      });
+      scheduleCallRoomCleanup(call.room_name);
+    }
+  } catch {
+    // Socket/cleanup may be unavailable in isolated tests.
+  }
 }
 
 async function loadCall(roomName) {
@@ -186,8 +212,14 @@ export async function createPendingCall({
       transcription_status: 'pending',
       minutes_status: 'not_ready',
       status: 'preparing',
-      expires_at: new Date(Date.now() + PREPARING_TTL_MS),
-      delete_at: new Date(Date.now() + PREPARING_TTL_MS + TERMINAL_RETENTION_MS),
+      expires_at: new Date(
+        Date.now() + (callType === 'video' ? VIDEO_PREPARING_TTL_MS : PREPARING_TTL_MS),
+      ),
+      delete_at: new Date(
+        Date.now() +
+          (callType === 'video' ? VIDEO_PREPARING_TTL_MS : PREPARING_TTL_MS) +
+          TERMINAL_RETENTION_MS,
+      ),
     });
     return { ok: true, call: publicCall(call.toObject()) };
   } catch (error) {

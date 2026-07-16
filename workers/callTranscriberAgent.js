@@ -51,12 +51,15 @@ async function markTranscriptionFailed(callId, code, error) {
   );
 }
 
-async function completeTranscriptionAfterDrain(metadata) {
+async function completeTranscriptionAfterDrain(metadata, { allowActive = false } = {}) {
   const now = new Date();
+  const statuses = allowActive
+    ? [...TERMINAL_CALL_STATUSES, 'active']
+    : TERMINAL_CALL_STATUSES;
   return ProfessionalCall.updateOne(
     {
       _id: metadata.call_id,
-      status: { $in: TERMINAL_CALL_STATUSES },
+      status: { $in: statuses },
       transcription_status: { $in: ['pending', 'dispatching', 'active', 'failed'] },
       transcription_dispatch_generation: metadata.dispatch_generation,
     },
@@ -134,7 +137,13 @@ export const callTranscriberAgent = defineAgent({
       );
       const maybeCompleteAfterDrain = async () => {
         if (activeTasks.size > 0) return;
-        await completeTranscriptionAfterDrain(metadata);
+        const remotes = [...(ctx.room?.remoteParticipants?.values?.() || [])].filter(
+          (participant) =>
+            text(participant?.identity) && participant.kind !== ParticipantKind.AGENT,
+        );
+        await completeTranscriptionAfterDrain(metadata, {
+          allowActive: remotes.length === 0,
+        });
       };
       const runParticipant = async (participant) => {
         const identity = text(participant?.identity);
@@ -191,11 +200,26 @@ export const callTranscriberAgent = defineAgent({
           5_000,
           Number.parseInt(process.env.CALL_TRANSCRIPTION_DRAIN_TIMEOUT_MS || '30000', 10) || 30_000,
         );
-        await Promise.race([
-          Promise.allSettled([...activeTasks.values()].filter(Boolean)),
-          new Promise((resolve) => setTimeout(resolve, drainTimeoutMs)),
+        const pending = [...activeTasks.values()].filter(Boolean);
+        const outcome = await Promise.race([
+          Promise.allSettled(pending).then(() => 'done'),
+          new Promise((resolve) => setTimeout(() => resolve('timeout'), drainTimeoutMs)),
         ]);
-        await completeTranscriptionAfterDrain(metadata).catch(() => {});
+        if (outcome === 'done' || activeTasks.size === 0) {
+          await completeTranscriptionAfterDrain(metadata, { allowActive: true }).catch(() => {});
+          return;
+        }
+        await ProfessionalCall.updateOne(
+          {
+            _id: metadata.call_id,
+            transcription_status: { $in: ['pending', 'dispatching', 'active'] },
+          },
+          {
+            $set: {
+              transcription_drain_deadline: new Date(Date.now() + drainTimeoutMs),
+            },
+          },
+        ).catch(() => {});
       });
 
       const activation = await ProfessionalCall.updateOne(

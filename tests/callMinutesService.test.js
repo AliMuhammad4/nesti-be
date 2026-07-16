@@ -126,15 +126,17 @@ test('long transcripts are bounded into speaker-attributed chunks', () => {
 
 test('structured minutes normalization removes malformed content', () => {
   const normalized = normalizeMinutes({
-    summary: ' Summary ',
-    topics: [' Topic ', null],
+    summary: ' **Summary** about documents ',
+    topics: [' Topic ', null, 'Nesti Notetaker joined'],
     action_items: [{ task: ' Do it ', owner: 'Alex' }, { owner: 'Nobody' }],
+    follow_ups: ['- Follow up tomorrow', 'this call was transcribed'],
   });
-  assert.equal(normalized.summary, 'Summary');
+  assert.equal(normalized.summary, 'Summary about documents');
   assert.deepEqual(normalized.topics, ['Topic']);
   assert.deepEqual(normalized.action_items, [
     { owner: 'Alex', task: 'Do it', due_date: '' },
   ]);
+  assert.deepEqual(normalized.follow_ups, ['Follow up tomorrow']);
 });
 
 test('long transcript generation performs hierarchical reconciliation', async () => {
@@ -188,7 +190,7 @@ test('terminal call without transcript creates no minutes artifact', async () =>
   assert.equal(processed, false);
   assert.equal(completionCalls, before);
   assert.equal(deletedMinutes, 1);
-  assert.equal(callUpdate.$set.transcription_status, 'disabled');
+  assert.equal(callUpdate.$set.transcription_status, 'completed');
   assert.equal(callUpdate.$set.minutes_status, 'not_ready');
   assert.equal(callUpdate.$set.transcription_error_code, 'no_transcript_segments');
 });

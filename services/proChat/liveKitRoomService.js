@@ -62,6 +62,32 @@ export async function verifyLiveKitCallPresence(roomName, expectedParticipantIds
   return false;
 }
 
+export async function countLiveKitHumanParticipants(roomName) {
+  if (
+    process.execArgv.some((arg) => arg === '--test' || arg.startsWith('--test=')) ||
+    process.argv.includes('--test')
+  ) {
+    return null;
+  }
+  const client = getRoomServiceClient();
+  if (!client) return null;
+  try {
+    const participants = await client.listParticipants(String(roomName || '').trim());
+    return participants.filter(
+      (participant) => String(participant.kind || '').toLowerCase() !== 'agent',
+    ).length;
+  } catch (error) {
+    const message = String(error?.message || '');
+    const status = Number(error?.status || error?.statusCode || error?.response?.status);
+    if (status === 404 || /not found|does not exist|404/i.test(message)) return 0;
+    logger.warn('LiveKit human participant count failed', {
+      room_name: roomName,
+      message,
+    });
+    return null;
+  }
+}
+
 export async function deleteLiveKitRoom(roomName) {
   const normalizedRoomName = String(roomName || '').trim();
   if (!normalizedRoomName) return false;
@@ -91,6 +117,7 @@ const MAX_RETRY_MS = 60 * 1000;
 const TERMINAL_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 const TOKEN_REJOIN_GUARD_MS = 70 * 1000;
 const ACTIVE_TTL_MS = 4 * 60 * 60 * 1000;
+const ABANDONED_ACTIVE_GRACE_MS = 90 * 1000;
 let reconciliationTimer = null;
 
 function queueCleanup(roomName, delayMs = 0) {
@@ -146,6 +173,33 @@ export async function cleanupCallRoom(roomName) {
     { returnDocument: 'after' },
   ).lean();
   if (!claim) return true;
+
+  const transcriptionBusy = ['pending', 'dispatching', 'active'].includes(
+    String(claim.transcription_status || ''),
+  );
+  const hasConsent = Array.isArray(claim.participant_states)
+    ? claim.participant_states.some((participant) => participant?.transcription_consent === true)
+    : false;
+  if (transcriptionBusy && hasConsent) {
+    const drainDeadline = claim.transcription_drain_deadline
+      ? new Date(claim.transcription_drain_deadline)
+      : new Date(now.getTime() + 30_000);
+    if (drainDeadline.getTime() > now.getTime()) {
+      await ProfessionalCall.updateOne(
+        { _id: claim._id, cleanup_status: 'in_progress' },
+        {
+          $set: {
+            cleanup_status: 'pending',
+            cleanup_last_error: '',
+            cleanup_next_attempt_at: drainDeadline,
+            cleanup_lease_until: null,
+          },
+        },
+      );
+      queueCleanup(room, drainDeadline.getTime() - now.getTime());
+      return true;
+    }
+  }
 
   const deleted = await deleteLiveKitRoom(room);
   if (deleted) {
@@ -223,6 +277,74 @@ export async function reconcileCallRoomCleanup() {
       );
     }
   }
+
+  // End active calls that no longer have humans in LiveKit (missed hangup / closed tab).
+  const abandonedCandidates = await ProfessionalCall.find({
+    status: 'active',
+    started_at: { $lte: new Date(now.getTime() - ABANDONED_ACTIVE_GRACE_MS) },
+  })
+    .select('_id room_name thread_id participant_ids started_at call_scope')
+    .limit(50)
+    .lean();
+  const abandonedCalls = [];
+  for (const call of abandonedCandidates) {
+    const humanCount = await countLiveKitHumanParticipants(call.room_name);
+    if (humanCount === null) continue;
+    const minHumans = call.call_scope === 'multiparty' ? 1 : 2;
+    if (humanCount >= minHumans) continue;
+    const ended = await ProfessionalCall.findOneAndUpdate(
+      { _id: call._id, status: 'active' },
+      {
+        $set: {
+          status: 'ended',
+          ended_at: now,
+          cleanup_status: 'pending',
+          cleanup_next_attempt_at: now,
+          cleanup_final_after: new Date(now.getTime() + TOKEN_REJOIN_GUARD_MS),
+          expires_at: now,
+          delete_at: new Date(now.getTime() + TERMINAL_RETENTION_MS),
+        },
+        $unset: { active_thread_key: 1 },
+      },
+      { returnDocument: 'after' },
+    ).lean();
+    if (ended) abandonedCalls.push(ended);
+  }
+  if (abandonedCalls.length) {
+    await ProfessionalCall.updateMany(
+      {
+        _id: { $in: abandonedCalls.map((call) => call._id) },
+        transcription_status: { $in: ['pending', 'dispatching', 'active'] },
+        participant_states: { $not: { $elemMatch: { transcription_consent: true } } },
+      },
+      { $set: noConsentArtifactSet() },
+    );
+    await ProfessionalCall.updateMany(
+      {
+        _id: { $in: abandonedCalls.map((call) => call._id) },
+        transcription_status: { $in: ['pending', 'dispatching', 'active'] },
+        participant_states: { $elemMatch: { transcription_consent: true } },
+      },
+      {
+        $set: {
+          transcription_status: 'active',
+          transcription_drain_deadline: new Date(now.getTime() + 30_000),
+          minutes_status: 'pending',
+        },
+      },
+    );
+    const { emitCallTerminal } = await import('../realtime/workspaceSocket.js');
+    for (const call of abandonedCalls) {
+      emitCallTerminal(call.participant_ids, {
+        call_id: String(call._id),
+        room_name: call.room_name,
+        thread_id: call.thread_id,
+        status: 'ended',
+      });
+      queueCleanup(call.room_name);
+    }
+  }
+
   const expiringCalls = await ProfessionalCall.find({
     status: { $in: ['preparing', 'ringing', 'connecting', 'active'] },
     expires_at: { $lte: now },

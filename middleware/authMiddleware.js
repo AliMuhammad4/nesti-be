@@ -114,7 +114,7 @@ const requireCompleteProfessionalProfile = async (req, res, next) => {
       success: false,
       code: 'PROFILE_SETUP_INCOMPLETE',
       message:
-        'Complete your personal information and business details in Settings before using this feature. Ideal client (ICP) setup is separate and does not block workspace access.',
+        'Complete your personal and business information in Settings before using this feature. Add your company in Personal Information and at least one service area under Where do you work. Ideal client (ICP) setup is separate and does not block workspace access.',
       profile_setup: {
         ...profileSetup,
         icp_is_separate_from_workspace_basics: true,

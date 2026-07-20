@@ -3,11 +3,13 @@ import IcpProfile from '../../models/IcpProfile.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
 const ICP_WEIGHTS = {
-  client_type: 25,
-  price_range: 25,
-  property_type: 20,
+  client_type: 20,
+  price_range: 20,
+  property_type: 15,
   service_area: 15,
   timeline: 15,
+  language: 10,
+  experience: 5,
 };
 const TIMELINE_MAP = {
   asap: 'immediate',
@@ -236,6 +238,36 @@ function scoreAgentLeadAgainstIcp(leadProfile, icp, options = {}) {
       matched: !!matched,
       lead_value: leadTimeline || null,
       icp_value: icpTimelines,
+    });
+  }
+
+  // Language matching (if preferences available)
+  const leadLanguages = (leadProfile.preferences?.language_preference || []).map(norm);
+  const icpLanguages = (icp.languages_spoken || []).map(norm);
+  if (leadLanguages.length && icpLanguages.length) {
+    totalWeight += ICP_WEIGHTS.language;
+    const matched = leadLanguages.some((lang) => icpLanguages.includes(lang));
+    totalScore += matched ? ICP_WEIGHTS.language : 0;
+    factors.push({
+      dimension: 'language',
+      matched,
+      lead_value: leadLanguages,
+      icp_value: icpLanguages,
+    });
+  }
+
+  // Experience level matching (if preferences available)
+  const leadExperiencePref = norm(leadProfile.preferences?.experience_preference);
+  const icpExperience = norm(icp.experience_level);
+  if (leadExperiencePref && icpExperience) {
+    totalWeight += ICP_WEIGHTS.experience;
+    const matched = leadExperiencePref === icpExperience;
+    totalScore += matched ? ICP_WEIGHTS.experience : 0;
+    factors.push({
+      dimension: 'experience',
+      matched,
+      lead_value: leadExperiencePref,
+      icp_value: icpExperience,
     });
   }
 

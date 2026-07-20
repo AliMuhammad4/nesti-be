@@ -5,6 +5,8 @@ import ChatConversation from '../../models/ChatConversation.js';
 import { LEAD_LIST_CONVERSATION_FIELDS } from './leadAppointmentStatus.js';
 import { leadMapperOptsFromRequest } from './leadQueryUtils.js';
 import { mapLeadMatchToSellerLeadSummary } from './leadResponseMappers.js';
+import { mapLeadProfileForApi } from './leadProfileFormat.js';
+import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 
 const INQUIRED_PROPERTY_LEAD_MATCH_FIELDS =
   '_id lead_profile_id conversation_id match_score match_status compatibility_factors lead_type createdAt updatedAt';
@@ -19,11 +21,42 @@ function firstString(...values) {
   return '';
 }
 
+function imageDedupeKeyFromInput(img) {
+  if (img && typeof img === 'object') {
+    const publicId = String(img.public_id || '').trim();
+    if (publicId) return `pid:${publicId.toLowerCase()}`;
+  }
+  const url = String(typeof img === 'string' ? img : img?.secure_url || img?.url || '')
+    .trim();
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname;
+    const uploadIdx = path.indexOf('/upload/');
+    if (uploadIdx >= 0) {
+      let rest = path.slice(uploadIdx + '/upload/'.length);
+      rest = rest.replace(/(?:[^/]+\/)*v\d+\//, '');
+      if (rest) return `url:${rest.toLowerCase()}`;
+    }
+    return `url:${path.toLowerCase()}`;
+  } catch {
+    return `url:${url.split('?')[0].toLowerCase()}`;
+  }
+}
+
 function normalizeImageUrls(input) {
+  const seen = new Set();
   return (Array.isArray(input) ? input : [])
-    .map((img) => (typeof img === 'string' ? img : img?.secure_url || img?.url || ''))
-    .map((url) => String(url || '').trim())
-    .filter(Boolean)
+    .map((img) => ({
+      key: imageDedupeKeyFromInput(img),
+      url: String(typeof img === 'string' ? img : img?.secure_url || img?.url || '').trim(),
+    }))
+    .filter(({ key, url }) => {
+      if (!url || !key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(({ url }) => url)
     .slice(0, 8);
 }
 
@@ -106,19 +139,89 @@ export async function fetchInquiredPropertySellerLead({ linkedSellerLeadMatchId,
   return mapLeadMatchToSellerLeadSummary(sellerMatch, profile, convo || {}, mapperOpts);
 }
 
+function mapSellerListingProfileToLeadSummary(profile) {
+  if (!profile || profile.intent !== 'sell') return null;
+  const profType = profile?.ownership?.professional_type || PROFESSIONAL_TYPE.AGENT;
+  const profileView = mapLeadProfileForApi(profile, profType);
+  const grade = String(profile?.scoring?.current_grade || 'warm').toLowerCase();
+  return {
+    id: null,
+    professional_type: profType,
+    lead_type: `${grade}_seller`,
+    grade,
+    score: profile.total_score ?? profile?.scoring?.current_score ?? null,
+    status: profile.lifecycle?.status || 'new',
+    contact: profileView.contact,
+    property: profileView.property,
+    qualification: profileView.qualification,
+    appointment_status: 'none',
+    calendly_booking_status: null,
+    conversation_id: '',
+    source: 'property_listing',
+    intent: 'sell',
+    created_at: profile.createdAt,
+    updated_at: profile.updatedAt,
+  };
+}
+
+export async function fetchInquiredPropertySellerLeadWithFallback({
+  linkedSellerLeadMatchId,
+  ownerUserId,
+  profileId,
+  mapperOpts,
+}) {
+  let resolvedMatchId = String(linkedSellerLeadMatchId || '').trim();
+  const normalizedProfileId = firstString(profileId).replace(/^lead:/, '');
+
+  if (!resolvedMatchId && normalizedProfileId && ownerUserId) {
+    resolvedMatchId =
+      (await resolveLinkedSellerLeadMatchId({
+        ownerUserId,
+        inquiredProperty: { id: normalizedProfileId },
+      })) || '';
+  }
+
+  if (resolvedMatchId) {
+    const sellerLead = await fetchInquiredPropertySellerLead({
+      linkedSellerLeadMatchId: resolvedMatchId,
+      mapperOpts,
+    });
+    if (sellerLead) return { sellerLead, linkedSellerLeadMatchId: resolvedMatchId };
+  }
+
+  if (!normalizedProfileId || !mongoose.Types.ObjectId.isValid(normalizedProfileId)) {
+    return { sellerLead: null, linkedSellerLeadMatchId: resolvedMatchId || null };
+  }
+
+  const profile = await LeadProfile.findById(normalizedProfileId)
+    .select(INQUIRED_PROPERTY_PROFILE_FIELDS)
+    .lean();
+  return {
+    sellerLead: mapSellerListingProfileToLeadSummary(profile),
+    linkedSellerLeadMatchId: resolvedMatchId || null,
+  };
+}
+
 export async function buildInquiredPropertyPayload(req, leadMatch) {
-  const { inquiredProperty, linkedSellerLeadMatchId } = extractInquiredPropertyContext(leadMatch);
-  if (!inquiredProperty && !linkedSellerLeadMatchId) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const { inquiredProperty, linkedSellerLeadMatchId: storedLinkedId } = extractInquiredPropertyContext(leadMatch);
+  const profileId = firstString(inquiredProperty?.id, cf.inquired_property_id);
+
+  if (!inquiredProperty && !storedLinkedId && !profileId) {
     return {
       inquired_property: null,
       linked_seller_lead_match_id: null,
       seller_lead: null,
     };
   }
-  const sellerLead = await fetchInquiredPropertySellerLead({
-    linkedSellerLeadMatchId,
+
+  const { sellerLead, linkedSellerLeadMatchId } = await fetchInquiredPropertySellerLeadWithFallback({
+    linkedSellerLeadMatchId: storedLinkedId,
+    ownerUserId: leadMatch.user_id,
+    profileId,
     mapperOpts: leadMapperOptsFromRequest(req),
   });
+
   return {
     inquired_property: inquiredProperty,
     linked_seller_lead_match_id: linkedSellerLeadMatchId || null,

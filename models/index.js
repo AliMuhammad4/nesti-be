@@ -22,6 +22,9 @@ import ProfessionalChatMessage from './ProfessionalChatMessage.js';
 import PublicProfile from './PublicProfile.js';
 import ProfileViewEvent from './ProfileViewEvent.js';
 import Subscription from './Subscription.js';
+import ProfessionalCall from './ProfessionalCall.js';
+import ProfessionalCallTranscriptSegment from './ProfessionalCallTranscriptSegment.js';
+import ProfessionalCallMinutes from './ProfessionalCallMinutes.js';
 export {
   User,
   ChatConversation,
@@ -47,4 +50,7 @@ export {
   PublicProfile,
   ProfileViewEvent,
   Subscription,
+  ProfessionalCall,
+  ProfessionalCallTranscriptSegment,
+  ProfessionalCallMinutes,
 };

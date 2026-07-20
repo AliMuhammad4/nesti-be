@@ -35,6 +35,7 @@ const professionalNotificationSchema = new mongoose.Schema(
     outcomes_headline: { type: String, default: null },
     booking_cta: { type: String, default: null },
     primary_next_action: { type: mongoose.Schema.Types.Mixed, default: null },
+    details: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

@@ -50,10 +50,14 @@ export function displayName(user, fallback = 'A professional') {
 
 export function threadSummary(t) {
   if (!t) return null;
+  const participantsKey = String(t.participants_key || '');
+  const isLeadThread = participantsKey.startsWith('lead:');
   return {
     id: String(t._id || t.id || ''),
     thread_type: t.thread_type || 'dm',
     title: t.title || null,
+    is_lead_thread: isLeadThread,
+    lead_id: isLeadThread ? (participantsKey.split(':')[1] || null) : null,
     created_by: t.created_by ? String(t.created_by) : null,
     participants: Array.isArray(t.participants) ? t.participants.map(String) : [],
     left_participants: Array.isArray(t.left_participants) ? t.left_participants.map(String) : [],

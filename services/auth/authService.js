@@ -1,6 +1,6 @@
 import User from '../../models/User.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
-import { USER_ROLE, USER_ROLE_VALUES } from '../../constants/roles.js';
+import { USER_ROLE, USER_ROLE_VALUES, isProfessionalRole } from '../../constants/roles.js';
 import { evaluateProfessionalProfileSetup } from '../../utils/professionalProfileSetup.js';
 import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
@@ -12,6 +12,7 @@ import {
   createFreeTrialSubscription,
   getSubscriptionPresentationForUser,
 } from '../billing/subscriptionService.js';
+import { getClientSubscriptionForUser } from '../client/clientSubscriptionService.js';
 import { disposableEmailErrorResponse, isDisposableEmail } from './disposableEmailGuard.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
@@ -162,7 +163,12 @@ const verifyGoogleToken = async ({ token, token_type }) => {
 };
 
 const bootstrapProfessionalProfile = async (user) => {
-  if (user.role === USER_ROLE.ADMIN) return;
+  // Skip profile creation for admins and clients
+  if (user.role === USER_ROLE.ADMIN || user.role === USER_ROLE.CLIENT) return;
+  
+  // Only create professional profile for actual professional roles
+  if (!isProfessionalRole(user.role)) return;
+  
   await ProfessionalProfile.create({
     user_id: user._id,
     professional_type: user.role,
@@ -203,6 +209,27 @@ const finalizeInviteForUser = ({ invite_token, userId, method, path }) => {
 
 function normalizeProfessionalProfile(profileDoc) {
   const p = profileDoc || {};
+  const toCleanArray = (value, limit = 0) => {
+    const items = (Array.isArray(value) ? value : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    if (!limit || items.length <= limit) return items;
+    return items.slice(0, limit);
+  };
+  const splitToArray = (value, limit = 0) => {
+    const text = String(value || '').trim();
+    if (!text) return [];
+    const items = text
+      .split(/[,/|]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (!limit || items.length <= limit) return items;
+    return items.slice(0, limit);
+  };
+  const coreSpecializationTags = toCleanArray(
+    p.core_specialization_tags?.length ? p.core_specialization_tags : p.specializations,
+    5,
+  );
   return {
     ...p,
     full_name: p.full_name || '',
@@ -225,11 +252,32 @@ function normalizeProfessionalProfile(profileDoc) {
     energy_style: p.energy_style || '',
     personality_tag: p.personality_tag || '',
     awards: p.awards || '',
-    specializations: Array.isArray(p.specializations) ? p.specializations : [],
+    specializations: Array.isArray(p.specializations) ? p.specializations : coreSpecializationTags,
     communication_channels: Array.isArray(p.communication_channels) ? p.communication_channels : [],
     preferred_clients: Array.isArray(p.preferred_clients) ? p.preferred_clients : [],
     calendly_link: p.calendly_link || '',
     bio: p.bio || '',
+    languages_spoken: toCleanArray(p.languages_spoken, 8),
+    other_language_text: p.other_language_text || '',
+    working_style_structured: p.working_style_structured || '',
+    experience_level: p.experience_level || '',
+    core_specialization_tags: coreSpecializationTags,
+    working_style_tags: toCleanArray(
+      p.working_style_tags?.length ? p.working_style_tags : p.working_style_structured ? [p.working_style_structured] : [],
+      5,
+    ),
+    specialty_strength_tags: toCleanArray(p.specialty_strength_tags, 5),
+    personality_style_tags: toCleanArray(
+      p.personality_style_tags?.length ? p.personality_style_tags : p.personality_tag ? [p.personality_tag] : [],
+      5,
+    ),
+    service_area_primary_zones: toCleanArray(
+      p.service_area_primary_zones?.length ? p.service_area_primary_zones : splitToArray(p.target_neighborhoods, 8),
+      8,
+    ),
+    service_area_secondary_zones: toCleanArray(p.service_area_secondary_zones, 12),
+    service_area_cities: toCleanArray(p.service_area_cities, 15),
+    service_area_regions: toCleanArray(p.service_area_regions, 15),
   };
 }
 
@@ -353,6 +401,14 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       success: true,
       message: 'Email verified successfully and account created',
       token: signJwt({ id: user._id }, '30d'),
+      role: user.role,
+      user: {
+        id: String(user._id),
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+      },
     },
   };
 };
@@ -529,20 +585,47 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
     professionalProfile?.active_icp_profile_id
   );
 
-  const subscription = await getSubscriptionPresentationForUser(user, {
+  let subscription = await getSubscriptionPresentationForUser(user, {
     refreshFromStripe,
   });
-  const isExpired = subscription.isExpired;
+  if (user.role === USER_ROLE.CLIENT && subscription.accountStatus !== 'subscribed') {
+    const clientSubscription = await getClientSubscriptionForUser(user._id);
+    const clientStatus = String(clientSubscription?.status || '').trim().toLowerCase();
+    const clientIsActive = ['active', 'trialing', 'past_due'].includes(clientStatus);
+    if (clientSubscription && clientIsActive) {
+      subscription = {
+        ...subscription,
+        accountStatus: 'subscribed',
+        subscriptionPlan: String(clientSubscription.tier || '').trim().toLowerCase(),
+        subscriptionStatus: clientStatus || 'active',
+        subscriptionEndsAt: clientSubscription.current_period_end || null,
+        cancelAtPeriodEnd: Boolean(clientSubscription.cancel_at_period_end),
+      };
+    }
+  }
+  const isExpired = String(subscription?.accountStatus || '').toLowerCase() === 'expired';
 
-  const profileSetup =
-    user.role === USER_ROLE.ADMIN
-      ? {
-          personal_complete: true,
-          business_complete: true,
-          is_complete: true,
-          missing_fields: [],
-        }
-      : evaluateProfessionalProfileSetup(user, professionalProfile);
+  // Profile setup evaluation - only for professionals and admins
+  let profileSetup;
+  if (user.role === USER_ROLE.ADMIN) {
+    profileSetup = {
+      personal_complete: true,
+      business_complete: true,
+      is_complete: true,
+      missing_fields: [],
+    };
+  } else if (user.role === USER_ROLE.CLIENT) {
+    // Clients don't have professional profile requirements
+    profileSetup = {
+      personal_complete: true,
+      business_complete: true,
+      is_complete: true,
+      missing_fields: [],
+    };
+  } else {
+    // Professionals (agent, broker, lawyer)
+    profileSetup = evaluateProfessionalProfileSetup(user, professionalProfile);
+  }
 
   return {
     status: 200,
@@ -557,11 +640,14 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         first_name: user.first_name,
         last_name: user.last_name,
         email: user.email,
+        phone: user.phone || '',
         role: user.role,
         auth_provider: user.auth_provider || 'local',
         authProvider: user.auth_provider || 'local',
         profile_image: user.profile_image || null,
         cover_image: user.cover_image || null,
+        cover_image_position: user.cover_image_position || { x: 50, y: 50 },
+        cover_image_zoom: user.cover_image_zoom || 1,
         accountStatus: subscription.accountStatus,
         trialEndsAt: subscription.trialEndsAt,
         subscriptionPlan: subscription.subscriptionPlan,

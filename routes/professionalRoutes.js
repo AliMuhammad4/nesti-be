@@ -13,7 +13,7 @@ import {
   listProfessionalsByRole,
   getProfessionalById,
 } from '../controllers/professionalController.js';
-import { postProfileImageUpload } from '../controllers/profileMediaController.js';
+import { postCoverImageAdjustments, postProfileImageUpload } from '../controllers/profileMediaController.js';
 import { uploadProfileImage } from '../middleware/uploadProfileImage.js';
 import { MAX_IMAGE_UPLOAD_MB } from '../constants/mediaLimits.js';
 
@@ -53,6 +53,7 @@ function validateIcpByRole(req, res, next) {
 router.get('/me', protect, requireActiveSubscriptionAccess, getMyProfessionalProfile);
 router.get('/list', protect, requireActiveSubscriptionAccess, listProfessionalsByRole);
 router.post('/upload-image', protect, requireActiveSubscriptionAccess, runProfileUpload, postProfileImageUpload);
+router.post('/cover-adjustments', protect, requireActiveSubscriptionAccess, postCoverImageAdjustments);
 router.get('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, getIdealClientProfile);
 router.post('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
 router.put('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);

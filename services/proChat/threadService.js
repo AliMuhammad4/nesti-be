@@ -12,6 +12,7 @@ import {
 } from '../../utils/proChatUtils.js';
 import { assertThreadMembership } from './accessService.js';
 import { notifyGroupCreated, notifyThreadStarted } from './notificationService.js';
+import { USER_ROLE } from '../../constants/roles.js';
 
 const USER_SELECT = 'first_name last_name email role profile_image';
 
@@ -25,9 +26,18 @@ export async function createOrGetDirectThread({ currentUserId, otherUserId }) {
   const otherId = toObjectId(otherIdRaw);
   if (!meId || !otherId) return { status: 400, body: { success: false, message: 'Invalid user id' } };
 
-  const otherUser = await User.findById(otherIdRaw).select(USER_SELECT).lean();
+  const [currentUser, otherUser] = await Promise.all([
+    User.findById(currentUserId).select(USER_SELECT).lean(),
+    User.findById(otherIdRaw).select(USER_SELECT).lean(),
+  ]);
+  const currentRole = String(currentUser?.role || '').toLowerCase();
+  const otherRole = String(otherUser?.role || '').toLowerCase();
   if (!otherUser) return { status: 404, body: { success: false, message: 'Professional not found' } };
-  if (!isProfessionalRole(otherUser.role)) {
+  const isProfessionalDm = isProfessionalRole(currentRole) && isProfessionalRole(otherRole);
+  const isClientProfessionalDm =
+    (currentRole === USER_ROLE.CLIENT && isProfessionalRole(otherRole)) ||
+    (isProfessionalRole(currentRole) && otherRole === USER_ROLE.CLIENT);
+  if (!isProfessionalDm && !isClientProfessionalDm) {
     return { status: 400, body: { success: false, message: 'Chat is for professionals only' } };
   }
 
@@ -183,16 +193,20 @@ export async function getThreadById({ currentUserId, threadId }) {
   };
 }
 
-export async function listMyThreads({ currentUserId, limitRaw = 20, pageRaw = 1 }) {
+export async function listMyThreads({ currentUserId, limitRaw = 20, pageRaw = 1, includeLeadThreadsRaw = true }) {
   const limitNum = Number(limitRaw);
   const pageNum = Number(pageRaw);
   const limit = Math.min(Math.max(Number.isFinite(limitNum) ? limitNum : 20, 1), 100);
   const page = Math.max(Number.isFinite(pageNum) ? pageNum : 1, 1);
   const skip = (page - 1) * limit;
+  const includeLeadThreads = includeLeadThreadsRaw !== false && String(includeLeadThreadsRaw) !== '0';
 
   const threadFilter = {
     $or: [{ participants: currentUserId }, { left_participants: currentUserId }],
   };
+  if (!includeLeadThreads) {
+    threadFilter.participants_key = { $not: /^lead:/ };
+  }
   const [facet] = await ProfessionalChatThread.aggregate([
     { $match: threadFilter },
     {
@@ -221,10 +235,12 @@ export async function listMyThreads({ currentUserId, limitRaw = 20, pageRaw = 1 
   const out = items.map((t) => {
     const type = t.thread_type || 'dm';
     const isGroup = String(type) === 'group';
+    const participantsKey = String(t.participants_key || '');
+    const isLeadThread = participantsKey.startsWith('lead:');
     const participants = (t.participants || [])
       .map((pid) => userById.get(String(pid)))
       .filter(Boolean);
-    const other = !isGroup
+    const other = (!isGroup || isLeadThread)
       ? participants.find((p) => String(p?._id || '') !== String(currentUserId)) || null
       : null;
     const membersPreview = isGroup
@@ -235,6 +251,8 @@ export async function listMyThreads({ currentUserId, limitRaw = 20, pageRaw = 1 
       id: String(t._id),
       thread_type: type,
       title: t.title || null,
+      is_lead_thread: isLeadThread,
+      lead_id: isLeadThread ? (participantsKey.split(':')[1] || null) : null,
       created_by: t.created_by ? String(t.created_by) : null,
       member_count: participants.length,
       is_member: isMember,

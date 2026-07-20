@@ -7,6 +7,7 @@ export const BILLING_PLANS = {
     currency: 'usd',
     interval: 'month',
     stripe_price_id_env: 'STRIPE_PRICE_BASIC',
+    placement_priority: 5,
   },
   standard: {
     plan_key: 'standard',
@@ -16,6 +17,7 @@ export const BILLING_PLANS = {
     currency: 'usd',
     interval: 'month',
     stripe_price_id_env: 'STRIPE_PRICE_STANDARD',
+    placement_priority: 10,
   },
   enterprise: {
     plan_key: 'enterprise',
@@ -25,6 +27,7 @@ export const BILLING_PLANS = {
     currency: 'usd',
     interval: 'month',
     stripe_price_id_env: 'STRIPE_PRICE_ENTERPRISE',
+    placement_priority: 20,
   },
 };
 
@@ -54,6 +57,11 @@ const PLAN_TIER_ORDER = {
 
 export function getPlanTier(planKey) {
   return PLAN_TIER_ORDER[String(planKey || '').trim().toLowerCase()] || 0;
+}
+
+export function getPlacementPriority(planKey) {
+  const plan = getPlan(planKey);
+  return plan?.placement_priority || 0;
 }
 
 function formatStripeAmount(amount, currency = 'usd') {

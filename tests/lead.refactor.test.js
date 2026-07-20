@@ -152,6 +152,55 @@ test('lead response mappers preserve core list/detail/seller shapes', async () =
   assert.equal(underProfile.professional_type, 'agent');
 });
 
+test('lawyer client professional inquiry list rows use per-match property_address for location', async () => {
+  const { mapLeadMatchToListRow } = await import('../services/lead/leadResponseMappers.js');
+  const sharedProfile = {
+    _id: '507f1f77bcf86cd799439099',
+    intent: 'unspecified',
+    identity: { full_name: 'Muhamamd Ahmed', email: 'client@example.com', phone: '555' },
+    contact_preferences: {},
+    property: { location: 'rtyuio', address: 'rtyuio' },
+    qualification: { lawyer: { legal_services_needed: 'sale_closing' } },
+    ownership: { professional_type: 'lawyer' },
+    source: 'client_professional_inquiry',
+  };
+
+  const olderMatch = {
+    ...stubMatch,
+    _id: '507f1f77bcf86cd799439021',
+    lead_type: 'client_warm',
+    compatibility_factors: {
+      source: 'client_professional_inquiry',
+      professional_type: 'lawyer',
+      property_address: 'Johar Town, Lahore',
+    },
+  };
+  const newerMatch = {
+    ...stubMatch,
+    _id: '507f1f77bcf86cd799439022',
+    lead_type: 'client_hot',
+    compatibility_factors: {
+      source: 'client_professional_inquiry',
+      professional_type: 'lawyer',
+      property_address: 'DHA Phase 5',
+    },
+  };
+
+  const olderRow = mapLeadMatchToListRow(olderMatch, sharedProfile, stubConvo, false, {
+    includeIntentField: false,
+    includeExperienceBlocks: false,
+  });
+  const newerRow = mapLeadMatchToListRow(newerMatch, sharedProfile, stubConvo, false, {
+    includeIntentField: false,
+    includeExperienceBlocks: false,
+  });
+
+  assert.equal(olderRow.location, 'Johar Town, Lahore');
+  assert.equal(olderRow.property.location, 'Johar Town, Lahore');
+  assert.equal(newerRow.location, 'DHA Phase 5');
+  assert.equal(newerRow.property.location, 'DHA Phase 5');
+});
+
 test('role conversion checklist matches role-specific requirements', async () => {
   const { evaluateRoleConversionChecklist } = await import(
     '../services/lead/leadConversionChecklist.js'
@@ -239,6 +288,102 @@ test('inquired property helpers normalize context and payload fields', async () 
   const normalized = normalizeInquiredProperty({ title: '  Condo  ', address: 'Main St' });
   assert.equal(normalized.title, 'Condo');
   assert.equal(normalized.address, 'Main St');
+
+  const deduped = normalizeInquiredProperty({
+    title: 'Duplex',
+    address: 'Duplex',
+    images: ['https://cdn/a.jpg', 'https://cdn/a.jpg', 'https://cdn/b.jpg'],
+  });
+  assert.deepEqual(deduped.images, ['https://cdn/a.jpg', 'https://cdn/b.jpg']);
+
+  const cloudinaryDeduped = normalizeInquiredProperty({
+    title: 'Home',
+    images: [
+      { public_id: 'listings/photo-1', secure_url: 'https://res.cloudinary.com/demo/image/upload/w_400/v1/listings/photo-1.jpg' },
+      { public_id: 'listings/photo-1', secure_url: 'https://res.cloudinary.com/demo/image/upload/w_800/v1/listings/photo-1.jpg' },
+      { public_id: 'listings/photo-2', url: 'https://res.cloudinary.com/demo/image/upload/v1/listings/photo-2.jpg' },
+    ],
+  });
+  assert.equal(cloudinaryDeduped.images.length, 2);
+});
+
+test('client property inquiry scoring uses scoreLead with client profile signals', async () => {
+  const {
+    scoreClientPropertyInquiry,
+    scoreLead,
+  } = await import('../services/chat/scoring/agentScoring.js');
+
+  const bare = scoreLead({
+    message: 'Hi lahore 500000',
+    hasContact: true,
+    contactInfo: { name: 'Test', email: 't@example.com', phone: '' },
+    interactionCount: 1,
+    seedSignals: { budget: '500000', location: 'lahore' },
+    formQualification: {},
+  });
+  assert.equal(bare.leadScore, 19);
+  assert.equal(bare.leadGrade, 'cold');
+
+  const inquiry = scoreClientPropertyInquiry({
+    inquiryText: 'I am interested in this home',
+    listingFields: {
+      address: 'lahore',
+      location: 'lahore',
+      expected_price: '500000',
+      property_type: 'Condo',
+      bedrooms: '3',
+      bathrooms: '3',
+    },
+    clientName: 'Muhamamd Ahmed',
+    clientEmail: 'client@example.com',
+    clientPhone: '',
+  });
+  assert.equal(inquiry.leadScore, bare.leadScore);
+  assert.equal(inquiry.leadGrade, bare.leadGrade);
+
+  const dashboardProfile = scoreClientPropertyInquiry({
+    inquiryText: 'Interested in this listing',
+    clientProfile: {
+      preferred_location: 'Lahore',
+      purchase_timeline: '1_year',
+      dream_home_price: 500000,
+    },
+    listingFields: {
+      address: 'Lahore',
+      location: 'Lahore',
+      expected_price: '500000',
+    },
+    clientName: 'Muhamamd Ahmed',
+    clientEmail: 'client@example.com',
+    clientPhone: '',
+  });
+  assert.ok(
+    dashboardProfile.leadScore > inquiry.leadScore,
+    `expected timeline to increase score above ${inquiry.leadScore}, got ${dashboardProfile.leadScore}`,
+  );
+
+  const enriched = scoreClientPropertyInquiry({
+    inquiryText: 'Ready to move soon',
+    clientProfile: {
+      purchase_timeline: 'asap',
+      mortgage_status: 'paying_cash',
+      realtor_status: 'no_agent',
+      viewing_readiness: 'asap',
+      offer_readiness: 'yes_immediately',
+      motivation_reason: 'family_change',
+      living_situation: 'renting',
+    },
+    listingFields: {
+      address: 'lahore',
+      location: 'lahore',
+      expected_price: '500000',
+    },
+    clientName: 'Muhamamd Ahmed',
+    clientEmail: 'client@example.com',
+    clientPhone: '',
+  });
+  assert.ok(enriched.leadScore >= 60, `expected warm+, got ${enriched.leadScore}`);
+  assert.ok(['warm', 'hot'].includes(enriched.leadGrade), `grade was ${enriched.leadGrade}`);
 });
 
 test('close reason validation enforces referral recipient rules', async () => {

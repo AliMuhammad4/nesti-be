@@ -3,7 +3,7 @@ import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.j
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { evaluateRoleConversionChecklist } from './leadConversionChecklist.js';
 import { mapLeadProfileForApi } from './leadProfileFormat.js';
-import { extractInquiredPropertyContext } from './inquiredProperty.js';
+import { extractInquiredPropertyContext, normalizeInquiredProperty } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
 import { resolveListIntent } from './leadQueryUtils.js';
 
@@ -135,6 +135,112 @@ function formatCloseSummary(cf) {
   };
 }
 
+function isListedPropertyInquirySource(leadMatch, leadSource) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const source = String(leadSource || cf.source || '').trim().toLowerCase();
+  return source === 'client_property_inquiry';
+}
+
+function isClientProfessionalInquirySource(leadMatch, leadSource) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const source = String(leadSource || cf.source || '').trim().toLowerCase();
+  return source === 'client_professional_inquiry';
+}
+
+function resolveClientProfessionalInquiryLocation(leadMatch) {
+  const cf = leadMatch?.compatibility_factors || {};
+  return String(cf.property_address || '').trim();
+}
+
+function emptyAgentQualification() {
+  return {
+    mortgage_status: null,
+    realtor_status: null,
+    motivation_reason: null,
+    viewing_readiness: null,
+    living_situation: null,
+    urgency_readiness: null,
+    buy_property_location: null,
+  };
+}
+
+function hasAgentQualificationData(qualification) {
+  if (!qualification || typeof qualification !== 'object') return false;
+  return Object.values(qualification).some(
+    (value) => value != null && String(value).trim() !== '',
+  );
+}
+
+function applyClientProfessionalInquiryView(core, leadMatch) {
+  if (!isClientProfessionalInquirySource(leadMatch, core.source)) return core;
+
+  const location = resolveClientProfessionalInquiryLocation(leadMatch) || null;
+  // Use only the exact per-inquiry address. Do not fall back to shared LeadProfile
+  // location because it can be overwritten by newer inquiries.
+  return {
+    ...core,
+    location,
+    address: location,
+    city: location,
+    property: {
+      ...core.property,
+      location,
+      address: location,
+    },
+  };
+}
+
+function applyListedPropertyInquiryView(core, leadMatch, profile) {
+  if (!isListedPropertyInquirySource(leadMatch, core.source)) return core;
+
+  const cf = leadMatch?.compatibility_factors || {};
+  const rawProp = profile?.property || {};
+  let inquiredProperty = core.inquired_property;
+  if (!inquiredProperty) {
+    inquiredProperty = normalizeInquiredProperty({
+      id: cf.inquired_property_id,
+      title: cf.inquired_property_title,
+      address: rawProp.address,
+      location: rawProp.location || rawProp.address,
+      expected_price: rawProp.expected_price,
+      property_type: rawProp.property_type,
+      bedrooms: rawProp.bedrooms,
+      bathrooms: rawProp.bathrooms,
+      square_footage: rawProp.square_footage,
+    });
+  }
+
+  const inquiryMessage = String(cf.inquiry_message || rawProp.must_have_features || '').trim();
+  const profType =
+    leadMatch?.compatibility_factors?.professional_type || profile?.ownership?.professional_type;
+
+  return {
+    ...core,
+    inquired_property: inquiredProperty,
+    inquiry_message: inquiryMessage || null,
+    is_listed_property_inquiry: true,
+    property: {
+      ...core.property,
+      location: inquiredProperty?.location || inquiredProperty?.address || rawProp.address || null,
+      address: inquiredProperty?.address || rawProp.address || null,
+      budget: inquiredProperty?.expected_price || rawProp.expected_price || null,
+      expected_price: inquiredProperty?.expected_price || rawProp.expected_price || null,
+      timeline: null,
+      bedrooms: inquiredProperty?.bedrooms || rawProp.bedrooms || null,
+      bathrooms: inquiredProperty?.bathrooms || rawProp.bathrooms || null,
+      property_type: inquiredProperty?.property_type || rawProp.property_type || null,
+      must_have_features: inquiryMessage || null,
+      parking_required: null,
+      backyard_needed: null,
+      school_district_important: null,
+    },
+    qualification:
+      profType === PROFESSIONAL_TYPE.AGENT && !hasAgentQualificationData(core.qualification)
+        ? emptyAgentQualification()
+        : core.qualification,
+  };
+}
+
 function leadCore(leadMatch, profileView, convo, opts = {}) {
   const { includeIntentField = true } = opts;
   const grade = leadMatch.lead_type?.split('_')[0] || null;
@@ -170,6 +276,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     conversation_id: String(leadMatch.conversation_id || ''),
     source: leadSource,
     inquired_property: inquiredProperty,
+    client_profile: leadMatch?.compatibility_factors?.client_profile || null,
     linked_seller_lead_match_id: linkedSellerLeadMatchId,
     is_direct_public_inquiry:
       Boolean(leadMatch?.compatibility_factors?.direct_submission) || leadSource === 'public_web_form',
@@ -183,7 +290,9 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
   if (includeIntentField) {
     core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);
   }
-  return core;
+  let row = applyListedPropertyInquiryView(core, leadMatch, opts.leadProfile || null);
+  row = applyClientProfessionalInquiryView(row, leadMatch);
+  return row;
 }
 
 export function mapLeadMatchToListRow(leadMatch, profile, convo, includeConversion, opts = {}) {

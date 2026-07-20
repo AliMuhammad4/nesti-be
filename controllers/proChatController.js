@@ -23,6 +23,16 @@ import {
   listThreadMessages as listThreadMessagesService,
   postThreadMessage as postThreadMessageService,
 } from '../services/proChat/messageService.js';
+import { createCallTokenForThread } from '../services/proChat/callService.js';
+import {
+  getCallRecord as getCallRecordService,
+  listCallRecords as listCallRecordsService,
+} from '../services/proChat/callRecordService.js';
+import {
+  getCallArtifactStatus as getCallArtifactStatusService,
+  getCallMinutes as getCallMinutesService,
+  getCallTranscript as getCallTranscriptService,
+} from '../services/proChat/callArtifactService.js';
 
 function sendServiceResult(res, result) {
   return res.status(result?.status || 200).json(result?.body || result);
@@ -183,6 +193,7 @@ export const listMyThreads = async (req, res, next) => {
       currentUserId: req.user?._id,
       limitRaw: req.query?.limit,
       pageRaw: req.query?.page,
+      includeLeadThreadsRaw: req.query?.include_lead_threads,
     });
     return res.json(body);
   } catch (error) {
@@ -216,6 +227,96 @@ export const postThreadMessage = async (req, res, next) => {
     return sendServiceResult(res, result);
   } catch (error) {
     logger.warn('postThreadMessage failed', { err: error?.message });
+    next(error);
+  }
+};
+
+export const createThreadCallToken = async (req, res, next) => {
+  try {
+    const result = await createCallTokenForThread({
+      currentUserId: req.user?._id,
+      threadId: normalizeId(req.params?.id),
+      callType: req.body?.call_type,
+      roomName: req.body?.room_name,
+      action: req.body?.action,
+      transcriptionConsent: req.body?.transcription_consent,
+    });
+    return sendServiceResult(res, result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listCallRecords = async (req, res, next) => {
+  try {
+    const result = await listCallRecordsService({
+      currentUserId: req.user?._id,
+      page: req.query?.page,
+      limit: req.query?.limit,
+      status: req.query?.status,
+      callType: req.query?.call_type,
+      threadId: req.query?.thread_id,
+      from: req.query?.from,
+      to: req.query?.to,
+    });
+    return sendServiceResult(res, result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCallRecord = async (req, res, next) => {
+  try {
+    const result = await getCallRecordService({
+      currentUserId: req.user?._id,
+      callId: req.params?.callId,
+    });
+    return sendServiceResult(res, result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCallArtifactStatus = async (req, res, next) => {
+  try {
+    return sendServiceResult(
+      res,
+      await getCallArtifactStatusService({
+        currentUserId: req.user?._id,
+        callId: req.params?.callId,
+      }),
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCallTranscript = async (req, res, next) => {
+  try {
+    return sendServiceResult(
+      res,
+      await getCallTranscriptService({
+        currentUserId: req.user?._id,
+        callId: req.params?.callId,
+        page: req.query?.page,
+        limit: req.query?.limit,
+      }),
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCallMinutes = async (req, res, next) => {
+  try {
+    return sendServiceResult(
+      res,
+      await getCallMinutesService({
+        currentUserId: req.user?._id,
+        callId: req.params?.callId,
+      }),
+    );
+  } catch (error) {
     next(error);
   }
 };

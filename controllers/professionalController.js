@@ -8,9 +8,51 @@ import { awardInviterMilestoneForUser } from '../services/referral/inviteService
 import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import IcpProfile from '../models/IcpProfile.js';
+import ClientProfile from '../models/ClientProfile.js';
+import { calculateClientProfessionalAiMatch } from '../services/matching/matchRankingService.js';
+
+function toCleanArray(value, limit = 0) {
+  const items = (Array.isArray(value) ? value : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  if (!limit || items.length <= limit) return items;
+  return items.slice(0, limit);
+}
+
+function splitToArray(value, limit = 0) {
+  const text = String(value || '').trim();
+  if (!text) return [];
+  const items = text
+    .split(/[,/|]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!limit || items.length <= limit) return items;
+  return items.slice(0, limit);
+}
 
 function normalizeProfessionalProfile(profileDoc) {
   const p = profileDoc ? (typeof profileDoc.toObject === 'function' ? profileDoc.toObject() : profileDoc) : {};
+  const coreSpecializationTags = toCleanArray(
+    p.core_specialization_tags?.length ? p.core_specialization_tags : p.specializations,
+    5,
+  );
+  const specialtyStrengthTags = toCleanArray(p.specialty_strength_tags, 5);
+  const workingStyleTags = toCleanArray(
+    p.working_style_tags?.length ? p.working_style_tags : p.working_style_structured ? [p.working_style_structured] : [],
+    5,
+  );
+  const personalityStyleTags = toCleanArray(
+    p.personality_style_tags?.length ? p.personality_style_tags : p.personality_tag ? [p.personality_tag] : [],
+    5,
+  );
+  const serviceAreaCities = toCleanArray(p.service_area_cities, 15);
+  const serviceAreaRegions = toCleanArray(p.service_area_regions, 15);
+  const serviceAreaPrimaryZones = toCleanArray(
+    p.service_area_primary_zones?.length ? p.service_area_primary_zones : splitToArray(p.target_neighborhoods, 8),
+    8,
+  );
+  const serviceAreaSecondaryZones = toCleanArray(p.service_area_secondary_zones, 12);
+
   return {
     ...p,
     full_name: p.full_name || '',
@@ -25,6 +67,8 @@ function normalizeProfessionalProfile(profileDoc) {
     social_media: p.social_media || '',
     transaction_volume: p.transaction_volume || '',
     avg_sale_price: p.avg_sale_price || '',
+    avg_home_price: p.avg_home_price ?? null,
+    commission_rate_percent: p.commission_rate_percent ?? null,
     response_time: p.response_time || '',
     availability: p.availability || '',
     support_level: p.support_level || '',
@@ -33,11 +77,23 @@ function normalizeProfessionalProfile(profileDoc) {
     energy_style: p.energy_style || '',
     personality_tag: p.personality_tag || '',
     awards: p.awards || '',
-    specializations: Array.isArray(p.specializations) ? p.specializations : [],
+    specializations: Array.isArray(p.specializations) ? p.specializations : coreSpecializationTags,
     communication_channels: Array.isArray(p.communication_channels) ? p.communication_channels : [],
     preferred_clients: Array.isArray(p.preferred_clients) ? p.preferred_clients : [],
     calendly_link: p.calendly_link || '',
     bio: p.bio || '',
+    languages_spoken: toCleanArray(p.languages_spoken, 8),
+    other_language_text: p.other_language_text || '',
+    working_style_structured: p.working_style_structured || '',
+    experience_level: p.experience_level || '',
+    core_specialization_tags: coreSpecializationTags,
+    working_style_tags: workingStyleTags,
+    specialty_strength_tags: specialtyStrengthTags,
+    personality_style_tags: personalityStyleTags,
+    service_area_cities: serviceAreaCities,
+    service_area_regions: serviceAreaRegions,
+    service_area_primary_zones: serviceAreaPrimaryZones,
+    service_area_secondary_zones: serviceAreaSecondaryZones,
   };
 }
 
@@ -130,6 +186,8 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       company_name,
       transaction_volume,
       avg_sale_price,
+      avg_home_price,
+      commission_rate_percent,
       response_time,
       availability,
       support_level,
@@ -146,6 +204,18 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       website,
       certificates,
       full_name,
+      languages_spoken,
+      other_language_text,
+      working_style_structured,
+      experience_level,
+      core_specialization_tags,
+      working_style_tags,
+      specialty_strength_tags,
+      personality_style_tags,
+      service_area_primary_zones,
+      service_area_secondary_zones,
+      service_area_cities,
+      service_area_regions,
     } = body;
 
     const user = await User.findById(userId);
@@ -203,6 +273,15 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (company_name !== undefined) update.company_name = company_name;
     if (transaction_volume !== undefined) update.transaction_volume = transaction_volume;
     if (avg_sale_price !== undefined) update.avg_sale_price = avg_sale_price;
+    if (avg_home_price !== undefined) {
+      const parsedAvgHomePrice = Number(avg_home_price);
+      update.avg_home_price = Number.isFinite(parsedAvgHomePrice) && parsedAvgHomePrice >= 0 ? parsedAvgHomePrice : null;
+    }
+    if (commission_rate_percent !== undefined) {
+      const parsedCommissionRate = Number(commission_rate_percent);
+      update.commission_rate_percent =
+        Number.isFinite(parsedCommissionRate) && parsedCommissionRate >= 0 ? parsedCommissionRate : null;
+    }
     if (response_time !== undefined) update.response_time = response_time;
     if (availability !== undefined) update.availability = availability;
     if (support_level !== undefined) update.support_level = support_level;
@@ -214,6 +293,32 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (specializations !== undefined) update.specializations = specializations;
     if (communication_channels !== undefined) update.communication_channels = communication_channels;
     if (preferred_clients !== undefined) update.preferred_clients = preferred_clients;
+    if (languages_spoken !== undefined) update.languages_spoken = toCleanArray(languages_spoken, 8);
+    if (other_language_text !== undefined) update.other_language_text = String(other_language_text || '').trim();
+    if (working_style_structured !== undefined) update.working_style_structured = working_style_structured;
+    if (experience_level !== undefined) update.experience_level = experience_level;
+    if (core_specialization_tags !== undefined) {
+      update.core_specialization_tags = toCleanArray(core_specialization_tags, 5);
+      if (specializations === undefined) update.specializations = update.core_specialization_tags;
+    }
+    if (working_style_tags !== undefined) update.working_style_tags = toCleanArray(working_style_tags, 5);
+    if (specialty_strength_tags !== undefined) update.specialty_strength_tags = toCleanArray(specialty_strength_tags, 5);
+    if (personality_style_tags !== undefined) {
+      update.personality_style_tags = toCleanArray(personality_style_tags, 5);
+      if (personality_tag === undefined && update.personality_style_tags[0]) {
+        update.personality_tag = update.personality_style_tags[0];
+      }
+    }
+    if (service_area_primary_zones !== undefined) {
+      update.service_area_primary_zones = toCleanArray(service_area_primary_zones, 8);
+      if (target_neighborhoods === undefined) update.target_neighborhoods = update.service_area_primary_zones.join(', ');
+    }
+    if (service_area_secondary_zones !== undefined) update.service_area_secondary_zones = toCleanArray(service_area_secondary_zones, 12);
+    if (service_area_cities !== undefined) {
+      update.service_area_cities = toCleanArray(service_area_cities, 15);
+      if (location === undefined) update.location = update.service_area_cities.join(', ');
+    }
+    if (service_area_regions !== undefined) update.service_area_regions = toCleanArray(service_area_regions, 15);
 
     // Single Calendly URL for all users.
     if (calendly_link !== undefined) update.calendly_link = calendly_link;
@@ -525,7 +630,7 @@ export const getProfessionalById = async (req, res, next) => {
 
     const profile = await ProfessionalProfile.findOne({ user_id: user._id })
       .select(
-        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio',
+        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price avg_home_price commission_rate_percent response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken other_language_text working_style_structured experience_level core_specialization_tags working_style_tags specialty_strength_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions active_icp_profile_id',
       )
       .lean();
 
@@ -548,6 +653,14 @@ export const getProfessionalById = async (req, res, next) => {
       },
     ]);
     const stats = leadStats?.[0] || {};
+    const clientProfile =
+      req.user?.role === 'client'
+        ? await ClientProfile.findOne({ user_id: req.user._id }).lean()
+        : null;
+    const aiMatch =
+      clientProfile && profile
+        ? await calculateClientProfessionalAiMatch(clientProfile, profile)
+        : {};
 
     return res.json({
       success: true,
@@ -574,6 +687,8 @@ export const getProfessionalById = async (req, res, next) => {
         social_media: profile?.social_media || '',
         transaction_volume: profile?.transaction_volume || '',
         avg_sale_price: profile?.avg_sale_price || '',
+        avg_home_price: profile?.avg_home_price ?? null,
+        commission_rate_percent: profile?.commission_rate_percent ?? null,
         response_time: profile?.response_time || '',
         availability: profile?.availability || '',
         support_level: profile?.support_level || '',
@@ -585,10 +700,23 @@ export const getProfessionalById = async (req, res, next) => {
         specializations: Array.isArray(profile?.specializations) ? profile.specializations : [],
         communication_channels: Array.isArray(profile?.communication_channels) ? profile.communication_channels : [],
         preferred_clients: Array.isArray(profile?.preferred_clients) ? profile.preferred_clients : [],
+        languages_spoken: Array.isArray(profile?.languages_spoken) ? profile.languages_spoken : [],
+        other_language_text: profile?.other_language_text || '',
+        working_style_structured: profile?.working_style_structured || '',
+        experience_level: profile?.experience_level || '',
+        core_specialization_tags: Array.isArray(profile?.core_specialization_tags) ? profile.core_specialization_tags : [],
+        working_style_tags: Array.isArray(profile?.working_style_tags) ? profile.working_style_tags : [],
+        specialty_strength_tags: Array.isArray(profile?.specialty_strength_tags) ? profile.specialty_strength_tags : [],
+        personality_style_tags: Array.isArray(profile?.personality_style_tags) ? profile.personality_style_tags : [],
+        service_area_primary_zones: Array.isArray(profile?.service_area_primary_zones) ? profile.service_area_primary_zones : [],
+        service_area_secondary_zones: Array.isArray(profile?.service_area_secondary_zones) ? profile.service_area_secondary_zones : [],
+        service_area_cities: Array.isArray(profile?.service_area_cities) ? profile.service_area_cities : [],
+        service_area_regions: Array.isArray(profile?.service_area_regions) ? profile.service_area_regions : [],
         total_leads: Number(stats.total_leads || 0),
         total_deals: Number(stats.total_deals || 0),
         created_at: user.createdAt || null,
         updated_at: user.updatedAt || null,
+        ...aiMatch,
       },
     });
   } catch (error) {

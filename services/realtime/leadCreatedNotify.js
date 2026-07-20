@@ -47,6 +47,7 @@ export async function emitNewLeadCreatedNotification(ownerUserId, ctx) {
     socketIntent,
     appointment_status,
     conversion_preview,
+    details = null,
   } = ctx;
 
   emitNotification(ownerUserId, {
@@ -70,6 +71,7 @@ export async function emitNewLeadCreatedNotification(ownerUserId, ctx) {
     booking_cta: conversion_preview?.booking_cta ?? null,
     primary_next_action: primaryNextActionFromPreview(conversion_preview),
     action: { type: 'open_lead', lead_match_id: String(newLeadMatch._id) },
+    details,
   });
 
   try {

@@ -76,6 +76,10 @@ export const leadAgentPatchSchema = Joi.object({
   }).optional(),
 }).min(1);
 
+export const leadConversationMessageSchema = Joi.object({
+  body: Joi.string().trim().min(1).max(5000).required(),
+});
+
 export const leadProfileCreateSchema = Joi.object({
   intent: Joi.string().valid(...CHAT_INTENTS).required(),
   ownership: Joi.object({

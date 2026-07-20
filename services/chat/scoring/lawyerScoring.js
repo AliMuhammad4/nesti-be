@@ -38,8 +38,15 @@ export const deriveLawyerQualificationFromText = (text = '') => {
   if (/first time|first.?time buyer|first home|never bought/i.test(t)) out.first_time_buyer = 'yes';
   else if (/no.*second|not first|bought before|previous home/i.test(t)) out.first_time_buyer = 'no';
   if (/full closing|complete closing|full legal|closing services/i.test(t)) out.legal_services_needed = 'full_closing';
+  else if (/purchase closing|buyer closing|closing.*purchase|purchase.*closing/i.test(t)) out.legal_services_needed = 'purchase_closing';
+  else if (/sale closing|seller closing|closing.*sale|sale.*closing/i.test(t)) out.legal_services_needed = 'sale_closing';
+  else if (/refinance legal|refinance lawyer|refinance closing|refinance documents/i.test(t)) out.legal_services_needed = 'refinance_legal_work';
+  else if (/agreement review|contract review|review agreement|review contract/i.test(t)) out.legal_services_needed = 'agreement_review';
   else if (/title transfer|transfer services/i.test(t)) out.legal_services_needed = 'title_transfer';
-  else if (/document review|review documents|contract review/i.test(t)) out.legal_services_needed = 'document_review';
+  else if (/mortgage document|mortgage documents|loan document|financing document/i.test(t)) out.legal_services_needed = 'mortgage_document_review';
+  else if (/property dispute|real estate dispute|legal advice|property advice|dispute advice/i.test(t)) out.legal_services_needed = 'property_dispute_advice';
+  else if (/document review|review documents/i.test(t)) out.legal_services_needed = 'document_review';
+  else if (/other legal|not listed|something else|other service/i.test(t)) out.legal_services_needed = 'other';
   return out;
 };
 
@@ -117,8 +124,15 @@ export const scoreLawyerLead = ({
   let legalServicesScore = 0;
   const lsn = fq.legal_services_needed;
   if (lsn === 'full_closing') { legalServicesScore = 10; reasons.push('Legal services: full closing'); }
+  else if (lsn === 'purchase_closing') { legalServicesScore = 10; reasons.push('Legal services: purchase closing'); }
+  else if (lsn === 'sale_closing') { legalServicesScore = 10; reasons.push('Legal services: sale closing'); }
+  else if (lsn === 'refinance_legal_work') { legalServicesScore = 7; reasons.push('Legal services: refinance legal work'); }
+  else if (lsn === 'agreement_review') { legalServicesScore = 6; reasons.push('Legal services: agreement / contract review'); }
   else if (lsn === 'title_transfer') { legalServicesScore = 7; reasons.push('Legal services: title transfer'); }
+  else if (lsn === 'mortgage_document_review') { legalServicesScore = 6; reasons.push('Legal services: mortgage document review'); }
+  else if (lsn === 'property_dispute_advice') { legalServicesScore = 5; reasons.push('Legal services: property dispute / legal advice'); }
   else if (lsn === 'document_review') { legalServicesScore = 5; reasons.push('Legal services: document review'); }
+  else if (lsn === 'other') { legalServicesScore = 3; reasons.push('Legal services: other'); }
 
   const finalScore = Math.min(
     transactionStageScore + closingTimelineScore + transactionTypeScore +

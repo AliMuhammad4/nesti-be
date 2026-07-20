@@ -10,8 +10,36 @@ export const FREE_TRIAL_DAYS = 3;
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const STRIPE_BLOCKING_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
 
+function isStripeResourceMissing(error) {
+  return error?.code === 'resource_missing' || error?.raw?.code === 'resource_missing';
+}
+
 function userHasActiveSubscriptionAccess(subscription) {
   return accountStatusFromSubscription(subscription) === 'subscribed';
+}
+
+async function markSubscriptionStripeStateExpired(userId) {
+  return Subscription.findOneAndUpdate(
+    { user_id: userId },
+    {
+      $set: {
+        stripe_customer_id: '',
+        stripe_subscription_id: '',
+        stripe_price_id: '',
+        stripe_subscription_schedule_id: '',
+        pending_plan_key: '',
+        pending_plan_effective_at: null,
+        status: 'expired',
+        cancel_at_period_end: false,
+        current_period_start: null,
+        current_period_end: null,
+        latest_invoice_id: '',
+        last_payment_status: '',
+        last_synced_at: new Date(),
+      },
+    },
+    { returnDocument: 'after' },
+  );
 }
 
 async function findBlockingStripeSubscription(customerId) {
@@ -33,13 +61,29 @@ async function refreshSubscriptionFromStripeForUser(user) {
   const customerId = String(subscription?.stripe_customer_id || '').trim();
   if (!customerId) return subscription;
 
-  const activeStripeSubscription = await findBlockingStripeSubscription(customerId);
+  let activeStripeSubscription;
+  try {
+    activeStripeSubscription = await findBlockingStripeSubscription(customerId);
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      return markSubscriptionStripeStateExpired(user._id);
+    }
+    throw error;
+  }
   if (!activeStripeSubscription) return subscription;
 
   const stripe = getStripeClient();
-  const detailedStripeSubscription = await stripe.subscriptions.retrieve(activeStripeSubscription.id, {
-    expand: ['latest_invoice'],
-  });
+  let detailedStripeSubscription;
+  try {
+    detailedStripeSubscription = await stripe.subscriptions.retrieve(activeStripeSubscription.id, {
+      expand: ['latest_invoice'],
+    });
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      return markSubscriptionStripeStateExpired(user._id);
+    }
+    throw error;
+  }
   const repairResult = await repairUnpaidUpgradeIfNeeded(stripe, user, subscription, detailedStripeSubscription);
   if (repairResult.repaired) {
     return repairResult.subscription;
@@ -482,7 +526,33 @@ export function serializeSubscription(subscription) {
   };
 }
 
+async function normalizeFreeTrialDuration(subscription) {
+  if (!subscription?.trial_start || !['free_trial', 'expired'].includes(subscription.status)) {
+    return subscription;
+  }
+
+  const trialStart = new Date(subscription.trial_start);
+  if (Number.isNaN(trialStart.getTime())) return subscription;
+
+  const expectedTrialEnd = new Date(trialStart.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
+  const currentTrialEnd = subscription.trial_end ? new Date(subscription.trial_end) : null;
+  const shouldExtend =
+    !currentTrialEnd ||
+    Number.isNaN(currentTrialEnd.getTime()) ||
+    currentTrialEnd.getTime() < expectedTrialEnd.getTime();
+
+  if (!shouldExtend) return subscription;
+
+  subscription.trial_end = expectedTrialEnd;
+  if (subscription.status === 'expired' && expectedTrialEnd > new Date()) {
+    subscription.status = 'free_trial';
+  }
+  await subscription.save();
+  return subscription;
+}
+
 export async function expireTrialIfNeeded(subscription) {
+  subscription = await normalizeFreeTrialDuration(subscription);
   if (
     subscription?.status === 'free_trial' &&
     subscription.trial_end &&
@@ -593,8 +663,12 @@ export async function ensureStripeCustomerForUser(user, subscription, options = 
   const stripe = getStripeClient();
 
   if (subscription?.stripe_customer_id) {
-    await stripe.customers.update(subscription.stripe_customer_id, customerDetails);
-    return subscription.stripe_customer_id;
+    try {
+      await stripe.customers.update(subscription.stripe_customer_id, customerDetails);
+      return subscription.stripe_customer_id;
+    } catch (error) {
+      if (!isStripeResourceMissing(error)) throw error;
+    }
   }
 
   const customer = await stripe.customers.create(customerDetails);
@@ -619,7 +693,7 @@ export async function createCheckoutSessionForUser(user, planKey) {
     return { ok: false, code: 503, message: `${plan.name} Stripe price is not configured.` };
   }
 
-  const subscription = await getOrCreateSubscriptionForUser(user);
+  const subscription = await getFreshSubscriptionForUser(user);
   await ensureStripeCustomerForUser(user, subscription, { planKey: plan.plan_key });
   const freshSubscription = await Subscription.findOne({ user_id: user._id });
   const purchaseEligibility = await assertUserCanPurchasePlan(user, freshSubscription);
@@ -850,14 +924,29 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
   return synced;
 }
 
-export async function cancelSubscriptionForUser(user) {
+export async function cancelSubscriptionForUser(user, cancellationReason = '') {
+  const reason = String(cancellationReason || '').trim();
   const subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription?.stripe_subscription_id) {
     return { ok: false, code: 404, message: 'No active Stripe subscription found.' };
   }
 
   const stripe = getStripeClient();
-  const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+  let stripeSubscription;
+  try {
+    stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return {
+        ok: false,
+        code: 409,
+        message: 'The previous Stripe subscription no longer exists for the current Stripe account. The local subscription state has been reset; please subscribe again.',
+        subscription: cleared,
+      };
+    }
+    throw error;
+  }
   const attachedScheduleId = normalizeStripeId(stripeSubscription.schedule);
 
   if (subscription.stripe_subscription_schedule_id || attachedScheduleId) {
@@ -866,8 +955,23 @@ export async function cancelSubscriptionForUser(user) {
 
   const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
     cancel_at_period_end: true,
+    metadata: {
+      ...(stripeSubscription.metadata || {}),
+      cancellation_reason: reason.slice(0, 500),
+      cancellation_requested_at: new Date().toISOString(),
+    },
   });
-  const synced = await syncStripeSubscription(updated, { clearPendingPlan: true });
+  let synced = await syncStripeSubscription(updated, { clearPendingPlan: true });
+  synced = await Subscription.findOneAndUpdate(
+    { user_id: user._id },
+    {
+      $set: {
+        'metadata.cancellation_reason': reason,
+        'metadata.cancellation_requested_at': new Date(),
+      },
+    },
+    { returnDocument: 'after' },
+  );
   return { ok: true, subscription: synced };
 }
 
@@ -882,9 +986,23 @@ export async function resumeSubscriptionForUser(user) {
   }
 
   const stripe = getStripeClient();
-  const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-    cancel_at_period_end: false,
-  });
+  let updated;
+  try {
+    updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+      cancel_at_period_end: false,
+    });
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return {
+        ok: false,
+        code: 409,
+        message: 'The previous Stripe subscription no longer exists for the current Stripe account. The local subscription state has been reset; please subscribe again.',
+        subscription: cleared,
+      };
+    }
+    throw error;
+  }
   const synced = await syncStripeSubscription(updated);
   return { ok: true, subscription: synced };
 }
@@ -925,9 +1043,23 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
   }
 
   const stripe = getStripeClient();
-  const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id, {
-    expand: ['latest_invoice'],
-  });
+  let stripeSubscription;
+  try {
+    stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id, {
+      expand: ['latest_invoice'],
+    });
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return {
+        ok: false,
+        code: 409,
+        message: 'The previous Stripe subscription no longer exists for the current Stripe account. The local subscription state has been reset; please subscribe again.',
+        subscription: cleared,
+      };
+    }
+    throw error;
+  }
   const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
   if (!subscriptionItemId) {
     return { ok: false, code: 500, message: 'Unable to read subscription items from Stripe.' };

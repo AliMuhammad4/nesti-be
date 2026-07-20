@@ -8,6 +8,7 @@ import {
   buildLeadProfileDetailPayload,
   buildLeadProfilesListPayload,
   buildLeadConversationPayload,
+  postClientInquiryDirectConversationMessage,
   formatLeadDetailApiResponse,
 } from './leadProfileHelpers.js';
 import { buildInquiredPropertyPayload } from './inquiredProperty.js';
@@ -74,6 +75,20 @@ export const getLeadConversation = async (req, res, next) => {
     const { _id: userId } = req.user;
     const leadMatch = await findOwnedVisibleLeadMatch(userId, req.params.id);
     const payload = await buildLeadConversationPayload(req.params.id, leadMatch, req.query);
+    return res.json({ success: true, ...payload });
+  } catch (err) { return handleLeadServiceError(res, err, next); }
+};
+
+export const postLeadConversationMessage = async (req, res, next) => {
+  try {
+    const { _id: userId } = req.user;
+    const leadMatch = await findOwnedVisibleLeadMatch(userId, req.params.id);
+    const payload = await postClientInquiryDirectConversationMessage(
+      userId,
+      req.params.id,
+      leadMatch,
+      req.body?.body,
+    );
     return res.json({ success: true, ...payload });
   } catch (err) { return handleLeadServiceError(res, err, next); }
 };

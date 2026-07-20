@@ -45,16 +45,19 @@ function resolveLeadType(profile, leadMatch, conversation, professionalType = PR
     const q = profile?.qualification?.lawyer || {};
     const tx = norm(q.transaction_type);
     const service = norm(q.legal_services_needed);
-    if (service.includes('document_review')) return 'document_review_matter';
+    if (service.includes('property_dispute')) return 'property_dispute_matter';
+    if (service.includes('agreement_review') || service.includes('document_review')) return 'document_review_matter';
     if (service.includes('title_transfer') || tx.includes('title_transfer') || tx.includes('title')) {
       return 'title_transfer_matter';
     }
+    if (service.includes('refinance_legal_work') || tx.includes('refinance')) return 'refinance_matter';
+    if (service.includes('sale_closing')) return 'home_sale_closing';
+    if (service.includes('purchase_closing')) return 'home_purchase_closing';
     if (service.includes('full_closing')) {
       if (tx.includes('home_sale') || tx.includes('sale')) return 'home_sale_closing';
       if (tx.includes('home_purchase') || tx.includes('purchase')) return 'home_purchase_closing';
       return 'closing_matter';
     }
-    if (tx.includes('refinance')) return 'refinance_matter';
     if (tx.includes('home_sale') || tx.includes('sale')) return 'home_sale_matter';
     if (tx.includes('home_purchase') || tx.includes('purchase')) return 'home_purchase_matter';
     return 'legal_matter';

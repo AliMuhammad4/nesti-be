@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -5,7 +6,6 @@ import cors from 'cors';
 import { Resend } from 'resend';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-import dotenv from 'dotenv';
 import morgan from 'morgan';
 import logger from './utils/logger.js';
 import { planQuotaErrorResponse } from './services/billing/planQuota.js';
@@ -18,19 +18,20 @@ import leadRoutes from './routes/leadRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
 import billingRoutes from './routes/billingRoutes.js';
+import featuredRoutes from './routes/featuredRoutes.js';
+import clientRoutes from './routes/clientRoutes.js';
 import professionalRoutes from './routes/professionalRoutes.js';
 import calendarRoutes from './routes/calendarRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
 import stripeWebhookRoutes from './routes/stripeWebhookRoutes.js';
 import calendlyWebhookRoutes from './routes/calendlyWebhookRoutes.js';
 import propertyMatchScoringRoutes from './routes/agent/propertyMatchScoringRoutes.js';
+import propertyRoutes from './routes/propertyRoutes.js';
 import proChatRoutes from './routes/proChatRoutes.js';
 import publicProfileRoutes from './routes/publicProfileRoutes.js';
 import professionalDashboardRoutes from './routes/professionalDashboardRoutes.js';
 import { configureR2 } from './services/media/r2Client.js';
 
-// Load env
-dotenv.config();
 configureR2();
 
 const app = express();
@@ -131,7 +132,10 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/billing', billingRoutes);
+app.use('/api/featured', featuredRoutes);
+app.use('/api/client', clientRoutes);
 app.use('/api/professionals', professionalRoutes);
+app.use('/api/properties', propertyRoutes);
 app.use('/api/property-match-scoring', propertyMatchScoringRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/pro-chat', proChatRoutes);

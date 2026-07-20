@@ -1,0 +1,89 @@
+import ProfessionalCall from '../../models/ProfessionalCall.js';
+
+function text(value) {
+  return String(value || '').trim();
+}
+
+function normalizedSnapshot(values) {
+  return [...new Set((values || []).map(text).filter(Boolean))].sort();
+}
+
+function snapshotsMatch(left, right) {
+  const first = normalizedSnapshot(left);
+  const second = normalizedSnapshot(right);
+  return first.length === second.length && first.every((value, index) => value === second[index]);
+}
+
+export function consentingParticipantIds(call) {
+  const participantIds = [...new Set(
+    (call.participant_ids || []).map((participantId) => text(participantId)).filter(Boolean),
+  )];
+  return [
+    ...new Set(
+      (call.participant_states || [])
+        .filter((participant) => participant.transcription_consent === true)
+        .map((participant) => text(participant.user_id))
+        .filter((participantId) => participantIds.includes(participantId)),
+    ),
+  ];
+}
+
+export async function authorizeParticipantTranscriptionSession({
+  callId,
+  roomName,
+  participantIdentity,
+  expectedParticipantIds,
+}) {
+  const normalizedCallId = text(callId);
+  const normalizedRoomName = text(roomName);
+  const userId = text(participantIdentity);
+  if (!normalizedCallId || !normalizedRoomName || !userId) return null;
+
+  const now = new Date();
+  const call = await ProfessionalCall.findOne({
+    _id: normalizedCallId,
+    room_name: normalizedRoomName,
+    participant_ids: userId,
+    $or: [
+      { status: { $in: ['connecting', 'active'] } },
+      {
+        status: { $in: ['ended', 'expired'] },
+        transcription_status: { $in: ['pending', 'dispatching', 'active'] },
+        $or: [
+          { transcription_drain_deadline: { $gt: now } },
+          { transcription_drain_deadline: null },
+        ],
+      },
+    ],
+    participant_states: {
+      $elemMatch: {
+        user_id: userId,
+        transcription_consent: true,
+        $or: [
+          { status: { $in: ['invited', 'joined'] } },
+          { joined_at: { $ne: null } },
+        ],
+      },
+    },
+  })
+    .select('started_at connecting_at status participant_ids transcription_policy_version')
+    .lean();
+  if (!call || !snapshotsMatch(call.participant_ids, expectedParticipantIds)) return null;
+
+  const startedAtMs = call.started_at
+    ? new Date(call.started_at).getTime()
+    : call.connecting_at
+      ? new Date(call.connecting_at).getTime()
+      : null;
+  if (!Number.isFinite(startedAtMs)) return null;
+  return {
+    call_id: text(call._id || normalizedCallId),
+    participant_identity: userId,
+    started_at_ms: startedAtMs,
+    transcription_policy_version: text(call.transcription_policy_version),
+  };
+}
+
+export function assertImmutableParticipantSnapshot(actualParticipantIds, expectedParticipantIds) {
+  return snapshotsMatch(actualParticipantIds, expectedParticipantIds);
+}

@@ -3,6 +3,7 @@ import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
 import ChatConversation from '../../models/ChatConversation.js';
 import ChatMessage from '../../models/ChatMessage.js';
+import ProfessionalChatThread from '../../models/ProfessionalChatThread.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { formatLeadProfileSummary, mapLeadProfileForApi } from './leadProfileFormat.js';
 import { buildProfileConsultationFlags } from './leadProfileSignals.js';
@@ -33,6 +34,10 @@ import {
   loadPlanVisibleLeadFilter,
   mergeLeadQueryWithPlanVisibility,
 } from '../billing/planQuota.js';
+import {
+  listThreadMessages as listProChatThreadMessages,
+  postThreadMessage as postProChatThreadMessage,
+} from '../proChat/messageService.js';
 
 export function ownerQuery(userId) {
   return { $or: [{ 'ownership.user_id': String(userId) }, { owner_user_id: String(userId) }] };
@@ -67,13 +72,40 @@ export async function fetchProfilesForIcpTier({ userObjectId, userId, icpTier, s
   return { total: countRows[0]?.total ?? 0, profiles };
 }
 
-export async function fetchProfilesDefault({ userId, skip, limit }) {
-  const q = ownerQuery(userId);
-  const [total, profiles] = await Promise.all([
-    LeadProfile.countDocuments(q),
-    LeadProfile.find(q).sort({ updatedAt: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
+export async function fetchProfilesDefault({ userObjectId, skip, limit }) {
+  const sharedStages = [
+    { $match: { user_id: userObjectId, lead_profile_id: { $ne: null } } },
+    {
+      $group: {
+        _id: '$lead_profile_id',
+        lead_refs: { $addToSet: '$_id' },
+        lead_count: { $sum: 1 },
+        last_match_at: { $max: '$updatedAt' },
+      },
+    },
+    { $match: { _id: { $ne: null } } },
+    { $lookup: { from: LeadProfile.collection.collectionName, localField: '_id', foreignField: '_id', as: 'profile' } },
+    { $unwind: { path: '$profile', preserveNullAndEmptyArrays: false } },
+    {
+      $addFields: {
+        'profile.lead_refs': '$lead_refs',
+        'profile.stats.total_matches': '$lead_count',
+        'profile.stats.last_seen_at': '$last_match_at',
+      },
+    },
+    { $replaceRoot: { newRoot: '$profile' } },
+  ];
+
+  const [countRows, profiles] = await Promise.all([
+    LeadMatch.aggregate([...sharedStages, { $count: 'total' }]),
+    LeadMatch.aggregate([
+      ...sharedStages,
+      { $sort: { 'stats.total_matches': -1, 'stats.last_seen_at': -1, updatedAt: -1, createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ]),
   ]);
-  return { total, profiles };
+  return { total: countRows[0]?.total ?? 0, profiles };
 }
 
 function formatProfileWithConsultationFlags(profile, appointmentMap, nurtureMap, { skipAppointment = false, omitOwnership = false } = {}) {
@@ -335,6 +367,156 @@ export async function buildLeadProfileDetailPayload(req, userId, profileId, quer
   return response;
 }
 
+function clientInquiryUserId(leadMatch) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const source = String(cf.source || '').trim().toLowerCase();
+  const clientUserId = String(cf.client_user_id || '').trim();
+  if (source !== 'client_professional_inquiry' || !clientUserId) return '';
+  return clientUserId;
+}
+
+async function isLeadScopedThread(threadId, leadId) {
+  if (!threadId || !mongoose.Types.ObjectId.isValid(threadId)) return false;
+  const thread = await ProfessionalChatThread.findById(threadId).select('participants_key').lean();
+  return String(thread?.participants_key || '').startsWith(`lead:${String(leadId)}:`);
+}
+
+function clientInquiryThreadTitle(leadMatch) {
+  const cf = leadMatch?.compatibility_factors || {};
+  const role = String(cf.professional_type || '').trim().toLowerCase();
+  if (role === 'mortgage_broker' || role === 'broker') return 'Mortgage inquiry';
+  if (role === 'agent') return 'Agent inquiry';
+  return 'Legal inquiry';
+}
+
+async function createLeadScopedClientInquiryThread({ userId, clientUserId, leadId, title = 'Legal inquiry' }) {
+  const thread = await ProfessionalChatThread.create({
+    thread_type: 'group',
+    title,
+    participants: [userId, clientUserId],
+    participants_key: `lead:${String(leadId)}:${String(new mongoose.Types.ObjectId())}`,
+    created_by: userId,
+  });
+  return String(thread._id);
+}
+
+async function ensureClientInquiryThread({ userId, leadMatch }) {
+  const clientUserId = clientInquiryUserId(leadMatch);
+  const leadId = String(leadMatch?._id || '').trim();
+  let threadId = String(leadMatch?.compatibility_factors?.chat_thread_id || '').trim();
+  if (!(await isLeadScopedThread(threadId, leadId))) {
+    threadId = clientUserId && leadId
+      ? await createLeadScopedClientInquiryThread({
+          userId,
+          clientUserId,
+          leadId,
+          title: clientInquiryThreadTitle(leadMatch),
+        })
+      : null;
+    if (threadId && mongoose.Types.ObjectId.isValid(threadId)) {
+      await LeadMatch.updateOne(
+        { _id: leadId, user_id: userId },
+        { $set: { 'compatibility_factors.chat_thread_id': threadId } },
+      );
+    }
+  }
+  return { threadId: mongoose.Types.ObjectId.isValid(threadId) ? threadId : null, clientUserId };
+}
+
+async function listClientInquiryThreadMessages({ userId, leadMatch, page = 1, limit = 100 }) {
+  const { threadId } = await ensureClientInquiryThread({ userId, leadMatch });
+  if (!threadId) {
+    return { threadId: null, messages: [], pagination: buildPaginationMeta({ page: 1, limit: 0, total: 0 }) };
+  }
+
+  const result = await listProChatThreadMessages({
+    currentUserId: userId,
+    threadId,
+    pageRaw: page,
+    limitRaw: limit,
+  });
+  if (result.status !== 200) {
+    return { threadId: null, messages: [], pagination: buildPaginationMeta({ page: 1, limit: 0, total: 0 }) };
+  }
+  const items = Array.isArray(result.body?.items) ? result.body.items : [];
+  return {
+    threadId,
+    messages: items,
+    pagination: result.body?.pagination || buildPaginationMeta({ page, limit, total: items.length }),
+  };
+}
+
+async function buildClientInquiryDirectConversationPayload(userId, leadId, leadMatch, query = {}) {
+  const clientUserId = clientInquiryUserId(leadMatch);
+  if (!clientUserId) return null;
+
+  const { page, limit } = parsePageLimitPagination(query, PAGINATION_PRESETS.leadConversation);
+  const { threadId, messages, pagination } = await listClientInquiryThreadMessages({
+    userId,
+    leadMatch,
+    page,
+    limit,
+  });
+
+  return {
+    lead_id: leadId,
+    conversation_id: null,
+    messages,
+    direct_chat: {
+      available: true,
+      can_reply: true,
+      thread_id: threadId,
+      client_user_id: clientUserId,
+      source: 'client_professional_inquiry',
+    },
+    empty_state: messages.length
+      ? null
+      : {
+          reason: 'No direct messages yet.',
+          action: 'Send the first reply to start a direct conversation with this client.',
+        },
+    pagination,
+  };
+}
+
+export async function postClientInquiryDirectConversationMessage(userId, leadId, leadMatch, body) {
+  const clientUserId = clientInquiryUserId(leadMatch);
+  if (!clientUserId) {
+    const err = new Error('Direct lead chat is only available for client inquiry leads.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const { threadId } = await ensureClientInquiryThread({ userId, leadMatch });
+  if (!threadId) {
+    const err = new Error('Unable to create client chat thread.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const messageResult = await postProChatThreadMessage({
+    currentUserId: userId,
+    threadId,
+    body,
+    attachments: [],
+    clientId: `lead-direct:${String(leadId)}:${Date.now()}`,
+  });
+  if (messageResult.status !== 200) {
+    const err = new Error(messageResult.body?.message || 'Unable to send message.');
+    err.statusCode = messageResult.status || 400;
+    throw err;
+  }
+
+  const updatedLeadMatch = {
+    ...leadMatch,
+    compatibility_factors: {
+      ...(leadMatch.compatibility_factors || {}),
+      chat_thread_id: threadId,
+    },
+  };
+  return buildClientInquiryDirectConversationPayload(userId, leadId, updatedLeadMatch, { page: 1, limit: 100 });
+}
+
 export async function buildLeadProfilesListPayload(req) {
   const userId = String(req.user._id);
   const userObjectId = req.user._id;
@@ -351,7 +533,7 @@ export async function buildLeadProfilesListPayload(req) {
 
   const { total, profiles } = icpTier
     ? await fetchProfilesForIcpTier({ userObjectId, userId, icpTier, skip, limit })
-    : await fetchProfilesDefault({ userId, skip, limit });
+    : await fetchProfilesDefault({ userObjectId, skip, limit });
 
   if (total === 0) {
     return {
@@ -369,6 +551,9 @@ export async function buildLeadProfilesListPayload(req) {
 }
 
 export async function buildLeadConversationPayload(leadId, leadMatch, query = {}) {
+  const directPayload = await buildClientInquiryDirectConversationPayload(leadMatch.user_id, leadId, leadMatch, query);
+  if (directPayload) return directPayload;
+
   if (!leadMatch.conversation_id) {
     return {
       lead_id: leadId,

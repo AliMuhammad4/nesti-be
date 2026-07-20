@@ -5,8 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
+    "dev": "node scripts/devWithTranscription.mjs",
+    "dev:api": "node --watch server.js",
+    "worker:transcription": "node scripts/startTranscriptionWorker.mjs",
     "lint": "node scripts/lint.mjs",
+    "backfill:professional:signals": "node scripts/backfillProfessionalStructuredFields.js",
     "stripe:listen": "stripe listen --forward-to http://localhost:5000/api/billing/stripe/webhook --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,subscription_schedule.updated,subscription_schedule.completed,subscription_schedule.released,subscription_schedule.canceled,invoice.paid,invoice.payment_failed",
     "test": "node scripts/test.mjs"
   },
@@ -16,6 +19,10 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1069.0",
     "@aws-sdk/s3-request-presigner": "^3.1069.0",
+    "@livekit/agents": "^1.5.2",
+    "@livekit/agents-plugin-openai": "^1.5.2",
+    "@livekit/rtc-node": "^0.13.31",
+    "@socket.io/mongo-adapter": "^0.4.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
@@ -23,6 +30,7 @@
     "express-rate-limit": "^8.5.2",
     "joi": "^18.1.2",
     "jsonwebtoken": "^9.0.3",
+    "livekit-server-sdk": "^2.17.0",
     "mongoose": "^9.2.4",
     "morgan": "^1.10.1",
     "multer": "^2.1.1",
@@ -30,7 +38,8 @@
     "resend": "^6.12.4",
     "socket.io": "^4.8.3",
     "stripe": "^22.2.0",
-    "winston": "^3.19.0"
+    "winston": "^3.19.0",
+    "zod": "^4.1.8"
   },
   "type": "module"
 }

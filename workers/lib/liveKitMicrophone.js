@@ -7,7 +7,7 @@ export function microphonePublication(participant) {
   );
 }
 
-export async function waitForMicrophone(ctx, participant, logger, timeoutMs = 20000) {
+export async function waitForMicrophone(ctx, participant, logger, timeoutMs = 12_000) {
   const existing = microphonePublication(participant);
   if (existing) return existing;
 

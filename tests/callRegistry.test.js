@@ -246,6 +246,18 @@ test('explicit transcription choice is stored per participant including false', 
       .transcription_consent,
     true,
   );
+  // Allowed minutes cannot be revoked by a later rejoin with false.
+  const sticky = await authorizeCallJoin({
+    threadId: baseCall.threadId,
+    roomName: baseCall.roomName,
+    userId: 'user-2',
+    transcriptionConsent: false,
+  });
+  assert.equal(
+    sticky.call.participant_states.find((participant) => participant.user_id === 'user-2')
+      .transcription_consent,
+    true,
+  );
 });
 
 test('no-consent direct call activates and terminates without minutes work', async () => {

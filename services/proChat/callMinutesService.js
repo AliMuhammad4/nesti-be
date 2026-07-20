@@ -7,6 +7,7 @@ import { emitCallArtifactsReady } from '../realtime/workspaceSocket.js';
 import { consentCompletedArtifactSet } from './callArtifactFields.js';
 import {
   chunkTranscriptSegments,
+  fallbackMinutesFromSegments,
   normalizeMinutes,
   positiveIntEnv,
 } from './callMinutesFormatting.js';
@@ -17,13 +18,16 @@ import {
 
 export {
   chunkTranscriptSegments,
+  fallbackMinutesFromSegments,
   generateMinutesFromSegments,
   normalizeMinutes,
   setCallMinutesOpenAIClientForTests,
 };
 
-const PROMPT_VERSION = 'call-minutes-v2';
+const PROMPT_VERSION = 'call-minutes-v3';
 const TERMINAL_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
+// Longer than the worker's 90s drain window so a healthy worker always wins.
+const STUCK_TRANSCRIPTION_GRACE_MS = 2 * 60 * 1000;
 const workerId = `${process.pid}:${randomUUID()}`;
 let reconciliationTimer = null;
 
@@ -145,7 +149,7 @@ export async function processMinutesForCall(call) {
   leaseHeartbeat.unref?.();
   try {
     const generated = await generateMinutesFromSegments(segments);
-    const minutes = normalizeMinutes(generated.minutes);
+    let minutes = normalizeMinutes(generated.minutes);
     const minutesEmpty =
       !minutes.summary &&
       !minutes.topics.length &&
@@ -153,30 +157,35 @@ export async function processMinutesForCall(call) {
       !minutes.action_items.length &&
       !minutes.follow_ups.length;
     if (minutesEmpty) {
-      await ProfessionalCallMinutes.updateOne(
-        { _id: claim._id, status: 'processing', lease_owner: workerId },
-        {
-          $set: {
-            status: 'failed',
-            lease_owner: '',
-            lease_until: null,
-            next_attempt_at: null,
-            last_error: 'empty_minutes: No substantive minutes could be produced.',
+      const fallback = fallbackMinutesFromSegments(segments);
+      if (fallback?.summary) {
+        minutes = fallback;
+      } else {
+        await ProfessionalCallMinutes.updateOne(
+          { _id: claim._id, status: 'processing', lease_owner: workerId },
+          {
+            $set: {
+              status: 'failed',
+              lease_owner: '',
+              lease_until: null,
+              next_attempt_at: null,
+              last_error: 'empty_minutes: No substantive minutes could be produced.',
+            },
           },
-        },
-      );
-      await ProfessionalCall.updateOne(
-        { _id: call._id },
-        {
-          $set: {
-            minutes_status: 'failed',
-            transcription_error_code: 'empty_minutes',
-            transcription_error_message:
-              'No substantive minutes could be produced from this transcript.',
+        );
+        await ProfessionalCall.updateOne(
+          { _id: call._id },
+          {
+            $set: {
+              minutes_status: 'failed',
+              transcription_error_code: 'empty_minutes',
+              transcription_error_message:
+                'No substantive minutes could be produced from this transcript.',
+            },
           },
-        },
-      );
-      return false;
+        );
+        return false;
+      }
     }
     const characterCount = segments.reduce(
       (sum, segment) => sum + text(segment.text).length,
@@ -270,11 +279,30 @@ export async function reconcileCallMinutes() {
     },
     { $set: consentCompletedArtifactSet(now) },
   );
+  // Recover calls whose transcription stayed 'active'/'dispatching' with no
+  // drain deadline ever written (API down at call end, or the call ended from
+  // 'connecting' before started_at was set). The deadline-based recovery
+  // above can never match them.
+  await ProfessionalCall.updateMany(
+    {
+      status: { $in: ['ended', 'expired'] },
+      transcription_status: { $in: ['active', 'dispatching'] },
+      transcription_drain_deadline: null,
+      ended_at: { $lte: new Date(now.getTime() - STUCK_TRANSCRIPTION_GRACE_MS) },
+      participant_states: { $elemMatch: { transcription_consent: true } },
+    },
+    { $set: consentCompletedArtifactSet(now) },
+  );
   const calls = await ProfessionalCall.find({
     status: { $in: ['ended', 'expired'] },
-    started_at: { $ne: null },
+    // Calls ended from 'connecting' have no started_at but can still hold a
+    // real transcript when the transcriber joined during connect.
+    $or: [{ started_at: { $ne: null } }, { transcription_started_at: { $ne: null } }],
     transcription_status: { $in: ['completed', 'failed'] },
     minutes_status: { $in: ['not_ready', 'pending', 'processing', 'failed'] },
+    // Terminal outcomes: retrying cannot change a final transcript, and
+    // leaving them in the scan would crowd out fresh calls over time.
+    transcription_error_code: { $nin: ['empty_minutes', 'no_transcript_segments'] },
   })
     .sort({ ended_at: 1 })
     .limit(25)

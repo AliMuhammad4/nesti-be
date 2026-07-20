@@ -43,10 +43,9 @@ export async function authorizeParticipantTranscriptionSession({
   const call = await ProfessionalCall.findOne({
     _id: normalizedCallId,
     room_name: normalizedRoomName,
-    started_at: { $ne: null },
     participant_ids: userId,
     $or: [
-      { status: 'active' },
+      { status: { $in: ['connecting', 'active'] } },
       {
         status: { $in: ['ended', 'expired'] },
         transcription_status: { $in: ['pending', 'dispatching', 'active'] },
@@ -67,11 +66,15 @@ export async function authorizeParticipantTranscriptionSession({
       },
     },
   })
-    .select('started_at participant_ids transcription_policy_version')
+    .select('started_at connecting_at status participant_ids transcription_policy_version')
     .lean();
   if (!call || !snapshotsMatch(call.participant_ids, expectedParticipantIds)) return null;
 
-  const startedAtMs = new Date(call.started_at).getTime();
+  const startedAtMs = call.started_at
+    ? new Date(call.started_at).getTime()
+    : call.connecting_at
+      ? new Date(call.connecting_at).getTime()
+      : null;
   if (!Number.isFinite(startedAtMs)) return null;
   return {
     call_id: text(call._id || normalizedCallId),

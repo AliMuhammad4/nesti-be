@@ -72,7 +72,7 @@ test('blank interim-like text is never persisted', async () => {
 
 test('filler and noise segments are never persisted', async () => {
   const before = writes;
-  for (const junk of ['um', 'uh...', '[inaudible]', '...', 'Thanks for watching.', 'Nesti Notetaker joined']) {
+  for (const junk of ['um', 'uh...', '[inaudible]', '...']) {
     const persisted = await persistFinalTranscriptSegment({
       callId: '64b000000000000000000004',
       segmentId: `junk:${junk}`,

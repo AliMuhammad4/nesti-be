@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import v8 from 'node:v8';
@@ -14,6 +14,12 @@ import {
   TRANSCRIPTION_AGENT_IDENTITY,
   TRANSCRIPTION_AGENT_NAME,
 } from '../services/proChat/callTranscriptionConstants.js';
+
+// Always apply backend/.env so language settings aren't stuck on a stale parent env.
+dotenv.config({
+  path: path.join(path.dirname(fileURLToPath(import.meta.url)), '../.env'),
+  override: true,
+});
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {

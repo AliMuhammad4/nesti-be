@@ -26,10 +26,9 @@ test.before(() => {
   mock.method(ProfessionalCall, 'findOneAndUpdate', (filter) => ({
     lean: async () => {
       if (claimReject) throw new Error('claim database unavailable');
-      assert.equal(
-        filter.participant_states.$elemMatch.transcription_consent,
-        true,
-      );
+      assert.equal(filter.status.$in.join(','), 'connecting,active');
+      assert.equal(filter.transcription_status, 'pending');
+      assert.equal(filter.participant_states, undefined);
       return claimed
         ? {
             _id: callId,
@@ -55,13 +54,18 @@ test.before(() => {
       return this;
     },
     lean: async () => ({
+      _id: callId,
+      room_name: 'prochat:thread:call',
+      thread_id: '64b000000000000000000003',
       status: 'active',
+      participant_ids: ['user-1', 'user-2'],
       participant_states: [
         { user_id: 'user-1', transcription_consent: consenting },
         { user_id: 'user-2', transcription_consent: false },
       ],
+      transcription_policy_version: '2026-07',
       transcription_status: consenting ? 'dispatching' : 'pending',
-      transcription_dispatch_id: 'dispatch-1',
+      transcription_dispatch_id: consenting ? 'dispatch-1' : '',
     }),
   }));
   mock.method(AgentDispatchClient.prototype, 'listDispatch', async () => []);
@@ -71,7 +75,7 @@ test.before(() => {
     assert.equal(agentName, TRANSCRIPTION_AGENT_NAME);
     const metadata = JSON.parse(options.metadata);
     assert.deepEqual(metadata.participant_ids, ['user-1', 'user-2']);
-    assert.deepEqual(metadata.consenting_participant_ids, ['user-1']);
+    assert.deepEqual(metadata.consenting_participant_ids, consenting ? ['user-1'] : []);
     assert.equal(typeof metadata.dispatch_generation, 'string');
     assert.ok(metadata.dispatch_generation.length > 10);
     return { id: 'dispatch-1', agentName };
@@ -112,20 +116,13 @@ test('concurrent activation observes the durable dispatch state', async () => {
   assert.equal(result.dispatch_id, 'dispatch-1');
 });
 
-test('no-consent activation waits and a later consenting join dispatches', async () => {
+test('live call dispatches even before anyone consents to minutes', async () => {
   claimed = false;
   consenting = false;
   const waiting = await dispatchTranscriptionWorkerForCall(callId);
   assert.equal(waiting.ok, true);
-  assert.equal(waiting.status, 'pending');
-  assert.equal(waiting.code, 'waiting_for_transcription_consent');
-  assert.equal(updates.length, 0);
-
-  consenting = true;
-  claimed = true;
-  const dispatched = await dispatchTranscriptionWorkerForCall(callId);
-  assert.equal(dispatched.ok, true);
-  assert.equal(dispatched.status, 'dispatching');
+  assert.equal(waiting.status, 'dispatching');
+  assert.equal(waiting.dispatch_id, 'dispatch-1');
 });
 
 test('disabled transcription records a truthful feature-disabled state', async () => {
@@ -162,12 +159,16 @@ test('scheduled dispatch returns immediately while LiveKit remains pending', asy
   );
 });
 
-test('scheduled dispatch catches rejection and persists failed status', async () => {
+test('scheduled dispatch catches rejection and queues a retry', async () => {
   claimReject = true;
   assert.equal(scheduleTranscriptionWorkerDispatch(callId), undefined);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.ok(
-    updates.some(({ update }) => update.$set?.transcription_status === 'failed'),
+    updates.some(
+      ({ update }) =>
+        update.$set?.transcription_status === 'pending' &&
+        update.$set?.transcription_error_code === 'transcription_dispatch_retrying',
+    ),
   );
   assert.ok(
     warnings.some(({ message }) =>

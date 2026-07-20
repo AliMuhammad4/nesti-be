@@ -14,12 +14,14 @@ test('transcription worker is explicit, current, and never persists audio', asyn
   assert.match(workerSource, /TRANSCRIPTION_AGENT_DISPLAY_NAME/);
   assert.match(workerSource, /job\.accept\(/);
   assert.match(participantSource, /new AudioStream/);
-  assert.match(participantSource, /INTERIM_TRANSCRIPT/);
   assert.match(participantSource, /FINAL_TRANSCRIPT/);
   assert.match(participantSource, /persistFinalTranscriptSegment/);
-  assert.doesNotMatch(participantSource, /publishTranscription/);
-  assert.match(participantSource, /authorizeParticipantTranscriptionSession/);
+  assert.match(participantSource, /detectLanguage/);
+  assert.match(participantSource, /getCallEchoTracker/);
+  assert.match(participantSource, /preroll|CALL_TRANSCRIPTION_PREROLL_SECONDS/);
   assert.match(agentSource, /consentRetry|setInterval/);
+  assert.match(agentSource, /Date\.now\(\) \+ 2_000/);
+  assert.match(agentSource, /90000/);
   assert.match(agentSource, /activeTasks\.set\(identity,\s*null\)/);
   assert.match(agentSource, /completeTranscriptionAfterDrain/);
   assert.match(agentSource, /transcription_dispatch_generation/);

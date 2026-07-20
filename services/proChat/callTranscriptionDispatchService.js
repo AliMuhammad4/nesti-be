@@ -43,6 +43,38 @@ async function markFailed(callId, code, error) {
   return { ok: false, status: 'failed', code, message };
 }
 
+async function markDispatchRetry(callId, code, error, { attempt = 1, maxAttempts = 4 } = {}) {
+  const message = text(error?.message || error).slice(0, 1000);
+  if (attempt >= maxAttempts) {
+    return markFailed(callId, code, error);
+  }
+  await ProfessionalCall.updateOne(
+    { _id: callId, transcription_status: { $in: ['pending', 'dispatching'] } },
+    {
+      $set: {
+        transcription_status: 'pending',
+        transcription_dispatch_id: '',
+        transcription_dispatch_generation: '',
+        transcription_dispatched_at: null,
+        transcription_error_code: 'transcription_dispatch_retrying',
+        transcription_error_message: `${message} (retry ${attempt}/${maxAttempts})`,
+      },
+    },
+  );
+  const delayMs = Math.min(60_000, 3_000 * 2 ** Math.max(0, attempt - 1));
+  setTimeout(() => {
+    void dispatchTranscriptionWorkerForCall(callId).catch(() => {});
+  }, delayMs).unref?.();
+  return {
+    ok: false,
+    status: 'pending',
+    code: 'transcription_dispatch_retrying',
+    message,
+    retrying: true,
+    attempt,
+  };
+}
+
 async function submitTranscriptionDispatch(client, call, { replaceStale = false } = {}) {
   const normalizedCallId = text(call._id);
   const dispatchGeneration = randomUUID();
@@ -52,9 +84,6 @@ async function submitTranscriptionDispatch(client, call, { replaceStale = false 
   const consentingIds = consentingParticipantIds(call);
   if (!participantIds.length) {
     throw new Error('The call participant snapshot is empty.');
-  }
-  if (!consentingIds.length) {
-    throw new Error('The transcription dispatch was claimed without a consenting participant.');
   }
 
   const workerReady = await ensureTranscriptionWorkerRunning();
@@ -155,9 +184,9 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
   const claimed = await ProfessionalCall.findOneAndUpdate(
     {
       _id: normalizedCallId,
-      status: 'active',
+      // Join while the call is live so audio is not lost waiting for consent.
+      status: { $in: ['connecting', 'active'] },
       transcription_status: 'pending',
-      participant_states: { $elemMatch: { transcription_consent: true } },
     },
     {
       $set: {
@@ -186,7 +215,9 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
         room_name: claimed.room_name,
         message: error?.message,
       });
-      return markFailed(normalizedCallId, 'transcription_dispatch_failed', error);
+      return markDispatchRetry(normalizedCallId, 'transcription_dispatch_failed', error, {
+        attempt: 1,
+      });
     }
   }
 
@@ -200,32 +231,18 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
     return { ok: false, status: 'failed', code: 'call_not_found' };
   }
 
-  const waitingForConsent =
-    existing.status === 'active' &&
-    existing.transcription_status === 'pending' &&
-    !consentingParticipantIds(existing).length;
-  if (waitingForConsent) {
-    return {
-      ok: true,
-      status: 'pending',
-      code: 'waiting_for_transcription_consent',
-      dispatch_id: '',
-      already_dispatched: false,
-    };
-  }
-
-  const hasConsent = consentingParticipantIds(existing).length > 0;
+  const liveForDispatch = ['connecting', 'active'].includes(text(existing.status));
   const dispatchAgeMs = existing.transcription_dispatched_at
     ? Date.now() - new Date(existing.transcription_dispatched_at).getTime()
-    : Number.POSITIVE_INFINITY;
+    : null;
   const staleDispatch =
     existing.transcription_status === 'dispatching' &&
     !existing.transcription_started_at &&
-    hasConsent &&
-    (!text(existing.transcription_dispatch_id) || dispatchAgeMs > 45_000);
+    text(existing.transcription_dispatch_id) &&
+    dispatchAgeMs != null &&
+    dispatchAgeMs > 45_000;
   const shouldDispatch =
-    existing.status === 'active' &&
-    hasConsent &&
+    liveForDispatch &&
     (existing.transcription_status === 'pending' || staleDispatch);
 
   if (!shouldDispatch) {
@@ -256,18 +273,20 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
       room_name: existing.room_name,
       message: error?.message,
     });
-    return markFailed(normalizedCallId, 'transcription_dispatch_failed', error);
+    const prior = text(existing.transcription_error_message);
+    const priorAttempt = Number((prior.match(/retry\s+(\d+)\//i) || [])[1] || 0);
+    return markDispatchRetry(normalizedCallId, 'transcription_dispatch_failed', error, {
+      attempt: Math.max(1, priorAttempt + 1),
+    });
   }
 }
 
 export async function ensureTranscriptionForActiveCall(call) {
   if (!featureEnabled()) return { ok: false, status: 'disabled', code: 'transcription_disabled' };
   const normalizedCallId = text(call?._id || call?.call_id);
-  if (!normalizedCallId || text(call?.status) !== 'active') {
+  const status = text(call?.status);
+  if (!normalizedCallId || !['connecting', 'active'].includes(status)) {
     return { ok: false, status: 'skipped', code: 'call_not_active' };
-  }
-  if (!consentingParticipantIds(call).length) {
-    return { ok: false, status: 'skipped', code: 'waiting_for_transcription_consent' };
   }
   return dispatchTranscriptionWorkerForCall(normalizedCallId);
 }
@@ -297,7 +316,9 @@ export function scheduleTranscriptionWorkerDispatch(callId) {
         message: error?.message,
       });
       try {
-        await markFailed(normalizedCallId, 'transcription_dispatch_failed', error);
+        await markDispatchRetry(normalizedCallId, 'transcription_dispatch_failed', error, {
+          attempt: 1,
+        });
       } catch (statusError) {
         logger.error('Failed to persist asynchronous transcription dispatch failure', {
           call_id: normalizedCallId,

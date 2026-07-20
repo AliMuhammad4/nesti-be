@@ -1,6 +1,6 @@
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import ProfessionalCallTranscriptSegment from '../../models/ProfessionalCallTranscriptSegment.js';
-import { refineTranscriptSegmentText } from './transcriptTextCleaning.js';
+import { refineTranscriptSegmentText, resolveSegmentLanguage } from './transcriptTextCleaning.js';
 
 const DEFAULT_SEGMENT_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -77,7 +77,7 @@ export async function persistFinalTranscriptSegment({
         speaker_name: text(participant.name) || 'Participant',
         track_sid: text(publication.sid),
         text: finalText,
-        language: text(alternative?.language),
+        language: resolveSegmentLanguage(alternative),
         start_time_ms: startTimeMs,
         end_time_ms: endTimeMs,
         confidence: Number.isFinite(alternative?.confidence)

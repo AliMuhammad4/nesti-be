@@ -17,7 +17,12 @@ let drainDeadline = null;
 function statusAllowedByFilter(filter) {
   const clauses = Array.isArray(filter.$or) ? filter.$or : [];
   return clauses.some((clause) => {
-    if (clause.status === 'active') return callStatus === 'active';
+    const isDrainClause = Boolean(clause.transcription_status || clause.$or);
+    if (!isDrainClause) {
+      if (clause.status === 'active') return callStatus === 'active';
+      if (Array.isArray(clause.status?.$in)) return clause.status.$in.includes(callStatus);
+      return false;
+    }
     if (clause.status?.$in?.includes(callStatus)) {
       const statusOk = ['pending', 'dispatching', 'active'].includes(transcriptionStatus);
       if (!statusOk) return false;
@@ -138,4 +143,31 @@ test('ended call stays authorized while transcription drain is active', async ()
     expectedParticipantIds: participantIds,
   });
   assert.equal(authorized.participant_identity, 'user-3');
+});
+
+test('connecting call uses connecting_at before started_at is set', async () => {
+  consent = true;
+  callStatus = 'connecting';
+  mock.method(ProfessionalCall, 'findOne', (filter) => ({
+    select() {
+      return this;
+    },
+    lean: async () =>
+      consent && statusAllowedByFilter(filter)
+        ? {
+            _id: callId,
+            started_at: null,
+            connecting_at: startedAt,
+            participant_ids: participantIds,
+            transcription_policy_version: '2026-07',
+          }
+        : null,
+  }));
+  const authorized = await authorizeParticipantTranscriptionSession({
+    callId,
+    roomName,
+    participantIdentity: 'user-3',
+    expectedParticipantIds: participantIds,
+  });
+  assert.equal(authorized.started_at_ms, startedAt.getTime());
 });

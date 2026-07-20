@@ -93,6 +93,28 @@ export function normalizeMinutes(value) {
   };
 }
 
+/** Last-resort minutes when the model returns empty but speech exists. */
+export function fallbackMinutesFromSegments(segments = []) {
+  const lines = (segments || [])
+    .map((segment) => {
+      const body = refineTranscriptSegmentText(segment?.text);
+      if (!body) return '';
+      const speaker = text(segment?.speaker_name) || 'Participant';
+      return `${speaker}: ${body}`;
+    })
+    .filter(Boolean);
+  if (!lines.length) return null;
+  const joined = lines.join(' ').replace(/\s+/g, ' ').trim();
+  if (joined.replace(/\s+/g, '').length < 8) return null;
+  return normalizeMinutes({
+    summary: `Brief call notes from the transcript: ${joined.slice(0, 1200)}`,
+    topics: [],
+    decisions: [],
+    action_items: [],
+    follow_ups: [],
+  });
+}
+
 export function groupByCharacters(values, maxCharacters) {
   const groups = [];
   let current = [];

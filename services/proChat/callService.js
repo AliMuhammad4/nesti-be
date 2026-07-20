@@ -229,7 +229,7 @@ export async function createCallTokenForThread({
     });
   }
   if (
-    finalState.call?.status === 'active' &&
+    ['connecting', 'active'].includes(String(finalState.call?.status || '')) &&
     (finalState.call?.participant_states || []).some(
       (participant) => participant.transcription_consent === true,
     )
@@ -237,7 +237,7 @@ export async function createCallTokenForThread({
     void ensureTranscriptionForActiveCall({
       ...finalState.call,
       call_id: callId,
-      status: 'active',
+      status: finalState.call?.status,
     }).catch((error) => {
       logger.warn('Transcription dispatch failed during call token issue', {
         call_id: callId,

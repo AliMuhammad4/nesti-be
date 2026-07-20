@@ -39,12 +39,26 @@ export function isTestLifecycle() {
 }
 
 function shouldStartEmbeddedWorker() {
-  if (text(process.env.CALL_TRANSCRIPTION_WORKER_EMBEDDED).toLowerCase() === 'false') {
-    return false;
-  }
+  const embedded = text(process.env.CALL_TRANSCRIPTION_WORKER_EMBEDDED).toLowerCase();
+  if (embedded === 'false') return false;
   if (isTestLifecycle()) {
     return false;
   }
+  // Multiple web processes must not each embed a worker (port / agent clashes).
+  const concurrency = Number(
+    process.env.WEB_CONCURRENCY ||
+      process.env.RENDER_INSTANCE_COUNT ||
+      process.env.CALL_TRANSCRIPTION_API_REPLICAS ||
+      1,
+  );
+  if (Number.isFinite(concurrency) && concurrency > 1 && embedded !== 'true') {
+    logger.warn(
+      'Skipping embedded transcription worker because API replicas > 1. Run a dedicated worker or set CALL_TRANSCRIPTION_WORKER_EMBEDDED=true on exactly one instance.',
+      { concurrency },
+    );
+    return false;
+  }
+  if (embedded === 'true') return true;
   return true;
 }
 
@@ -171,15 +185,19 @@ export async function ensureTranscriptionWorkerRunning() {
         signal !== 'SIGINT'
       ) {
         const interruptedCalls = await ProfessionalCall.find({
-          status: 'active',
-          transcription_status: 'active',
+          status: { $in: ['connecting', 'active'] },
+          transcription_status: { $in: ['dispatching', 'active'] },
         })
           .select('_id')
           .lean()
           .catch(() => []);
         if (interruptedCalls.length) {
           await ProfessionalCall.updateMany(
-            { _id: { $in: interruptedCalls.map((call) => call._id) }, status: 'active' },
+            {
+              _id: { $in: interruptedCalls.map((call) => call._id) },
+              status: { $in: ['connecting', 'active'] },
+              transcription_status: { $in: ['dispatching', 'active'] },
+            },
             {
               $set: {
                 transcription_status: 'pending',

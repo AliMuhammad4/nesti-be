@@ -53,6 +53,29 @@ async function markTranscriptionFailed(callId, code, error) {
 
 async function completeTranscriptionAfterDrain(metadata, { allowActive = false } = {}) {
   const now = new Date();
+  // Never complete while the call is still live unless the room has already
+  // been marked terminal. Brief participant drops must not finalize notes early.
+  if (allowActive) {
+    const live = await ProfessionalCall.findById(metadata.call_id)
+      .select('status')
+      .lean()
+      .catch(() => null);
+    if (live && !TERMINAL_CALL_STATUSES.includes(String(live.status || ''))) {
+      await ProfessionalCall.updateOne(
+        {
+          _id: metadata.call_id,
+          status: 'active',
+          transcription_status: { $in: ['pending', 'dispatching', 'active'] },
+        },
+        {
+          $set: {
+            transcription_drain_deadline: new Date(now.getTime() + 30_000),
+          },
+        },
+      ).catch(() => {});
+      return { matchedCount: 0, modifiedCount: 0 };
+    }
+  }
   const statuses = allowActive
     ? [...TERMINAL_CALL_STATUSES, 'active']
     : TERMINAL_CALL_STATUSES;
@@ -141,9 +164,11 @@ export const callTranscriberAgent = defineAgent({
           (participant) =>
             text(participant?.identity) && participant.kind !== ParticipantKind.AGENT,
         );
-        await completeTranscriptionAfterDrain(metadata, {
-          allowActive: remotes.length === 0,
-        });
+        // Only finalize when the call is already terminal in Mongo — never on a
+        // brief empty-room blip while status is still active.
+        if (remotes.length === 0) {
+          await completeTranscriptionAfterDrain(metadata, { allowActive: true });
+        }
       };
       const runParticipant = async (participant) => {
         const identity = text(participant?.identity);
@@ -162,7 +187,8 @@ export const callTranscriberAgent = defineAgent({
           try {
             const started = await transcribeParticipant(ctx, participant, metadata);
             if (started) activeIdentities.add(identity);
-            else retryAfter.set(identity, Date.now() + 15_000);
+            // Retry quickly while waiting for consent / mic — 15s gaps lost speech.
+            else retryAfter.set(identity, Date.now() + 2_000);
           } catch (error) {
             const attempt = Number(attempts.get(identity) || 0) + 1;
             attempts.set(identity, attempt);
@@ -192,13 +218,13 @@ export const callTranscriberAgent = defineAgent({
         for (const participant of ctx.room.remoteParticipants.values()) {
           void runParticipant(participant);
         }
-      }, 15_000);
+      }, 2_000);
       consentRetry.unref?.();
       ctx.addShutdownCallback(async () => {
         clearInterval(consentRetry);
         const drainTimeoutMs = Math.max(
           5_000,
-          Number.parseInt(process.env.CALL_TRANSCRIPTION_DRAIN_TIMEOUT_MS || '30000', 10) || 30_000,
+          Number.parseInt(process.env.CALL_TRANSCRIPTION_DRAIN_TIMEOUT_MS || '90000', 10) || 90_000,
         );
         const pending = [...activeTasks.values()].filter(Boolean);
         const outcome = await Promise.race([
@@ -225,7 +251,7 @@ export const callTranscriberAgent = defineAgent({
       const activation = await ProfessionalCall.updateOne(
         {
           _id: metadata.call_id,
-          status: 'active',
+          status: { $in: ['connecting', 'active'] },
           transcription_status: { $in: ['pending', 'dispatching', 'active'] },
         },
         {

@@ -57,13 +57,27 @@ function createSpeechToText() {
   const configuredLanguage = text(process.env.CALL_TRANSCRIPTION_LANGUAGE);
   const language = detectLanguage ? '' : configuredLanguage || 'en';
   const vad = readTranscriptionVadOptions();
+  // Personal-device calls are near-field; far_field over-suppresses close mics
+  // and is a common source of dropouts and silence hallucinations.
+  const noiseRaw = text(process.env.CALL_TRANSCRIPTION_NOISE_REDUCTION).toLowerCase();
+  let noiseReductionType = 'near_field';
+  if (noiseRaw === 'far_field') noiseReductionType = 'far_field';
+  else if (noiseRaw === 'off' || noiseRaw === 'none') noiseReductionType = undefined;
+  // Domain + language context biases the model toward the words actually spoken
+  // (English/Urdu real-estate call) instead of auto-detect hallucinations.
+  const prompt =
+    text(process.env.CALL_TRANSCRIPTION_PROMPT) ||
+    'This is a professional real-estate and business phone call. Participants speak ' +
+      'English and/or Urdu. Transcribe only the words actually spoken; do not add ' +
+      'greetings, sign-offs, or phrases that were not said.';
   const sttOptions = {
     apiKey: text(process.env.OPENAI_API_KEY),
     model,
     detectLanguage,
     useRealtime: true,
     language: language || undefined,
-    noiseReductionType: 'far_field',
+    prompt,
+    ...(noiseReductionType ? { noiseReductionType } : {}),
     turnDetection: {
       type: 'server_vad',
       threshold: vad.threshold,
@@ -113,9 +127,12 @@ export async function transcribeParticipant(ctx, participant, metadata) {
   }
 
   const sampleRate = 24000;
+  // Keep only a short pre-consent buffer. A large window replays up to a
+  // minute of stale audio into STT once consent lands, producing "old words"
+  // stamped at the wrong time in the transcript.
   const prerollSeconds = Math.min(
-    60,
-    Math.max(10, positiveInt(process.env.CALL_TRANSCRIPTION_PREROLL_SECONDS, 60)),
+    15,
+    Math.max(1, positiveInt(process.env.CALL_TRANSCRIPTION_PREROLL_SECONDS, 3)),
   );
   const maxPrerollSamples = sampleRate * prerollSeconds;
   const audioStream = new AudioStream(publication.track, {
@@ -184,7 +201,6 @@ export async function transcribeParticipant(ctx, participant, metadata) {
   let sequence = 0;
   let finals = 0;
   let lastPersistedText = '';
-  let pendingAlternative = null;
   const echoTracker = getCallEchoTracker(metadata.call_id);
 
   const nextSegmentId = (alternative) => {
@@ -276,22 +292,14 @@ export async function transcribeParticipant(ctx, participant, metadata) {
     for await (const event of speechStream) {
       if (event.type === stt.SpeechEventType.FINAL_TRANSCRIPT) {
         const alternative = event.alternatives?.[0];
-        pendingAlternative = null;
         if (!alternative || !text(alternative.text)) continue;
         await persistUtterance(alternative, nextSegmentId(alternative));
         continue;
       }
-      if (event.type === stt.SpeechEventType.INTERIM_TRANSCRIPT) {
-        const alternative = event.alternatives?.[0];
-        if (alternative && text(alternative.text)) {
-          pendingAlternative = alternative;
-        }
-      }
+      // Interim results are unstable partials that the model still revises;
+      // persisting them injects wrong/half words, so only finals are stored.
     }
     await producer;
-    if (pendingAlternative && text(pendingAlternative.text).replace(/\s+/g, '').length >= 8) {
-      await persistUtterance(pendingAlternative, nextSegmentId(pendingAlternative));
-    }
     logger.info({ finals }, 'Participant transcription stream closed');
     return true;
   } finally {

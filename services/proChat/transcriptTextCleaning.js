@@ -10,6 +10,55 @@ const BRACKET_NOISE_ONLY =
 
 const PUNCTUATION_ONLY = /^[\s.,!?;:'"`´'""…\-–—•·~/\\|()[\]{}]+$/;
 
+/**
+ * Standalone phrases that STT (Whisper / gpt-4o-transcribe) routinely
+ * hallucinates during silence, music, or background noise. They are dropped
+ * ONLY when they are the entire utterance — the same words inside a longer,
+ * genuine sentence are preserved.
+ */
+const HALLUCINATION_PHRASES = new Set([
+  'thank you',
+  'thank you very much',
+  'thank you so much',
+  'thanks',
+  'thanks a lot',
+  'thank you for watching',
+  'thanks for watching',
+  'thanks for watching this video',
+  'please subscribe',
+  'subscribe',
+  'subscribe to my channel',
+  'like and subscribe',
+  'please like and subscribe',
+  'see you',
+  'see you next time',
+  'see you in the next video',
+  'i will see you next time',
+  'bye',
+  'bye bye',
+  'goodbye',
+  'you',
+  'the end',
+  'شکریہ',
+  'بہت شکریہ',
+  'خدا حافظ',
+]);
+
+function normalizeHallucinationPhrase(value) {
+  return text(value)
+    .toLowerCase()
+    .replace(/[.!?,…]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** True when the whole utterance is a known standalone STT hallucination. */
+export function isLikelyHallucinationPhrase(raw) {
+  const normalized = normalizeHallucinationPhrase(raw);
+  if (!normalized) return false;
+  return HALLUCINATION_PHRASES.has(normalized);
+}
+
 export function sanitizeTranscriptText(raw) {
   let cleaned = String(raw || '')
     .normalize('NFC')
@@ -163,6 +212,7 @@ export function shouldPersistTranscriptText(raw) {
   if (PUNCTUATION_ONLY.test(cleaned)) return false;
   if (BRACKET_NOISE_ONLY.test(cleaned)) return false;
   if (FILLER_ONLY.test(cleaned)) return false;
+  if (isLikelyHallucinationPhrase(cleaned)) return false;
   if (letterOrDigitCount(cleaned) < 1) return false;
   if (!isAllowedCallTranscriptScript(cleaned)) return false;
   if (looksLikeLatinSttGibberish(cleaned)) return false;

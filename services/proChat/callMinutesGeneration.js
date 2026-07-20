@@ -38,6 +38,7 @@ const MINUTES_SYSTEM_PROMPT = [
   '- If the call is short but intelligible, still write a brief factual summary of what was said.',
   '- Ignore fillers, false starts, noise tokens, bracketed tags like [inaudible], and transcription artifacts.',
   '- Ignore any mention of Nesti Minutes, Nesti Notetaker, note-taking bots, transcription agents, or join/leave meta.',
+  '- Write the minutes in the dominant language of the conversation: if the transcript is mostly English, write in English; if mostly Urdu, write in Urdu. Keep the entire output in one consistent language and do not mix languages or scripts across sections.',
   '- Do not invent facts, owners, decisions, due dates, or topics that are not supported by the transcript.',
   '- Prefer empty arrays for topics/decisions/action_items/follow_ups when unsupported, but still provide a short summary when any clear speech exists.',
   '- Do not pad the summary with fluff such as "productive discussion" or "the parties exchanged greetings".',

@@ -29,6 +29,14 @@ test('transcription worker is explicit, current, and never persists audio', asyn
   assert.match(workerSource, /loadThreshold/);
   assert.doesNotMatch(workerSource, /Number\.POSITIVE_INFINITY/);
   assert.doesNotMatch(agentSource, /markTranscriptionFailed\(\s*metadata\.call_id,\s*'participant_transcription_failed'/);
+  // markTranscriptionFailed must never regress a call that already reached
+  // 'completed'. Without this exclusion, a stray shutdown-callback error
+  // after a successful drain would flip completed → failed and the reconciler
+  // would flash the UI back to "Preparing minutes of meeting".
+  assert.match(
+    agentSource,
+    /transcription_status:\s*\{\s*\$nin:\s*\[\s*'completed'\s*,\s*'failed'\s*,\s*'disabled'\s*\]\s*\}/,
+  );
   // LiveKit invokes entrypoints as (jobContext, participant).
   assert.match(
     agentSource,

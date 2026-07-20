@@ -94,6 +94,19 @@ export async function processMinutesForCall(call) {
     new Date(existingMinutes.transcript_version_at || 0).getTime() ===
       new Date(call.transcript_updated_at || 0).getTime()
   ) {
+    // Recovery paths (e.g. a completed → failed flip that was rolled back to
+    // 'completed' with minutes_status: 'pending') can leave the call marked
+    // pending even though the ProfessionalCallMinutes doc is still ready.
+    // Without this heal, the reconciler would keep re-selecting the call
+    // every cycle, calling us, no-op'ing here, and the UI would stay stuck on
+    // "Preparing minutes of meeting" forever. Sync back to 'ready' so the
+    // visible state matches the stored artifact.
+    if (call.minutes_status !== 'ready') {
+      await ProfessionalCall.updateOne(
+        { _id: call._id, minutes_status: { $ne: 'ready' } },
+        { $set: { minutes_status: 'ready' } },
+      );
+    }
     return false;
   }
   if (existingMinutes?.status === 'ready') {

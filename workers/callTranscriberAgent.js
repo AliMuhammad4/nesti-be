@@ -39,7 +39,10 @@ async function connectMongo() {
 
 async function markTranscriptionFailed(callId, code, error) {
   await ProfessionalCall.updateOne(
-    { _id: callId, transcription_status: { $nin: ['failed', 'disabled'] } },
+    {
+      _id: callId,
+      transcription_status: { $nin: ['completed', 'failed', 'disabled'] },
+    },
     {
       $set: {
         transcription_status: 'failed',
@@ -53,8 +56,6 @@ async function markTranscriptionFailed(callId, code, error) {
 
 async function completeTranscriptionAfterDrain(metadata, { allowActive = false } = {}) {
   const now = new Date();
-  // Never complete while the call is still live unless the room has already
-  // been marked terminal. Brief participant drops must not finalize notes early.
   if (allowActive) {
     const live = await ProfessionalCall.findById(metadata.call_id)
       .select('status')

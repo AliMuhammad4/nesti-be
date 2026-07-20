@@ -27,8 +27,6 @@ export function callRelativeTranscriptTimes(
     Number.isFinite(altEndSec) &&
     (altStartSec > 0 || altEndSec > 0);
 
-  // OpenAI realtime STT in @livekit/agents-plugin-openai currently emits start/end as 0.
-  // Fall back to wall-clock elapsed since call start so consecutive segments advance.
   if (!hasProviderTiming) {
     const callStart = Number(callStartedAtMs);
     if (Number.isFinite(callStart) && callStart > 0) {
@@ -104,6 +102,7 @@ export async function persistFinalTranscriptSegment({
         _id: callId,
         status: { $in: ['ended', 'expired'] },
         transcription_status: { $in: ['completed', 'disabled'] },
+        minutes_status: { $ne: 'ready' },
       },
       {
         $set: {

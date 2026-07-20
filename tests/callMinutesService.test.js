@@ -17,6 +17,7 @@ let minutesStatus = 'pending';
 let availableSegments = [];
 let deletedMinutes = 0;
 let callUpdate = null;
+let callUpdates = [];
 let existingMinutes = null;
 const fakeOpenAI = {
   chat: {
@@ -101,8 +102,9 @@ test.before(() => {
       }),
     };
   });
-  mock.method(ProfessionalCall, 'updateOne', async (_filter, update) => {
+  mock.method(ProfessionalCall, 'updateOne', async (filter, update) => {
     callUpdate = update;
+    callUpdates.push({ filter, update });
     return { modifiedCount: 1 };
   });
   mock.method(ProfessionalCallTranscriptSegment, 'find', () =>
@@ -114,6 +116,7 @@ test.beforeEach(() => {
   availableSegments = segments;
   deletedMinutes = 0;
   callUpdate = null;
+  callUpdates = [];
   existingMinutes = null;
 });
 
@@ -177,6 +180,51 @@ test('ready minutes are not regenerated for the same transcript version', async 
   });
   assert.equal(processed, false);
   assert.equal(completionCalls, before);
+});
+
+test('no-op branch heals call.minutes_status when artifact is ready but call marked pending', async () => {
+  // Scenario: markTranscriptionFailed flipped a completed call to failed, the
+  // reconciler recovered it to completed + minutes_status: 'pending', but the
+  // ProfessionalCallMinutes doc was still 'ready'. Without the heal, the
+  // reconciler would loop forever and the UI would stay on "Preparing".
+  const transcriptUpdatedAt = new Date();
+  existingMinutes = {
+    status: 'ready',
+    transcript_segment_count: segments.length,
+    transcript_version_at: transcriptUpdatedAt,
+  };
+  const processed = await processMinutesForCall({
+    _id: callId,
+    transcript_updated_at: transcriptUpdatedAt,
+    ended_at: new Date(),
+    minutes_status: 'pending',
+  });
+  assert.equal(processed, false);
+  const heal = callUpdates.find(
+    (entry) => entry.update?.$set?.minutes_status === 'ready',
+  );
+  assert.ok(heal, 'expected a heal update writing minutes_status: ready');
+  assert.deepEqual(heal.filter.minutes_status, { $ne: 'ready' });
+});
+
+test('no-op branch does not issue a heal write when call is already marked ready', async () => {
+  const transcriptUpdatedAt = new Date();
+  existingMinutes = {
+    status: 'ready',
+    transcript_segment_count: segments.length,
+    transcript_version_at: transcriptUpdatedAt,
+  };
+  const processed = await processMinutesForCall({
+    _id: callId,
+    transcript_updated_at: transcriptUpdatedAt,
+    ended_at: new Date(),
+    minutes_status: 'ready',
+  });
+  assert.equal(processed, false);
+  const heal = callUpdates.find(
+    (entry) => entry.update?.$set?.minutes_status === 'ready',
+  );
+  assert.equal(heal, undefined, 'no heal write when call already reports ready');
 });
 
 test('terminal call without transcript creates no minutes artifact', async () => {

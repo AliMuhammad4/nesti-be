@@ -61,6 +61,32 @@ const STRING_FIELDS = new Set([
   'preferred_experience',
 ]);
 
+const PURCHASE_TIMELINE_VALUES = new Set([
+  'asap',
+  '1-3 months',
+  '3-6 months',
+  '6-12 months',
+  'browsing',
+  '1_year',
+  '2_years',
+  '3_years',
+  '5_years',
+  'exploring',
+]);
+
+const EMPLOYMENT_STATUS_VALUES = new Set([
+  'full_time',
+  'self_employed',
+  'contract',
+  'new_job',
+  'unemployed',
+  'part_time',
+  'student',
+  'retired',
+  'other',
+  '',
+]);
+
 function normalizeStringArray(value, { max = 12 } = {}) {
   const arr = Array.isArray(value) ? value : value ? [value] : [];
   return Array.from(
@@ -78,6 +104,10 @@ export function sanitizeClientProfileData(data = {}) {
     if (Object.prototype.hasOwnProperty.call(out, field)) {
       out[field] = String(out[field] || '').trim();
     }
+  }
+  // purchase_timeline enum does not allow "" — empty means "unset" (null).
+  if (Object.prototype.hasOwnProperty.call(out, 'purchase_timeline')) {
+    out.purchase_timeline = out.purchase_timeline || null;
   }
   for (const field of ARRAY_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(out, field)) {
@@ -134,6 +164,21 @@ export function validateClientProfileData(data) {
 
   if (Array.isArray(data.priority_tags) && data.priority_tags.length > 5) {
     errors.push('Please select up to five priorities');
+  }
+
+  if (
+    data.purchase_timeline != null &&
+    data.purchase_timeline !== '' &&
+    !PURCHASE_TIMELINE_VALUES.has(String(data.purchase_timeline).trim())
+  ) {
+    errors.push('Invalid purchase timeline');
+  }
+
+  if (
+    data.employment_status != null &&
+    !EMPLOYMENT_STATUS_VALUES.has(String(data.employment_status).trim())
+  ) {
+    errors.push('Invalid employment status');
   }
 
   return {

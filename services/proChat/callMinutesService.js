@@ -270,7 +270,6 @@ export async function processMinutesForCall(call) {
 
 export async function reconcileCallMinutes() {
   const now = new Date();
-  // Recover calls whose worker died before acknowledging stream drain.
   await ProfessionalCall.updateMany(
     {
       status: { $in: ['ended', 'expired'] },
@@ -279,10 +278,6 @@ export async function reconcileCallMinutes() {
     },
     { $set: consentCompletedArtifactSet(now) },
   );
-  // Recover calls whose transcription stayed 'active'/'dispatching' with no
-  // drain deadline ever written (API down at call end, or the call ended from
-  // 'connecting' before started_at was set). The deadline-based recovery
-  // above can never match them.
   await ProfessionalCall.updateMany(
     {
       status: { $in: ['ended', 'expired'] },
@@ -295,13 +290,9 @@ export async function reconcileCallMinutes() {
   );
   const calls = await ProfessionalCall.find({
     status: { $in: ['ended', 'expired'] },
-    // Calls ended from 'connecting' have no started_at but can still hold a
-    // real transcript when the transcriber joined during connect.
     $or: [{ started_at: { $ne: null } }, { transcription_started_at: { $ne: null } }],
     transcription_status: { $in: ['completed', 'failed'] },
     minutes_status: { $in: ['not_ready', 'pending', 'processing', 'failed'] },
-    // Terminal outcomes: retrying cannot change a final transcript, and
-    // leaving them in the scan would crowd out fresh calls over time.
     transcription_error_code: { $nin: ['empty_minutes', 'no_transcript_segments'] },
   })
     .sort({ ended_at: 1 })

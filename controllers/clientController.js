@@ -208,7 +208,7 @@ export async function updateClientSettings(req, res) {
     }
 
     const user = Object.keys(userUpdates).length
-      ? await User.findByIdAndUpdate(userId, userUpdates, { new: true }).select('-password -otp -reset_password_token')
+      ? await User.findByIdAndUpdate(userId, userUpdates, { returnDocument: 'after' }).select('-password -otp -reset_password_token')
       : await User.findById(userId).select('-password -otp -reset_password_token');
 
     let profile = await ClientProfile.findOne({ user_id: userId });

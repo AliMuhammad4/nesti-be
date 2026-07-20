@@ -591,7 +591,7 @@ export async function createPropertyInquiry(req, res) {
         },
       },
       {
-        new: true,
+        returnDocument: 'after',
         upsert: true,
         setDefaultsOnInsert: true,
       }

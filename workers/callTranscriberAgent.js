@@ -126,9 +126,37 @@ export const callTranscriberAgent = defineAgent({
         throw new Error('OPENAI_API_KEY is required by the transcription worker.');
       }
       await connectMongo();
+      // Diagnose lookup failures (room/generation mismatch vs missing call /
+      // cross-environment job stolen by the wrong worker).
+      const callById = await ProfessionalCall.findById(metadata.call_id)
+        .select('room_name transcription_dispatch_generation status transcription_status')
+        .lean()
+        .catch(() => null);
+      if (!callById) {
+        throw new Error(
+          `The dispatched call was not found (call_id=${metadata.call_id}). ` +
+            'If you are running a local worker against LiveKit Cloud, use a ' +
+            'dev-only agent name so production jobs are not stolen.',
+        );
+      }
+      const jobRoom = text(ctx.job.room?.name);
+      if (text(callById.room_name) !== jobRoom) {
+        throw new Error(
+          `Call room mismatch: call has "${text(callById.room_name)}" but job room is "${jobRoom}".`,
+        );
+      }
+      if (
+        text(callById.transcription_dispatch_generation) !== metadata.dispatch_generation
+      ) {
+        throw new Error(
+          `Stale transcription dispatch generation for call ${metadata.call_id} ` +
+            `(call=${text(callById.transcription_dispatch_generation)}, ` +
+            `job=${metadata.dispatch_generation}).`,
+        );
+      }
       const call = await ProfessionalCall.findOne({
         _id: metadata.call_id,
-        room_name: ctx.job.room?.name,
+        room_name: jobRoom,
         transcription_dispatch_generation: metadata.dispatch_generation,
       }).lean();
       if (!call) throw new Error('The dispatched call was not found or metadata was invalid.');

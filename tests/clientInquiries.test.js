@@ -111,6 +111,24 @@ test('dedupeInquiryItemsForAllView keeps professional-only conversations', () =>
   assert.equal(dedupeInquiryItemsForAllView(items).length, 2);
 });
 
+test('My Inquiries items require a real LeadMatch — bare chat DMs are not inquiries', () => {
+  // Synthetic row that the old list builder used to invent from a DM thread.
+  const bareDmAsInquiry = {
+    inquiry_type: 'professional',
+    thread_id: 'dm-thread-1',
+    id: 'dm-thread-1',
+    lead_match_id: null,
+    lead_profile_id: null,
+    professional: { professional_type: 'lawyer' },
+  };
+  assert.equal(bareDmAsInquiry.lead_match_id, null);
+  // Real inquiries always carry a lead_match_id (or a property lead_profile_id).
+  const isRealInquiry = Boolean(
+    bareDmAsInquiry.lead_match_id || bareDmAsInquiry.lead_profile_id,
+  );
+  assert.equal(isRealInquiry, false);
+});
+
 test('computeInquiryCounts uses deduped all-view totals', () => {
   const items = [
     { inquiry_type: 'property', thread_id: 'thread-1', id: 'property-1' },

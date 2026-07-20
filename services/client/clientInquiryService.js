@@ -5,7 +5,6 @@ import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import PublicProfile from '../../models/PublicProfile.js';
 import User from '../../models/User.js';
 import { isProfessionalRole } from '../../constants/roles.js';
-import { toObjectId } from '../../utils/proChatUtils.js';
 
 const USER_SELECT = 'first_name last_name email role profile_image phone';
 
@@ -205,29 +204,12 @@ function filterInquiriesByType(items, normalizedType) {
 
 export async function getClientInquiriesForUser(userId, { type = '', limit = 50, page = 1, threadId = '' } = {}) {
   const clientId = String(userId);
-  const clientObjectId = toObjectId(userId);
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const safePage = Math.max(Number(page) || 1, 1);
   const normalizedType = String(type || '').trim().toLowerCase();
   const targetThreadId = String(threadId || '').trim();
 
-  const threadParticipantFilter = clientObjectId
-    ? {
-        participants: clientObjectId,
-        $or: [
-          { thread_type: 'dm' },
-          { thread_type: 'group', participants_key: /^lead:/ },
-        ],
-      }
-    : {
-        participants: userId,
-        $or: [
-          { thread_type: 'dm' },
-          { thread_type: 'group', participants_key: /^lead:/ },
-        ],
-      };
-
-  const [clientMatches, clientProfiles, threads] = await Promise.all([
+  const [clientMatches, clientProfiles] = await Promise.all([
     LeadMatch.find({ 'compatibility_factors.client_user_id': clientId })
       .sort({ updatedAt: -1 })
       .lean(),
@@ -237,10 +219,22 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
     })
       .sort({ updatedAt: -1 })
       .lean(),
-    ProfessionalChatThread.find(threadParticipantFilter)
-      .sort({ last_message_at: -1, updatedAt: -1 })
-      .lean(),
   ]);
+
+  // Only load threads tied to real inquiries (LeadMatch.chat_thread_id).
+  // Plain Chat DMs must not appear on My Inquiries — those belong in Conversations.
+  const matchThreadIds = [
+    ...new Set(
+      clientMatches
+        .map((match) => String(match?.compatibility_factors?.chat_thread_id || '').trim())
+        .filter(Boolean),
+    ),
+  ];
+  const threads = matchThreadIds.length
+    ? await ProfessionalChatThread.find({ _id: { $in: matchThreadIds } })
+        .sort({ last_message_at: -1, updatedAt: -1 })
+        .lean()
+    : [];
 
   const matchProfileIds = clientMatches
     .map((match) => match.lead_profile_id)
@@ -257,11 +251,6 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
 
   for (const match of clientMatches) {
     if (match.user_id) proUserIds.add(String(match.user_id));
-  }
-  for (const thread of threads) {
-    for (const participantId of thread.participants || []) {
-      if (String(participantId) !== clientId) proUserIds.add(String(participantId));
-    }
   }
 
   const proIds = [...proUserIds];
@@ -281,7 +270,6 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
 
   const items = [];
   const seenKeys = new Set();
-  const seenThreadIds = new Set();
   const threadById = new Map(threads.map((thread) => [String(thread._id), thread]));
 
   for (const match of clientMatches) {
@@ -300,9 +288,8 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
     const professional = buildProfessionalSummary(proUserId, userById, proByUserId, publicByUserId);
     if (!professional) continue;
 
-    const threadId = factors.chat_thread_id ? String(factors.chat_thread_id) : null;
-    const thread = threadId ? threadById.get(threadId) : null;
-    if (threadId) seenThreadIds.add(threadId);
+    const threadIdValue = factors.chat_thread_id ? String(factors.chat_thread_id) : null;
+    const thread = threadIdValue ? threadById.get(threadIdValue) : null;
 
     const legalServicesNeeded = isProperty ? '' : resolveLegalServicesNeeded(match);
     const mortgageServiceLabel = isProperty ? '' : resolveMortgageServiceLabel(match);
@@ -328,7 +315,7 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
       mortgage_service_label: mortgageServiceLabel || null,
       agent_service_label: agentServiceLabel || null,
       property_type: propertyType || null,
-      thread_id: threadId,
+      thread_id: threadIdValue,
       lead_match_id: String(match._id),
       lead_profile_id: match.lead_profile_id ? String(match.lead_profile_id) : null,
     });
@@ -359,41 +346,6 @@ export async function getClientInquiriesForUser(userId, { type = '', limit = 50,
       thread_id: null,
       lead_match_id: refs[0] || null,
       lead_profile_id: String(profile._id),
-    });
-  }
-
-  for (const thread of threads) {
-    const otherParticipant = (thread.participants || []).find((participantId) => String(participantId) !== clientId);
-    if (!otherParticipant) continue;
-
-    const threadId = String(thread._id);
-    // Only skip a thread if it is already represented by a LeadMatch chat_thread_id.
-    if (seenThreadIds.has(threadId)) continue;
-
-    const proUserId = String(otherParticipant);
-    const professional = buildProfessionalSummary(proUserId, userById, proByUserId, publicByUserId);
-    if (!professional) continue;
-
-    const dedupeKey = `professional:${proUserId}:${threadId}`;
-    if (seenKeys.has(dedupeKey)) continue;
-    seenKeys.add(dedupeKey);
-
-    items.push({
-      id: threadId,
-      inquiry_type: 'professional',
-      status: thread.last_message_at ? 'active' : 'new',
-      message: String(thread.last_message_text || '').trim(),
-      created_at: thread.createdAt,
-      updated_at: thread.last_message_at || thread.updatedAt || thread.createdAt,
-      professional,
-      property: null,
-      legal_services_needed: null,
-      legal_service_label: null,
-      mortgage_service_label: null,
-      agent_service_label: null,
-      thread_id: threadId,
-      lead_match_id: null,
-      lead_profile_id: null,
     });
   }
 

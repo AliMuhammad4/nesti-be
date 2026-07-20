@@ -25,6 +25,7 @@ test('transcription worker is explicit, current, and never persists audio', asyn
   assert.match(agentSource, /activeTasks\.set\(identity,\s*null\)/);
   assert.match(agentSource, /completeTranscriptionAfterDrain/);
   assert.match(agentSource, /transcription_dispatch_generation/);
+  assert.match(agentSource, /dev-only agent name|Stale transcription dispatch|Call room mismatch/);
   assert.match(workerSource, /loadThreshold/);
   assert.doesNotMatch(workerSource, /Number\.POSITIVE_INFINITY/);
   assert.doesNotMatch(agentSource, /markTranscriptionFailed\(\s*metadata\.call_id,\s*'participant_transcription_failed'/);

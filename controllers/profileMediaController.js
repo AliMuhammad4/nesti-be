@@ -2,7 +2,7 @@ import User from '../models/User.js';
 import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
 import logger from '../utils/logger.js';
 
-const KINDS = new Set(['profile', 'cover']);
+const KINDS = new Set(['profile', 'cover', 'logo']);
 
 function clampNumber(value, { min, max, fallback }) {
   const n = Number(value);
@@ -11,8 +11,9 @@ function clampNumber(value, { min, max, fallback }) {
 }
 
 /**
- * POST multipart: field `file` (image), field `kind` = `profile` | `cover`
- * Uploads to R2 and saves HTTPS URL on User.
+ * POST multipart: field `file` (image), field `kind` = `profile` | `cover` | `logo`.
+ * Profile and cover images update the User record; logo assets are returned for
+ * the storefront Brand Kit to persist with its draft.
  */
 export async function postProfileImageUpload(req, res, next) {
   try {
@@ -29,12 +30,12 @@ export async function postProfileImageUpload(req, res, next) {
     if (!KINDS.has(kind)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid kind. Use profile or cover.',
+        message: 'Invalid kind. Use profile, cover, or logo.',
       });
     }
 
     const userId = String(req.user._id);
-    const objectKey = `nesti/users/${userId}/${kind === 'cover' ? 'cover' : 'profile'}`;
+    const objectKey = `nesti/users/${userId}/${kind}`;
     const result = await uploadBufferToR2(req.file.buffer, {
       key: objectKey,
       mimeType: req.file.mimetype,
@@ -54,7 +55,7 @@ export async function postProfileImageUpload(req, res, next) {
       user.cover_image = secureUrl;
       user.cover_image_position = { x: 50, y: 50 };
       user.cover_image_zoom = 1;
-    } else {
+    } else if (kind === 'profile') {
       user.profile_image = secureUrl;
     }
     await user.save();

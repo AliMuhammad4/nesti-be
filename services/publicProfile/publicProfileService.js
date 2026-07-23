@@ -16,6 +16,7 @@ import {
   resolveLinkedSellerLeadMatchId,
 } from '../lead/inquiredProperty.js';
 import { notifyClientsOfNewPropertyForSale } from '../property/propertyClientNotifications.js';
+import { serializePublishedStorefront } from './storefrontService.js';
 
 function publicProfileUnavailableResponse() {
   return { status: 404, body: { success: false, message: 'Profile not found' } };
@@ -210,6 +211,16 @@ export const getPublicProfileBySlugService = async (slug) => {
         about: profile.about,
         services: profile.services,
         testimonials: profile.testimonials,
+        client_feedback: (profile.feedback_submissions || [])
+          .map((item) => ({
+            id: item._id,
+            client_name: item.client_name,
+            client_photo_url: null,
+            rating: item.rating,
+            text: item.text,
+            date: item.submitted_at,
+            role: 'Client feedback',
+          })),
         real_clients: realClients,
         
         featured_listings: profile.featured_listings,
@@ -292,6 +303,111 @@ export const getPublicProfileBySlugService = async (slug) => {
         professional_name: profile.user_id 
           ? `${profile.user_id.first_name} ${profile.user_id.last_name}`
           : null,
+      },
+    },
+  };
+};
+
+export const submitPublicFeedbackService = async ({ slug, payload }) => {
+  const normalizedSlug = String(slug || '').trim().toLowerCase();
+  if (!normalizedSlug) {
+    return { status: 400, body: { success: false, message: 'Invalid profile' } };
+  }
+
+  const profile = await PublicProfile.findOneAndUpdate(
+    { slug: normalizedSlug, enabled: true },
+    {
+      $push: {
+        feedback_submissions: {
+          $each: [{
+            client_name: payload.client_name,
+            email: payload.email,
+            rating: payload.rating,
+            text: payload.text,
+            submitted_at: new Date(),
+          }],
+          $slice: -100,
+        },
+      },
+    },
+    { new: false },
+  ).select('_id');
+
+  if (!profile) return publicProfileUnavailableResponse();
+
+  return {
+    status: 201,
+    body: {
+      success: true,
+      message: 'Thank you. Your feedback is now published.',
+    },
+  };
+};
+
+export const getApprovedPublicFeedbackService = async (slug) => {
+  const normalizedSlug = String(slug || '').trim().toLowerCase();
+  if (!normalizedSlug) {
+    return { status: 400, body: { success: false, message: 'Invalid profile' } };
+  }
+
+  const profile = await PublicProfile.findOne({ slug: normalizedSlug, enabled: true })
+    .select('user_id feedback_submissions')
+    .lean();
+
+  if (!profile || !(await userCanServePublicProfile(profile.user_id))) {
+    return publicProfileUnavailableResponse();
+  }
+
+  const feedback = (profile.feedback_submissions || [])
+    .sort((left, right) => new Date(right.submitted_at) - new Date(left.submitted_at))
+    .map((item) => ({
+      id: item._id,
+      client_name: item.client_name,
+      client_photo_url: null,
+      rating: item.rating,
+      text: item.text,
+      date: item.submitted_at,
+      role: 'Client feedback',
+    }));
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      feedback,
+      count: feedback.length,
+    },
+  };
+};
+
+export const getPublishedStorefrontBySlugService = async (slug) => {
+  if (!slug || typeof slug !== 'string') {
+    return {
+      status: 400,
+      body: { success: false, message: 'Invalid slug provided' },
+    };
+  }
+
+  const profile = await PublicProfile.findOne({ slug: slug.toLowerCase().trim() })
+    .select('slug enabled user_id storefront.published')
+    .lean();
+
+  if (!profile || !profile.enabled || !(await userCanServePublicProfile(profile.user_id))) {
+    return publicProfileUnavailableResponse();
+  }
+
+  const published = serializePublishedStorefront(profile.storefront);
+  if (!published) {
+    return publicProfileUnavailableResponse();
+  }
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      storefront: {
+        slug: profile.slug,
+        published,
       },
     },
   };
@@ -763,17 +879,22 @@ export const getPublicProfessionalNetworkService = async ({ role, limit = 60, ex
 
 // ─── Dedicated seller-properties endpoint ────────────────────────────────────
 
-export const getSellerPropertiesBySlugService = async (slug) => {
-  if (!slug || typeof slug !== 'string') {
+export const getSellerPropertiesBySlugService = async (slug, { requesterUserId } = {}) => {
+  if (!requesterUserId && (!slug || typeof slug !== 'string')) {
     return { status: 400, body: { success: false, message: 'Invalid slug' } };
   }
 
-  const profile = await PublicProfile.findOne({ slug: slug.toLowerCase().trim() })
+  const profileQuery = requesterUserId
+    ? { user_id: requesterUserId }
+    : { slug: slug.toLowerCase().trim() };
+  const profile = await PublicProfile.findOne(profileQuery)
     .select('user_id professional_type enabled')
     .populate('user_id', '_id')
     .lean();
 
-  if (!profile || !profile.enabled || !(await userCanServePublicProfile(profile.user_id))) {
+  const isOwnerRequest = requesterUserId
+    && String(profile?.user_id?._id || profile?.user_id) === String(requesterUserId);
+  if (!profile || (!isOwnerRequest && (!profile.enabled || !(await userCanServePublicProfile(profile.user_id))))) {
     return publicProfileUnavailableResponse();
   }
 
@@ -784,8 +905,9 @@ export const getSellerPropertiesBySlugService = async (slug) => {
   const professionalUserId = profile.user_id?._id || profile.user_id;
 
   try {
-    const sellerLeads = await LeadProfile.find({
+    let sellerLeads = await LeadProfile.find({
       'ownership.user_id': professionalUserId,
+      'lifecycle.status': { $nin: ['closed', 'sold', 'withdrawn'] },
       $or: [
         { 'intent_summary.primary_intent': 'sell' },
         { intent: 'sell' },
@@ -796,8 +918,16 @@ export const getSellerPropertiesBySlugService = async (slug) => {
     })
       .select('identity property budget_profile intent_summary lifecycle')
       .sort({ 'lifecycle.last_seen_at': -1 })
-      .limit(50)
       .lean();
+
+    const closedMatches = sellerLeads.length
+      ? await LeadMatch.find({
+          lead_profile_id: { $in: sellerLeads.map((lead) => lead._id) },
+          match_status: { $in: ['converted', 'closed_lost'] },
+        }).select('lead_profile_id').lean()
+      : [];
+    const closedLeadIds = new Set(closedMatches.map((match) => String(match.lead_profile_id)));
+    sellerLeads = sellerLeads.filter((lead) => !closedLeadIds.has(String(lead._id)));
 
     // Silent repair: reset any seller LeadMatch records incorrectly stamped with 'consult_booked'.
     const sellerLeadIds = sellerLeads.map((l) => l._id);

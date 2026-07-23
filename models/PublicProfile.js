@@ -16,6 +16,14 @@ const testimonialSchema = new mongoose.Schema({
   date: { type: Date, default: Date.now },
 }, { _id: true });
 
+const feedbackSubmissionSchema = new mongoose.Schema({
+  client_name: { type: String, required: true, trim: true, maxlength: 120 },
+  email: { type: String, required: true, trim: true, lowercase: true, maxlength: 180 },
+  rating: { type: Number, required: true, min: 1, max: 5 },
+  text: { type: String, required: true, trim: true, maxlength: 1000 },
+  submitted_at: { type: Date, default: Date.now },
+}, { _id: true });
+
 const mortgageProgramSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: { type: String, required: true },
@@ -28,6 +36,38 @@ const credentialSchema = new mongoose.Schema({
   issuer: { type: String, required: true },
   year: { type: Number, required: true },
 }, { _id: true });
+
+// Storefront content is revisioned so unpublished authoring changes cannot
+// affect the public storefront.
+const storefrontBlockSchema = new mongoose.Schema({
+  id: { type: String, required: true, maxlength: 100 },
+  type: { type: String, required: true, maxlength: 80 },
+  data: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+}, { _id: false });
+
+const storefrontBrandKitSchema = new mongoose.Schema({
+  logo_url: { type: String, default: null },
+  primary_color: { type: String, default: null },
+  secondary_color: { type: String, default: null },
+  accent_color: { type: String, default: null },
+  font_family: { type: String, default: null },
+  business_name: { type: String, default: null },
+  button_shape: { type: String, enum: ['square', 'rounded', 'pill', null], default: null },
+}, { _id: false });
+
+const storefrontTemplateSchema = new mongoose.Schema({
+  id: { type: String, default: null, maxlength: 100 },
+  name: { type: String, default: null, maxlength: 120 },
+  version: { type: String, default: null, maxlength: 40 },
+}, { _id: false });
+
+const storefrontRevisionSchema = new mongoose.Schema({
+  blocks: { type: [storefrontBlockSchema], default: [] },
+  brandKit: { type: storefrontBrandKitSchema, default: () => ({}) },
+  template: { type: storefrontTemplateSchema, default: () => ({}) },
+  updated_at: { type: Date, default: null },
+  published_at: { type: Date, default: null },
+}, { _id: false });
 
 const publicProfileSchema = new mongoose.Schema({
   user_id: {
@@ -107,6 +147,7 @@ const publicProfileSchema = new mongoose.Schema({
   services: [serviceSchema],
   
   testimonials: [testimonialSchema],
+  feedback_submissions: [feedbackSubmissionSchema],
   
   // Agent-specific content
   featured_listings: [{
@@ -166,6 +207,13 @@ const publicProfileSchema = new mongoose.Schema({
     title: { type: String, default: null, maxlength: 60 },
     description: { type: String, default: null, maxlength: 160 },
     keywords: [{ type: String }],
+  },
+
+  // AI business storefront foundation. Keep it separate from the legacy
+  // public-profile fields to preserve all existing profile API behavior.
+  storefront: {
+    draft: { type: storefrontRevisionSchema, default: null },
+    published: { type: storefrontRevisionSchema, default: null },
   },
   
 }, { timestamps: true });

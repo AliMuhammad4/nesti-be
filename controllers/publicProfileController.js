@@ -1,11 +1,14 @@
 import {
   getPublicProfileBySlugService,
+  getPublishedStorefrontBySlugService,
   getPublicProfessionalsListService,
   getPublicProfessionalNetworkService,
   getSellerPropertiesBySlugService,
   trackProfileViewService,
   checkSlugAvailabilityService,
   submitPublicLeadService,
+  submitPublicFeedbackService,
+  getApprovedPublicFeedbackService,
 } from '../services/publicProfile/publicProfileService.js';
 
 const send = (res, result) => {
@@ -16,6 +19,14 @@ export const getPublicProfileBySlug = async (req, res, next) => {
   try {
     const { slug } = req.params;
     send(res, await getPublicProfileBySlugService(slug));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getPublishedStorefrontBySlug = async (req, res, next) => {
+  try {
+    send(res, await getPublishedStorefrontBySlugService(req.params.slug));
   } catch (error) {
     next(error);
   }
@@ -93,6 +104,25 @@ export const submitPublicLead = async (req, res, next) => {
       ip_address: req.ip || null,
     };
     send(res, await submitPublicLeadService({ slug, payload, requestMeta }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const submitPublicFeedback = async (req, res, next) => {
+  try {
+    send(res, await submitPublicFeedbackService({
+      slug: req.params.slug,
+      payload: req.body || {},
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getApprovedPublicFeedback = async (req, res, next) => {
+  try {
+    send(res, await getApprovedPublicFeedbackService(req.params.slug));
   } catch (error) {
     next(error);
   }

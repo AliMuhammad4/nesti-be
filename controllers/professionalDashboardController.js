@@ -6,6 +6,11 @@ import {
   updateThemeService,
   generatePublicProfileCopyService,
   deletePublicProfileService,
+  getOwnStorefrontDraftService,
+  getOwnStorefrontPropertiesService,
+  saveStorefrontDraftService,
+  publishStorefrontService,
+  generateStorefrontDraftService,
 } from '../services/publicProfile/professionalDashboardService.js';
 
 const send = (res, result) => {
@@ -27,6 +32,49 @@ export const updatePublicProfile = async (req, res, next) => {
     const updates = req.body;
     send(res, await updatePublicProfileService(userId, updates));
   } catch (error) {
+    next(error);
+  }
+};
+
+export const getOwnStorefrontDraft = async (req, res, next) => {
+  try {
+    send(res, await getOwnStorefrontDraftService(req.user._id));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getOwnStorefrontProperties = async (req, res, next) => {
+  try {
+    send(res, await getOwnStorefrontPropertiesService(req.user._id));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const saveStorefrontDraft = async (req, res, next) => {
+  try {
+    send(res, await saveStorefrontDraftService(req.user._id, req.body.draft));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const publishStorefront = async (req, res, next) => {
+  try {
+    send(res, await publishStorefrontService(req.user._id));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const generateStorefrontDraft = async (req, res, next) => {
+  try {
+    send(res, await generateStorefrontDraftService(req.user._id, req.body || {}));
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
     next(error);
   }
 };

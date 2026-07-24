@@ -47,6 +47,15 @@ const storefrontBlockSchema = new mongoose.Schema({
 
 const storefrontBrandKitSchema = new mongoose.Schema({
   logo_url: { type: String, default: null },
+  cover_url: { type: String, default: null },
+  profile_photo_url: { type: String, default: null },
+  logo_size: { type: Number, min: 24, max: 72, default: 40 },
+  cover_position_x: { type: Number, min: 0, max: 100, default: 50 },
+  cover_position_y: { type: Number, min: 0, max: 100, default: 50 },
+  cover_zoom: { type: Number, min: 1, max: 3, default: 1 },
+  profile_position_x: { type: Number, min: 0, max: 100, default: 50 },
+  profile_position_y: { type: Number, min: 0, max: 100, default: 25 },
+  profile_zoom: { type: Number, min: 1, max: 3, default: 1 },
   primary_color: { type: String, default: null },
   secondary_color: { type: String, default: null },
   accent_color: { type: String, default: null },

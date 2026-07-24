@@ -10,7 +10,7 @@ function openai() {
 }
 
 const TEMPLATE_BLOCKS = {
-  agent: ['hero', 'expertise', 'role-details', 'about', 'properties', 'home-valuation', 'testimonials', 'services', 'guidance', 'cta'],
+  agent: ['hero', 'expertise', 'role-details', 'about', 'properties', 'testimonials', 'services', 'guidance', 'cta'],
   mortgage_broker: ['hero', 'expertise', 'role-details', 'about', 'mortgage-calculator', 'testimonials', 'services', 'mortgage-programs', 'guidance', 'cta'],
   lawyer: ['hero', 'expertise', 'role-details', 'about', 'closing-cost-estimator', 'testimonials', 'practice-areas', 'services', 'credentials', 'guidance', 'cta'],
 };

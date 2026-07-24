@@ -54,7 +54,7 @@ test('storefront block types are constrained by professional role', () => {
   assert.deepEqual(
     allowedStorefrontBlockTypes('mortgage_broker'),
     [
-      'hero', 'expertise', 'role-details', 'about', 'testimonials', 'services', 'guidance', 'cta',
+      'hero', 'expertise', 'role-details', 'about', 'testimonials', 'services', 'guidance', 'cta', 'footer',
       'mortgage-calculator', 'mortgage-programs',
     ],
   );
@@ -65,9 +65,14 @@ test('storefront block types are constrained by professional role', () => {
   assert.equal(brokerDraft.error, undefined);
 
   const agentOnlyBlock = validateStorefrontDraftForRole({
-    blocks: [{ id: 'valuation', type: 'home-valuation', data: { content: {} } }],
+    blocks: [{ id: 'properties', type: 'properties', data: { content: {} } }],
   }, 'lawyer');
   assert.match(agentOnlyBlock.error.message, /Unsupported storefront block type/);
+
+  const removedValuationBlock = validateStorefrontDraftForRole({
+    blocks: [{ id: 'valuation', type: 'home-valuation', data: { content: {} } }],
+  }, 'agent');
+  assert.match(removedValuationBlock.error.message, /Unsupported storefront block type/);
 });
 
 test('storefront data rejects unsafe content and malformed layout or style', () => {

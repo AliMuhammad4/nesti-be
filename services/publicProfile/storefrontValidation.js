@@ -19,7 +19,6 @@ const ROLE_BLOCK_TYPES = Object.freeze({
     'featured-listings',
     'top-listings',
     'sold-listings',
-    'home-valuation',
   ],
   [PROFESSIONAL_TYPE.MORTGAGE_BROKER]: [
     'mortgage-calculator',
@@ -149,6 +148,15 @@ const storefrontBlockSchema = Joi.object({
 
 const storefrontBrandKitSchema = Joi.object({
   logo_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(null, '').optional(),
+  cover_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(null, '').optional(),
+  profile_photo_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(null, '').optional(),
+  logo_size: Joi.number().integer().min(24).max(72).allow(null).optional(),
+  cover_position_x: Joi.number().min(0).max(100).optional(),
+  cover_position_y: Joi.number().min(0).max(100).optional(),
+  cover_zoom: Joi.number().min(1).max(3).optional(),
+  profile_position_x: Joi.number().min(0).max(100).optional(),
+  profile_position_y: Joi.number().min(0).max(100).optional(),
+  profile_zoom: Joi.number().min(1).max(3).optional(),
   primary_color: Joi.string().pattern(COLOR_VALUE_PATTERN).allow(null, '').optional(),
   secondary_color: Joi.string().pattern(COLOR_VALUE_PATTERN).allow(null, '').optional(),
   accent_color: Joi.string().pattern(COLOR_VALUE_PATTERN).allow(null, '').optional(),

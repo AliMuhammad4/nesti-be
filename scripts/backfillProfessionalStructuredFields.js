@@ -5,17 +5,16 @@ const CANONICAL_LANGUAGES = new Set([
   "english",
   "french",
   "punjabi",
+  "tamil",
   "mandarin",
   "arabic",
   "spanish",
   "hindi",
   "urdu",
   "portuguese",
-  "russian",
   "tagalog",
   "italian",
   "german",
-  "korean",
   "japanese",
   "vietnamese",
   "other",
@@ -60,6 +59,7 @@ function normalizeLanguage(raw) {
   if (CANONICAL_LANGUAGES.has(token)) return token;
   if (token.startsWith("mandarin")) return "mandarin";
   if (token.startsWith("punjabi")) return "punjabi";
+  if (token.startsWith("tamil")) return "tamil";
   if (token.startsWith("french")) return "french";
   if (token.startsWith("spanish")) return "spanish";
   if (token.startsWith("english")) return "english";
@@ -67,11 +67,9 @@ function normalizeLanguage(raw) {
   if (token.startsWith("hindi")) return "hindi";
   if (token.startsWith("arabic")) return "arabic";
   if (token.startsWith("portuguese")) return "portuguese";
-  if (token.startsWith("russian")) return "russian";
   if (token.startsWith("tagalog")) return "tagalog";
   if (token.startsWith("italian")) return "italian";
   if (token.startsWith("german")) return "german";
-  if (token.startsWith("korean")) return "korean";
   if (token.startsWith("japanese")) return "japanese";
   if (token.startsWith("vietnamese")) return "vietnamese";
   return "other";

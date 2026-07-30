@@ -20,7 +20,17 @@ test('storefront draft validation accepts bounded structured content', () => {
         data: {
           enabled: true,
           content: { heading: 'A business', image_url: 'https://cdn.example.com/hero.jpg' },
-          layout: { alignment: 'center', padding: 'large', width: 'contained', hiddenOn: ['mobile'] },
+          layout: {
+            alignment: 'center',
+            padding: 'large',
+            width: 'contained',
+            columns: '4',
+            animationType: 'slide-up',
+            animationTrigger: 'scroll',
+            animationDuration: 'medium',
+            animationDelay: '160',
+            animationIntensity: 'subtle',
+          },
           style: { background: '#112233', textColor: '#ffffff', radius: 'large', shadow: 'medium' },
         },
       }],
@@ -31,6 +41,43 @@ test('storefront draft validation accepts bounded structured content', () => {
 
   assert.equal(error, undefined);
   assert.equal(value.draft.blocks[0].data.content.heading, 'A business');
+  assert.equal(value.draft.blocks[0].data.layout.columns, '4');
+  assert.equal(value.draft.blocks[0].data.layout.animationType, 'slide-up');
+});
+
+test('storefront draft validation accepts element editing metadata', () => {
+  const { error, value } = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'services',
+        type: 'services',
+        data: {
+          content: {
+            items: [{ id: 'item-service-1', title: 'Strategy', description: 'A focused plan.' }],
+          },
+          layout: { hiddenFields: ['content.body'] },
+        },
+      }],
+    },
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(value.draft.blocks[0].data.content.items[0].id, 'item-service-1');
+  assert.deepEqual(value.draft.blocks[0].data.layout.hiddenFields, ['content.body']);
+});
+
+test('storefront draft validation accepts page background in brand kit', () => {
+  const { error, value } = saveStorefrontDraftSchema.validate({
+    draft: {
+      brandKit: {
+        primary_color: '#0f766e',
+        page_background: '#f1f5f9',
+      },
+    },
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(value.draft.brandKit.page_background, '#f1f5f9');
 });
 
 test('storefront draft validation rejects duplicate blocks and unknown metadata', () => {

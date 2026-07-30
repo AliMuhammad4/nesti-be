@@ -190,6 +190,26 @@ export const getPublicProfileBySlugService = async (slug) => {
     realClients = [];
   }
 
+  const submittedFeedback = (profile.feedback_submissions || [])
+    .map((item) => ({
+      id: item._id,
+      client_name: item.client_name,
+      client_photo_url: null,
+      rating: item.rating,
+      text: item.text,
+      date: item.submitted_at,
+      role: 'Client feedback',
+    }));
+
+  const mergedTestimonials = [
+    ...(Array.isArray(profile.testimonials) ? profile.testimonials : []),
+    ...submittedFeedback,
+  ].sort((left, right) => {
+    const leftDate = new Date(left?.date || 0).getTime();
+    const rightDate = new Date(right?.date || 0).getTime();
+    return rightDate - leftDate;
+  });
+
   return {
     status: 200,
     body: {
@@ -210,17 +230,8 @@ export const getPublicProfileBySlugService = async (slug) => {
         embed_token: embedToken,
         about: profile.about,
         services: profile.services,
-        testimonials: profile.testimonials,
-        client_feedback: (profile.feedback_submissions || [])
-          .map((item) => ({
-            id: item._id,
-            client_name: item.client_name,
-            client_photo_url: null,
-            rating: item.rating,
-            text: item.text,
-            date: item.submitted_at,
-            role: 'Client feedback',
-          })),
+        testimonials: mergedTestimonials,
+        client_feedback: submittedFeedback,
         real_clients: realClients,
         
         featured_listings: profile.featured_listings,

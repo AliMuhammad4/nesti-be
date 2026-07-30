@@ -119,9 +119,11 @@ export const generateStorefrontDraftSchema = Joi.object({
     profile_zoom: Joi.number().min(1).max(3).optional(),
     primary_color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow('').optional(),
     accent_color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow('').optional(),
+    page_background: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow('').optional(),
     font: Joi.string().trim().max(80).allow('').optional(),
     button_shape: Joi.string().trim().max(30).allow('').optional(),
     image_style: Joi.string().trim().max(80).allow('').optional(),
+    show_chatbot: Joi.boolean().optional(),
     essentials: Joi.object().unknown(true).max(20).optional(),
   }).unknown(false).optional(),
 }).unknown(false);

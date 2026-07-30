@@ -478,7 +478,7 @@ export const updatePublicProfileService = async (userId, updates) => {
 };
 
 export const deletePublicProfileService = async (userId) => {
-  const profile = await PublicProfile.findOne({ user_id: userId }).lean();
+  const profile = await PublicProfile.findOne({ user_id: userId });
 
   if (!profile) {
     return {
@@ -487,7 +487,44 @@ export const deletePublicProfileService = async (userId) => {
     };
   }
 
-  await PublicProfile.deleteOne({ user_id: userId });
+  // Soft-delete profile content so user feedback history can survive page re-creation.
+  // `feedback_submissions` is intentionally preserved.
+  profile.enabled = false;
+  profile.cover_photo_url = null;
+  profile.profile_photo_url = null;
+  profile.headline = null;
+  profile.tagline = null;
+  profile.about = null;
+  profile.services = [];
+  profile.testimonials = [];
+  profile.featured_listings = [];
+  profile.top_listings = [];
+  profile.sold_listings = [];
+  profile.mortgage_programs = [];
+  profile.calculator_widgets_enabled = false;
+  profile.practice_areas = [];
+  profile.credentials = [];
+  profile.social_links = {
+    linkedin: null,
+    facebook: null,
+    instagram: null,
+    twitter: null,
+    website: null,
+  };
+  profile.partner_professionals = [];
+  profile.theme_color = null;
+  profile.custom_css = null;
+  profile.seo_meta = {
+    title: null,
+    description: null,
+    keywords: [],
+  };
+  profile.storefront = {
+    draft: null,
+    published: null,
+  };
+
+  await profile.save();
   await ProfileViewEvent.deleteMany({ user_id: userId });
 
   return {

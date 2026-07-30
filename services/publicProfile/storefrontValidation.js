@@ -120,10 +120,26 @@ const storefrontLayoutSchema = Joi.object({
   padding: Joi.string().valid('none', 'small', 'medium', 'large').optional(),
   width: Joi.string().valid('full', 'contained', 'narrow').optional(),
   hiddenOn: Joi.array().items(Joi.string().valid('desktop', 'tablet', 'mobile')).unique().max(3).optional(),
+  hiddenFields: Joi.array()
+    .items(Joi.string().pattern(/^content\.[a-z_]+(::[A-Za-z0-9_-]+)?$/))
+    .unique()
+    .max(24)
+    .optional(),
   variant: Joi.string().valid('standard', 'editorial', 'split', 'feature-grid', 'lead-magnet', 'premium', 'minimal').optional(),
   mediaPosition: Joi.string().valid('none', 'left', 'right', 'background').optional(),
-  columns: Joi.alternatives().try(Joi.string().valid('1', '2', '3'), Joi.number().integer().min(1).max(3)).optional(),
+  columns: Joi.alternatives().try(
+    Joi.string().valid('1', '2', '3', '4'),
+    Joi.number().integer().min(1).max(4),
+  ).optional(),
   cardStyle: Joi.string().valid('flat', 'bordered', 'elevated', 'glass').optional(),
+  animationType: Joi.string().valid('none', 'fade', 'slide-up', 'slide-left', 'zoom').optional(),
+  animationTrigger: Joi.string().valid('load', 'scroll').optional(),
+  animationDuration: Joi.string().valid('fast', 'medium', 'slow').optional(),
+  animationDelay: Joi.alternatives().try(
+    Joi.string().valid('0', '80', '160', '240', '320', '480'),
+    Joi.number().integer().min(0).max(10000),
+  ).optional(),
+  animationIntensity: Joi.string().valid('subtle', 'medium', 'strong').optional(),
 }).unknown(false);
 
 const storefrontStyleSchema = Joi.object({
@@ -160,9 +176,11 @@ const storefrontBrandKitSchema = Joi.object({
   primary_color: Joi.string().pattern(COLOR_VALUE_PATTERN).allow(null, '').optional(),
   secondary_color: Joi.string().pattern(COLOR_VALUE_PATTERN).allow(null, '').optional(),
   accent_color: Joi.string().pattern(COLOR_VALUE_PATTERN).allow(null, '').optional(),
+  page_background: Joi.string().pattern(COLOR_VALUE_PATTERN).allow(null, '').optional(),
   font_family: Joi.string().trim().max(120).allow(null, '').optional(),
   business_name: Joi.string().trim().max(160).allow(null, '').optional(),
   button_shape: Joi.string().valid('square', 'rounded', 'pill').allow(null, '').optional(),
+  show_chatbot: Joi.boolean().optional(),
 }).unknown(false);
 
 const storefrontTemplateSchema = Joi.object({

@@ -59,9 +59,11 @@ const storefrontBrandKitSchema = new mongoose.Schema({
   primary_color: { type: String, default: null },
   secondary_color: { type: String, default: null },
   accent_color: { type: String, default: null },
+  page_background: { type: String, default: null },
   font_family: { type: String, default: null },
   business_name: { type: String, default: null },
   button_shape: { type: String, enum: ['square', 'rounded', 'pill', null], default: null },
+  show_chatbot: { type: Boolean, default: true },
 }, { _id: false });
 
 const storefrontTemplateSchema = new mongoose.Schema({

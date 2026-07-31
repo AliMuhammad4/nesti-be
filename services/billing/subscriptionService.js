@@ -1,5 +1,6 @@
 import Subscription from '../../models/Subscription.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
+import { USER_ROLE } from '../../constants/roles.js';
 import { getPlan, getPlanByPriceId, getPlanTier, getStripePriceId } from './plans.js';
 import { getStripeClient } from './stripeClient.js';
 import { getPlanLimitsForSubscription } from './entitlements.js';
@@ -59,7 +60,9 @@ async function findBlockingStripeSubscription(customerId) {
 async function refreshSubscriptionFromStripeForUser(user) {
   const subscription = await Subscription.findOne({ user_id: user._id });
   const customerId = String(subscription?.stripe_customer_id || '').trim();
-  if (!customerId) return subscription;
+  if (!customerId) {
+    return expireCanceledSubscriptionIfNeeded(subscription);
+  }
 
   let activeStripeSubscription;
   try {
@@ -70,9 +73,29 @@ async function refreshSubscriptionFromStripeForUser(user) {
     }
     throw error;
   }
-  if (!activeStripeSubscription) return subscription;
 
   const stripe = getStripeClient();
+
+  // No active/blocking Stripe sub: sync the local Stripe id (may be canceled) or expire local state
+  if (!activeStripeSubscription) {
+    const localSubscriptionId = String(subscription?.stripe_subscription_id || '').trim();
+    if (localSubscriptionId) {
+      try {
+        const endedStripeSubscription = await stripe.subscriptions.retrieve(localSubscriptionId);
+        const synced = await syncStripeSubscription(endedStripeSubscription, {
+          user_id: String(user._id),
+        });
+        return expireCanceledSubscriptionIfNeeded(synced);
+      } catch (error) {
+        if (isStripeResourceMissing(error)) {
+          return markSubscriptionStripeStateExpired(user._id);
+        }
+        throw error;
+      }
+    }
+    return expireCanceledSubscriptionIfNeeded(subscription);
+  }
+
   let detailedStripeSubscription;
   try {
     detailedStripeSubscription = await stripe.subscriptions.retrieve(activeStripeSubscription.id, {
@@ -103,14 +126,28 @@ async function refreshSubscriptionFromStripeForUser(user) {
   const localStatus = String(subscription?.status || '').trim();
   const localPriceId = String(subscription?.stripe_price_id || '').trim();
   const stripePriceId = firstSubscriptionPriceId(detailedStripeSubscription);
+  const stripePeriodEnd = getStripeSubscriptionPeriodEnd(detailedStripeSubscription);
+  const localPeriodEndMs = subscription?.current_period_end
+    ? new Date(subscription.current_period_end).getTime()
+    : null;
+  const stripePeriodEndMs = stripePeriodEnd ? stripePeriodEnd.getTime() : null;
+  const periodEndMatches =
+    localPeriodEndMs != null &&
+    stripePeriodEndMs != null &&
+    localPeriodEndMs === stripePeriodEndMs;
+  const cancelFlagMatches =
+    Boolean(subscription?.cancel_at_period_end) ===
+    Boolean(detailedStripeSubscription.cancel_at_period_end);
   const hasPeriodEnd = Boolean(subscription?.current_period_end);
   if (
     localSubscriptionId === String(detailedStripeSubscription.id || '').trim() &&
     ACTIVE_ACCESS_STATUSES.has(localStatus) &&
     hasPeriodEnd &&
-    localPriceId === stripePriceId
+    localPriceId === stripePriceId &&
+    periodEndMatches &&
+    cancelFlagMatches
   ) {
-    return subscription;
+    return expireCanceledSubscriptionIfNeeded(subscription);
   }
 
   return syncStripeSubscription(detailedStripeSubscription, { user_id: String(user._id) });
@@ -481,17 +518,38 @@ async function getOrCreateSubscriptionSchedule(stripe, stripeSubscription, local
   }
 }
 
+function isSubscriptionPeriodEnded(subscription) {
+  if (!subscription?.current_period_end) return false;
+  const periodEnd = new Date(subscription.current_period_end);
+  return !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() <= Date.now();
+}
+
 function accountStatusFromSubscription(subscription) {
   if (!subscription) return 'expired';
 
-  if (subscription.status === 'free_trial') {
+  const status = String(subscription.status || '').trim().toLowerCase();
+
+  if (status === 'free_trial') {
     if (subscription.trial_end && new Date(subscription.trial_end) <= new Date()) {
       return 'expired';
     }
     return 'free_trial';
   }
 
-  if (ACTIVE_ACCESS_STATUSES.has(subscription.status)) return 'subscribed';
+  if (
+    status === 'canceled' ||
+    status === 'cancelled' ||
+    status === 'incomplete_expired' ||
+    status === 'expired'
+  ) {
+    return 'expired';
+  }
+
+  if (Boolean(subscription.cancel_at_period_end) && isSubscriptionPeriodEnded(subscription)) {
+    return 'expired';
+  }
+
+  if (ACTIVE_ACCESS_STATUSES.has(status)) return 'subscribed';
   return 'expired';
 }
 
@@ -561,6 +619,44 @@ export async function expireTrialIfNeeded(subscription) {
     subscription.status = 'expired';
     await subscription.save();
   }
+  return expireCanceledSubscriptionIfNeeded(subscription);
+}
+
+/**
+ * Persist expiry when a cancel-at-period-end paid plan (or terminal Stripe status)
+ * has already passed its current_period_end. Without this, local status can stay
+ * "active" and users keep full access after the paid window ends.
+ */
+export async function expireCanceledSubscriptionIfNeeded(subscription) {
+  if (!subscription) return subscription;
+
+  const status = String(subscription.status || '').trim().toLowerCase();
+  if (status === 'free_trial') return subscription;
+
+  const periodEnded = isSubscriptionPeriodEnded(subscription);
+  const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
+  const terminalStatus =
+    status === 'canceled' ||
+    status === 'cancelled' ||
+    status === 'incomplete_expired';
+
+  const shouldExpire =
+    terminalStatus ||
+    (cancelAtPeriodEnd && periodEnded && ACTIVE_ACCESS_STATUSES.has(status));
+
+  if (!shouldExpire) return subscription;
+
+  if (status === 'expired' || status === 'canceled') {
+    if (subscription.cancel_at_period_end) {
+      subscription.cancel_at_period_end = false;
+      await subscription.save();
+    }
+    return subscription;
+  }
+
+  subscription.status = 'expired';
+  subscription.cancel_at_period_end = false;
+  await subscription.save();
   return subscription;
 }
 
@@ -584,6 +680,19 @@ export async function createFreeTrialSubscription(userId, trialEndsAt) {
 }
 
 export async function getOrCreateSubscriptionForUser(user) {
+  // Clients use ClientSubscription only — never auto-create a professional free trial
+  if (String(user?.role || '') === USER_ROLE.CLIENT) {
+    const existing = await Subscription.findOne({ user_id: user._id });
+    if (!existing) return null;
+    const status = String(existing.status || '').trim().toLowerCase();
+    if (status === 'free_trial' || ACTIVE_ACCESS_STATUSES.has(status)) {
+      existing.status = 'expired';
+      existing.cancel_at_period_end = false;
+      await existing.save();
+    }
+    return expireCanceledSubscriptionIfNeeded(existing);
+  }
+
   let subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription) {
     const createdAt = user.createdAt ? new Date(user.createdAt) : new Date();
@@ -595,6 +704,11 @@ export async function getOrCreateSubscriptionForUser(user) {
 
 export async function getFreshSubscriptionForUser(user) {
   await getOrCreateSubscriptionForUser(user);
+  if (String(user?.role || '') === USER_ROLE.CLIENT) {
+    return Subscription.findOne({ user_id: user._id }).then((subscription) =>
+      expireCanceledSubscriptionIfNeeded(subscription),
+    );
+  }
   await refreshSubscriptionFromStripeForUser(user);
   const subscription = await Subscription.findOne({ user_id: user._id });
   return expireTrialIfNeeded(subscription);
@@ -613,6 +727,15 @@ export async function getSubscriptionPresentationForUser(user, { refreshFromStri
     ? await getFreshSubscriptionForUser(user)
     : await getOrCreateSubscriptionForUser(user);
   const serialized = serializeSubscription(subscription);
+  if (!subscription) {
+    return {
+      ...serialized,
+      planLimits: getPlanLimitsForSubscription(null),
+      usage: {},
+      isExpired: true,
+      raw: null,
+    };
+  }
   const [usage] = await Promise.all([getPlanUsageForUser(user._id)]);
   return {
     ...serialized,
@@ -813,6 +936,18 @@ export async function syncCheckoutSession(session, eventId = '') {
   const subscriptionId = normalizeStripeId(session.subscription);
   if (!subscriptionId) return null;
   const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+
+  // Client checkouts must sync into ClientSubscription, not the professional model
+  const subscriptionType = String(
+    session?.metadata?.subscription_type || stripeSubscription?.metadata?.subscription_type || '',
+  )
+    .trim()
+    .toLowerCase();
+  if (subscriptionType === 'client') {
+    const { syncClientStripeSubscription } = await import('../client/clientSubscriptionService.js');
+    return syncClientStripeSubscription(stripeSubscription);
+  }
+
   return syncStripeSubscription(stripeSubscription, {
     user_id: session?.metadata?.user_id,
     plan_key: session?.metadata?.plan_key,
@@ -824,6 +959,39 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
   const subscriptionId = normalizeStripeId(invoice?.subscription);
   if (!subscriptionId) return null;
 
+  // Prefer a full Stripe subscription sync so period dates renew with invoice.paid
+  let synced = null;
+  try {
+    const stripe = getStripeClient();
+    const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const subscriptionType = String(stripeSubscription?.metadata?.subscription_type || '')
+      .trim()
+      .toLowerCase();
+
+    if (subscriptionType === 'client') {
+      const { syncClientStripeSubscription } = await import('../client/clientSubscriptionService.js');
+      synced = await syncClientStripeSubscription(stripeSubscription);
+    } else {
+      const ClientSubscription = (await import('../../models/ClientSubscription.js')).default;
+      const existingClient = await ClientSubscription.findOne({
+        stripe_subscription_id: subscriptionId,
+      })
+        .select('_id')
+        .lean();
+      if (existingClient) {
+        const { syncClientStripeSubscription } = await import('../client/clientSubscriptionService.js');
+        synced = await syncClientStripeSubscription(stripeSubscription);
+      } else {
+        synced = await syncStripeSubscription(stripeSubscription, {
+          last_stripe_event_id: eventId,
+        });
+      }
+    }
+  } catch (error) {
+    console.warn('invoice payment sync from Stripe subscription failed:', error?.message || error);
+  }
+
+  // Payment metadata only — status/period come from the Stripe subscription sync above
   const update = {
     latest_invoice_id: normalizeStripeId(invoice.id),
     last_payment_status: paymentStatus,
@@ -832,11 +1000,12 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
   };
   if (paymentStatus === 'failed') update.status = 'past_due';
 
-  const synced = await Subscription.findOneAndUpdate(
+  const paymentSynced = await Subscription.findOneAndUpdate(
     { stripe_subscription_id: subscriptionId },
     { $set: update },
     { returnDocument: 'after' },
   );
+  if (paymentSynced) synced = paymentSynced;
 
   if (paymentStatus === 'paid' && synced?.user_id) {
     try {
@@ -976,9 +1145,24 @@ export async function cancelSubscriptionForUser(user, cancellationReason = '') {
 }
 
 export async function resumeSubscriptionForUser(user) {
-  const subscription = await Subscription.findOne({ user_id: user._id });
+  // Refresh from Stripe first so we don't try to resume an already-ended subscription
+  const subscription = await getFreshSubscriptionForUser(user);
   if (!subscription?.stripe_subscription_id) {
-    return { ok: false, code: 404, message: 'No Stripe subscription found.' };
+    return {
+      ok: false,
+      code: 404,
+      message: 'No Stripe subscription found. Please subscribe again to restore access.',
+      subscription,
+    };
+  }
+
+  if (accountStatusFromSubscription(subscription) === 'expired' || isSubscriptionPeriodEnded(subscription)) {
+    return {
+      ok: false,
+      code: 409,
+      message: 'Your subscription period has ended. Please subscribe again to restore access.',
+      subscription,
+    };
   }
 
   if (!subscription.cancel_at_period_end) {
@@ -997,7 +1181,22 @@ export async function resumeSubscriptionForUser(user) {
       return {
         ok: false,
         code: 409,
-        message: 'The previous Stripe subscription no longer exists for the current Stripe account. The local subscription state has been reset; please subscribe again.',
+        message: 'The previous Stripe subscription no longer exists. Please subscribe again to restore access.',
+        subscription: cleared,
+      };
+    }
+
+    const stripeMessage = String(error?.raw?.message || error?.message || '').toLowerCase();
+    if (
+      stripeMessage.includes('canceled') ||
+      stripeMessage.includes('cancelled') ||
+      String(error?.code || '') === 'resource_missing'
+    ) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return {
+        ok: false,
+        code: 409,
+        message: 'Your subscription has already ended. Please subscribe again to restore access.',
         subscription: cleared,
       };
     }

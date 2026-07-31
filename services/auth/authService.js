@@ -12,7 +12,10 @@ import {
   createFreeTrialSubscription,
   getSubscriptionPresentationForUser,
 } from '../billing/subscriptionService.js';
-import { getClientSubscriptionForUser } from '../client/clientSubscriptionService.js';
+import {
+  getClientSubscriptionForUser,
+  isClientSubscriptionActive,
+} from '../client/clientSubscriptionService.js';
 import { disposableEmailErrorResponse, isDisposableEmail } from './disposableEmailGuard.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
@@ -588,11 +591,12 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
   let subscription = await getSubscriptionPresentationForUser(user, {
     refreshFromStripe,
   });
-  if (user.role === USER_ROLE.CLIENT && subscription.accountStatus !== 'subscribed') {
+  // Clients must be evaluated from ClientSubscription only. A leftover professional
+  // Subscription row (from older checkout webhook routing) must not keep them "subscribed".
+  if (user.role === USER_ROLE.CLIENT) {
     const clientSubscription = await getClientSubscriptionForUser(user._id);
     const clientStatus = String(clientSubscription?.status || '').trim().toLowerCase();
-    const clientIsActive = ['active', 'trialing', 'past_due'].includes(clientStatus);
-    if (clientSubscription && clientIsActive) {
+    if (clientSubscription && isClientSubscriptionActive(clientSubscription)) {
       subscription = {
         ...subscription,
         accountStatus: 'subscribed',
@@ -600,6 +604,15 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         subscriptionStatus: clientStatus || 'active',
         subscriptionEndsAt: clientSubscription.current_period_end || null,
         cancelAtPeriodEnd: Boolean(clientSubscription.cancel_at_period_end),
+      };
+    } else {
+      subscription = {
+        ...subscription,
+        accountStatus: 'expired',
+        subscriptionPlan: String(clientSubscription?.tier || subscription.subscriptionPlan || '').trim().toLowerCase(),
+        subscriptionStatus: clientStatus || 'expired',
+        subscriptionEndsAt: clientSubscription?.current_period_end || subscription.subscriptionEndsAt || null,
+        cancelAtPeriodEnd: Boolean(clientSubscription?.cancel_at_period_end),
       };
     }
   }

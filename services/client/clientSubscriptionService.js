@@ -311,12 +311,73 @@ export async function createClientCheckoutSession(userId, tier) {
   };
 }
 
+function isClientPeriodEnded(subscription) {
+  if (!subscription?.current_period_end) return false;
+  const periodEnd = new Date(subscription.current_period_end);
+  return !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() <= Date.now();
+}
+
+export function isClientSubscriptionActive(subscription) {
+  if (!subscription) return false;
+  const status = String(subscription.status || '').trim().toLowerCase();
+  if (!ACTIVE_ACCESS_STATUSES.has(status)) return false;
+  if (Boolean(subscription.cancel_at_period_end) && isClientPeriodEnded(subscription)) {
+    return false;
+  }
+  return true;
+}
+
+export async function expireCanceledClientSubscriptionIfNeeded(subscription) {
+  if (!subscription) return subscription;
+
+  const status = String(subscription.status || '').trim().toLowerCase();
+  const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
+  const periodEnded = isClientPeriodEnded(subscription);
+  const terminalStatus = status === 'canceled' || status === 'cancelled' || status === 'incomplete_expired';
+  const shouldExpire =
+    terminalStatus ||
+    (cancelAtPeriodEnd && periodEnded && ACTIVE_ACCESS_STATUSES.has(status));
+
+  if (!shouldExpire) return subscription;
+
+  if (status === 'canceled') {
+    if (subscription.cancel_at_period_end) {
+      subscription.cancel_at_period_end = false;
+      if (typeof subscription.save === 'function') {
+        await subscription.save();
+      } else {
+        await ClientSubscription.updateOne(
+          { _id: subscription._id },
+          { $set: { cancel_at_period_end: false } },
+        );
+      }
+    }
+    return subscription;
+  }
+
+  subscription.status = 'canceled';
+  subscription.cancel_at_period_end = false;
+  if (typeof subscription.save === 'function') {
+    await subscription.save();
+    return subscription;
+  }
+
+  await ClientSubscription.updateOne(
+    { _id: subscription._id },
+    { $set: { status: 'canceled', cancel_at_period_end: false } },
+  );
+  return ClientSubscription.findById(subscription._id);
+}
+
 export async function getClientSubscriptionForUser(userId) {
-  return ClientSubscription.findOne({ user_id: userId }).lean();
+  const subscription = await ClientSubscription.findOne({ user_id: userId });
+  if (!subscription) return null;
+  const expired = await expireCanceledClientSubscriptionIfNeeded(subscription);
+  return expired?.toObject ? expired.toObject() : expired;
 }
 
 export async function getClientSubscriptionPresentationForUser(userId, { refreshFromStripe = false } = {}) {
-  const subscription = await ClientSubscription.findOne({ user_id: userId });
+  let subscription = await ClientSubscription.findOne({ user_id: userId });
   if (!subscription) return null;
 
   if (refreshFromStripe && subscription.stripe_subscription_id) {
@@ -324,14 +385,25 @@ export async function getClientSubscriptionPresentationForUser(userId, { refresh
       const stripe = getStripeClient();
       const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
       await syncClientStripeSubscription(stripeSubscription);
-      return ClientSubscription.findOne({ user_id: userId }).lean();
+      subscription = await ClientSubscription.findOne({ user_id: userId });
     } catch (error) {
-      console.warn('Client subscription refresh from Stripe failed:', error?.message || error);
-      return subscription.toObject();
+      const message = String(error?.message || '').toLowerCase();
+      const missing =
+        error?.code === 'resource_missing' ||
+        error?.raw?.code === 'resource_missing' ||
+        message.includes('no such subscription');
+      if (missing) {
+        subscription.status = 'canceled';
+        subscription.cancel_at_period_end = false;
+        await subscription.save();
+      } else {
+        console.warn('Client subscription refresh from Stripe failed:', error?.message || error);
+      }
     }
   }
 
-  return subscription.toObject();
+  subscription = await expireCanceledClientSubscriptionIfNeeded(subscription);
+  return subscription?.toObject ? subscription.toObject() : subscription;
 }
 
 function formatInvoiceAmount(amount, currency = 'usd') {
@@ -403,8 +475,9 @@ export async function changeClientSubscriptionPlan(userId, tier) {
     return { ok: false, code: 400, message: 'Invalid client subscription tier.' };
   }
 
-  const subscription = await ClientSubscription.findOne({ user_id: userId });
-  if (!subscription || !ACTIVE_ACCESS_STATUSES.has(String(subscription.status || '').toLowerCase())) {
+  let subscription = await ClientSubscription.findOne({ user_id: userId });
+  subscription = await expireCanceledClientSubscriptionIfNeeded(subscription);
+  if (!subscription || !isClientSubscriptionActive(subscription)) {
     return {
       ok: false,
       code: 409,
@@ -609,19 +682,32 @@ export async function changeClientSubscriptionPlan(userId, tier) {
 }
 
 export async function syncClientStripeSubscription(stripeSubscription) {
-  const userId = stripeSubscription.metadata?.user_id;
+  const stripeSubscriptionId = String(stripeSubscription?.id || '').trim();
+  const existingByStripeId = stripeSubscriptionId
+    ? await ClientSubscription.findOne({ stripe_subscription_id: stripeSubscriptionId })
+    : null;
+
+  const userId =
+    stripeSubscription.metadata?.user_id ||
+    (existingByStripeId ? String(existingByStripeId.user_id) : '');
   if (!userId) {
     console.error('No user_id in stripe subscription metadata');
     return null;
   }
 
-  const tier = stripeSubscription.metadata?.tier;
+  const tier =
+    stripeSubscription.metadata?.tier ||
+    existingByStripeId?.tier ||
+    '';
   if (!tier) {
     console.error('No tier in stripe subscription metadata');
     return null;
   }
 
-  const priceId = stripeSubscription.items?.data?.[0]?.price?.id || '';
+  const priceId =
+    stripeSubscription.items?.data?.[0]?.price?.id ||
+    existingByStripeId?.stripe_price_id ||
+    '';
   const scheduleId = normalizeStripeId(stripeSubscription.schedule);
   const periodStart =
     stripeSubscription.current_period_start
@@ -634,6 +720,7 @@ export async function syncClientStripeSubscription(stripeSubscription) {
     ?? stripeSubscription.items?.data?.[0]?.current_period_end
     ?? null;
 
+  const stripeStatus = String(stripeSubscription.status || '').trim().toLowerCase();
   const updateData = {
     user_id: userId,
     tier,
@@ -641,12 +728,15 @@ export async function syncClientStripeSubscription(stripeSubscription) {
     stripe_customer_id:
       typeof stripeSubscription.customer === 'string'
         ? stripeSubscription.customer
-        : stripeSubscription.customer?.id || '',
+        : stripeSubscription.customer?.id || existingByStripeId?.stripe_customer_id || '',
     stripe_price_id: priceId,
-    status: stripeSubscription.status,
-    current_period_start: toSafeDate(periodStart),
-    current_period_end: toSafeDate(periodEnd),
-    cancel_at_period_end: stripeSubscription.cancel_at_period_end || false,
+    status: stripeStatus || 'canceled',
+    current_period_start: toSafeDate(periodStart) || existingByStripeId?.current_period_start || null,
+    current_period_end: toSafeDate(periodEnd) || existingByStripeId?.current_period_end || null,
+    cancel_at_period_end:
+      stripeStatus === 'canceled' || stripeStatus === 'cancelled'
+        ? false
+        : Boolean(stripeSubscription.cancel_at_period_end),
     ...(scheduleId
       ? { stripe_subscription_schedule_id: scheduleId }
       : {
@@ -667,7 +757,7 @@ export async function syncClientStripeSubscription(stripeSubscription) {
     { upsert: true, returnDocument: 'after' }
   );
 
-  return clientSubscription;
+  return expireCanceledClientSubscriptionIfNeeded(clientSubscription);
 }
 
 export async function cancelClientSubscription(userId, cancellationReason = '') {
@@ -702,30 +792,67 @@ export async function cancelClientSubscription(userId, cancellationReason = '') 
 }
 
 export async function resumeClientSubscription(userId) {
-  const clientSubscription = await ClientSubscription.findOne({ user_id: userId });
+  let clientSubscription = await ClientSubscription.findOne({ user_id: userId });
   if (!clientSubscription) {
     throw new Error('No client subscription found');
   }
 
-  if (!clientSubscription.stripe_subscription_id) {
-    throw new Error('No Stripe subscription ID found');
+  // Refresh from Stripe so we don't resume an already-ended subscription
+  clientSubscription =
+    (await getClientSubscriptionPresentationForUser(userId, { refreshFromStripe: true })) ||
+    clientSubscription;
+
+  // Re-load as a mongoose doc for updates when needed
+  const live = await ClientSubscription.findOne({ user_id: userId });
+  if (!live?.stripe_subscription_id) {
+    const err = new Error('Your subscription has ended. Please subscribe again to restore access.');
+    err.statusCode = 409;
+    throw err;
   }
 
-  if (!clientSubscription.cancel_at_period_end) {
-    throw new Error('Subscription is not scheduled to cancel');
+  if (!isClientSubscriptionActive(live) || isClientPeriodEnded(live)) {
+    const err = new Error('Your subscription period has ended. Please subscribe again to restore access.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  if (!live.cancel_at_period_end) {
+    const err = new Error('Subscription is not scheduled to cancel');
+    err.statusCode = 400;
+    throw err;
   }
 
   const stripe = getStripeClient();
-  const updated = await stripe.subscriptions.update(clientSubscription.stripe_subscription_id, {
-    cancel_at_period_end: false,
-  });
+  let updated;
+  try {
+    updated = await stripe.subscriptions.update(live.stripe_subscription_id, {
+      cancel_at_period_end: false,
+    });
+  } catch (error) {
+    const message = String(error?.raw?.message || error?.message || '').toLowerCase();
+    const missing =
+      error?.code === 'resource_missing' ||
+      error?.raw?.code === 'resource_missing' ||
+      message.includes('no such subscription') ||
+      message.includes('canceled') ||
+      message.includes('cancelled');
+    if (missing) {
+      live.status = 'canceled';
+      live.cancel_at_period_end = false;
+      await live.save();
+      const err = new Error('Your subscription has already ended. Please subscribe again to restore access.');
+      err.statusCode = 409;
+      throw err;
+    }
+    throw error;
+  }
 
-  clientSubscription.metadata = {
-    ...(clientSubscription.metadata || {}),
+  live.metadata = {
+    ...(live.metadata || {}),
     cancellation_reason: '',
     cancellation_reason_recorded_at: null,
   };
-  await clientSubscription.save();
+  await live.save();
 
   return syncClientStripeSubscription(updated);
 }

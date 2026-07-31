@@ -478,7 +478,7 @@ const cancelCalendlyBookingHandler = async (req, res, next) => {
 
 router.get('/connect/calendly/embed',                requireEmbedFeature, loadEmbed, connectCalendlyByEmbed);
 router.get('/status/embed',                          requireEmbedFeature, loadEmbed, getCalendarStatusByEmbed);
-router.post('/calendly/webhook-subscription',        protect, requireCompleteProfessionalProfile, requireCalendlyConnected, validateBody(webhookSubscriptionBearerBodySchema), registerWebhookSubscription);
+router.post('/calendly/webhook-subscription',        protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALENDAR_INTEGRATION), requireCalendlyConnected, validateBody(webhookSubscriptionBearerBodySchema), registerWebhookSubscription);
 router.post('/calendly/webhook-subscription/embed',  requireEmbedFeature, loadEmbed, requireCalendlyConnected, validateBody(webhookSubscriptionBodySchema), registerWebhookSubscriptionEmbed);
 router.get('/calendly/webhook-subscriptions/embed',  requireDevFeature, loadEmbed, requireCalendlyConnected, listWebhooksEmbed);
 router.post('/calendly/simulate-invitee-created/embed', requireDevFeature, loadEmbed, validateBody(simulateInviteeBodySchema), simulateInviteeCreatedEmbed);

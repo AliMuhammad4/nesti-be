@@ -11,6 +11,7 @@ import {
   hasFeature,
 } from '../services/billing/entitlements.js';
 import { getPlanUsageForUser } from '../services/billing/planQuota.js';
+
 async function loadSubscription(req, { refresh = false } = {}) {
   if (req.subscription && !refresh) return req.subscription;
   const subscription = refresh
@@ -27,11 +28,27 @@ function isAdmin(req) {
   return req.user?.role === USER_ROLE.ADMIN;
 }
 
+function isClient(req) {
+  return req.user?.role === USER_ROLE.CLIENT;
+}
+
+function clientRoleDeniedResponse() {
+  return {
+    success: false,
+    code: 'CLIENT_ROLE_NOT_ALLOWED',
+    message: 'This feature is only available for professional accounts.',
+  };
+}
+
 export function requireActiveSubscriptionAccess(req, res, next) {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
   }
   if (isAdmin(req)) return next();
+  // Professional entitlement middleware must never grant access via leftover pro rows for clients
+  if (isClient(req)) {
+    return res.status(403).json(clientRoleDeniedResponse());
+  }
 
   return loadSubscription(req)
     .then(() => {
@@ -93,6 +110,9 @@ export function requireFeature(featureKey) {
       return res.status(401).json({ success: false, message: 'Not authenticated' });
     }
     if (isAdmin(req)) return next();
+    if (isClient(req)) {
+      return res.status(403).json(clientRoleDeniedResponse());
+    }
 
     try {
       const subscription = await loadSubscription(req);
@@ -114,6 +134,9 @@ export function requireAnyFeature(...featureKeys) {
       return res.status(401).json({ success: false, message: 'Not authenticated' });
     }
     if (isAdmin(req)) return next();
+    if (isClient(req)) {
+      return res.status(403).json(clientRoleDeniedResponse());
+    }
 
     try {
       const subscription = await loadSubscription(req);

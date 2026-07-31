@@ -540,7 +540,8 @@ export async function resumeClientSubscriptionEndpoint(req, res) {
     });
   } catch (error) {
     console.error('Error resuming client subscription:', error);
-    return res.status(500).json({
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to resume subscription',
     });

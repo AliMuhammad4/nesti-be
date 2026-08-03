@@ -4,6 +4,8 @@ import {
   ensureAgent,
   requireCompleteProfessionalProfile,
 } from '../../middleware/authMiddleware.js';
+import { requireFeature } from '../../middleware/subscriptionAccess.js';
+import { FEATURES } from '../../services/billing/entitlements.js';
 import {
   getMyPropertyMatchScoring,
   putMyPropertyMatchScoring,
@@ -11,7 +13,21 @@ import {
 
 const router = express.Router();
 
-router.get('/', protect, requireCompleteProfessionalProfile, ensureAgent, getMyPropertyMatchScoring);
-router.put('/', protect, requireCompleteProfessionalProfile, ensureAgent, putMyPropertyMatchScoring);
+router.get(
+  '/',
+  protect,
+  requireCompleteProfessionalProfile,
+  ensureAgent,
+  requireFeature(FEATURES.LEADS_SCORING),
+  getMyPropertyMatchScoring,
+);
+router.put(
+  '/',
+  protect,
+  requireCompleteProfessionalProfile,
+  ensureAgent,
+  requireFeature(FEATURES.LEADS_SCORING),
+  putMyPropertyMatchScoring,
+);
 
 export default router;

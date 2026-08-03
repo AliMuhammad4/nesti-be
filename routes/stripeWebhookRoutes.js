@@ -92,16 +92,32 @@ async function processStripeEvent(event) {
       break;
     case 'customer.subscription.created':
     case 'customer.subscription.updated':
-    case 'customer.subscription.deleted':
-      // Route to appropriate subscription service based on metadata
-      const subscriptionType = event.data.object?.metadata?.subscription_type;
-      if (subscriptionType === 'client') {
-        result = await syncClientStripeSubscription(event.data.object);
+    case 'customer.subscription.deleted': {
+      // Route by metadata, then fall back to which DB collection owns this Stripe sub id
+      const stripeSub = event.data.object;
+      const subscriptionType = String(stripeSub?.metadata?.subscription_type || '')
+        .trim()
+        .toLowerCase();
+      const stripeSubscriptionId = String(stripeSub?.id || '').trim();
+
+      let routeToClient = subscriptionType === 'client';
+      if (!routeToClient && subscriptionType !== 'professional' && stripeSubscriptionId) {
+        const ClientSubscription = (await import('../models/ClientSubscription.js')).default;
+        const existingClient = await ClientSubscription.findOne({
+          stripe_subscription_id: stripeSubscriptionId,
+        })
+          .select('_id')
+          .lean();
+        routeToClient = Boolean(existingClient);
+      }
+
+      if (routeToClient) {
+        result = await syncClientStripeSubscription(stripeSub);
       } else {
-        // Default to professional subscription
-        result = await syncStripeSubscription(event.data.object, { last_stripe_event_id: event.id });
+        result = await syncStripeSubscription(stripeSub, { last_stripe_event_id: event.id });
       }
       break;
+    }
     case 'subscription_schedule.created':
     case 'subscription_schedule.updated':
     case 'subscription_schedule.completed':

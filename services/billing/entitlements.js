@@ -118,6 +118,12 @@ const FREE_TRIAL_LIMIT_OVERRIDES = Object.freeze({
   followup_actions: 5,
 });
 
+function isSubscriptionPeriodEnded(subscription) {
+  if (!subscription?.current_period_end) return false;
+  const periodEnd = new Date(subscription.current_period_end);
+  return !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() <= Date.now();
+}
+
 export function accountStatusFromSubscription(subscription) {
   if (!subscription) return ACCOUNT_STATUS.EXPIRED;
 
@@ -127,6 +133,20 @@ export function accountStatusFromSubscription(subscription) {
       return ACCOUNT_STATUS.EXPIRED;
     }
     return ACCOUNT_STATUS.FREE_TRIAL;
+  }
+
+  if (
+    status === 'canceled' ||
+    status === 'cancelled' ||
+    status === 'incomplete_expired' ||
+    status === ACCOUNT_STATUS.EXPIRED
+  ) {
+    return ACCOUNT_STATUS.EXPIRED;
+  }
+
+  // cancel_at_period_end keeps access only until the paid period ends
+  if (Boolean(subscription.cancel_at_period_end) && isSubscriptionPeriodEnded(subscription)) {
+    return ACCOUNT_STATUS.EXPIRED;
   }
 
   if (ACTIVE_ACCESS_STATUSES.has(status)) return ACCOUNT_STATUS.SUBSCRIBED;

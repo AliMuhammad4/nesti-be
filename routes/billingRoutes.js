@@ -84,15 +84,16 @@ const cancelCurrentSubscription = async (req, res) => {
 const resumeCurrentSubscription = async (req, res) => {
   const result = await resumeSubscriptionForUser(req.user);
   if (!result.ok) {
-    if (result.subscription) {
-      return res.json({
-        success: true,
-        message: result.message,
-        subscription: serializeSubscription(result.subscription),
-        reset: true,
-      });
-    }
-    return res.status(result.code || 400).json({ success: false, message: result.message });
+    return res.status(result.code || 400).json({
+      success: false,
+      message: result.message,
+      ...(result.subscription
+        ? {
+            subscription: serializeSubscription(result.subscription),
+            reset: true,
+          }
+        : {}),
+    });
   }
   res.json({
     success: true,

@@ -27,6 +27,28 @@ export function createDraftRevision(draft, now = new Date()) {
   };
 }
 
+export function templateIdForRevision(revision) {
+  return String(revision?.template?.id || '').trim();
+}
+
+export function storefrontDrafts(storefront = {}) {
+  const persisted = Array.isArray(storefront?.drafts) ? storefront.drafts : [];
+  const legacy = storefront?.draft ? [storefront.draft] : [];
+  const byTemplate = new Map();
+  [...legacy, ...persisted].forEach((revision) => {
+    const templateId = templateIdForRevision(revision);
+    if (!templateId) return;
+    byTemplate.set(templateId, revision);
+  });
+  return [...byTemplate.values()];
+}
+
+export function serializeStorefrontDrafts(storefront = {}) {
+  return storefrontDrafts(storefront)
+    .map(serializeStorefrontRevision)
+    .filter(Boolean);
+}
+
 export function createPublishedRevision(draft, now = new Date()) {
   const revision = serializeStorefrontRevision(draft);
   if (!revision) return null;

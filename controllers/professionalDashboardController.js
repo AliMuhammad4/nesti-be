@@ -62,7 +62,7 @@ export const saveStorefrontDraft = async (req, res, next) => {
 
 export const publishStorefront = async (req, res, next) => {
   try {
-    send(res, await publishStorefrontService(req.user._id));
+    send(res, await publishStorefrontService(req.user._id, req.body?.draft));
   } catch (error) {
     next(error);
   }

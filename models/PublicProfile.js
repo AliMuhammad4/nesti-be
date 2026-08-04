@@ -61,8 +61,11 @@ const storefrontBrandKitSchema = new mongoose.Schema({
   accent_color: { type: String, default: null },
   page_background: { type: String, default: null },
   font_family: { type: String, default: null },
+  logo_dark_url: { type: String, default: null },
   business_name: { type: String, default: null },
   button_shape: { type: String, enum: ['square', 'rounded', 'pill', null], default: null },
+  image_style: { type: String, default: null },
+  essentials: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   show_chatbot: { type: Boolean, default: true },
 }, { _id: false });
 
@@ -223,7 +226,10 @@ const publicProfileSchema = new mongoose.Schema({
   // AI business storefront foundation. Keep it separate from the legacy
   // public-profile fields to preserve all existing profile API behavior.
   storefront: {
+    // Legacy singleton retained for backward-compatible lazy migration.
     draft: { type: storefrontRevisionSchema, default: null },
+    drafts: { type: [storefrontRevisionSchema], default: [] },
+    active_template_id: { type: String, default: null, maxlength: 100 },
     published: { type: storefrontRevisionSchema, default: null },
   },
   

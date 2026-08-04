@@ -4,6 +4,8 @@ import {
   createDraftRevision,
   createPublishedRevision,
   serializePublishedStorefront,
+  serializeStorefrontDrafts,
+  storefrontDrafts,
 } from '../services/publicProfile/storefrontService.js';
 import { saveStorefrontDraftSchema } from '../schemas/publicProfileSchemas.js';
 import {
@@ -78,6 +80,45 @@ test('storefront draft validation accepts page background in brand kit', () => {
 
   assert.equal(error, undefined);
   assert.equal(value.draft.brandKit.page_background, '#f1f5f9');
+});
+
+test('storefront draft validation preserves all editable brand settings', () => {
+  const { error, value } = saveStorefrontDraftSchema.validate({
+    draft: {
+      brandKit: {
+        logo_dark_url: 'https://cdn.example.com/logo-dark.svg',
+        image_style: 'editorial',
+        essentials: { service_area: 'Lahore' },
+      },
+    },
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(value.draft.brandKit.logo_dark_url, 'https://cdn.example.com/logo-dark.svg');
+  assert.equal(value.draft.brandKit.image_style, 'editorial');
+  assert.equal(value.draft.brandKit.essentials.service_area, 'Lahore');
+});
+
+test('template draft collection preserves legacy and per-template revisions', () => {
+  const legacy = createDraftRevision({
+    template: { id: 'agent-classic' },
+    blocks: [{ id: 'hero-classic', type: 'hero', data: {} }],
+  });
+  const investor = createDraftRevision({
+    template: { id: 'agent-investor' },
+    blocks: [{ id: 'hero-investor', type: 'hero', data: {} }],
+  });
+  const newerClassic = createDraftRevision({
+    template: { id: 'agent-classic' },
+    blocks: [{ id: 'hero-classic-new', type: 'hero', data: {} }],
+  });
+
+  const drafts = storefrontDrafts({ draft: legacy, drafts: [investor, newerClassic] });
+  const serialized = serializeStorefrontDrafts({ draft: legacy, drafts: [investor, newerClassic] });
+
+  assert.equal(drafts.length, 2);
+  assert.equal(drafts.find((draft) => draft.template.id === 'agent-classic').blocks[0].id, 'hero-classic-new');
+  assert.deepEqual(serialized.map((draft) => draft.template.id).sort(), ['agent-classic', 'agent-investor']);
 });
 
 test('storefront draft validation rejects duplicate blocks and unknown metadata', () => {

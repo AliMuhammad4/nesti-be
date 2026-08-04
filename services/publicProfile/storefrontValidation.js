@@ -164,6 +164,7 @@ const storefrontBlockSchema = Joi.object({
 
 const storefrontBrandKitSchema = Joi.object({
   logo_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(null, '').optional(),
+  logo_dark_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(null, '').optional(),
   cover_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(null, '').optional(),
   profile_photo_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(null, '').optional(),
   logo_size: Joi.number().integer().min(24).max(72).allow(null).optional(),
@@ -180,6 +181,8 @@ const storefrontBrandKitSchema = Joi.object({
   font_family: Joi.string().trim().max(120).allow(null, '').optional(),
   business_name: Joi.string().trim().max(160).allow(null, '').optional(),
   button_shape: Joi.string().valid('square', 'rounded', 'pill').allow(null, '').optional(),
+  image_style: Joi.string().trim().max(80).allow(null, '').optional(),
+  essentials: Joi.object().unknown(true).max(20).optional(),
   show_chatbot: Joi.boolean().optional(),
 }).unknown(false);
 

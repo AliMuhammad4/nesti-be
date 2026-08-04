@@ -10,7 +10,10 @@ import { generateStorefrontDraft } from './storefrontAiGenerationService.js';
 import {
   createDraftRevision,
   createPublishedRevision,
+  serializeStorefrontDrafts,
   serializeStorefrontRevision,
+  storefrontDrafts,
+  templateIdForRevision,
 } from './storefrontService.js';
 import { validateStorefrontDraftForRole } from './storefrontValidation.js';
 import { getSellerPropertiesBySlugService } from './publicProfileService.js';
@@ -224,8 +227,20 @@ export const getOwnStorefrontDraftService = async (userId) => {
   }
 
   const profile = await PublicProfile.findOne({ user_id: userId })
-    .select('_id slug storefront.draft storefront.published.published_at')
+    .select('_id slug storefront.draft storefront.drafts storefront.active_template_id storefront.published.published_at')
     .lean();
+  const legacyTemplateId = templateIdForRevision(profile?.storefront?.draft);
+  if (profile?._id && legacyTemplateId && !profile.storefront?.drafts?.length) {
+    await PublicProfile.updateOne(
+      { _id: profile._id },
+      {
+        $set: {
+          'storefront.drafts': [profile.storefront.draft],
+          'storefront.active_template_id': profile.storefront?.active_template_id || legacyTemplateId,
+        },
+      },
+    );
+  }
 
   return {
     status: 200,
@@ -233,6 +248,8 @@ export const getOwnStorefrontDraftService = async (userId) => {
       success: true,
       profile: profile ? { id: profile._id, slug: profile.slug } : null,
       draft: serializeStorefrontRevision(profile?.storefront?.draft),
+      drafts: serializeStorefrontDrafts(profile?.storefront),
+      active_template_id: profile?.storefront?.active_template_id || profile?.storefront?.draft?.template?.id || null,
       published_at: profile?.storefront?.published?.published_at || null,
     },
   };
@@ -260,8 +277,15 @@ export const saveStorefrontDraftService = async (userId, draft) => {
     };
   }
 
+  const revision = createDraftRevision(validatedDraft);
+  const templateId = templateIdForRevision(revision);
   profile.storefront = profile.storefront || {};
-  profile.storefront.draft = createDraftRevision(validatedDraft);
+  const drafts = storefrontDrafts(profile.storefront)
+    .filter((entry) => templateIdForRevision(entry) !== templateId);
+  drafts.push(revision);
+  profile.storefront.drafts = drafts;
+  profile.storefront.draft = revision;
+  profile.storefront.active_template_id = templateId;
   profile.markModified('storefront');
   await profile.save();
 
@@ -271,12 +295,14 @@ export const saveStorefrontDraftService = async (userId, draft) => {
       success: true,
       message: 'Storefront draft saved successfully',
       profile: { id: profile._id, slug: profile.slug },
-      draft: serializeStorefrontRevision(profile.storefront.draft),
+      draft: serializeStorefrontRevision(revision),
+      drafts: serializeStorefrontDrafts(profile.storefront),
+      active_template_id: templateId,
     },
   };
 };
 
-export const publishStorefrontService = async (userId) => {
+export const publishStorefrontService = async (userId, draft = null) => {
   const profile = await PublicProfile.findOne({ user_id: userId });
   if (!profile) {
     return {
@@ -285,7 +311,39 @@ export const publishStorefrontService = async (userId) => {
     };
   }
 
-  const published = createPublishedRevision(profile.storefront?.draft);
+  let sourceDraft = profile.storefront?.draft;
+  if (draft) {
+    const professionalProfile = await ProfessionalProfile.findOne({ user_id: userId }).lean();
+    const professionalType = professionalProfile?.professional_type || profile.professional_type;
+    const { error: validationError, value: validatedDraft } = validateStorefrontDraftForRole(
+      draft,
+      professionalType,
+    );
+    if (validationError) {
+      return {
+        status: 400,
+        body: {
+          success: false,
+          message: validationError.message,
+        },
+      };
+    }
+    sourceDraft = createDraftRevision(validatedDraft);
+    profile.storefront = profile.storefront || {};
+    const templateId = templateIdForRevision(sourceDraft);
+    profile.storefront.drafts = storefrontDrafts(profile.storefront)
+      .filter((entry) => templateIdForRevision(entry) !== templateId)
+      .concat(sourceDraft);
+    profile.storefront.draft = sourceDraft;
+    profile.storefront.active_template_id = templateId;
+  }
+
+  if (!sourceDraft && profile.storefront?.active_template_id) {
+    sourceDraft = storefrontDrafts(profile.storefront).find(
+      (entry) => templateIdForRevision(entry) === profile.storefront.active_template_id,
+    );
+  }
+  const published = createPublishedRevision(sourceDraft);
   if (!published) {
     return {
       status: 409,
@@ -305,6 +363,8 @@ export const publishStorefrontService = async (userId) => {
       message: 'Storefront published successfully',
       profile: { id: profile._id, slug: profile.slug },
       published: serializeStorefrontRevision(profile.storefront.published),
+      drafts: serializeStorefrontDrafts(profile.storefront),
+      active_template_id: profile.storefront.active_template_id || templateIdForRevision(sourceDraft),
     },
   };
 };

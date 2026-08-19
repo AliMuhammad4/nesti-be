@@ -83,6 +83,17 @@ const storefrontRevisionSchema = new mongoose.Schema({
   published_at: { type: Date, default: null },
 }, { _id: false });
 
+const storefrontTemplatePurchaseSchema = new mongoose.Schema({
+  template_id: { type: String, required: true, maxlength: 100 },
+  tier: { type: String, enum: ['free', 'basic', 'standard', 'premium'], default: 'free' },
+  amount: { type: Number, default: 0, min: 0 },
+  currency: { type: String, default: 'usd', maxlength: 8 },
+  stripe_checkout_session_id: { type: String, default: '', maxlength: 160 },
+  stripe_payment_intent_id: { type: String, default: '', maxlength: 160 },
+  stripe_invoice_id: { type: String, default: '', maxlength: 160 },
+  purchased_at: { type: Date, default: Date.now },
+}, { _id: false });
+
 const publicProfileSchema = new mongoose.Schema({
   user_id: {
     type: mongoose.Schema.Types.ObjectId,
@@ -231,6 +242,8 @@ const publicProfileSchema = new mongoose.Schema({
     drafts: { type: [storefrontRevisionSchema], default: [] },
     active_template_id: { type: String, default: null, maxlength: 100 },
     published: { type: storefrontRevisionSchema, default: null },
+    unlocked_template_ids: { type: [String], default: [] },
+    template_purchases: { type: [storefrontTemplatePurchaseSchema], default: [] },
   },
   
 }, { timestamps: true });

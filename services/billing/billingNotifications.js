@@ -4,6 +4,7 @@ import ClientSubscription from '../../models/ClientSubscription.js';
 import logger from '../../utils/logger.js';
 import { emitNotification } from '../realtime/workspaceSocket.js';
 import { getPlanByPriceId } from './plans.js';
+import { getStorefrontTemplateTier } from './storefrontTemplatePurchases.js';
 
 function normalizeStripeId(value) {
   if (!value) return '';
@@ -36,6 +37,30 @@ function invoicePricePlans(invoice = {}) {
     }
   }
   return plans;
+}
+
+function invoiceStorefrontTemplatePurchase(invoice = {}) {
+  const sources = [
+    invoice.metadata,
+    invoice.subscription_details?.metadata,
+    invoice.parent?.subscription_details?.metadata,
+    invoice.parent?.quote_details?.metadata,
+    ...(invoice.lines?.data || []).map((line) => line.metadata),
+    ...(invoice.lines?.data || []).map((line) => line.parent?.subscription_item_details?.metadata),
+  ].filter(Boolean);
+
+  const metadata = sources.find((source) => (
+    String(source.purchase_type || '').trim() === 'storefront_template'
+    && String(source.template_id || '').trim()
+  ));
+  if (!metadata) return null;
+
+  const template = getStorefrontTemplateTier(metadata.template_id);
+  return {
+    template_id: String(metadata.template_id || '').trim(),
+    tier: String(metadata.tier || template?.tier || '').trim(),
+    name: template?.name || 'Storefront template',
+  };
 }
 
 async function findUserIdForStripeObject(object = {}) {
@@ -106,6 +131,23 @@ async function notifyInvoicePaid(event) {
   if (!userId) return null;
 
   const amount = formatAmount(invoice.amount_paid, invoice.currency);
+  const templatePurchase = invoiceStorefrontTemplatePurchase(invoice);
+  if (templatePurchase) {
+    return persistAndEmit(userId, event.id, {
+      notification_type: 'storefront_template_payment_paid',
+      title: 'Template unlocked',
+      body: `${templatePurchase.name} was unlocked for ${amount}. You can publish with it anytime.`,
+      severity: 'info',
+      action: {
+        type: 'open_storefront_builder',
+        href: '/dashboard/public-profile',
+        invoice_id: invoice.id,
+        hosted_invoice_url: invoice.hosted_invoice_url || '',
+        template_id: templatePurchase.template_id,
+      },
+    });
+  }
+
   const reason = String(invoice.billing_reason || '');
   const plans = invoicePricePlans(invoice);
   const planName = plans.at(-1)?.name || 'subscription';
@@ -142,6 +184,23 @@ async function notifyInvoicePaymentFailed(event) {
   if (!userId) return null;
 
   const amount = formatAmount(invoice.amount_due || invoice.amount_remaining, invoice.currency);
+  const templatePurchase = invoiceStorefrontTemplatePurchase(invoice);
+  if (templatePurchase) {
+    return persistAndEmit(userId, event.id, {
+      notification_type: 'storefront_template_payment_failed',
+      title: 'Template payment failed',
+      body: `We could not unlock ${templatePurchase.name}. Please try the template payment again.`,
+      severity: 'critical',
+      action: {
+        type: 'open_storefront_builder',
+        href: '/dashboard/public-profile',
+        invoice_id: invoice.id,
+        hosted_invoice_url: invoice.hosted_invoice_url || '',
+        template_id: templatePurchase.template_id,
+      },
+    });
+  }
+
   return persistAndEmit(userId, event.id, {
     notification_type: 'billing_payment_failed',
     title: 'Payment failed',

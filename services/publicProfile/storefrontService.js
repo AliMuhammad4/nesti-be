@@ -27,6 +27,59 @@ export function createDraftRevision(draft, now = new Date()) {
   };
 }
 
+const STOREFRONT_BRAND_KIT_KEYS = Object.freeze([
+  'logo_url',
+  'logo_dark_url',
+  'cover_url',
+  'profile_photo_url',
+  'logo_size',
+  'cover_position_x',
+  'cover_position_y',
+  'cover_zoom',
+  'profile_position_x',
+  'profile_position_y',
+  'profile_zoom',
+  'primary_color',
+  'secondary_color',
+  'accent_color',
+  'page_background',
+  'font_family',
+  'business_name',
+  'button_shape',
+  'image_style',
+  'essentials',
+  'show_chatbot',
+]);
+
+export function createGeneratedDraftRevision(generated, existingBrandKit = {}, now = new Date()) {
+  const generatedBrandKit = generated?.brand_kit || {};
+  const mergedBrandKit = { ...existingBrandKit };
+  STOREFRONT_BRAND_KIT_KEYS.forEach((key) => {
+    if (generatedBrandKit[key] !== undefined) mergedBrandKit[key] = generatedBrandKit[key];
+  });
+  if (generatedBrandKit.font !== undefined) {
+    mergedBrandKit.font_family = generatedBrandKit.font;
+  }
+
+  return createDraftRevision({
+    blocks: (generated?.storefront_blocks || []).map((block) => ({
+      id: block.id,
+      type: block.type,
+      data: {
+        enabled: block.enabled !== false,
+        content: block.content || {},
+        ...(block.settings && Object.keys(block.settings).length ? { layout: block.settings } : {}),
+      },
+    })),
+    brandKit: mergedBrandKit,
+    template: {
+      id: generated?.template_key || '',
+      name: generated?.template_key || '',
+      version: '1',
+    },
+  }, now);
+}
+
 export function templateIdForRevision(revision) {
   return String(revision?.template?.id || '').trim();
 }
@@ -41,6 +94,17 @@ export function storefrontDrafts(storefront = {}) {
     byTemplate.set(templateId, revision);
   });
   return [...byTemplate.values()];
+}
+
+export function activeStorefrontDraft(storefront = {}) {
+  const activeTemplateId = String(storefront?.active_template_id || '').trim();
+  if (activeTemplateId) {
+    const activeRevision = storefrontDrafts(storefront).find(
+      (revision) => templateIdForRevision(revision) === activeTemplateId,
+    );
+    if (activeRevision) return activeRevision;
+  }
+  return storefront?.draft || null;
 }
 
 export function serializeStorefrontDrafts(storefront = {}) {

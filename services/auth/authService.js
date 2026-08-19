@@ -17,14 +17,13 @@ import {
   isClientSubscriptionActive,
 } from '../client/clientSubscriptionService.js';
 import { disposableEmailErrorResponse, isDisposableEmail } from './disposableEmailGuard.js';
+import { getJwtSecret } from '../../utils/jwtSecret.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-
-const signJwt = (payload, expiresIn) => jwt.sign(payload, JWT_SECRET, { expiresIn });
+const signJwt = (payload, expiresIn) => jwt.sign(payload, getJwtSecret(), { expiresIn });
 
 const tryVerifyJwt = (token) => {
   try {
-    return { ok: true, payload: jwt.verify(token, JWT_SECRET) };
+    return { ok: true, payload: jwt.verify(token, getJwtSecret()) };
   } catch {
     return { ok: false };
   }

@@ -17,6 +17,186 @@ const VISIBLE_LEAD_MATCH_FILTER = {
   ],
 };
 
+export async function countClosedSellerLeads(userId) {
+  if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) return 0;
+  return LeadMatch.countDocuments({
+    user_id: new mongoose.Types.ObjectId(String(userId)),
+    match_status: 'converted',
+    lead_type: /seller$/i,
+    ...VISIBLE_LEAD_MATCH_FILTER,
+  });
+}
+
+export async function countAvailableSellerLeads(userId) {
+  if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) return 0;
+  return LeadMatch.countDocuments({
+    user_id: new mongoose.Types.ObjectId(String(userId)),
+    match_status: { $nin: ['converted', 'closed_lost'] },
+    lead_type: /seller$/i,
+    ...VISIBLE_LEAD_MATCH_FILTER,
+  });
+}
+
+function positiveNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function parsePropertyValue(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return 0;
+  const matches = [...text.replace(/,/g, '').matchAll(/(\d+(?:\.\d+)?)\s*([km])?/g)];
+  if (!matches.length) return 0;
+  const amounts = matches
+    .map((match) => {
+      const amount = positiveNumber(match[1]);
+      if (!amount) return 0;
+      if (match[2] === 'm') return amount * 1_000_000;
+      if (match[2] === 'k') return amount * 1_000;
+      return amount;
+    })
+    .filter(Boolean);
+  if (!amounts.length) return 0;
+  return amounts.length > 1
+    ? amounts.reduce((sum, amount) => sum + amount, 0) / amounts.length
+    : amounts[0];
+}
+
+function estimatedPropertyValue(profile = {}) {
+  const min = positiveNumber(profile?.budget_profile?.min_budget);
+  const max = positiveNumber(profile?.budget_profile?.max_budget);
+  if (min && max) return (min + max) / 2;
+  if (max) return max;
+  if (min) return min;
+  return parsePropertyValue(
+    profile?.property?.expected_price
+      || profile?.property?.budget
+      || profile?.budget_profile?.latest_budget_text,
+  );
+}
+
+export function summarizeSellerCredentialMetrics(rows = []) {
+  const clientKeys = new Set();
+  const activeProfiles = new Map();
+  let totalSoldHomeValue = 0;
+  let soldHomesWithValue = 0;
+  let soldHomesWithClosedValue = 0;
+  let currency = 'USD';
+
+  rows.forEach((row, index) => {
+    const profile = row?.lead_profile_id && typeof row.lead_profile_id === 'object'
+      ? row.lead_profile_id
+      : {};
+    const profileId = String(profile?._id || row?.lead_profile_id || '').trim();
+    const clientKey = profileId || String(row?._id || `seller-row-${index}`);
+    clientKeys.add(clientKey);
+    currency = profile?.budget_profile?.currency || currency;
+
+    const estimatedValue = estimatedPropertyValue(profile);
+    if (!['converted', 'closed_lost'].includes(row?.match_status)) {
+      const existing = activeProfiles.get(clientKey) || 0;
+      activeProfiles.set(clientKey, Math.max(existing, estimatedValue));
+    }
+
+    if (row?.match_status === 'converted') {
+      const closedValue = positiveNumber(row?.compatibility_factors?.close_summary?.value);
+      const soldValue = closedValue || estimatedValue;
+      if (soldValue > 0) {
+        totalSoldHomeValue += soldValue;
+        soldHomesWithValue += 1;
+      }
+      if (closedValue > 0) soldHomesWithClosedValue += 1;
+    }
+  });
+
+  const activePipelineValue = [...activeProfiles.values()]
+    .reduce((sum, amount) => sum + amount, 0);
+
+  return {
+    total_clients: clientKeys.size,
+    active_pipeline_value: Math.round(activePipelineValue),
+    total_sold_home_value: Math.round(totalSoldHomeValue),
+    sold_homes_with_value: soldHomesWithValue,
+    sold_homes_with_closed_value: soldHomesWithClosedValue,
+    currency: String(currency || 'USD').toUpperCase(),
+  };
+}
+
+export async function getSellerCredentialMetrics(userId) {
+  if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+    return summarizeSellerCredentialMetrics([]);
+  }
+  const rows = await LeadMatch.find({
+    user_id: new mongoose.Types.ObjectId(String(userId)),
+    lead_type: /seller$/i,
+    ...VISIBLE_LEAD_MATCH_FILTER,
+  })
+    .select('lead_profile_id match_status compatibility_factors.close_summary.value')
+    .populate({
+      path: 'lead_profile_id',
+      select: [
+        'budget_profile.min_budget',
+        'budget_profile.max_budget',
+        'budget_profile.currency',
+        'budget_profile.latest_budget_text',
+        'property.expected_price',
+        'property.budget',
+      ].join(' '),
+    })
+    .lean();
+
+  return summarizeSellerCredentialMetrics(rows);
+}
+
+export async function getRecentClosedSellerLeadOutcomes(userId, limit = 6) {
+  if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) return [];
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 6, 12));
+  const matches = await LeadMatch.find({
+    user_id: new mongoose.Types.ObjectId(String(userId)),
+    match_status: 'converted',
+    lead_type: /seller$/i,
+    ...VISIBLE_LEAD_MATCH_FILTER,
+  })
+    .select('lead_profile_id updatedAt')
+    .sort({ updatedAt: -1 })
+    .limit(safeLimit)
+    .populate({
+      path: 'lead_profile_id',
+      select: [
+        'property.address',
+        'property.location',
+        'property.expected_price',
+        'property.bedrooms',
+        'property.bathrooms',
+        'property.square_footage',
+        'property.property_type',
+        'property.images',
+      ].join(' '),
+    })
+    .lean();
+
+  return matches.map((match) => {
+    const property = match.lead_profile_id?.property || {};
+    const photos = (Array.isArray(property.images) ? property.images : [])
+      .map((image) => image?.secure_url || image?.url || '')
+      .filter(Boolean);
+    return {
+      title: property.property_type || 'Seller property',
+      property_type: property.property_type || 'Seller property',
+      address: property.address || '',
+      location: property.location || '',
+      price: property.expected_price || '',
+      bedrooms: property.bedrooms || '',
+      bathrooms: property.bathrooms || '',
+      square_feet: property.square_footage || '',
+      photos,
+      image_url: photos[0] || '',
+      status: 'sold',
+      closed_at: match.updatedAt || null,
+    };
+  });
+}
+
 function parseDays(days) {
   const n = Number(days);
   if (!Number.isFinite(n) || n <= 0) return 30;

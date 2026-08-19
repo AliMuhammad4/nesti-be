@@ -9,6 +9,7 @@ import {
   syncSubscriptionSchedule,
   updateInvoicePaymentState,
 } from '../services/billing/subscriptionService.js';
+import { syncStorefrontTemplateCheckoutSession } from '../services/billing/storefrontTemplatePurchases.js';
 import { syncClientStripeSubscription } from '../services/client/clientSubscriptionService.js';
 
 const router = express.Router();
@@ -55,7 +56,9 @@ async function claimStripeEvent(event) {
       return { shouldProcess: true, eventId };
     }
 
-    return { shouldProcess: false, eventId };
+    // Do not acknowledge an event that another request has only claimed but not
+    // completed. A non-2xx response keeps Stripe retrying if that worker crashes.
+    return { shouldProcess: false, retryLater: true, eventId };
   }
 
   await StripeWebhookEvent.create({
@@ -88,7 +91,11 @@ async function processStripeEvent(event) {
   let result = null;
   switch (event.type) {
     case 'checkout.session.completed':
-      result = await syncCheckoutSession(event.data.object, event.id);
+      if (String(event.data.object?.metadata?.purchase_type || '') === 'storefront_template') {
+        result = await syncStorefrontTemplateCheckoutSession(event.data.object);
+      } else {
+        result = await syncCheckoutSession(event.data.object, event.id);
+      }
       break;
     case 'customer.subscription.created':
     case 'customer.subscription.updated':
@@ -170,6 +177,9 @@ router.post('/', async (req, res) => {
     const claim = await claimStripeEvent(event);
     eventId = claim.eventId;
     if (!claim.shouldProcess) {
+      if (claim.retryLater) {
+        return res.status(409).json({ received: false, processing: true });
+      }
       return res.json({ received: true, duplicate: true });
     }
 

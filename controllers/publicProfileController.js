@@ -1,5 +1,6 @@
 import {
   getPublicProfileBySlugService,
+  getPublicProfileShellBySlugService,
   getPublishedStorefrontBySlugService,
   getPublicProfessionalsListService,
   getPublicProfessionalNetworkService,
@@ -19,6 +20,14 @@ export const getPublicProfileBySlug = async (req, res, next) => {
   try {
     const { slug } = req.params;
     send(res, await getPublicProfileBySlugService(slug));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getPublicProfileShellBySlug = async (req, res, next) => {
+  try {
+    send(res, await getPublicProfileShellBySlugService(req.params.slug));
   } catch (error) {
     next(error);
   }
@@ -77,6 +86,7 @@ export const getPublicProfessionalNetwork = async (req, res, next) => {
 export const getSellerProperties = async (req, res, next) => {
   try {
     const { slug } = req.params;
+    res.set('Cache-Control', 'public, max-age=10, stale-while-revalidate=30');
     send(res, await getSellerPropertiesBySlugService(slug));
   } catch (error) {
     next(error);

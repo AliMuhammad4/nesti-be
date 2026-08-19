@@ -31,12 +31,27 @@ const ROLE_BLOCK_TYPES = Object.freeze({
   ],
 });
 
+const SHARED_PROOF_BLOCK_TYPES = Object.freeze([
+  'seller-performance',
+  'seller-sold-results',
+  'seller-case-study',
+  'seller-credentials',
+]);
+
+const AGENT_SHARED_PROOF_TEMPLATE_IDS = new Set([
+  'agent-seller-expert',
+  'agent-luxury-advisor',
+  'agent-first-home',
+  'agent-community-expert',
+]);
+
 const MAX_CONTENT_DEPTH = 4;
 const MAX_CONTENT_KEYS = 30;
 const MAX_CONTENT_ITEMS = 30;
 const MAX_CONTENT_TEXT_LENGTH = 2000;
 const MAX_URL_LENGTH = 2048;
 const COLOR_VALUE_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+const SAFE_BLOCK_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const URL_KEY_PATTERN = /(?:url|uri|href|link|image|logo)$/i;
 const COLOR_KEY_PATTERN = /(?:color|colour)$/i;
 
@@ -157,8 +172,8 @@ export const storefrontBlockDataSchema = Joi.object({
 }).unknown(false).default({});
 
 const storefrontBlockSchema = Joi.object({
-  id: Joi.string().trim().max(100).required(),
-  type: Joi.string().trim().max(80).required(),
+  id: Joi.string().trim().max(100).pattern(SAFE_BLOCK_IDENTIFIER_PATTERN).required(),
+  type: Joi.string().trim().max(80).pattern(SAFE_BLOCK_IDENTIFIER_PATTERN).required(),
   data: storefrontBlockDataSchema,
 }).unknown(false);
 
@@ -198,8 +213,14 @@ export const storefrontDraftSchema = Joi.object({
   template: storefrontTemplateSchema.optional(),
 }).min(1);
 
-export function allowedStorefrontBlockTypes(role) {
-  return [...SHARED_BLOCK_TYPES, ...(ROLE_BLOCK_TYPES[role] || [])];
+export function allowedStorefrontBlockTypes(role, templateId = '') {
+  return [
+    ...SHARED_BLOCK_TYPES,
+    ...(ROLE_BLOCK_TYPES[role] || []),
+    ...(role === PROFESSIONAL_TYPE.AGENT && AGENT_SHARED_PROOF_TEMPLATE_IDS.has(templateId)
+      ? SHARED_PROOF_BLOCK_TYPES
+      : []),
+  ];
 }
 
 export function validateStorefrontDraftForRole(draft, role) {
@@ -209,7 +230,7 @@ export function validateStorefrontDraftForRole(draft, role) {
   });
   if (error) return { error, value };
 
-  const allowedBlockTypes = new Set(allowedStorefrontBlockTypes(role));
+  const allowedBlockTypes = new Set(allowedStorefrontBlockTypes(role, value.template?.id));
   const invalidBlockTypes = (value.blocks || [])
     .filter((block) => !allowedBlockTypes.has(block.type))
     .map((block) => block.type);

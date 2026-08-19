@@ -1,17 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  activeStorefrontDraft,
   createDraftRevision,
+  createGeneratedDraftRevision,
   createPublishedRevision,
   serializePublishedStorefront,
   serializeStorefrontDrafts,
   storefrontDrafts,
 } from '../services/publicProfile/storefrontService.js';
-import { saveStorefrontDraftSchema } from '../schemas/publicProfileSchemas.js';
+import {
+  generateStorefrontDraftSchema,
+  saveStorefrontDraftSchema,
+} from '../schemas/publicProfileSchemas.js';
 import {
   allowedStorefrontBlockTypes,
   validateStorefrontDraftForRole,
 } from '../services/publicProfile/storefrontValidation.js';
+import { generateDefaultStorefrontBlocks } from '../services/publicProfile/storefrontAiGenerationService.js';
+import {
+  mergeProfileTestimonials,
+  serializeProfileFeedback,
+  toProfessionalProfileSummary,
+} from '../services/publicProfile/professionalDashboardService.js';
 
 test('storefront draft validation accepts bounded structured content', () => {
   const { error, value } = saveStorefrontDraftSchema.validate({
@@ -121,7 +132,37 @@ test('template draft collection preserves legacy and per-template revisions', ()
   assert.deepEqual(serialized.map((draft) => draft.template.id).sort(), ['agent-classic', 'agent-investor']);
 });
 
-test('storefront draft validation rejects duplicate blocks and unknown metadata', () => {
+test('active storefront draft resolves the selected per-template revision before legacy draft', () => {
+  const classic = createDraftRevision({
+    template: { id: 'agent-classic' },
+    blocks: [{ id: 'classic-hero', type: 'hero' }],
+  });
+  const community = createDraftRevision({
+    template: { id: 'agent-community-expert' },
+    blocks: [{ id: 'community-hero', type: 'hero' }],
+  });
+
+  const active = activeStorefrontDraft({
+    draft: classic,
+    drafts: [classic, community],
+    active_template_id: 'agent-community-expert',
+  });
+
+  assert.equal(active.template.id, 'agent-community-expert');
+  assert.equal(active.blocks[0].id, 'community-hero');
+});
+
+test('storefront draft validation allows repeated block types but rejects duplicate or unsafe IDs', () => {
+  const repeatedType = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [
+        { id: 'services-primary', type: 'services' },
+        { id: 'services-copy', type: 'services' },
+      ],
+    },
+  });
+  assert.equal(repeatedType.error, undefined);
+
   const duplicate = saveStorefrontDraftSchema.validate({
     draft: {
       blocks: [
@@ -132,10 +173,98 @@ test('storefront draft validation rejects duplicate blocks and unknown metadata'
   });
   assert.ok(duplicate.error);
 
+  const unsafeId = saveStorefrontDraftSchema.validate({
+    draft: { blocks: [{ id: 'hero<script>', type: 'hero' }] },
+  });
+  assert.ok(unsafeId.error);
+
   const unknownBrandKit = saveStorefrontDraftSchema.validate({
     draft: { brandKit: { primary_color: '#112233', unexpected: 'value' } },
   });
   assert.ok(unknownBrandKit.error);
+});
+
+test('community expert AI draft has 14 valid blocks and preserves the full brand kit', () => {
+  assert.equal(generateStorefrontDraftSchema.validate({
+    template_key: 'agent-community-expert',
+    brand_kit: {
+      secondary_color: '#334155',
+      font_family: 'Manrope',
+    },
+  }).error, undefined);
+
+  const blocks = generateDefaultStorefrontBlocks('agent', 'agent-community-expert', {
+    headline: 'Know the neighborhood',
+    tagline: 'Local guidance',
+    about: 'A community-focused agent.',
+    services: [{ title: 'Relocation', description: 'Move locally.', cta_text: 'Learn More' }],
+  });
+  const revision = createGeneratedDraftRevision({
+    template_key: 'agent-community-expert',
+    storefront_blocks: blocks,
+    brand_kit: {
+      logo_dark_url: 'https://cdn.example.com/dark.svg',
+      cover_url: 'https://cdn.example.com/cover.jpg',
+      page_background: '#f8f7fc',
+      font: 'Manrope',
+      button_shape: 'pill',
+      essentials: { service_area: 'Downtown' },
+      show_chatbot: false,
+    },
+  }, {
+    profile_photo_url: 'https://cdn.example.com/profile.jpg',
+    primary_color: '#17152b',
+  });
+
+  assert.equal(revision.blocks.length, 14);
+  assert.deepEqual(revision.blocks.map((block) => block.type), [
+    'hero', 'featured-listings', 'role-details', 'about', 'services', 'expertise',
+    'seller-performance', 'seller-sold-results', 'seller-case-study', 'seller-credentials',
+    'testimonials', 'guidance', 'cta', 'footer',
+  ]);
+  assert.equal(revision.brandKit.profile_photo_url, 'https://cdn.example.com/profile.jpg');
+  assert.equal(revision.brandKit.logo_dark_url, 'https://cdn.example.com/dark.svg');
+  assert.equal(revision.brandKit.cover_url, 'https://cdn.example.com/cover.jpg');
+  assert.equal(revision.brandKit.page_background, '#f8f7fc');
+  assert.equal(revision.brandKit.font_family, 'Manrope');
+  assert.equal(revision.brandKit.show_chatbot, false);
+  assert.equal(
+    validateStorefrontDraftForRole({
+      blocks: revision.blocks,
+      brandKit: revision.brandKit,
+      template: revision.template,
+    }, 'agent').error,
+    undefined,
+  );
+});
+
+test('owner preview serializers expose public feedback and community profile inputs', () => {
+  const profile = {
+    testimonials: [{ client_name: 'Older', rating: 4, text: 'Great', date: '2026-01-01' }],
+    feedback_submissions: [{
+      _id: 'feedback-1',
+      client_name: 'Recent',
+      rating: 5,
+      text: 'Excellent',
+      submitted_at: '2026-02-01',
+    }],
+  };
+  const summary = toProfessionalProfileSummary({
+    calendly_link: 'https://calendly.com/example',
+    service_area_primary_zones: ['Downtown'],
+    service_area_secondary_zones: ['West End'],
+    service_area_cities: ['Toronto'],
+    service_area_regions: ['GTA'],
+    languages_spoken: ['english', 'urdu'],
+    core_specialization_tags: ['relocation'],
+  });
+
+  assert.equal(serializeProfileFeedback(profile)[0].rating, 5);
+  assert.equal(mergeProfileTestimonials(profile)[0].client_name, 'Recent');
+  assert.equal(summary.calendly_link, 'https://calendly.com/example');
+  assert.deepEqual(summary.service_area_primary_zones, ['Downtown']);
+  assert.deepEqual(summary.languages_spoken, ['english', 'urdu']);
+  assert.deepEqual(summary.core_specialization_tags, ['relocation']);
 });
 
 test('storefront block types are constrained by professional role', () => {
@@ -161,6 +290,41 @@ test('storefront block types are constrained by professional role', () => {
     blocks: [{ id: 'valuation', type: 'home-valuation', data: { content: {} } }],
   }, 'agent');
   assert.match(removedValuationBlock.error.message, /Unsupported storefront block type/);
+
+  const sharedProofBlocks = [
+    { id: 'performance', type: 'seller-performance', data: { content: {} } },
+    { id: 'sold-results', type: 'seller-sold-results', data: { content: {} } },
+    { id: 'case-study', type: 'seller-case-study', data: { content: {} } },
+    { id: 'seller-credentials', type: 'seller-credentials', data: { content: {} } },
+  ];
+  [
+    'agent-seller-expert',
+    'agent-luxury-advisor',
+    'agent-first-home',
+    'agent-community-expert',
+  ].forEach((templateId) => {
+    const sellerProofDraft = validateStorefrontDraftForRole({
+      template: { id: templateId },
+      blocks: sharedProofBlocks,
+    }, 'agent');
+    assert.equal(sellerProofDraft.error, undefined, `${templateId} should accept shared proof blocks`);
+  });
+
+  [
+    { templateId: 'agent-classic', role: 'agent' },
+    { templateId: 'agent-seller-expert', role: 'mortgage_broker' },
+    { templateId: 'agent-luxury-advisor', role: 'lawyer' },
+  ].forEach(({ templateId, role }) => {
+    const sellerProofDraft = validateStorefrontDraftForRole({
+      template: { id: templateId },
+      blocks: sharedProofBlocks,
+    }, role);
+    assert.match(
+      sellerProofDraft.error.message,
+      /Unsupported storefront block type/,
+      `${role} using ${templateId} should reject shared proof blocks`,
+    );
+  });
 });
 
 test('storefront data rejects unsafe content and malformed layout or style', () => {

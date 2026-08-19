@@ -15,6 +15,34 @@ const TEMPLATE_BLOCKS = {
   lawyer: ['hero', 'expertise', 'role-details', 'about', 'closing-cost-estimator', 'testimonials', 'practice-areas', 'services', 'credentials', 'guidance', 'cta'],
 };
 
+const TEMPLATE_SPECIFIC_BLOCKS = Object.freeze({
+  'agent-community-expert': [
+    'hero',
+    'featured-listings',
+    'role-details',
+    'about',
+    'services',
+    'expertise',
+    'seller-performance',
+    'seller-sold-results',
+    'seller-case-study',
+    'seller-credentials',
+    'testimonials',
+    'guidance',
+    'cta',
+    'footer',
+  ],
+  'agent-investor': [
+    'hero',
+    'featured-listings',
+    'services',
+    'guidance',
+    'about',
+    'cta',
+    'footer',
+  ],
+});
+
 function roleLabel(role) {
   if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return 'mortgage broker';
   if (role === PROFESSIONAL_TYPE.LAWYER) return 'real estate lawyer';
@@ -23,6 +51,12 @@ function roleLabel(role) {
 
 function roleForBlocks(role) {
   return Object.hasOwn(TEMPLATE_BLOCKS, role) ? role : 'agent';
+}
+
+function defaultTemplateKeyForRole(role) {
+  const resolved = roleForBlocks(role);
+  if (resolved === 'agent') return 'agent-investor';
+  return `${resolved}-classic`;
 }
 
 function cleanText(value, limit) {
@@ -61,14 +95,29 @@ function normaliseGeneratedCopy(payload) {
   };
 }
 
-function defaultBlocks(role) {
-  return TEMPLATE_BLOCKS[roleForBlocks(role)].map((type, index) => ({
+function generatedContentForBlock(type, generated = {}) {
+  if (type === 'hero') {
+    return { heading: generated.headline || '', body: generated.tagline || '', eyebrow: 'Community expert' };
+  }
+  if (type === 'about') return { heading: 'About', body: generated.about || '' };
+  if (type === 'services') {
+    return {
+      heading: 'How I can help',
+      items: Array.isArray(generated.services) ? generated.services : [],
+    };
+  }
+  return {};
+}
+
+function defaultBlocks(role, templateKey = '', generated = {}) {
+  const types = TEMPLATE_SPECIFIC_BLOCKS[templateKey] || TEMPLATE_BLOCKS[roleForBlocks(role)];
+  return types.map((type, index) => ({
     id: `${type}-${index + 1}`,
     type,
     version: 1,
     enabled: true,
     settings: {},
-    content: {},
+    content: generatedContentForBlock(type, generated),
   }));
 }
 
@@ -120,27 +169,31 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
 
   return {
     ...generated,
-    template_key: cleanText(templateKey, 80) || `${role}-classic`,
-    storefront_blocks: defaultBlocks(role),
+    template_key: cleanText(templateKey, 80) || defaultTemplateKeyForRole(role),
+    storefront_blocks: defaultBlocks(role, cleanText(templateKey, 80), generated),
     brand_kit: {
+      ...brandKit,
       business_name: cleanText(brandKit.business_name || professionalProfile?.company_name, 120),
       logo_url: cleanText(brandKit.logo_url, 1000),
       logo_dark_url: cleanText(brandKit.logo_dark_url, 1000),
       primary_color: cleanText(brandKit.primary_color, 16),
       accent_color: cleanText(brandKit.accent_color, 16),
-      font: cleanText(brandKit.font, 80),
+      font: cleanText(brandKit.font || brandKit.font_family, 80),
       button_shape: cleanText(brandKit.button_shape, 30),
       image_style: cleanText(brandKit.image_style, 80),
-      essentials: onboarding,
+      essentials: {
+        ...(brandKit.essentials || {}),
+        ...onboarding,
+      },
     },
     generation_metadata: {
       model: MODEL,
       generated_at: new Date().toISOString(),
-      template_key: cleanText(templateKey, 80) || `${role}-classic`,
+      template_key: cleanText(templateKey, 80) || defaultTemplateKeyForRole(role),
     },
   };
 }
 
-export function generateDefaultStorefrontBlocks(role) {
-  return defaultBlocks(role);
+export function generateDefaultStorefrontBlocks(role, templateKey = '', generated = {}) {
+  return defaultBlocks(role, templateKey, generated);
 }

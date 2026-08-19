@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   getPublicProfileBySlug,
+  getPublicProfileShellBySlug,
   getPublishedStorefrontBySlug,
   getPublicProfessionalNetwork,
   getPublicProfessionalsList,
@@ -20,6 +21,7 @@ const router = express.Router();
 router.get('/professionals', getPublicProfessionalsList);
 router.get('/professional-network', getPublicProfessionalNetwork);
 router.get('/professionals/:slug/properties', getSellerProperties);
+router.get('/professionals/:slug/shell', getPublicProfileShellBySlug);
 router.get('/professionals/:slug/storefront', getPublishedStorefrontBySlug);
 router.get('/professionals/:slug/feedback', getApprovedPublicFeedback);
 router.get('/professionals/:slug', getPublicProfileBySlug);

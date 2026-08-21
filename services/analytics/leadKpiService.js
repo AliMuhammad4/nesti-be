@@ -122,6 +122,13 @@ export function summarizeSellerCredentialMetrics(rows = []) {
   };
 }
 
+export function summarizeProfessionalCredentialMetrics(rows = []) {
+  return {
+    ...summarizeSellerCredentialMetrics(rows),
+    closed_cases: rows.filter((row) => row?.match_status === 'converted').length,
+  };
+}
+
 export async function getSellerCredentialMetrics(userId) {
   if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
     return summarizeSellerCredentialMetrics([]);
@@ -146,6 +153,31 @@ export async function getSellerCredentialMetrics(userId) {
     .lean();
 
   return summarizeSellerCredentialMetrics(rows);
+}
+
+export async function getProfessionalCredentialMetrics(userId) {
+  if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+    return summarizeProfessionalCredentialMetrics([]);
+  }
+  const rows = await LeadMatch.find({
+    user_id: new mongoose.Types.ObjectId(String(userId)),
+    ...VISIBLE_LEAD_MATCH_FILTER,
+  })
+    .select('lead_profile_id match_status compatibility_factors.close_summary.value')
+    .populate({
+      path: 'lead_profile_id',
+      select: [
+        'budget_profile.min_budget',
+        'budget_profile.max_budget',
+        'budget_profile.currency',
+        'budget_profile.latest_budget_text',
+        'property.expected_price',
+        'property.budget',
+      ].join(' '),
+    })
+    .lean();
+
+  return summarizeProfessionalCredentialMetrics(rows);
 }
 
 export async function getRecentClosedSellerLeadOutcomes(userId, limit = 6) {

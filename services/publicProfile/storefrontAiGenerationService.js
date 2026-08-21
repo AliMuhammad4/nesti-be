@@ -16,6 +16,23 @@ const TEMPLATE_BLOCKS = {
 };
 
 const TEMPLATE_SPECIFIC_BLOCKS = Object.freeze({
+  'lawyer-classic': [
+    'hero',
+    'about',
+    'who-we-help',
+    'expertise',
+    'practice-areas',
+    'document-checklist',
+    'fee-guidance',
+    'role-details',
+    'consultation-options',
+    'testimonials',
+    'credentials',
+    'guidance',
+    'faq',
+    'cta',
+    'footer',
+  ],
   'agent-community-expert': [
     'hero',
     'featured-listings',
@@ -95,11 +112,80 @@ function normaliseGeneratedCopy(payload) {
   };
 }
 
-function generatedContentForBlock(type, generated = {}) {
+function generatedContentForBlock(type, generated = {}, templateKey = '') {
   if (type === 'hero') {
-    return { heading: generated.headline || '', body: generated.tagline || '', eyebrow: 'Community expert' };
+    if (templateKey === 'lawyer-classic') {
+      return {
+        heading: generated.headline || '',
+        body: generated.tagline || '',
+        eyebrow: 'Property law · Closing counsel',
+        primary_cta_label: 'Submit inquiry',
+        cta_label: 'Make an appointment',
+        lawyer_classic_design_version: 2,
+      };
+    }
+    return { heading: generated.headline || '', body: generated.tagline || '' };
   }
-  if (type === 'about') return { heading: 'About', body: generated.about || '' };
+  if (type === 'about') {
+    if (templateKey === 'lawyer-classic') {
+      return {
+        eyebrow: 'About the practice',
+        heading: 'Real estate legal counsel',
+        body: generated.about || '',
+      };
+    }
+    return { heading: 'About', body: generated.about || '' };
+  }
+  if (type === 'expertise' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Practice snapshot',
+      heading: 'Where counsel is focused',
+      body: 'A concise view of specializations, markets, and how a legal inquiry typically proceeds.',
+    };
+  }
+  if (type === 'who-we-help' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Who we help',
+      heading: 'Counsel for every side of the transaction',
+      body: 'Buyers, sellers, refinancers, and property owners can start with a structured inquiry.',
+    };
+  }
+  if (type === 'document-checklist' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'File preparation',
+      heading: 'What to send before we speak',
+      body: 'A complete file helps the lawyer understand the matter without asking you to repeat the basics.',
+    };
+  }
+  if (type === 'fee-guidance' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Fee transparency',
+      heading: 'How legal fees are typically framed',
+      body: 'Use this as orientation before a consultation. It is not a quote, retainer, or promise of representation.',
+    };
+  }
+  if (type === 'consultation-options' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Start the conversation',
+      heading: 'Choose how you would like to begin',
+      body: 'Pick the path that matches your timeline. Confidential details should wait until the lawyer confirms representation.',
+    };
+  }
+  if (type === 'faq' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Helpful questions',
+      heading: 'What clients often ask',
+      body: 'Clear answers to common questions before you start.',
+      faqs: [
+        { q: 'Is this legal advice?', a: 'No. This page starts an inquiry so the lawyer can review the matter and follow up appropriately.' },
+        { q: 'Can I request a contract review?', a: 'Yes. Share the agreement, conditions, and timeline so the review request arrives with useful context.' },
+        { q: 'What should I send before we speak?', a: 'The property address, agreement of purchase and sale, closing date, and any title or financing documents you already have.' },
+        { q: 'When should I contact a lawyer?', a: 'As soon as an offer is being drafted or a closing date is in view — earlier contact leaves more time to resolve conditions and title issues.' },
+        { q: 'What happens after I submit an inquiry?', a: 'The lawyer reviews the information, checks whether the matter is a fit, and contacts you about availability and next steps.' },
+        { q: 'Can legal fees be confirmed before work begins?', a: 'Yes. Once the scope is clear, the lawyer can explain the expected legal fees, disbursements, and retainer requirements.' },
+      ],
+    };
+  }
   if (type === 'services') {
     return {
       heading: 'How I can help',
@@ -117,7 +203,7 @@ function defaultBlocks(role, templateKey = '', generated = {}) {
     version: 1,
     enabled: true,
     settings: {},
-    content: generatedContentForBlock(type, generated),
+    content: generatedContentForBlock(type, generated, templateKey),
   }));
 }
 
@@ -129,6 +215,7 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
   }
 
   const role = roleForBlocks(professionalProfile?.professional_type || user?.role);
+  const resolvedTemplateKey = cleanText(templateKey, 80) || defaultTemplateKeyForRole(role);
   const context = {
     professional_type: role,
     full_name: professionalProfile?.full_name || [user?.first_name, user?.last_name].filter(Boolean).join(' '),
@@ -140,8 +227,11 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
     cities: professionalProfile?.service_area_cities || [],
     onboarding,
     brand_kit: brandKit,
-    template_key: cleanText(templateKey, 80),
+    template_key: resolvedTemplateKey,
   };
+  const templateInstructions = resolvedTemplateKey === 'lawyer-classic'
+    ? 'For the lawyer-classic template, write the headline, tagline, and about copy specifically for a real estate legal practice. Emphasize clear transaction, contract, title, and closing guidance without implying a lawyer-client relationship, promising outcomes, or giving legal advice.'
+    : '';
 
   const completion = await openai().chat.completions.create({
     model: MODEL,
@@ -155,7 +245,7 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
       },
       {
         role: 'user',
-        content: `Create a personalized website draft for this ${roleLabel(role)}. Return exactly: headline, tagline, about, seo_meta {title, description, keywords}, services [{title,description,cta_text}].\n\nContext:\n${JSON.stringify(context)}`,
+        content: `Create a personalized website draft for this ${roleLabel(role)}. ${templateInstructions} Return exactly: headline, tagline, about, seo_meta {title, description, keywords}, services [{title,description,cta_text}].\n\nContext:\n${JSON.stringify(context)}`,
       },
     ],
   });
@@ -169,8 +259,8 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
 
   return {
     ...generated,
-    template_key: cleanText(templateKey, 80) || defaultTemplateKeyForRole(role),
-    storefront_blocks: defaultBlocks(role, cleanText(templateKey, 80), generated),
+    template_key: resolvedTemplateKey,
+    storefront_blocks: defaultBlocks(role, resolvedTemplateKey, generated),
     brand_kit: {
       ...brandKit,
       business_name: cleanText(brandKit.business_name || professionalProfile?.company_name, 120),
@@ -189,7 +279,8 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
     generation_metadata: {
       model: MODEL,
       generated_at: new Date().toISOString(),
-      template_key: cleanText(templateKey, 80) || defaultTemplateKeyForRole(role),
+      template_key: resolvedTemplateKey,
+      ...(resolvedTemplateKey === 'lawyer-classic' ? { lawyer_classic_design_version: 2 } : {}),
     },
   };
 }

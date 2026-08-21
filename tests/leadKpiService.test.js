@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeSellerCredentialMetrics } from '../services/analytics/leadKpiService.js';
+import {
+  summarizeProfessionalCredentialMetrics,
+  summarizeSellerCredentialMetrics,
+} from '../services/analytics/leadKpiService.js';
 
 test('summarizeSellerCredentialMetrics returns distinct clients and seller property values', () => {
   const rows = [
@@ -65,5 +68,23 @@ test('summarizeSellerCredentialMetrics returns stable zero values for empty data
     sold_homes_with_value: 0,
     sold_homes_with_closed_value: 0,
     currency: 'USD',
+  });
+});
+
+test('summarizeProfessionalCredentialMetrics counts converted cases across lead types', () => {
+  const rows = [
+    { _id: 'lawyer-active', match_status: 'nurturing', lead_profile_id: { _id: 'client-1' } },
+    { _id: 'lawyer-closed', match_status: 'converted', lead_profile_id: { _id: 'client-2' } },
+    { _id: 'broker-closed', match_status: 'converted', lead_profile_id: { _id: 'client-3' } },
+  ];
+
+  assert.deepEqual(summarizeProfessionalCredentialMetrics(rows), {
+    total_clients: 3,
+    active_pipeline_value: 0,
+    total_sold_home_value: 0,
+    sold_homes_with_value: 0,
+    sold_homes_with_closed_value: 0,
+    currency: 'USD',
+    closed_cases: 2,
   });
 });

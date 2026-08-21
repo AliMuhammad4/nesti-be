@@ -10,6 +10,7 @@ import {
   countClosedSellerLeads,
   getRecentClosedSellerLeadOutcomes,
   getLeadKpiSummary,
+  getProfessionalCredentialMetrics,
   getSellerCredentialMetrics,
 } from '../analytics/leadKpiService.js';
 import { serializePublishedStorefront } from './storefrontService.js';
@@ -153,6 +154,7 @@ async function loadFullProfileContext(professionalUserId) {
     availableSellerLeadsCount,
     recentClosedSellerLeads,
     sellerCredentialMetrics,
+    professionalCredentialMetrics,
     professionalProfile,
     latestInviteLink,
     embedDoc,
@@ -163,6 +165,7 @@ async function loadFullProfileContext(professionalUserId) {
     countAvailableSellerLeads(professionalUserId).catch(() => 0),
     getRecentClosedSellerLeadOutcomes(professionalUserId).catch(() => []),
     getSellerCredentialMetrics(professionalUserId).catch(() => null),
+    getProfessionalCredentialMetrics(professionalUserId).catch(() => null),
     ProfessionalProfile.findOne({ user_id: professionalUserId })
       .select(PROFESSIONAL_PROFILE_FIELDS)
       .lean()
@@ -199,6 +202,7 @@ async function loadFullProfileContext(professionalUserId) {
     availableSellerLeadsCount,
     recentClosedSellerLeads,
     sellerCredentialMetrics,
+    professionalCredentialMetrics,
     professionalProfile,
     latestInviteLink,
     embedDoc,
@@ -266,6 +270,7 @@ function serializeFullPublicProfile(profile, professionalUserId, context) {
     available_seller_leads_count: context.availableSellerLeadsCount,
     recent_closed_seller_leads: context.recentClosedSellerLeads,
     seller_credential_metrics: context.sellerCredentialMetrics,
+    professional_credential_metrics: context.professionalCredentialMetrics,
     client_rating_average: calculateProfileRating(profile),
     professional_profile: serializeProfessionalProfile(context.professionalProfile),
     professional_name: profile.user_id

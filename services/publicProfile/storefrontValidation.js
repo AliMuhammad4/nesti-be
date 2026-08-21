@@ -28,6 +28,11 @@ const ROLE_BLOCK_TYPES = Object.freeze({
     'closing-cost-estimator',
     'practice-areas',
     'credentials',
+    'who-we-help',
+    'document-checklist',
+    'fee-guidance',
+    'consultation-options',
+    'faq',
   ],
 });
 
@@ -51,15 +56,44 @@ const MAX_CONTENT_ITEMS = 30;
 const MAX_CONTENT_TEXT_LENGTH = 2000;
 const MAX_URL_LENGTH = 2048;
 const COLOR_VALUE_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+const EMPTY_SURFACE_COLORS = new Set(['transparent', 'none', 'inherit', 'initial']);
 const SAFE_BLOCK_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const URL_KEY_PATTERN = /(?:url|uri|href|link|image|logo)$/i;
+const MEDIA_URL_KEY_PATTERN = /(?:image|logo|photo|avatar|cover)(?:[_-]?(?:url|uri|href|link))?$/i;
 const COLOR_KEY_PATTERN = /(?:color|colour)$/i;
+
+function coerceOptionalColor(value, helpers) {
+  const next = String(value ?? '').trim();
+  if (!next || EMPTY_SURFACE_COLORS.has(next.toLowerCase())) return '';
+  if (!COLOR_VALUE_PATTERN.test(next)) return helpers.error('string.pattern.base');
+  return next;
+}
 
 function isPlainObject(value) {
   return value !== null
     && typeof value === 'object'
     && !Array.isArray(value)
     && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function isSafeNavigationValue(value) {
+  if (/[\u0000-\u001F\u007F\\]/.test(value)) return false;
+  if (value.startsWith('#')) return value.length > 1;
+  if (value.startsWith('/')) {
+    if (value.startsWith('//')) return false;
+    try {
+      const resolved = new URL(value, 'https://storefront.invalid');
+      return resolved.origin === 'https://storefront.invalid';
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
 }
 
 function contentValidationError(value, depth = 0, key = '') {
@@ -70,6 +104,9 @@ function contentValidationError(value, depth = 0, key = '') {
       return 'contains text that is too long';
     }
     if (URL_KEY_PATTERN.test(key) && value) {
+      if (!MEDIA_URL_KEY_PATTERN.test(key) && isSafeNavigationValue(value)) {
+        return null;
+      }
       try {
         const url = new URL(value);
         if (!['http:', 'https:'].includes(url.protocol)) {
@@ -158,8 +195,8 @@ const storefrontLayoutSchema = Joi.object({
 }).unknown(false);
 
 const storefrontStyleSchema = Joi.object({
-  background: Joi.string().pattern(COLOR_VALUE_PATTERN).allow('').max(7).optional(),
-  textColor: Joi.string().pattern(COLOR_VALUE_PATTERN).allow('').max(7).optional(),
+  background: Joi.string().allow('').max(32).custom(coerceOptionalColor).optional(),
+  textColor: Joi.string().allow('').max(32).custom(coerceOptionalColor).optional(),
   radius: Joi.string().valid('none', 'small', 'medium', 'large', 'full', 'default').optional(),
   shadow: Joi.string().valid('none', 'small', 'medium', 'large').optional(),
 }).unknown(false);

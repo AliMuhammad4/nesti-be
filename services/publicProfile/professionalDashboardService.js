@@ -30,6 +30,7 @@ import {
 import {
   countAvailableSellerLeads,
   countClosedSellerLeads,
+  getProfessionalCredentialMetrics,
   getRecentClosedSellerLeadOutcomes,
   getSellerCredentialMetrics,
 } from '../analytics/leadKpiService.js';
@@ -122,6 +123,7 @@ export const getOwnPublicProfileService = async (userId) => {
   let availableSellerLeadsCount = 0;
   let recentClosedSellerLeads = [];
   let sellerCredentialMetrics = null;
+  let professionalCredentialMetrics = null;
   try {
     closedSellerLeadsCount = await countClosedSellerLeads(userId);
   } catch {
@@ -141,6 +143,11 @@ export const getOwnPublicProfileService = async (userId) => {
     sellerCredentialMetrics = await getSellerCredentialMetrics(userId);
   } catch {
     sellerCredentialMetrics = null;
+  }
+  try {
+    professionalCredentialMetrics = await getProfessionalCredentialMetrics(userId);
+  } catch {
+    professionalCredentialMetrics = null;
   }
 
   if (!profile) {
@@ -190,6 +197,7 @@ export const getOwnPublicProfileService = async (userId) => {
         available_seller_leads_count: availableSellerLeadsCount,
         recent_closed_seller_leads: recentClosedSellerLeads,
         seller_credential_metrics: sellerCredentialMetrics,
+        professional_credential_metrics: professionalCredentialMetrics,
         client_rating_average: calculateProfileRating(profile),
         about: profile.about,
         services: profile.services,
@@ -555,6 +563,8 @@ export const generateStorefrontDraftService = async (userId, input = {}) => {
   const generatedRevision = createGeneratedDraftRevision(
     generated,
     existingRevision?.brandKit?.toObject?.() || existingRevision?.brandKit || {},
+    new Date(),
+    existingRevision?.blocks || [],
   );
   const { error: validationError } = validateStorefrontDraftForRole(
     {

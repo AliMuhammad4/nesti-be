@@ -51,7 +51,65 @@ const STOREFRONT_BRAND_KIT_KEYS = Object.freeze([
   'show_chatbot',
 ]);
 
-export function createGeneratedDraftRevision(generated, existingBrandKit = {}, now = new Date()) {
+function generatedRevisionBlocks(generated = {}) {
+  return (generated?.storefront_blocks || []).map((block) => ({
+    id: block.id,
+    type: block.type,
+    data: {
+      enabled: block.enabled !== false,
+      content: block.content || {},
+      ...(block.settings && Object.keys(block.settings).length ? { layout: block.settings } : {}),
+    },
+  }));
+}
+
+function mergeGeneratedBlocks(generatedBlocks, existingBlocks = []) {
+  if (!Array.isArray(existingBlocks) || !existingBlocks.length) return generatedBlocks;
+
+  const normalizedExisting = existingBlocks.map(
+    (block) => block?.toObject?.() || block,
+  );
+  const unusedGenerated = new Set(generatedBlocks.map((_, index) => index));
+  const mergedExisting = normalizedExisting.map((existingBlock) => {
+    let generatedIndex = generatedBlocks.findIndex(
+      (block, index) => unusedGenerated.has(index) && block.id === existingBlock?.id,
+    );
+    if (generatedIndex < 0) {
+      generatedIndex = generatedBlocks.findIndex(
+        (block, index) => unusedGenerated.has(index) && block.type === existingBlock?.type,
+      );
+    }
+    if (generatedIndex < 0) return existingBlock;
+
+    unusedGenerated.delete(generatedIndex);
+    const generatedBlock = generatedBlocks[generatedIndex];
+    return {
+      ...generatedBlock,
+      ...existingBlock,
+      id: existingBlock.id,
+      type: existingBlock.type,
+      data: {
+        ...generatedBlock.data,
+        ...(existingBlock.data || {}),
+        content: {
+          ...(existingBlock.data?.content || {}),
+          ...(generatedBlock.data?.content || {}),
+        },
+      },
+    };
+  });
+
+  // Existing drafts own their structure. AI refreshes copy for matching blocks
+  // without resurrecting sections the user intentionally removed or moved.
+  return mergedExisting;
+}
+
+export function createGeneratedDraftRevision(
+  generated,
+  existingBrandKit = {},
+  now = new Date(),
+  existingBlocks = [],
+) {
   const generatedBrandKit = generated?.brand_kit || {};
   const mergedBrandKit = { ...existingBrandKit };
   STOREFRONT_BRAND_KIT_KEYS.forEach((key) => {
@@ -62,15 +120,7 @@ export function createGeneratedDraftRevision(generated, existingBrandKit = {}, n
   }
 
   return createDraftRevision({
-    blocks: (generated?.storefront_blocks || []).map((block) => ({
-      id: block.id,
-      type: block.type,
-      data: {
-        enabled: block.enabled !== false,
-        content: block.content || {},
-        ...(block.settings && Object.keys(block.settings).length ? { layout: block.settings } : {}),
-      },
-    })),
+    blocks: mergeGeneratedBlocks(generatedRevisionBlocks(generated), existingBlocks),
     brandKit: mergedBrandKit,
     template: {
       id: generated?.template_key || '',

@@ -58,6 +58,52 @@ test('storefront draft validation accepts bounded structured content', () => {
   assert.equal(value.draft.blocks[0].data.layout.animationType, 'slide-up');
 });
 
+test('storefront content allows safe navigation targets but keeps media URLs absolute', () => {
+  const safeNavigation = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'footer',
+        type: 'footer',
+        data: {
+          content: {
+            items: [
+              { label: 'Practice areas', url: '#services' },
+              { label: 'Contact', href: '/contact?source=storefront#inquiry' },
+            ],
+          },
+        },
+      }],
+    },
+  });
+  assert.equal(safeNavigation.error, undefined);
+
+  for (const unsafeUrl of ['javascript:alert(1)', 'data:text/html,bad', '//evil.example/path']) {
+    const { error } = saveStorefrontDraftSchema.validate({
+      draft: {
+        blocks: [{
+          id: 'footer',
+          type: 'footer',
+          data: { content: { url: unsafeUrl } },
+        }],
+      },
+    });
+    assert.ok(error, `${unsafeUrl} should be rejected`);
+  }
+
+  for (const relativeMediaUrl of ['#portrait', '/images/portrait.jpg']) {
+    const { error } = saveStorefrontDraftSchema.validate({
+      draft: {
+        blocks: [{
+          id: 'hero',
+          type: 'hero',
+          data: { content: { image_url: relativeMediaUrl } },
+        }],
+      },
+    });
+    assert.ok(error, `${relativeMediaUrl} should not be accepted as an image URL`);
+  }
+});
+
 test('storefront draft validation accepts element editing metadata', () => {
   const { error, value } = saveStorefrontDraftSchema.validate({
     draft: {
@@ -238,6 +284,100 @@ test('community expert AI draft has 14 valid blocks and preserves the full brand
   );
 });
 
+test('lawyer classic AI blocks use canonical order and legal-specific copy metadata', () => {
+  const blocks = generateDefaultStorefrontBlocks('lawyer', 'lawyer-classic', {
+    headline: 'Clear counsel for your closing',
+    tagline: 'Review contracts, title, and closing requirements with confidence.',
+    about: 'Focused real estate legal guidance for buyers and sellers.',
+  });
+
+  assert.deepEqual(blocks.map((block) => block.type), [
+    'hero',
+    'about',
+    'who-we-help',
+    'expertise',
+    'practice-areas',
+    'document-checklist',
+    'fee-guidance',
+    'role-details',
+    'consultation-options',
+    'testimonials',
+    'credentials',
+    'guidance',
+    'faq',
+    'cta',
+    'footer',
+  ]);
+  assert.equal(blocks.length, 15);
+  assert.equal(blocks[0].content.eyebrow, 'Property law · Closing counsel');
+  assert.equal(blocks[0].content.lawyer_classic_design_version, 2);
+  assert.notEqual(blocks[0].content.eyebrow, 'Community expert');
+  assert.equal(blocks[1].content.eyebrow, 'About the practice');
+  assert.equal(blocks[1].content.body, 'Focused real estate legal guidance for buyers and sellers.');
+  assert.equal(new Set(blocks.map((block) => block.type)).size, blocks.length);
+  assert.deepEqual(
+    blocks.find((block) => block.type === 'testimonials').content,
+    {},
+    'AI generation must not invent client testimonials',
+  );
+  assert.deepEqual(
+    blocks.find((block) => block.type === 'credentials').content,
+    {},
+    'AI generation must not invent legal credentials',
+  );
+});
+
+test('AI revision merge preserves existing order, layout, style, and ungenerated content', () => {
+  const generatedBlocks = generateDefaultStorefrontBlocks('lawyer', 'lawyer-classic', {
+    headline: 'Fresh legal headline',
+    tagline: 'Fresh legal summary',
+    about: 'Fresh practice overview',
+  });
+  const revision = createGeneratedDraftRevision(
+    {
+      template_key: 'lawyer-classic',
+      storefront_blocks: generatedBlocks,
+      brand_kit: {},
+    },
+    {},
+    new Date('2026-08-19T00:00:00.000Z'),
+    [
+      {
+        id: 'custom-about',
+        type: 'about',
+        data: {
+          content: { heading: 'Old heading', custom_note: 'Keep this field' },
+          layout: { alignment: 'right', padding: 'small' },
+          style: { background: '#112233', textColor: '#ffffff' },
+        },
+      },
+      {
+        id: 'custom-hero',
+        type: 'hero',
+        data: {
+          enabled: false,
+          content: { heading: 'Old hero', custom_badge: 'Keep this badge' },
+          layout: { alignment: 'left', width: 'narrow' },
+          style: { radius: 'large', shadow: 'medium' },
+        },
+      },
+    ],
+  );
+
+  assert.deepEqual(revision.blocks.slice(0, 2).map((block) => block.id), ['custom-about', 'custom-hero']);
+  assert.deepEqual(revision.blocks[0].data.layout, { alignment: 'right', padding: 'small' });
+  assert.deepEqual(revision.blocks[0].data.style, { background: '#112233', textColor: '#ffffff' });
+  assert.equal(revision.blocks[0].data.content.body, 'Fresh practice overview');
+  assert.equal(revision.blocks[0].data.content.custom_note, 'Keep this field');
+  assert.equal(revision.blocks[1].data.enabled, false);
+  assert.deepEqual(revision.blocks[1].data.layout, { alignment: 'left', width: 'narrow' });
+  assert.deepEqual(revision.blocks[1].data.style, { radius: 'large', shadow: 'medium' });
+  assert.equal(revision.blocks[1].data.content.heading, 'Fresh legal headline');
+  assert.equal(revision.blocks[1].data.content.custom_badge, 'Keep this badge');
+  assert.equal(revision.blocks.length, 2);
+  assert.equal(revision.blocks.some((block) => block.type === 'footer'), false);
+});
+
 test('owner preview serializers expose public feedback and community profile inputs', () => {
   const profile = {
     testimonials: [{ client_name: 'Older', rating: 4, text: 'Great', date: '2026-01-01' }],
@@ -325,6 +465,23 @@ test('storefront block types are constrained by professional role', () => {
       `${role} using ${templateId} should reject shared proof blocks`,
     );
   });
+});
+
+test('storefront draft validation accepts transparent section backgrounds as empty', () => {
+  const { error, value } = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'about',
+        type: 'about',
+        data: {
+          style: { background: 'transparent', textColor: '' },
+        },
+      }],
+    },
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(value.draft.blocks[0].data.style.background, '');
 });
 
 test('storefront data rejects unsafe content and malformed layout or style', () => {

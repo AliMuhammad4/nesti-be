@@ -53,6 +53,8 @@ const PROFESSIONAL_PROFILE_FIELDS = [
   'service_area_cities',
   'service_area_regions',
   'languages_spoken',
+  'other_language_text',
+  'license_number',
   'experience_level',
 ].join(' ');
 
@@ -139,6 +141,8 @@ function serializeProfessionalProfile(profile) {
     energy_style: profile.energy_style || '',
     personality_tag: profile.personality_tag || '',
     experience_level: profile.experience_level || '',
+    license_number: profile.license_number || '',
+    other_language_text: profile.other_language_text || '',
   };
   for (const field of PROFESSIONAL_PROFILE_ARRAY_FIELDS) {
     serialized[field] = Array.isArray(profile[field]) ? profile[field] : [];

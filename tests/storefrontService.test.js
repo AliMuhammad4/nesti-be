@@ -421,6 +421,30 @@ test('storefront block types are constrained by professional role', () => {
   }, 'mortgage_broker');
   assert.equal(brokerDraft.error, undefined);
 
+  const firstHomeLawyerDraft = validateStorefrontDraftForRole({
+    template: { id: 'lawyer-first-home-closing' },
+    blocks: [
+      { id: 'hero', type: 'hero', data: { content: {} } },
+      { id: 'snapshot', type: 'practice-snapshot', data: { content: {} } },
+      { id: 'scope', type: 'engagement-scope', data: { content: {} } },
+      { id: 'logistics', type: 'practice-logistics', data: { content: {} } },
+      { id: 'footer', type: 'footer', data: { content: {} } },
+    ],
+  }, 'lawyer');
+  assert.equal(firstHomeLawyerDraft.error, undefined);
+
+  const classicLawyerUsingFirstHomeBlocks = validateStorefrontDraftForRole({
+    template: { id: 'lawyer-classic' },
+    blocks: [{ id: 'scope', type: 'engagement-scope', data: { content: {} } }],
+  }, 'lawyer');
+  assert.match(classicLawyerUsingFirstHomeBlocks.error.message, /Unsupported storefront block type/);
+
+  const classicLawyerUsingSnapshot = validateStorefrontDraftForRole({
+    template: { id: 'lawyer-classic' },
+    blocks: [{ id: 'snapshot', type: 'practice-snapshot', data: { content: {} } }],
+  }, 'lawyer');
+  assert.match(classicLawyerUsingSnapshot.error.message, /Unsupported storefront block type/);
+
   const agentOnlyBlock = validateStorefrontDraftForRole({
     blocks: [{ id: 'properties', type: 'properties', data: { content: {} } }],
   }, 'lawyer');
@@ -430,6 +454,11 @@ test('storefront block types are constrained by professional role', () => {
     blocks: [{ id: 'valuation', type: 'home-valuation', data: { content: {} } }],
   }, 'agent');
   assert.match(removedValuationBlock.error.message, /Unsupported storefront block type/);
+
+  const removedClosingEstimator = validateStorefrontDraftForRole({
+    blocks: [{ id: 'closing-estimator', type: 'closing-cost-estimator', data: { content: {} } }],
+  }, 'lawyer');
+  assert.match(removedClosingEstimator.error.message, /Unsupported storefront block type/);
 
   const sharedProofBlocks = [
     { id: 'performance', type: 'seller-performance', data: { content: {} } },
@@ -465,6 +494,21 @@ test('storefront block types are constrained by professional role', () => {
       `${role} using ${templateId} should reject shared proof blocks`,
     );
   });
+});
+
+test('First Home drafts allow custom order and repeated section types', () => {
+  const validate = (blocks) => validateStorefrontDraftForRole({
+    template: { id: 'lawyer-first-home-closing' },
+    blocks,
+  }, 'lawyer');
+
+  const result = validate([
+    { id: 'footer', type: 'footer', data: {} },
+    { id: 'about-1', type: 'about', data: {} },
+    { id: 'hero', type: 'hero', data: {} },
+    { id: 'about-2', type: 'about', data: {} },
+  ]);
+  assert.equal(result.error, undefined);
 });
 
 test('storefront draft validation accepts transparent section backgrounds as empty', () => {
@@ -506,6 +550,42 @@ test('storefront data rejects unsafe content and malformed layout or style', () 
     },
   });
   assert.ok(invalidStyle.error);
+
+  const invalidNestedBackground = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'services',
+        type: 'services',
+        data: { content: { items: [{ title: 'Card', background: 'url(https://tracker.invalid/pixel)' }] } },
+      }],
+    },
+  });
+  assert.ok(invalidNestedBackground.error);
+
+  const invalidFooterTarget = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'footer',
+        type: 'footer',
+        data: { content: { items: [{ label: 'Unsafe', target: 'javascript:alert(1)' }] } },
+      }],
+    },
+  });
+  assert.ok(invalidFooterTarget.error);
+
+  const safeFooterTargets = ['#about', '/contact', 'https://example.com', 'mailto:hello@example.com', 'tel:+15551234567'];
+  safeFooterTargets.forEach((target) => {
+    const result = saveStorefrontDraftSchema.validate({
+      draft: {
+        blocks: [{
+          id: 'footer',
+          type: 'footer',
+          data: { content: { items: [{ label: 'Safe', target }] } },
+        }],
+      },
+    });
+    assert.equal(result.error, undefined, `${target} should be accepted`);
+  });
 });
 
 test('publishing snapshots a draft and public serialization exposes no draft', () => {

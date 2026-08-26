@@ -63,6 +63,7 @@ export function toProfessionalProfileSummary(profile) {
     service_area_primary_zones: Array.isArray(profile.service_area_primary_zones) ? profile.service_area_primary_zones : [],
     service_area_secondary_zones: Array.isArray(profile.service_area_secondary_zones) ? profile.service_area_secondary_zones : [],
     languages_spoken: Array.isArray(profile.languages_spoken) ? profile.languages_spoken : [],
+    other_language_text: profile.other_language_text || '',
     experience_level: profile.experience_level || '',
     core_specialization_tags: Array.isArray(profile.core_specialization_tags) ? profile.core_specialization_tags : [],
     specialty_strength_tags: Array.isArray(profile.specialty_strength_tags) ? profile.specialty_strength_tags : [],

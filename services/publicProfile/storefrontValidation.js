@@ -25,7 +25,6 @@ const ROLE_BLOCK_TYPES = Object.freeze({
     'mortgage-programs',
   ],
   [PROFESSIONAL_TYPE.LAWYER]: [
-    'closing-cost-estimator',
     'practice-areas',
     'credentials',
     'who-we-help',
@@ -50,6 +49,12 @@ const AGENT_SHARED_PROOF_TEMPLATE_IDS = new Set([
   'agent-community-expert',
 ]);
 
+const LAWYER_FIRST_HOME_TEMPLATE_ID = 'lawyer-first-home-closing';
+const LAWYER_FIRST_HOME_BLOCK_TYPES = Object.freeze([
+  'engagement-scope',
+  'practice-snapshot',
+  'practice-logistics',
+]);
 const MAX_CONTENT_DEPTH = 4;
 const MAX_CONTENT_KEYS = 30;
 const MAX_CONTENT_ITEMS = 30;
@@ -58,9 +63,9 @@ const MAX_URL_LENGTH = 2048;
 const COLOR_VALUE_PATTERN = /^#[0-9A-Fa-f]{6}$/;
 const EMPTY_SURFACE_COLORS = new Set(['transparent', 'none', 'inherit', 'initial']);
 const SAFE_BLOCK_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
-const URL_KEY_PATTERN = /(?:url|uri|href|link|image|logo)$/i;
+const URL_KEY_PATTERN = /(?:url|uri|href|link|image|logo|target)$/i;
 const MEDIA_URL_KEY_PATTERN = /(?:image|logo|photo|avatar|cover)(?:[_-]?(?:url|uri|href|link))?$/i;
-const COLOR_KEY_PATTERN = /(?:color|colour)$/i;
+const COLOR_KEY_PATTERN = /(?:color|colour|background)$/i;
 
 function coerceOptionalColor(value, helpers) {
   const next = String(value ?? '').trim();
@@ -90,7 +95,7 @@ function isSafeNavigationValue(value) {
   }
   try {
     const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol);
+    return ['http:', 'https:', 'mailto:', 'tel:'].includes(url.protocol);
   } catch {
     return false;
   }
@@ -116,7 +121,12 @@ function contentValidationError(value, depth = 0, key = '') {
         return 'contains an invalid URL';
       }
     }
-    if (COLOR_KEY_PATTERN.test(key) && value && !COLOR_VALUE_PATTERN.test(value)) {
+    if (
+      COLOR_KEY_PATTERN.test(key)
+      && value
+      && !EMPTY_SURFACE_COLORS.has(value.toLowerCase())
+      && !COLOR_VALUE_PATTERN.test(value)
+    ) {
       return 'contains an invalid color';
     }
     return null;
@@ -257,6 +267,9 @@ export function allowedStorefrontBlockTypes(role, templateId = '') {
     ...(role === PROFESSIONAL_TYPE.AGENT && AGENT_SHARED_PROOF_TEMPLATE_IDS.has(templateId)
       ? SHARED_PROOF_BLOCK_TYPES
       : []),
+    ...(role === PROFESSIONAL_TYPE.LAWYER && templateId === LAWYER_FIRST_HOME_TEMPLATE_ID
+      ? LAWYER_FIRST_HOME_BLOCK_TYPES
+      : []),
   ];
 }
 
@@ -271,10 +284,12 @@ export function validateStorefrontDraftForRole(draft, role) {
   const invalidBlockTypes = (value.blocks || [])
     .filter((block) => !allowedBlockTypes.has(block.type))
     .map((block) => block.type);
-  if (!invalidBlockTypes.length) return { error: undefined, value };
+  if (invalidBlockTypes.length) {
+    return {
+      error: new Error(`Unsupported storefront block type for ${role}: ${invalidBlockTypes.join(', ')}`),
+      value,
+    };
+  }
 
-  return {
-    error: new Error(`Unsupported storefront block type for ${role}: ${invalidBlockTypes.join(', ')}`),
-    value,
-  };
+  return { error: undefined, value };
 }

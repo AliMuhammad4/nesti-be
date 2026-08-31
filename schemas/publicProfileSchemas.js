@@ -99,10 +99,20 @@ export { storefrontDraftSchema };
 
 export const saveStorefrontDraftSchema = Joi.object({
   draft: storefrontDraftSchema.required(),
+  expected_revision_id: Joi.string().trim().max(80).optional(),
+  expected_revision_version: Joi.number().integer().min(0).optional(),
+}).unknown(false);
+
+export const publishStorefrontSchema = Joi.object({
+  draft: storefrontDraftSchema.optional(),
+  expected_revision_id: Joi.string().trim().max(80).optional(),
+  expected_revision_version: Joi.number().integer().min(0).optional(),
 }).unknown(false);
 
 export const generateStorefrontDraftSchema = Joi.object({
   template_key: Joi.string().trim().max(80).optional(),
+  expected_revision_id: Joi.string().trim().max(80).optional(),
+  expected_revision_version: Joi.number().integer().min(0).optional(),
   onboarding: Joi.object().unknown(true).max(20).optional(),
   brand_kit: Joi.object({
     business_name: Joi.string().trim().max(120).allow('').optional(),

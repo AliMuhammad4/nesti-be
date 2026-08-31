@@ -124,14 +124,6 @@ export const STOREFRONT_TEMPLATE_TIERS = {
     currency: 'usd',
     professional_type: 'lawyer',
   },
-  'lawyer-commercial': {
-    template_id: 'lawyer-commercial',
-    name: 'Commercial Counsel',
-    tier: 'free',
-    amount: 0,
-    currency: 'usd',
-    professional_type: 'lawyer',
-  },
 };
 
 const FREE_TEMPLATE_IDS = new Set(

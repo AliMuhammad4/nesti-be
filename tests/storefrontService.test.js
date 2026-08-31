@@ -6,6 +6,7 @@ import {
   createGeneratedDraftRevision,
   createPublishedRevision,
   serializePublishedStorefront,
+  serializeStorefrontRevision,
   serializeStorefrontDrafts,
   storefrontDrafts,
 } from '../services/publicProfile/storefrontService.js';
@@ -20,9 +21,23 @@ import {
 import { generateDefaultStorefrontBlocks } from '../services/publicProfile/storefrontAiGenerationService.js';
 import {
   mergeProfileTestimonials,
+  isDeletedPublicPageRecord,
   serializeProfileFeedback,
   toProfessionalProfileSummary,
 } from '../services/publicProfile/professionalDashboardService.js';
+
+test('soft-deleted page records do not hydrate a fallback builder page', () => {
+  assert.equal(isDeletedPublicPageRecord({
+    enabled: false,
+    storefront: { draft: null, drafts: [], published: null },
+    services: [],
+    practice_areas: [],
+  }), true);
+  assert.equal(isDeletedPublicPageRecord({
+    enabled: false,
+    storefront: { drafts: [{ template: { id: 'lawyer-investor' } }] },
+  }), false);
+});
 
 test('storefront draft validation accepts bounded structured content', () => {
   const { error, value } = saveStorefrontDraftSchema.validate({
@@ -56,6 +71,45 @@ test('storefront draft validation accepts bounded structured content', () => {
   assert.equal(value.draft.blocks[0].data.content.heading, 'A business');
   assert.equal(value.draft.blocks[0].data.layout.columns, '4');
   assert.equal(value.draft.blocks[0].data.layout.animationType, 'slide-up');
+});
+
+test('storefront CTA layout only accepts inline or stacked buttons', () => {
+  for (const buttonLayout of ['inline', 'stacked']) {
+    const result = saveStorefrontDraftSchema.validate({
+      draft: {
+        blocks: [{ id: 'cta', type: 'cta', data: { layout: { buttonLayout } } }],
+      },
+    });
+    assert.equal(result.error, undefined);
+  }
+  assert.ok(saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{ id: 'cta', type: 'cta', data: { layout: { buttonLayout: 'grid' } } }],
+    },
+  }).error);
+});
+
+test('save contract accepts optional optimistic revision metadata', () => {
+  const result = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{ id: 'hero', type: 'hero', data: {} }],
+      revision_id: 'revision-from-read',
+      revision_version: 3,
+    },
+    expected_revision_id: 'revision-from-read',
+    expected_revision_version: 3,
+  });
+  assert.equal(result.error, undefined);
+});
+
+test('AI generation contract accepts optimistic revision metadata', () => {
+  const result = generateStorefrontDraftSchema.validate({
+    template_key: 'lawyer-investor',
+    expected_revision_id: 'revision-from-read',
+    expected_revision_version: 3,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.value.expected_revision_version, 3);
 });
 
 test('storefront content allows safe navigation targets but keeps media URLs absolute', () => {
@@ -511,6 +565,54 @@ test('First Home drafts allow custom order and repeated section types', () => {
   assert.equal(result.error, undefined);
 });
 
+test('lawyer investor AI blocks use the ten-layer policy without testimonials', () => {
+  const blocks = generateDefaultStorefrontBlocks('lawyer', 'lawyer-investor', {
+    headline: 'Counsel for active property investors',
+    tagline: 'Structured legal support for repeat transactions.',
+    about: 'An investor-focused real estate legal practice.',
+    services: [
+      { title: 'Acquisitions', description: 'Review the next purchase.', cta_text: 'Start intake' },
+    ],
+  });
+
+  assert.deepEqual(blocks.map((block) => block.type), [
+    'hero',
+    'about',
+    'practice-snapshot',
+    'services',
+    'role-details',
+    'practice-areas',
+    'guidance',
+    'credentials',
+    'cta',
+    'footer',
+  ]);
+  assert.equal(blocks.some((block) => block.type === 'testimonials'), false);
+  assert.equal(blocks[0].content.eyebrow, 'Investor transaction counsel');
+  assert.equal(blocks[3].content.items[0].title, 'Acquisitions');
+});
+
+test('lawyer investor drafts reject testimonials but allow custom section order', () => {
+  const valid = validateStorefrontDraftForRole({
+    template: { id: 'lawyer-investor' },
+    blocks: [
+      { id: 'footer', type: 'footer', data: {} },
+      { id: 'hero', type: 'hero', data: {} },
+      { id: 'about', type: 'about', data: {} },
+    ],
+  }, 'lawyer');
+  assert.equal(valid.error, undefined);
+
+  const invalid = validateStorefrontDraftForRole({
+    template: { id: 'lawyer-investor' },
+    blocks: [
+      { id: 'hero', type: 'hero', data: {} },
+      { id: 'reviews', type: 'testimonials', data: {} },
+    ],
+  }, 'lawyer');
+  assert.match(invalid.error.message, /Unsupported storefront block type/);
+});
+
 test('storefront draft validation accepts transparent section backgrounds as empty', () => {
   const { error, value } = saveStorefrontDraftSchema.validate({
     draft: {
@@ -602,4 +704,51 @@ test('publishing snapshots a draft and public serialization exposes no draft', (
   assert.equal(publicStorefront.blocks[0].data.title, 'Before publish');
   assert.equal(publicStorefront.published_at, '2026-01-02T00:00:00.000Z');
   assert.equal('draft' in publicStorefront, false);
+});
+
+test('revision metadata increments and publish preserves exact draft SEO identity', () => {
+  const first = createDraftRevision({
+    blocks: [{ id: 'hero', type: 'hero', data: {} }],
+    template: { id: 'modern' },
+    seo_meta: { title: 'Draft SEO', description: 'Not live yet', keywords: ['law'] },
+  }, new Date('2026-01-01T00:00:00.000Z'));
+  const second = createDraftRevision({
+    blocks: first.blocks,
+    template: first.template,
+    seo_meta: { title: 'Revised SEO' },
+  }, new Date('2026-01-02T00:00:00.000Z'), { previousRevision: first });
+  const published = createPublishedRevision(second, new Date('2026-01-03T00:00:00.000Z'));
+
+  assert.notEqual(first.revision_id, second.revision_id);
+  assert.equal(first.revision_version, 1);
+  assert.equal(second.revision_version, 2);
+  assert.equal(published.revision_id, second.revision_id);
+  assert.equal(published.revision_version, second.revision_version);
+  assert.equal(published.seo_meta.title, 'Revised SEO');
+});
+
+test('public storefront strictly whitelists essentials while owner revisions retain context', () => {
+  const draft = createDraftRevision({
+    blocks: [],
+    template: { id: 'modern' },
+    brandKit: {
+      essentials: {
+        service_area: 'Toronto',
+        languages_spoken: ['english'],
+        calendly_link: 'https://calendly.com/example',
+        private_onboarding_answer: 'confidential',
+        ai_context: { customer_segment: 'private' },
+      },
+    },
+  });
+  const published = createPublishedRevision(draft);
+  const owner = serializeStorefrontRevision(draft);
+  const publicStorefront = serializePublishedStorefront({ published });
+
+  assert.equal(owner.brandKit.essentials.private_onboarding_answer, 'confidential');
+  assert.deepEqual(publicStorefront.brandKit.essentials, {
+    calendly_link: 'https://calendly.com/example',
+    languages_spoken: ['english'],
+    service_area: 'Toronto',
+  });
 });

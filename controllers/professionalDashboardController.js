@@ -17,6 +17,36 @@ const send = (res, result) => {
   res.status(result.status).json(result.body);
 };
 
+function revisionExpectation(req) {
+  const expected = {
+    ...(req.body?.expected_revision_id !== undefined
+      ? { revisionId: req.body.expected_revision_id }
+      : {}),
+    ...(req.body?.expected_revision_version !== undefined
+      ? { revisionVersion: req.body.expected_revision_version }
+      : {}),
+  };
+  const ifMatch = String(req.get('If-Match') || '').trim().replace(/^W\//, '').replaceAll('"', '');
+  if (ifMatch && expected.revisionId === undefined) {
+    const separator = ifMatch.lastIndexOf(':');
+    if (separator > 0 && /^\d+$/.test(ifMatch.slice(separator + 1))) {
+      expected.revisionId = ifMatch.slice(0, separator);
+      expected.revisionVersion = Number(ifMatch.slice(separator + 1));
+    } else {
+      expected.revisionId = ifMatch;
+    }
+  }
+  return expected;
+}
+
+function sendRevision(res, result, key) {
+  const revision = result.body?.[key];
+  if (revision?.revision_id) {
+    res.set('ETag', `"${revision.revision_id}:${revision.revision_version || 0}"`);
+  }
+  send(res, result);
+}
+
 export const getOwnPublicProfile = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -54,7 +84,15 @@ export const getOwnStorefrontProperties = async (req, res, next) => {
 
 export const saveStorefrontDraft = async (req, res, next) => {
   try {
-    send(res, await saveStorefrontDraftService(req.user._id, req.body.draft));
+    sendRevision(
+      res,
+      await saveStorefrontDraftService(
+        req.user._id,
+        req.body.draft,
+        revisionExpectation(req),
+      ),
+      'draft',
+    );
   } catch (error) {
     next(error);
   }
@@ -62,7 +100,15 @@ export const saveStorefrontDraft = async (req, res, next) => {
 
 export const publishStorefront = async (req, res, next) => {
   try {
-    send(res, await publishStorefrontService(req.user._id, req.body?.draft));
+    sendRevision(
+      res,
+      await publishStorefrontService(
+        req.user._id,
+        req.body?.draft,
+        revisionExpectation(req),
+      ),
+      'published',
+    );
   } catch (error) {
     next(error);
   }

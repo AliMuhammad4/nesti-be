@@ -9,6 +9,7 @@ import { generatePublicProfileCopy } from './publicProfileAiCopyService.js';
 import { generateStorefrontDraft } from './storefrontAiGenerationService.js';
 import {
   activeStorefrontDraft,
+  canonicalizeStorefrontDraft,
   createDraftRevision,
   createGeneratedDraftRevision,
   createPublishedRevision,
@@ -18,6 +19,7 @@ import {
   templateIdForRevision,
 } from './storefrontService.js';
 import { validateStorefrontDraftForRole } from './storefrontValidation.js';
+import { defaultStorefrontTemplateIdForRole } from './storefrontTemplateDefaults.js';
 import {
   getStorefrontTemplateTier,
   storefrontTemplateSupportsProfile,
@@ -94,6 +96,25 @@ export function mergeProfileTestimonials(profile = {}) {
   ));
 }
 
+export function isDeletedPublicPageRecord(profile) {
+  if (!profile || profile.enabled) return false;
+  const hasStorefrontRevision = Boolean(
+    profile.storefront?.published
+    || profile.storefront?.draft
+    || (Array.isArray(profile.storefront?.drafts) && profile.storefront.drafts.length),
+  );
+  const hasLegacyPageContent = Boolean(
+    profile.headline
+    || profile.tagline
+    || profile.about
+    || profile.cover_photo_url
+    || profile.profile_photo_url
+    || profile.services?.length
+    || profile.practice_areas?.length,
+  );
+  return !hasStorefrontRevision && !hasLegacyPageContent;
+}
+
 export const getOwnPublicProfileService = async (userId) => {
   // Get user first to check role
   const user = await User.findById(userId).lean();
@@ -151,7 +172,9 @@ export const getOwnPublicProfileService = async (userId) => {
     professionalCredentialMetrics = null;
   }
 
-  if (!profile) {
+  const isDeletedPage = isDeletedPublicPageRecord(profile);
+
+  if (!profile || isDeletedPage) {
     const suggestedSlug = await generateSlugFromName(
       `${user.first_name}-${user.last_name}`,
       userId
@@ -296,13 +319,71 @@ async function getOrCreatePublicProfileForStorefront(userId) {
     };
   }
 
-  profile = new PublicProfile({
-    user_id: userId,
-    professional_type: professionalProfile.professional_type,
-    slug: await generateSlugFromName(`${user.first_name}-${user.last_name}`, userId),
-    enabled: false,
-  });
+  try {
+    profile = await PublicProfile.create({
+      user_id: userId,
+      professional_type: professionalProfile.professional_type,
+      slug: await generateSlugFromName(`${user.first_name}-${user.last_name}`, userId),
+      enabled: false,
+    });
+  } catch (creationError) {
+    if (creationError?.code !== 11000) throw creationError;
+    profile = await PublicProfile.findOne({ user_id: userId });
+    if (!profile) throw creationError;
+  }
   return { profile, professionalType: professionalProfile.professional_type };
+}
+
+function revisionConflict(currentRevision) {
+  return {
+    status: 409,
+    body: {
+      success: false,
+      message: 'Storefront draft changed. Reload the latest revision and try again.',
+      current_revision: serializeStorefrontRevision(currentRevision),
+    },
+  };
+}
+
+function expectationMatches(revision, expected = {}) {
+  if (expected.revisionId !== undefined
+    && String(revision?.revision_id || '') !== String(expected.revisionId || '')) {
+    return false;
+  }
+  if (expected.revisionVersion !== undefined
+    && Number(revision?.revision_version || 0) !== Number(expected.revisionVersion)) {
+    return false;
+  }
+  return true;
+}
+
+function hasRevisionExpectation(expected = {}) {
+  return expected.revisionId !== undefined || expected.revisionVersion !== undefined;
+}
+
+function revisionContentMatches(revision, canonicalDraft) {
+  const serialized = serializeStorefrontRevision(revision);
+  return JSON.stringify({
+    blocks: serialized?.blocks || [],
+    brandKit: serialized?.brandKit || {},
+    template: serialized?.template || {},
+    seo_meta: serialized?.seo_meta || {},
+  }) === JSON.stringify({
+    blocks: canonicalDraft?.blocks || [],
+    brandKit: canonicalDraft?.brandKit || {},
+    template: canonicalDraft?.template || {},
+    seo_meta: canonicalDraft?.seo_meta || {},
+  });
+}
+
+async function saveProfileOrConflict(profile, currentRevision) {
+  try {
+    await profile.save();
+    return null;
+  } catch (error) {
+    if (error?.name === 'VersionError') return revisionConflict(currentRevision);
+    throw error;
+  }
 }
 
 export const getOwnStorefrontDraftService = async (userId) => {
@@ -322,7 +403,11 @@ export const getOwnStorefrontDraftService = async (userId) => {
   const legacyTemplateId = templateIdForRevision(profile?.storefront?.draft);
   if (profile?._id && legacyTemplateId && !profile.storefront?.drafts?.length) {
     await PublicProfile.updateOne(
-      { _id: profile._id },
+      {
+        _id: profile._id,
+        'storefront.drafts.0': { $exists: false },
+        'storefront.draft.template.id': legacyTemplateId,
+      },
       {
         $set: {
           'storefront.drafts': [profile.storefront.draft],
@@ -337,7 +422,7 @@ export const getOwnStorefrontDraftService = async (userId) => {
     body: {
       success: true,
       profile: profile ? { id: profile._id, slug: profile.slug } : null,
-      draft: serializeStorefrontRevision(profile?.storefront?.draft),
+      draft: serializeStorefrontRevision(activeStorefrontDraft(profile?.storefront)),
       drafts: serializeStorefrontDrafts(profile?.storefront),
       active_template_id: profile?.storefront?.active_template_id || profile?.storefront?.draft?.template?.id || null,
       published_at: profile?.storefront?.published?.published_at || null,
@@ -349,12 +434,13 @@ export const getOwnStorefrontPropertiesService = async (userId) => (
   getSellerPropertiesBySlugService('', { requesterUserId: userId })
 );
 
-export const saveStorefrontDraftService = async (userId, draft) => {
+export const saveStorefrontDraftService = async (userId, draft, expected = {}) => {
   const { profile, professionalType, error } = await getOrCreatePublicProfileForStorefront(userId);
   if (error) return error;
 
+  const canonicalDraft = canonicalizeStorefrontDraft(draft);
   const { error: validationError, value: validatedDraft } = validateStorefrontDraftForRole(
-    draft,
+    canonicalDraft,
     professionalType,
   );
   if (validationError) {
@@ -380,16 +466,22 @@ export const saveStorefrontDraftService = async (userId, draft) => {
     };
   }
 
-  const revision = createDraftRevision(validatedDraft);
-  const templateId = templateIdForRevision(revision);
+  const templateId = templateIdForRevision(validatedDraft);
   profile.storefront = profile.storefront || {};
+  const previousRevision = storefrontDrafts(profile.storefront)
+    .find((entry) => templateIdForRevision(entry) === templateId);
+  if (hasRevisionExpectation(expected) && !expectationMatches(previousRevision, expected)) {
+    return revisionConflict(previousRevision);
+  }
+  const revision = createDraftRevision(validatedDraft, new Date(), { previousRevision });
   const drafts = storefrontDrafts(profile.storefront)
     .filter((entry) => templateIdForRevision(entry) !== templateId);
   drafts.push(revision);
   profile.storefront.drafts = drafts;
   profile.storefront.draft = revision;
   profile.storefront.active_template_id = templateId;
-  await profile.save();
+  const saveConflict = await saveProfileOrConflict(profile, previousRevision);
+  if (saveConflict) return saveConflict;
 
   return {
     status: 200,
@@ -404,7 +496,7 @@ export const saveStorefrontDraftService = async (userId, draft) => {
   };
 };
 
-export const publishStorefrontService = async (userId, draft = null) => {
+export const publishStorefrontService = async (userId, draft = null, expected = {}) => {
   const [profile, professionalProfile] = await Promise.all([
     PublicProfile.findOne({ user_id: userId })
       .select('user_id professional_type slug storefront'),
@@ -419,7 +511,7 @@ export const publishStorefrontService = async (userId, draft = null) => {
     };
   }
 
-  let sourceDraft = draft ? draft : activeStorefrontDraft(profile.storefront);
+  const sourceDraft = draft ? draft : activeStorefrontDraft(profile.storefront);
   let shouldPersistSourceDraft = false;
   if (draft) {
     shouldPersistSourceDraft = true;
@@ -431,14 +523,23 @@ export const publishStorefrontService = async (userId, draft = null) => {
       body: { success: false, message: 'Save a storefront draft before publishing' },
     };
   }
+  const persistedSourceDraft = draft
+    ? storefrontDrafts(profile.storefront).find(
+        (entry) => templateIdForRevision(entry) === templateIdForRevision(draft),
+      )
+    : sourceDraft;
+  if (hasRevisionExpectation(expected) && !expectationMatches(persistedSourceDraft, expected)) {
+    return revisionConflict(persistedSourceDraft);
+  }
 
   const professionalType = professionalProfile?.professional_type || profile.professional_type;
   const serializedSource = serializeStorefrontRevision(sourceDraft);
-  const sourcePayload = {
+  const sourcePayload = canonicalizeStorefrontDraft({
     blocks: serializedSource?.blocks || [],
     brandKit: serializedSource?.brandKit || {},
     template: serializedSource?.template || {},
-  };
+    seo_meta: serializedSource?.seo_meta || {},
+  });
   const { error: validationError, value: validatedDraft } = validateStorefrontDraftForRole(
     sourcePayload,
     professionalType,
@@ -477,12 +578,26 @@ export const publishStorefrontService = async (userId, draft = null) => {
     };
   }
 
-  const validatedRevision = createDraftRevision(
-    validatedDraft,
-    sourceDraft.updated_at || new Date(),
-  );
   profile.storefront = profile.storefront || {};
+  let validatedRevision = sourceDraft;
   if (shouldPersistSourceDraft) {
+    const templateId = templateIdForRevision(validatedDraft);
+    const previousRevision = storefrontDrafts(profile.storefront)
+      .find((entry) => templateIdForRevision(entry) === templateId);
+    validatedRevision = createDraftRevision(validatedDraft, new Date(), { previousRevision });
+    profile.storefront.drafts = storefrontDrafts(profile.storefront)
+      .filter((entry) => templateIdForRevision(entry) !== templateId)
+      .concat(validatedRevision);
+    profile.storefront.draft = validatedRevision;
+    profile.storefront.active_template_id = templateId;
+  } else if (
+    !sourceDraft.revision_id
+    || !Number(sourceDraft.revision_version)
+    || !revisionContentMatches(sourceDraft, validatedDraft)
+  ) {
+    validatedRevision = createDraftRevision(validatedDraft, new Date(), {
+      previousRevision: sourceDraft,
+    });
     const templateId = templateIdForRevision(validatedRevision);
     profile.storefront.drafts = storefrontDrafts(profile.storefront)
       .filter((entry) => templateIdForRevision(entry) !== templateId)
@@ -492,8 +607,10 @@ export const publishStorefrontService = async (userId, draft = null) => {
   }
   const published = createPublishedRevision(validatedRevision);
   profile.storefront.published = published;
+  profile.seo_meta = published.seo_meta || {};
   profile.enabled = true;
-  await profile.save();
+  const publishConflict = await saveProfileOrConflict(profile, sourceDraft);
+  if (publishConflict) return publishConflict;
 
   return {
     status: 200,
@@ -521,9 +638,10 @@ export const generateStorefrontDraftService = async (userId, input = {}) => {
   const { profile, error } = await getOrCreatePublicProfileForStorefront(userId);
   if (error) return error;
   const requestedTemplateKey = String(
-    input.template_key || (String(professionalProfile.professional_type || user.role).toLowerCase() === 'agent'
-      ? 'agent-investor'
-      : `${professionalProfile.professional_type || user.role}-classic`),
+    input.template_key
+    || defaultStorefrontTemplateIdForRole(
+      professionalProfile.professional_type || user.role,
+    ),
   ).trim();
   const requestedTemplate = getStorefrontTemplateTier(requestedTemplateKey);
   if (!requestedTemplate) {
@@ -541,6 +659,20 @@ export const generateStorefrontDraftService = async (userId, input = {}) => {
   const existingRevision = storefrontDrafts(profile.storefront).find(
     (revision) => templateIdForRevision(revision) === requestedTemplateKey,
   );
+  const generationExpectation = {
+    ...(input.expected_revision_id !== undefined
+      ? { revisionId: input.expected_revision_id }
+      : {}),
+    ...(input.expected_revision_version !== undefined
+      ? { revisionVersion: input.expected_revision_version }
+      : {}),
+  };
+  if (
+    hasRevisionExpectation(generationExpectation)
+    && !expectationMatches(existingRevision, generationExpectation)
+  ) {
+    return revisionConflict(existingRevision);
+  }
   const brandKit = {
     ...(existingRevision?.brandKit?.toObject?.() || existingRevision?.brandKit || {}),
     ...(input.brand_kit || {}),
@@ -566,6 +698,7 @@ export const generateStorefrontDraftService = async (userId, input = {}) => {
     existingRevision?.brandKit?.toObject?.() || existingRevision?.brandKit || {},
     new Date(),
     existingRevision?.blocks || [],
+    existingRevision || null,
   );
   const { error: validationError } = validateStorefrontDraftForRole(
     {
@@ -581,18 +714,9 @@ export const generateStorefrontDraftService = async (userId, input = {}) => {
     throw generationError;
   }
 
-  profile.headline = generated.headline;
-  profile.tagline = generated.tagline;
-  profile.about = generated.about;
-  profile.services = generated.services;
-  profile.seo_meta = generated.seo_meta;
-  profile.storefront = profile.storefront || {};
-  profile.storefront.drafts = storefrontDrafts(profile.storefront)
-    .filter((revision) => templateIdForRevision(revision) !== generated.template_key)
-    .concat(generatedRevision);
-  profile.storefront.draft = generatedRevision;
-  profile.storefront.active_template_id = generated.template_key;
-  await profile.save();
+  applyGeneratedStorefrontDraft(profile, generatedRevision, generated.template_key);
+  const generationConflict = await saveProfileOrConflict(profile, existingRevision);
+  if (generationConflict) return generationConflict;
 
   return {
     status: 200,
@@ -612,6 +736,16 @@ export const generateStorefrontDraftService = async (userId, input = {}) => {
     },
   };
 };
+
+export function applyGeneratedStorefrontDraft(profile, generatedRevision, templateKey) {
+  profile.storefront = profile.storefront || {};
+  profile.storefront.drafts = storefrontDrafts(profile.storefront)
+    .filter((revision) => templateIdForRevision(revision) !== templateKey)
+    .concat(generatedRevision);
+  profile.storefront.draft = generatedRevision;
+  profile.storefront.active_template_id = templateKey;
+  return profile;
+}
 
 export const updatePublicProfileService = async (userId, updates) => {
   const professionalProfile = await ProfessionalProfile.findOne({ user_id: userId }).lean();
@@ -634,12 +768,23 @@ export const updatePublicProfileService = async (userId, updates) => {
       );
     }
 
-    profile = new PublicProfile({
-      user_id: userId,
-      professional_type: professionalProfile.professional_type,
-      slug: updates.slug,
-      enabled: updates.enabled !== undefined ? updates.enabled : false,
-    });
+    try {
+      profile = await PublicProfile.create({
+        user_id: userId,
+        professional_type: professionalProfile.professional_type,
+        slug: updates.slug,
+        enabled: updates.enabled !== undefined ? updates.enabled : false,
+      });
+    } catch (creationError) {
+      if (creationError?.code !== 11000) throw creationError;
+      profile = await PublicProfile.findOne({ user_id: userId });
+      if (!profile) {
+        return {
+          status: 400,
+          body: { success: false, message: 'This slug is already taken' },
+        };
+      }
+    }
   }
 
   if (updates.slug && updates.slug !== profile.slug) {

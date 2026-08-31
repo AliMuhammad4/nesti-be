@@ -21,6 +21,7 @@ const feedbackSubmissionSchema = new mongoose.Schema({
   email: { type: String, required: true, trim: true, lowercase: true, maxlength: 180 },
   rating: { type: Number, required: true, min: 1, max: 5 },
   text: { type: String, required: true, trim: true, maxlength: 1000 },
+  approved: { type: Boolean, default: false },
   submitted_at: { type: Date, default: Date.now },
 }, { _id: true });
 
@@ -79,6 +80,13 @@ const storefrontRevisionSchema = new mongoose.Schema({
   blocks: { type: [storefrontBlockSchema], default: [] },
   brandKit: { type: storefrontBrandKitSchema, default: () => ({}) },
   template: { type: storefrontTemplateSchema, default: () => ({}) },
+  seo_meta: {
+    title: { type: String, default: null, maxlength: 60 },
+    description: { type: String, default: null, maxlength: 160 },
+    keywords: { type: [String], default: [] },
+  },
+  revision_id: { type: String, default: null, maxlength: 80 },
+  revision_version: { type: Number, min: 0, default: 0 },
   updated_at: { type: Date, default: null },
   published_at: { type: Date, default: null },
 }, { _id: false });
@@ -246,7 +254,7 @@ const publicProfileSchema = new mongoose.Schema({
     template_purchases: { type: [storefrontTemplatePurchaseSchema], default: [] },
   },
   
-}, { timestamps: true });
+}, { timestamps: true, optimisticConcurrency: true });
 
 // `slug` and `user_id` already get unique indexes from the `unique: true` field options.
 // Compound index for the public listing browser (enabled + role filter).

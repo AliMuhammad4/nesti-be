@@ -1,5 +1,13 @@
 import Joi from 'joi';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+import {
+  LAWYER_INVESTOR_BLOCK_TYPES,
+  LAWYER_INVESTOR_TEMPLATE_ID,
+} from './lawyerInvestorStorefrontContract.js';
+import {
+  LAWYER_NEWCOMER_BLOCK_TYPES,
+  LAWYER_NEWCOMER_TEMPLATE_ID,
+} from './lawyerNewcomerStorefrontContract.js';
 
 const SHARED_BLOCK_TYPES = Object.freeze([
   'hero',
@@ -188,7 +196,7 @@ const storefrontLayoutSchema = Joi.object({
     .max(24)
     .optional(),
   variant: Joi.string().valid('standard', 'editorial', 'split', 'feature-grid', 'lead-magnet', 'premium', 'minimal').optional(),
-  mediaPosition: Joi.string().valid('none', 'left', 'right', 'background').optional(),
+  mediaPosition: Joi.string().valid('none', 'left', 'right', 'background', 'portrait', 'cover').optional(),
   columns: Joi.alternatives().try(
     Joi.string().valid('1', '2', '3', '4'),
     Joi.number().integer().min(1).max(4),
@@ -202,6 +210,7 @@ const storefrontLayoutSchema = Joi.object({
     Joi.number().integer().min(0).max(10000),
   ).optional(),
   animationIntensity: Joi.string().valid('subtle', 'medium', 'strong').optional(),
+  buttonLayout: Joi.string().valid('inline', 'stacked').optional(),
 }).unknown(false);
 
 const storefrontStyleSchema = Joi.object({
@@ -254,13 +263,34 @@ const storefrontTemplateSchema = Joi.object({
   version: Joi.string().trim().max(40).allow(null, '').optional(),
 }).unknown(false);
 
+const storefrontSeoSchema = Joi.object({
+  title: Joi.string().trim().max(60).allow(null, '').optional(),
+  description: Joi.string().trim().max(160).allow(null, '').optional(),
+  keywords: Joi.array().items(Joi.string().trim().max(50)).unique().max(8).optional(),
+}).unknown(false);
+
 export const storefrontDraftSchema = Joi.object({
   blocks: Joi.array().items(storefrontBlockSchema).unique('id').max(60).optional(),
   brandKit: storefrontBrandKitSchema.optional(),
   template: storefrontTemplateSchema.optional(),
+  seo_meta: storefrontSeoSchema.optional(),
+  revision_id: Joi.string().trim().max(80).allow(null, '').optional(),
+  revision_version: Joi.number().integer().min(0).optional(),
 }).min(1);
 
 export function allowedStorefrontBlockTypes(role, templateId = '') {
+  if (
+    role === PROFESSIONAL_TYPE.LAWYER
+    && templateId === LAWYER_INVESTOR_TEMPLATE_ID
+  ) {
+    return [...LAWYER_INVESTOR_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.LAWYER
+    && templateId === LAWYER_NEWCOMER_TEMPLATE_ID
+  ) {
+    return [...LAWYER_NEWCOMER_BLOCK_TYPES];
+  }
   return [
     ...SHARED_BLOCK_TYPES,
     ...(ROLE_BLOCK_TYPES[role] || []),
@@ -271,6 +301,227 @@ export function allowedStorefrontBlockTypes(role, templateId = '') {
       ? LAWYER_FIRST_HOME_BLOCK_TYPES
       : []),
   ];
+}
+
+const INVESTOR_COLLECTION_POLICY = Object.freeze({
+  services: { key: 'items', limit: 6, requiredText: 'title' },
+  'practice-areas': { key: 'items', limit: 6, requiredText: 'title' },
+  'role-details': { key: 'highlights', limit: 6, requiredText: 'title' },
+  guidance: { key: 'steps', limit: 6, requiredText: 'title' },
+  footer: { key: 'items', limit: 8, requiredText: 'label' },
+});
+
+const NEWCOMER_COLLECTION_POLICY = Object.freeze({
+  services: { key: 'items', limit: 6, requiredText: 'title' },
+  'practice-areas': { key: 'items', limit: 6, requiredText: 'title' },
+  guidance: { key: 'steps', limit: 6, requiredText: 'title' },
+  testimonials: { key: 'items', limit: 8, requiredText: 'client_name' },
+  footer: { key: 'items', limit: 8, requiredText: 'label' },
+});
+
+function investorCollectionError(block) {
+  const policy = INVESTOR_COLLECTION_POLICY[block.type];
+  if (!policy) return null;
+  const content = block?.data?.content || {};
+  if (!Object.hasOwn(content, policy.key)) return null;
+  const items = content[policy.key];
+  if (!Array.isArray(items)) {
+    return `${block.type}.${policy.key} must be an array`;
+  }
+  if (items.length > policy.limit) {
+    return `${block.type}.${policy.key} must contain no more than ${policy.limit} items`;
+  }
+  const itemIds = new Set();
+  for (const item of items) {
+    if (!isPlainObject(item)) {
+      return `${block.type}.${policy.key} items must be objects`;
+    }
+    if (
+      typeof item[policy.requiredText] !== 'string'
+      || !item[policy.requiredText].trim()
+      || item[policy.requiredText].length > 120
+    ) {
+      return `${block.type}.${policy.key} items require a valid ${policy.requiredText}`;
+    }
+    if (
+      typeof item.id !== 'string'
+      || item.id.length > 100
+      || !SAFE_BLOCK_IDENTIFIER_PATTERN.test(item.id)
+    ) {
+      return `${block.type}.${policy.key} items contain an invalid id`;
+    }
+    if (itemIds.has(item.id)) {
+      return `${block.type}.${policy.key} item ids must be unique`;
+    }
+    itemIds.add(item.id);
+    for (const textKey of ['description', 'text', 'cta_text', 'icon', 'label', 'target', 'url', 'href']) {
+      if (item[textKey] !== undefined && typeof item[textKey] !== 'string') {
+        return `${block.type}.${policy.key} item ${textKey} must be a string`;
+      }
+    }
+    for (const booleanKey of ['link_disabled', 'enabled']) {
+      if (item[booleanKey] !== undefined && typeof item[booleanKey] !== 'boolean') {
+        return `${block.type}.${policy.key} item ${booleanKey} must be a boolean`;
+      }
+    }
+    if (block.type === 'footer') {
+      const destination = item.target ?? item.url ?? item.href;
+      if (destination !== undefined && destination !== '' && !isSafeNavigationValue(destination)) {
+        return 'footer.items contains an unsafe link';
+      }
+    }
+    if (block.type === 'testimonials') {
+      if (typeof item.text !== 'string' || !item.text.trim() || item.text.length > 1000) {
+        return 'testimonials.items require valid text';
+      }
+      if (item.rating !== undefined && (
+        !Number.isFinite(Number(item.rating))
+        || Number(item.rating) < 1
+        || Number(item.rating) > 5
+      )) {
+        return 'testimonials.items rating must be between 1 and 5';
+      }
+    }
+  }
+  return null;
+}
+
+const INVESTOR_METRICS = Object.freeze(['pipeline', 'experience', 'clients', 'cases']);
+const INVESTOR_METRIC_SET = new Set(INVESTOR_METRICS);
+const INVESTOR_SNAPSHOT_TEXT_FIELDS = Object.freeze([
+  'practice_focus_label',
+  'practice_focus_subtitle',
+  'markets_label',
+  'markets_subtitle',
+  'languages_label',
+  'languages_subtitle',
+]);
+
+function investorMetricArrayError(content, key) {
+  if (!Object.hasOwn(content, key)) return null;
+  const value = content[key];
+  if (!Array.isArray(value) || value.length > INVESTOR_METRICS.length) {
+    return `credentials.${key} must be an array with no more than ${INVESTOR_METRICS.length} items`;
+  }
+  if (new Set(value).size !== value.length || value.some((metric) => !INVESTOR_METRIC_SET.has(metric))) {
+    return `credentials.${key} must contain unique supported metric names`;
+  }
+  return null;
+}
+
+function investorMetricMapError(content, key) {
+  if (!Object.hasOwn(content, key)) return null;
+  const value = content[key];
+  if (!isPlainObject(value)) return `credentials.${key} must be an object`;
+  for (const [metric, label] of Object.entries(value)) {
+    if (!INVESTOR_METRIC_SET.has(metric) || typeof label !== 'string' || label.length > 120) {
+      return `credentials.${key} must contain supported metric string values`;
+    }
+  }
+  return null;
+}
+
+function investorBlockSemanticError(block) {
+  const content = block?.data?.content || {};
+  const collectionError = investorCollectionError(block);
+  if (collectionError) return collectionError;
+
+  if (block.type === 'hero' && Object.hasOwn(content, 'investor_design_version')) {
+    if (typeof content.investor_design_version !== 'number'
+      || !Number.isFinite(content.investor_design_version)
+      || content.investor_design_version < 0) {
+      return 'hero.investor_design_version must be a finite non-negative number';
+    }
+  }
+  if (block.type === 'practice-snapshot') {
+    for (const key of INVESTOR_SNAPSHOT_TEXT_FIELDS) {
+      if (content[key] !== undefined && typeof content[key] !== 'string') {
+        return `practice-snapshot.${key} must be a string`;
+      }
+    }
+  }
+  if (block.type === 'credentials') {
+    return investorMetricArrayError(content, 'metric_order')
+      || investorMetricArrayError(content, 'hidden_metrics')
+      || investorMetricMapError(content, 'metric_icons')
+      || investorMetricMapError(content, 'metric_labels');
+  }
+  if (block.type === 'footer') {
+    for (const key of ['show_email', 'show_phone', 'show_booking']) {
+      if (content[key] !== undefined && typeof content[key] !== 'boolean') {
+        return `footer.${key} must be a boolean`;
+      }
+    }
+  }
+  return null;
+}
+
+function newcomerCollectionError(block) {
+  const policy = NEWCOMER_COLLECTION_POLICY[block.type];
+  if (!policy) return null;
+  const content = block?.data?.content || {};
+  if (!Object.hasOwn(content, policy.key)) return null;
+  const items = content[policy.key];
+  if (!Array.isArray(items)) {
+    return `${block.type}.${policy.key} must be an array`;
+  }
+  if (items.length > policy.limit) {
+    return `${block.type}.${policy.key} must contain no more than ${policy.limit} items`;
+  }
+  const itemIds = new Set();
+  for (const item of items) {
+    if (!isPlainObject(item)) {
+      return `${block.type}.${policy.key} items must be objects`;
+    }
+    if (
+      typeof item[policy.requiredText] !== 'string'
+      || !item[policy.requiredText].trim()
+      || item[policy.requiredText].length > 120
+    ) {
+      return `${block.type}.${policy.key} items require a valid ${policy.requiredText}`;
+    }
+    if (
+      typeof item.id !== 'string'
+      || item.id.length > 100
+      || !SAFE_BLOCK_IDENTIFIER_PATTERN.test(item.id)
+    ) {
+      return `${block.type}.${policy.key} items contain an invalid id`;
+    }
+    if (itemIds.has(item.id)) {
+      return `${block.type}.${policy.key} item ids must be unique`;
+    }
+    itemIds.add(item.id);
+    if (block.type === 'footer') {
+      const destination = item.target ?? item.url ?? item.href;
+      if (destination !== undefined && destination !== '' && !isSafeNavigationValue(destination)) {
+        return 'footer.items contains an unsafe link';
+      }
+    }
+  }
+  return null;
+}
+
+function newcomerBlockSemanticError(block) {
+  const content = block?.data?.content || {};
+  const collectionError = newcomerCollectionError(block);
+  if (collectionError) return collectionError;
+  if (block.type === 'hero' && Object.hasOwn(content, 'newcomer_design_version')) {
+    if (
+      typeof content.newcomer_design_version !== 'number'
+      || !Number.isFinite(content.newcomer_design_version)
+      || content.newcomer_design_version < 0
+    ) {
+      return 'hero.newcomer_design_version must be a finite non-negative number';
+    }
+  }
+  if (block.type === 'footer') {
+    for (const key of ['show_email', 'show_phone', 'show_booking']) {
+      if (content[key] !== undefined && typeof content[key] !== 'boolean') {
+        return `footer.${key} must be a boolean`;
+      }
+    }
+  }
+  return null;
 }
 
 export function validateStorefrontDraftForRole(draft, role) {
@@ -289,6 +540,38 @@ export function validateStorefrontDraftForRole(draft, role) {
       error: new Error(`Unsupported storefront block type for ${role}: ${invalidBlockTypes.join(', ')}`),
       value,
     };
+  }
+
+  if (
+    role === PROFESSIONAL_TYPE.LAWYER
+    && value.template?.id === LAWYER_INVESTOR_TEMPLATE_ID
+  ) {
+    for (const requiredType of ['hero', 'footer']) {
+      const count = (value.blocks || []).filter((block) => block.type === requiredType).length;
+      if (count !== 1) {
+        return {
+          error: new Error(`Lawyer Investor storefront requires exactly one ${requiredType} block`),
+          value,
+        };
+      }
+    }
+    for (const block of value.blocks || []) {
+      const semanticError = investorBlockSemanticError(block);
+      if (semanticError) {
+        return { error: new Error(semanticError), value };
+      }
+    }
+  }
+  if (
+    role === PROFESSIONAL_TYPE.LAWYER
+    && value.template?.id === LAWYER_NEWCOMER_TEMPLATE_ID
+  ) {
+    for (const block of value.blocks || []) {
+      const semanticError = newcomerBlockSemanticError(block);
+      if (semanticError) {
+        return { error: new Error(semanticError), value };
+      }
+    }
   }
 
   return { error: undefined, value };

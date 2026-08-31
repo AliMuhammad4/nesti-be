@@ -21,6 +21,7 @@ import {
   updatePublicProfileSchema,
   updateThemeSchema,
   generateStorefrontDraftSchema,
+  publishStorefrontSchema,
   saveStorefrontDraftSchema,
 } from '../schemas/publicProfileSchemas.js';
 
@@ -40,7 +41,12 @@ router.put(
   saveStorefrontDraft,
 );
 
-router.post('/profile/storefront/publish', requireFeature(FEATURES.PUBLIC_PROFILE), publishStorefront);
+router.post(
+  '/profile/storefront/publish',
+  requireFeature(FEATURES.PUBLIC_PROFILE),
+  validateBody(publishStorefrontSchema),
+  publishStorefront,
+);
 router.post(
   '/profile/storefront/generate',
   requireFeature(FEATURES.ASSISTANT_PROFESSIONAL),

@@ -1,27 +1,74 @@
+import { randomUUID } from 'node:crypto';
+import {
+  canonicalizeLawyerInvestorDraft,
+  LAWYER_INVESTOR_TEMPLATE_ID,
+} from './lawyerInvestorStorefrontContract.js';
+import {
+  canonicalizeLawyerNewcomerDraft,
+  LAWYER_NEWCOMER_DESIGN_VERSION,
+  LAWYER_NEWCOMER_TEMPLATE_ID,
+} from './lawyerNewcomerStorefrontContract.js';
+
 function toPlainObject(value) {
   if (!value) return null;
   const object = typeof value.toObject === 'function' ? value.toObject() : value;
   return JSON.parse(JSON.stringify(object));
 }
 
-export function serializeStorefrontRevision(revision) {
+const PUBLIC_ESSENTIAL_KEYS = Object.freeze([
+  'calendly_link',
+  'email',
+  'languages_spoken',
+  'lawyer_classic_brand_version',
+  'lawyer_first_home_brand_version',
+  'lawyer_newcomer_brand_version',
+  'logo_chip_mode',
+  'profile_photo_url',
+  'service_area',
+  'years_experience',
+]);
+
+function publicEssentials(essentials) {
+  const source = toPlainObject(essentials) || {};
+  return Object.fromEntries(
+    PUBLIC_ESSENTIAL_KEYS
+      .filter((key) => Object.hasOwn(source, key))
+      .map((key) => [key, source[key]]),
+  );
+}
+
+export function serializeStorefrontRevision(revision, { publicView = false } = {}) {
   const source = toPlainObject(revision);
   if (!source) return null;
+  const brandKit = source.brandKit || {};
 
   return {
     blocks: Array.isArray(source.blocks) ? source.blocks : [],
-    brandKit: source.brandKit || {},
+    brandKit: publicView
+      ? { ...brandKit, essentials: publicEssentials(brandKit.essentials) }
+      : brandKit,
     template: source.template || {},
+    seo_meta: source.seo_meta || {},
+    revision_id: source.revision_id || null,
+    revision_version: Number.isSafeInteger(source.revision_version)
+      ? source.revision_version
+      : 0,
     updated_at: source.updated_at || null,
     published_at: source.published_at || null,
   };
 }
 
-export function createDraftRevision(draft, now = new Date()) {
+export function createDraftRevision(draft, now = new Date(), { previousRevision = null } = {}) {
+  const previousVersion = Number(previousRevision?.revision_version);
   return {
     blocks: Array.isArray(draft?.blocks) ? draft.blocks : [],
     brandKit: draft?.brandKit || {},
     template: draft?.template || {},
+    seo_meta: draft?.seo_meta || {},
+    revision_id: randomUUID(),
+    revision_version: Number.isSafeInteger(previousVersion) && previousVersion >= 0
+      ? previousVersion + 1
+      : 1,
     updated_at: now,
     published_at: null,
   };
@@ -59,6 +106,7 @@ function generatedRevisionBlocks(generated = {}) {
       enabled: block.enabled !== false,
       content: block.content || {},
       ...(block.settings && Object.keys(block.settings).length ? { layout: block.settings } : {}),
+      ...(block.style && Object.keys(block.style).length ? { style: block.style } : {}),
     },
   }));
 }
@@ -109,6 +157,7 @@ export function createGeneratedDraftRevision(
   existingBrandKit = {},
   now = new Date(),
   existingBlocks = [],
+  previousRevision = null,
 ) {
   const generatedBrandKit = generated?.brand_kit || {};
   const mergedBrandKit = { ...existingBrandKit };
@@ -119,15 +168,45 @@ export function createGeneratedDraftRevision(
     mergedBrandKit.font_family = generatedBrandKit.font;
   }
 
-  return createDraftRevision({
-    blocks: mergeGeneratedBlocks(generatedRevisionBlocks(generated), existingBlocks),
+  let normalizedExistingBlocks = existingBlocks;
+  if (generated?.template_key === LAWYER_INVESTOR_TEMPLATE_ID) {
+    normalizedExistingBlocks = canonicalizeLawyerInvestorDraft({
+      blocks: existingBlocks,
+      template: { id: LAWYER_INVESTOR_TEMPLATE_ID },
+    }, generated).blocks;
+  } else if (generated?.template_key === LAWYER_NEWCOMER_TEMPLATE_ID) {
+    normalizedExistingBlocks = canonicalizeLawyerNewcomerDraft({
+      blocks: existingBlocks,
+      template: {
+        id: LAWYER_NEWCOMER_TEMPLATE_ID,
+        version: previousRevision?.template?.version,
+      },
+    }, generated).blocks;
+  }
+  const draft = {
+    blocks: mergeGeneratedBlocks(generatedRevisionBlocks(generated), normalizedExistingBlocks),
     brandKit: mergedBrandKit,
+    seo_meta: generated?.seo_meta || {},
     template: {
       id: generated?.template_key || '',
       name: generated?.template_key || '',
-      version: '1',
+      version: generated?.template_key === LAWYER_NEWCOMER_TEMPLATE_ID
+        ? String(LAWYER_NEWCOMER_DESIGN_VERSION)
+        : '1',
     },
-  }, now);
+  };
+  return createDraftRevision(
+    canonicalizeStorefrontDraft(draft, generated),
+    now,
+    { previousRevision },
+  );
+}
+
+export function canonicalizeStorefrontDraft(draft, generated = {}) {
+  return canonicalizeLawyerNewcomerDraft(
+    canonicalizeLawyerInvestorDraft(draft, generated),
+    generated,
+  );
 }
 
 export function templateIdForRevision(revision) {
@@ -154,7 +233,13 @@ export function activeStorefrontDraft(storefront = {}) {
     );
     if (activeRevision) return activeRevision;
   }
-  return storefront?.draft || null;
+  const drafts = storefrontDrafts(storefront);
+  if (storefront?.draft) {
+    const legacyTemplateId = templateIdForRevision(storefront.draft);
+    return drafts.find((revision) => templateIdForRevision(revision) === legacyTemplateId)
+      || storefront.draft;
+  }
+  return drafts[0] || null;
 }
 
 export function serializeStorefrontDrafts(storefront = {}) {
@@ -171,11 +256,14 @@ export function createPublishedRevision(draft, now = new Date()) {
     blocks: revision.blocks,
     brandKit: revision.brandKit,
     template: revision.template,
+    seo_meta: revision.seo_meta,
+    revision_id: revision.revision_id,
+    revision_version: revision.revision_version,
     updated_at: revision.updated_at || now,
     published_at: now,
   };
 }
 
 export function serializePublishedStorefront(storefront) {
-  return serializeStorefrontRevision(storefront?.published);
+  return serializeStorefrontRevision(storefront?.published, { publicView: true });
 }

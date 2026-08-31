@@ -1,5 +1,15 @@
 import OpenAI from 'openai';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+import {
+  createLawyerInvestorGeneratedBlocks,
+  LAWYER_INVESTOR_TEMPLATE_ID,
+} from './lawyerInvestorStorefrontContract.js';
+import {
+  createLawyerNewcomerGeneratedBlocks,
+  LAWYER_NEWCOMER_DESIGN_VERSION,
+  LAWYER_NEWCOMER_TEMPLATE_ID,
+} from './lawyerNewcomerStorefrontContract.js';
+import { defaultStorefrontTemplateIdForRole } from './storefrontTemplateDefaults.js';
 
 const MODEL = 'gpt-4o-mini';
 let client;
@@ -30,6 +40,29 @@ const TEMPLATE_SPECIFIC_BLOCKS = Object.freeze({
     'credentials',
     'guidance',
     'faq',
+    'cta',
+    'footer',
+  ],
+  'lawyer-investor': [
+    'hero',
+    'about',
+    'practice-snapshot',
+    'services',
+    'role-details',
+    'practice-areas',
+    'guidance',
+    'credentials',
+    'cta',
+    'footer',
+  ],
+  'lawyer-newcomer': [
+    'hero',
+    'about',
+    'practice-areas',
+    'services',
+    'guidance',
+    'credentials',
+    'testimonials',
     'cta',
     'footer',
   ],
@@ -70,12 +103,6 @@ function roleForBlocks(role) {
   return Object.hasOwn(TEMPLATE_BLOCKS, role) ? role : 'agent';
 }
 
-function defaultTemplateKeyForRole(role) {
-  const resolved = roleForBlocks(role);
-  if (resolved === 'agent') return 'agent-investor';
-  return `${resolved}-classic`;
-}
-
 function cleanText(value, limit) {
   return String(value || '').trim().slice(0, limit);
 }
@@ -114,6 +141,16 @@ function normaliseGeneratedCopy(payload) {
 
 function generatedContentForBlock(type, generated = {}, templateKey = '') {
   if (type === 'hero') {
+    if (templateKey === 'lawyer-investor') {
+      return {
+        heading: generated.headline || '',
+        body: generated.tagline || '',
+        eyebrow: 'Investor transaction counsel',
+        primary_cta_label: 'Start investor intake',
+        cta_label: 'Book a strategy call',
+        join_label: '',
+      };
+    }
     if (templateKey === 'lawyer-classic') {
       return {
         heading: generated.headline || '',
@@ -127,6 +164,13 @@ function generatedContentForBlock(type, generated = {}, templateKey = '') {
     return { heading: generated.headline || '', body: generated.tagline || '' };
   }
   if (type === 'about') {
+    if (templateKey === 'lawyer-investor') {
+      return {
+        eyebrow: 'Investor-focused legal practice',
+        heading: 'Legal clarity for repeat transactions',
+        body: generated.about || '',
+      };
+    }
     if (templateKey === 'lawyer-classic') {
       return {
         eyebrow: 'About the practice',
@@ -187,6 +231,15 @@ function generatedContentForBlock(type, generated = {}, templateKey = '') {
     };
   }
   if (type === 'services') {
+    if (templateKey === 'lawyer-investor') {
+      return {
+        eyebrow: 'Investor legal services',
+        heading: 'Support across the transaction lifecycle',
+        body: 'Choose the workstream that matches the deal, ownership structure, financing, and closing timeline.',
+        resource_label: 'Transaction workstreams',
+        items: Array.isArray(generated.services) ? generated.services : [],
+      };
+    }
     return {
       heading: 'How I can help',
       items: Array.isArray(generated.services) ? generated.services : [],
@@ -196,6 +249,12 @@ function generatedContentForBlock(type, generated = {}, templateKey = '') {
 }
 
 function defaultBlocks(role, templateKey = '', generated = {}) {
+  if (templateKey === LAWYER_INVESTOR_TEMPLATE_ID) {
+    return createLawyerInvestorGeneratedBlocks(generated);
+  }
+  if (templateKey === LAWYER_NEWCOMER_TEMPLATE_ID) {
+    return createLawyerNewcomerGeneratedBlocks(generated);
+  }
   const types = TEMPLATE_SPECIFIC_BLOCKS[templateKey] || TEMPLATE_BLOCKS[roleForBlocks(role)];
   return types.map((type, index) => ({
     id: `${type}-${index + 1}`,
@@ -215,7 +274,8 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
   }
 
   const role = roleForBlocks(professionalProfile?.professional_type || user?.role);
-  const resolvedTemplateKey = cleanText(templateKey, 80) || defaultTemplateKeyForRole(role);
+  const resolvedTemplateKey = cleanText(templateKey, 80)
+    || defaultStorefrontTemplateIdForRole(role);
   const context = {
     professional_type: role,
     full_name: professionalProfile?.full_name || [user?.first_name, user?.last_name].filter(Boolean).join(' '),
@@ -231,7 +291,11 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
   };
   const templateInstructions = resolvedTemplateKey === 'lawyer-classic'
     ? 'For the lawyer-classic template, write the headline, tagline, and about copy specifically for a real estate legal practice. Emphasize clear transaction, contract, title, and closing guidance without implying a lawyer-client relationship, promising outcomes, or giving legal advice.'
-    : '';
+    : resolvedTemplateKey === 'lawyer-investor'
+      ? 'For the lawyer-investor template, write specifically for a real estate lawyer serving active property investors. Emphasize disciplined acquisitions, refinancing, assignments, ownership structures, title work, and repeat transaction intake. Do not imply a lawyer-client relationship, promise outcomes, provide legal advice, or invent transaction volume.'
+      : resolvedTemplateKey === 'lawyer-newcomer'
+        ? 'For the lawyer-newcomer template, write plain-language copy for a real estate lawyer helping newcomers understand a Canadian residential purchase closing. Emphasize agreements, title, lender instructions, identity documents, closing funds, signing, and practical next steps. Do not assume immigration status, imply a lawyer-client relationship, promise outcomes, provide legal or immigration advice, invent credentials, or invent client experiences.'
+        : '';
 
   const completion = await openai().chat.completions.create({
     model: MODEL,
@@ -260,7 +324,10 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
   return {
     ...generated,
     template_key: resolvedTemplateKey,
-    storefront_blocks: defaultBlocks(role, resolvedTemplateKey, generated),
+    storefront_blocks: defaultBlocks(role, resolvedTemplateKey, {
+      ...generated,
+      business_name: cleanText(brandKit.business_name || professionalProfile?.company_name, 120),
+    }),
     brand_kit: {
       ...brandKit,
       business_name: cleanText(brandKit.business_name || professionalProfile?.company_name, 120),
@@ -273,7 +340,6 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
       image_style: cleanText(brandKit.image_style, 80),
       essentials: {
         ...(brandKit.essentials || {}),
-        ...onboarding,
       },
     },
     generation_metadata: {
@@ -281,6 +347,9 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
       generated_at: new Date().toISOString(),
       template_key: resolvedTemplateKey,
       ...(resolvedTemplateKey === 'lawyer-classic' ? { lawyer_classic_design_version: 2 } : {}),
+      ...(resolvedTemplateKey === LAWYER_NEWCOMER_TEMPLATE_ID
+        ? { lawyer_newcomer_design_version: LAWYER_NEWCOMER_DESIGN_VERSION }
+        : {}),
     },
   };
 }

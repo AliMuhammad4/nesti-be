@@ -2,7 +2,7 @@ import User from '../models/User.js';
 import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
 import logger from '../utils/logger.js';
 
-const KINDS = new Set(['profile', 'cover']);
+const KINDS = new Set(['profile', 'cover', 'logo']);
 
 function clampNumber(value, { min, max, fallback }) {
   const n = Number(value);
@@ -11,8 +11,12 @@ function clampNumber(value, { min, max, fallback }) {
 }
 
 /**
- * POST multipart: field `file` (image), field `kind` = `profile` | `cover`
- * Uploads to R2 and saves HTTPS URL on User.
+ * POST multipart: field `file` (image), field `kind` = `profile` | `cover` | `logo`.
+ * Optional field `scope` = `storefront`:
+ *   - Uploads to a storefront-only R2 key and returns the URL.
+ *   - Does NOT update User.profile_image / User.cover_image (page-only assets).
+ * Without storefront scope, profile/cover images update the User record (account-wide).
+ * Logo assets are always returned for the Brand Kit to persist with its draft.
  */
 export async function postProfileImageUpload(req, res, next) {
   try {
@@ -29,12 +33,19 @@ export async function postProfileImageUpload(req, res, next) {
     if (!KINDS.has(kind)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid kind. Use profile or cover.',
+        message: 'Invalid kind. Use profile, cover, or logo.',
       });
     }
 
+    const scope = String(req.body?.scope || '').trim().toLowerCase();
+    const storefrontOnly = scope === 'storefront';
     const userId = String(req.user._id);
-    const objectKey = `nesti/users/${userId}/${kind === 'cover' ? 'cover' : 'profile'}`;
+    const uploadVersion = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const objectKey = storefrontOnly
+      // Storefront assets must use immutable URLs. Reusing one key causes the
+      // R2 CDN and Next/Image optimizer to keep serving the previous upload.
+      ? `nesti/users/${userId}/storefront/${kind}-${uploadVersion}`
+      : `nesti/users/${userId}/${kind}`;
     const result = await uploadBufferToR2(req.file.buffer, {
       key: objectKey,
       mimeType: req.file.mimetype,
@@ -50,20 +61,24 @@ export async function postProfileImageUpload(req, res, next) {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    if (kind === 'cover') {
-      user.cover_image = secureUrl;
-      user.cover_image_position = { x: 50, y: 50 };
-      user.cover_image_zoom = 1;
-    } else {
-      user.profile_image = secureUrl;
+
+    if (!storefrontOnly) {
+      if (kind === 'cover') {
+        user.cover_image = secureUrl;
+        user.cover_image_position = { x: 50, y: 50 };
+        user.cover_image_zoom = 1;
+      } else if (kind === 'profile') {
+        user.profile_image = secureUrl;
+      }
+      await user.save();
     }
-    await user.save();
 
     return res.json({
       success: true,
-      message: 'Image uploaded',
+      message: storefrontOnly ? 'Storefront image uploaded' : 'Image uploaded',
       url: secureUrl,
       kind,
+      scope: storefrontOnly ? 'storefront' : 'account',
       profile_image: user.profile_image || null,
       cover_image: user.cover_image || null,
       cover_image_position: user.cover_image_position || { x: 50, y: 50 },

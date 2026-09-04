@@ -1,6 +1,7 @@
 import LeadMatch from '../../models/LeadMatch.js';
 import NurtureLog from '../../models/NurtureLog.js';
 import { getPlanLimitsForSubscription } from './entitlements.js';
+import { getOrCreateSubscriptionForUser } from './subscriptionLocalService.js';
 
 export class PlanQuotaError extends Error {
   constructor({ limitKey, used, max }) {
@@ -126,7 +127,6 @@ export async function notifyCapturedLeadsOverQuotaIfNeeded(userId, subscription)
 
 /** Load subscription and notify when captured leads exceed the plan workspace cap. */
 export async function afterLeadCapturedNotifyOverQuota(userId) {
-  const { getOrCreateSubscriptionForUser } = await import('./subscriptionService.js');
   const subscription = await getOrCreateSubscriptionForUser({ _id: userId });
   return notifyCapturedLeadsOverQuotaIfNeeded(userId, subscription);
 }

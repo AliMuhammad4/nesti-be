@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { storefrontDraftSchema } from '../services/publicProfile/storefrontValidation.js';
 
 export const updatePublicProfileSchema = Joi.object({
   slug: Joi.string().min(3).max(50).lowercase().trim().pattern(/^[a-z0-9-]+$/).optional(),
@@ -93,6 +94,51 @@ export const updateThemeSchema = Joi.object({
   theme_color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow(null, '').optional(),
   custom_css: Joi.string().max(5000).allow(null, '').optional(),
 }).min(1);
+
+export { storefrontDraftSchema };
+
+export const saveStorefrontDraftSchema = Joi.object({
+  draft: storefrontDraftSchema.required(),
+  expected_revision_id: Joi.string().trim().max(80).optional(),
+  expected_revision_version: Joi.number().integer().min(0).optional(),
+}).unknown(false);
+
+export const publishStorefrontSchema = Joi.object({
+  draft: storefrontDraftSchema.optional(),
+  expected_revision_id: Joi.string().trim().max(80).optional(),
+  expected_revision_version: Joi.number().integer().min(0).optional(),
+}).unknown(false);
+
+export const generateStorefrontDraftSchema = Joi.object({
+  template_key: Joi.string().trim().max(80).optional(),
+  expected_revision_id: Joi.string().trim().max(80).optional(),
+  expected_revision_version: Joi.number().integer().min(0).optional(),
+  onboarding: Joi.object().unknown(true).max(20).optional(),
+  brand_kit: Joi.object({
+    business_name: Joi.string().trim().max(120).allow('').optional(),
+    logo_url: Joi.string().uri().allow('').optional(),
+    logo_dark_url: Joi.string().uri().allow('').optional(),
+    cover_url: Joi.string().uri().allow('').optional(),
+    profile_photo_url: Joi.string().uri().allow('').optional(),
+    logo_size: Joi.number().integer().min(24).max(72).optional(),
+    cover_position_x: Joi.number().min(0).max(100).optional(),
+    cover_position_y: Joi.number().min(0).max(100).optional(),
+    cover_zoom: Joi.number().min(1).max(3).optional(),
+    profile_position_x: Joi.number().min(0).max(100).optional(),
+    profile_position_y: Joi.number().min(0).max(100).optional(),
+    profile_zoom: Joi.number().min(1).max(3).optional(),
+    primary_color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow('').optional(),
+    secondary_color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow('').optional(),
+    accent_color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow('').optional(),
+    page_background: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).allow('').optional(),
+    font: Joi.string().trim().max(80).allow('').optional(),
+    font_family: Joi.string().trim().max(120).allow('').optional(),
+    button_shape: Joi.string().trim().max(30).allow('').optional(),
+    image_style: Joi.string().trim().max(80).allow('').optional(),
+    show_chatbot: Joi.boolean().optional(),
+    essentials: Joi.object().unknown(true).max(20).optional(),
+  }).unknown(false).optional(),
+}).unknown(false);
 
 export const trackAnalyticsSchema = Joi.object({
   visitor_id: Joi.string().required(),
@@ -191,3 +237,11 @@ export const submitPublicLeadSchema = Joi.object({
   session_id: Joi.string().trim().max(120).allow('').optional(),
   visitor_id: Joi.string().trim().max(120).allow('').optional(),
 }).or('email', 'phone');
+
+export const submitPublicFeedbackSchema = Joi.object({
+  client_name: Joi.string().trim().min(2).max(120).required(),
+  email: Joi.string().trim().email().max(180).required(),
+  rating: Joi.number().integer().min(1).max(5).required(),
+  text: Joi.string().trim().min(20).max(1000).required(),
+  website: Joi.string().allow('').max(0).optional(),
+}).unknown(false);

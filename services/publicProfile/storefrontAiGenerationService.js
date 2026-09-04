@@ -1,0 +1,415 @@
+import OpenAI from 'openai';
+import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+import {
+  createLawyerInvestorGeneratedBlocks,
+  LAWYER_INVESTOR_TEMPLATE_ID,
+} from './lawyerInvestorStorefrontContract.js';
+import {
+  createLawyerNewcomerGeneratedBlocks,
+  LAWYER_NEWCOMER_DESIGN_VERSION,
+  LAWYER_NEWCOMER_TEMPLATE_ID,
+} from './lawyerNewcomerStorefrontContract.js';
+import { defaultStorefrontTemplateIdForRole } from './storefrontTemplateDefaults.js';
+
+const MODEL = 'gpt-4o-mini';
+let client;
+
+function openai() {
+  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return client;
+}
+
+const TEMPLATE_BLOCKS = {
+  agent: ['hero', 'expertise', 'role-details', 'about', 'properties', 'testimonials', 'services', 'guidance', 'cta'],
+  mortgage_broker: ['hero', 'expertise', 'role-details', 'about', 'mortgage-calculator', 'testimonials', 'services', 'mortgage-programs', 'guidance', 'cta'],
+  lawyer: ['hero', 'expertise', 'role-details', 'about', 'testimonials', 'practice-areas', 'services', 'credentials', 'guidance', 'cta'],
+};
+
+const TEMPLATE_SPECIFIC_BLOCKS = Object.freeze({
+  'lawyer-classic': [
+    'hero',
+    'about',
+    'who-we-help',
+    'expertise',
+    'practice-areas',
+    'document-checklist',
+    'fee-guidance',
+    'role-details',
+    'consultation-options',
+    'testimonials',
+    'credentials',
+    'guidance',
+    'faq',
+    'cta',
+    'footer',
+  ],
+  'lawyer-investor': [
+    'hero',
+    'about',
+    'practice-snapshot',
+    'services',
+    'role-details',
+    'practice-areas',
+    'guidance',
+    'credentials',
+    'cta',
+    'footer',
+  ],
+  'lawyer-newcomer': [
+    'hero',
+    'about',
+    'practice-areas',
+    'services',
+    'guidance',
+    'credentials',
+    'testimonials',
+    'cta',
+    'footer',
+  ],
+  'mortgage_broker-classic': [
+    'hero',
+    'about',
+    'practice-snapshot',
+    'mortgage-programs',
+    'services',
+    'role-details',
+    'broker-compensation',
+    'faq',
+    'cta',
+    'footer',
+  ],
+  'agent-community-expert': [
+    'hero',
+    'featured-listings',
+    'role-details',
+    'about',
+    'services',
+    'expertise',
+    'seller-performance',
+    'seller-sold-results',
+    'seller-case-study',
+    'seller-credentials',
+    'testimonials',
+    'guidance',
+    'cta',
+    'footer',
+  ],
+  'agent-investor': [
+    'hero',
+    'featured-listings',
+    'services',
+    'guidance',
+    'about',
+    'cta',
+    'footer',
+  ],
+});
+
+function roleLabel(role) {
+  if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) return 'mortgage broker';
+  if (role === PROFESSIONAL_TYPE.LAWYER) return 'real estate lawyer';
+  return 'real estate agent';
+}
+
+function roleForBlocks(role) {
+  return Object.hasOwn(TEMPLATE_BLOCKS, role) ? role : 'agent';
+}
+
+function cleanText(value, limit) {
+  return String(value || '').trim().slice(0, limit);
+}
+
+function parseObject(raw) {
+  const text = String(raw || '').trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('AI response did not contain valid JSON');
+  return JSON.parse(text.slice(start, end + 1));
+}
+
+function normaliseGeneratedCopy(payload) {
+  const services = Array.isArray(payload?.services)
+    ? payload.services.slice(0, 6).map((service) => ({
+      title: cleanText(service?.title, 80),
+      description: cleanText(service?.description, 280),
+      cta_text: cleanText(service?.cta_text, 40) || 'Learn More',
+    })).filter((service) => service.title)
+    : [];
+
+  return {
+    headline: cleanText(payload?.headline, 100),
+    tagline: cleanText(payload?.tagline, 200),
+    about: cleanText(payload?.about, 2000),
+    seo_meta: {
+      title: cleanText(payload?.seo_meta?.title, 60),
+      description: cleanText(payload?.seo_meta?.description, 160),
+      keywords: Array.isArray(payload?.seo_meta?.keywords)
+        ? payload.seo_meta.keywords.map((keyword) => cleanText(keyword, 50)).filter(Boolean).slice(0, 8)
+        : [],
+    },
+    services,
+  };
+}
+
+function generatedContentForBlock(type, generated = {}, templateKey = '') {
+  if (type === 'hero') {
+    if (templateKey === 'lawyer-investor') {
+      return {
+        heading: generated.headline || '',
+        body: generated.tagline || '',
+        eyebrow: 'Investor transaction counsel',
+        primary_cta_label: 'Start investor intake',
+        cta_label: 'Book a strategy call',
+        join_label: '',
+      };
+    }
+    if (templateKey === 'lawyer-classic') {
+      return {
+        heading: generated.headline || '',
+        body: generated.tagline || '',
+        eyebrow: 'Property law · Closing counsel',
+        primary_cta_label: 'Submit inquiry',
+        cta_label: 'Make an appointment',
+        lawyer_classic_design_version: 2,
+      };
+    }
+    if (templateKey === 'mortgage_broker-classic') {
+      return {
+        heading: generated.headline || '',
+        body: generated.tagline || '',
+        eyebrow: `Welcome to ${cleanText(generated.business_name || '', 80) || 'your practice'}`,
+        primary_cta_label: 'Apply for loan',
+        cta_label: 'Book a consultation',
+        join_label: 'Join Nesti',
+        broker_design_version: 16,
+      };
+    }
+    return { heading: generated.headline || '', body: generated.tagline || '' };
+  }
+  if (type === 'about') {
+    if (templateKey === 'lawyer-investor') {
+      return {
+        eyebrow: 'Investor-focused legal practice',
+        heading: 'Legal clarity for repeat transactions',
+        body: generated.about || '',
+      };
+    }
+    if (templateKey === 'lawyer-classic') {
+      return {
+        eyebrow: 'About the practice',
+        heading: 'Real estate legal counsel',
+        body: generated.about || '',
+      };
+    }
+    if (templateKey === 'mortgage_broker-classic') {
+      return {
+        eyebrow: 'Company introductions',
+        heading: 'Our loans will fill your dreams come true',
+        body: generated.about || '',
+      };
+    }
+    return { heading: 'About', body: generated.about || '' };
+  }
+  if (type === 'expertise' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Practice snapshot',
+      heading: 'Where counsel is focused',
+      body: 'A concise view of specializations, markets, and how a legal inquiry typically proceeds.',
+    };
+  }
+  if (type === 'who-we-help' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Who we help',
+      heading: 'Counsel for every side of the transaction',
+      body: 'Buyers, sellers, refinancers, and property owners can start with a structured inquiry.',
+    };
+  }
+  if (type === 'document-checklist' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'File preparation',
+      heading: 'What to send before we speak',
+      body: 'A complete file helps the lawyer understand the matter without asking you to repeat the basics.',
+    };
+  }
+  if (type === 'fee-guidance' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Fee transparency',
+      heading: 'How legal fees are typically framed',
+      body: 'Use this as orientation before a consultation. It is not a quote, retainer, or promise of representation.',
+    };
+  }
+  if (type === 'consultation-options' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Start the conversation',
+      heading: 'Choose how you would like to begin',
+      body: 'Pick the path that matches your timeline. Confidential details should wait until the lawyer confirms representation.',
+    };
+  }
+  if (type === 'faq' && templateKey === 'lawyer-classic') {
+    return {
+      eyebrow: 'Helpful questions',
+      heading: 'What clients often ask',
+      body: 'Clear answers to common questions before you start.',
+      faqs: [
+        { q: 'Is this legal advice?', a: 'No. This page starts an inquiry so the lawyer can review the matter and follow up appropriately.' },
+        { q: 'Can I request a contract review?', a: 'Yes. Share the agreement, conditions, and timeline so the review request arrives with useful context.' },
+        { q: 'What should I send before we speak?', a: 'The property address, agreement of purchase and sale, closing date, and any title or financing documents you already have.' },
+        { q: 'When should I contact a lawyer?', a: 'As soon as an offer is being drafted or a closing date is in view — earlier contact leaves more time to resolve conditions and title issues.' },
+        { q: 'What happens after I submit an inquiry?', a: 'The lawyer reviews the information, checks whether the matter is a fit, and contacts you about availability and next steps.' },
+        { q: 'Can legal fees be confirmed before work begins?', a: 'Yes. Once the scope is clear, the lawyer can explain the expected legal fees, disbursements, and retainer requirements.' },
+      ],
+    };
+  }
+  if (type === 'faq' && templateKey === 'mortgage_broker-classic') {
+    return {
+      eyebrow: 'Helpful questions',
+      heading: 'What clients often ask',
+      body: 'Clear answers to common mortgage questions before you start.',
+      faqs: [
+        { q: 'How long does mortgage approval usually take?', a: 'Timelines vary by lender and file complexity, but a well-prepared application can often move from first review to approval within a few business days.' },
+        { q: 'What documents should I prepare first?', a: 'Income proof, identification, down-payment source, credit consent, and property details (or a target purchase range) help keep the process moving.' },
+        { q: 'Can I get pre-approved before making an offer?', a: 'Yes. Pre-approval clarifies affordability and strengthens your position before you submit an offer on a home.' },
+        { q: 'Do you only help with purchases?', a: 'No. Support typically covers purchases, refinances, renewals, and investor financing depending on your goals and lender fit.' },
+        { q: 'Will this consultation lock me into a lender?', a: 'No. The first conversation is about fit, options, and next steps. You stay in control of whether to proceed.' },
+        { q: 'What happens after I submit an inquiry?', a: 'Your details are reviewed, clarifying questions may follow if needed, and you receive a clear path for consultation or application support.' },
+      ],
+    };
+  }
+  if (type === 'services') {
+    if (templateKey === 'lawyer-investor') {
+      return {
+        eyebrow: 'Investor legal services',
+        heading: 'Support across the transaction lifecycle',
+        body: 'Choose the workstream that matches the deal, ownership structure, financing, and closing timeline.',
+        resource_label: 'Transaction workstreams',
+        items: Array.isArray(generated.services) ? generated.services : [],
+      };
+    }
+    if (templateKey === 'mortgage_broker-classic') {
+      return {
+        eyebrow: 'Mortgage solutions',
+        heading: 'Advice for every stage of your mortgage',
+        body: 'Explore practical financing strategies backed by clear comparisons, careful preparation, and responsive support.',
+        items: Array.isArray(generated.services) ? generated.services : [],
+      };
+    }
+    return {
+      heading: 'How I can help',
+      items: Array.isArray(generated.services) ? generated.services : [],
+    };
+  }
+  return {};
+}
+
+function defaultBlocks(role, templateKey = '', generated = {}) {
+  if (templateKey === LAWYER_INVESTOR_TEMPLATE_ID) {
+    return createLawyerInvestorGeneratedBlocks(generated);
+  }
+  if (templateKey === LAWYER_NEWCOMER_TEMPLATE_ID) {
+    return createLawyerNewcomerGeneratedBlocks(generated);
+  }
+  const types = TEMPLATE_SPECIFIC_BLOCKS[templateKey] || TEMPLATE_BLOCKS[roleForBlocks(role)];
+  return types.map((type, index) => ({
+    id: `${type}-${index + 1}`,
+    type,
+    version: 1,
+    enabled: true,
+    settings: {},
+    content: generatedContentForBlock(type, generated, templateKey),
+  }));
+}
+
+export async function generateStorefrontDraft({ user, professionalProfile, onboarding = {}, templateKey, brandKit = {} }) {
+  if (!process.env.OPENAI_API_KEY) {
+    const error = new Error('OpenAI is not configured');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const role = roleForBlocks(professionalProfile?.professional_type || user?.role);
+  const resolvedTemplateKey = cleanText(templateKey, 80)
+    || defaultStorefrontTemplateIdForRole(role);
+  const context = {
+    professional_type: role,
+    full_name: professionalProfile?.full_name || [user?.first_name, user?.last_name].filter(Boolean).join(' '),
+    company_name: professionalProfile?.company_name || '',
+    location: professionalProfile?.location || '',
+    experience: professionalProfile?.experience || '',
+    specializations: professionalProfile?.specializations || [],
+    languages_spoken: professionalProfile?.languages_spoken || [],
+    cities: professionalProfile?.service_area_cities || [],
+    onboarding,
+    brand_kit: brandKit,
+    template_key: resolvedTemplateKey,
+  };
+  const templateInstructions = resolvedTemplateKey === 'lawyer-classic'
+    ? 'For the lawyer-classic template, write the headline, tagline, and about copy specifically for a real estate legal practice. Emphasize clear transaction, contract, title, and closing guidance without implying a lawyer-client relationship, promising outcomes, or giving legal advice.'
+    : resolvedTemplateKey === 'lawyer-investor'
+      ? 'For the lawyer-investor template, write specifically for a real estate lawyer serving active property investors. Emphasize disciplined acquisitions, refinancing, assignments, ownership structures, title work, and repeat transaction intake. Do not imply a lawyer-client relationship, promise outcomes, provide legal advice, or invent transaction volume.'
+      : resolvedTemplateKey === 'lawyer-newcomer'
+        ? 'For the lawyer-newcomer template, write plain-language copy for a real estate lawyer helping newcomers understand a Canadian residential purchase closing. Emphasize agreements, title, lender instructions, identity documents, closing funds, signing, and practical next steps. Do not assume immigration status, imply a lawyer-client relationship, promise outcomes, provide legal or immigration advice, invent credentials, or invent client experiences.'
+        : resolvedTemplateKey === 'mortgage_broker-classic'
+          ? 'For the mortgage_broker-classic template, write specifically for a mortgage advisor. Emphasize financing programs, pre-approval, refinancing, renewals, and clear next steps. Do not invent rates, approvals, guarantees, credentials, or client testimonials.'
+          : '';
+
+  const completion = await openai().chat.completions.create({
+    model: MODEL,
+    response_format: { type: 'json_object' },
+    temperature: 0.3,
+    max_tokens: 1500,
+    messages: [
+      {
+        role: 'system',
+        content: 'Return strict JSON only. Write factual, conversion-focused storefront content. Never invent awards, credentials, transaction results, mortgage rates, property values, client testimonials, legal advice, or guarantees.',
+      },
+      {
+        role: 'user',
+        content: `Create a personalized website draft for this ${roleLabel(role)}. ${templateInstructions} Return exactly: headline, tagline, about, seo_meta {title, description, keywords}, services [{title,description,cta_text}].\n\nContext:\n${JSON.stringify(context)}`,
+      },
+    ],
+  });
+
+  const generated = normaliseGeneratedCopy(parseObject(completion.choices[0]?.message?.content));
+  if (!generated.headline || !generated.tagline || !generated.about) {
+    const error = new Error('AI returned incomplete storefront content');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return {
+    ...generated,
+    template_key: resolvedTemplateKey,
+    storefront_blocks: defaultBlocks(role, resolvedTemplateKey, {
+      ...generated,
+      business_name: cleanText(brandKit.business_name || professionalProfile?.company_name, 120),
+    }),
+    brand_kit: {
+      ...brandKit,
+      business_name: cleanText(brandKit.business_name || professionalProfile?.company_name, 120),
+      logo_url: cleanText(brandKit.logo_url, 1000),
+      logo_dark_url: cleanText(brandKit.logo_dark_url, 1000),
+      primary_color: cleanText(brandKit.primary_color, 16),
+      accent_color: cleanText(brandKit.accent_color, 16),
+      font: cleanText(brandKit.font || brandKit.font_family, 80),
+      button_shape: cleanText(brandKit.button_shape, 30),
+      image_style: cleanText(brandKit.image_style, 80),
+      essentials: {
+        ...(brandKit.essentials || {}),
+      },
+    },
+    generation_metadata: {
+      model: MODEL,
+      generated_at: new Date().toISOString(),
+      template_key: resolvedTemplateKey,
+      ...(resolvedTemplateKey === 'lawyer-classic' ? { lawyer_classic_design_version: 2 } : {}),
+      ...(resolvedTemplateKey === 'mortgage_broker-classic' ? { broker_design_version: 16 } : {}),
+      ...(resolvedTemplateKey === LAWYER_NEWCOMER_TEMPLATE_ID
+        ? { lawyer_newcomer_design_version: LAWYER_NEWCOMER_DESIGN_VERSION }
+        : {}),
+    },
+  };
+}
+
+export function generateDefaultStorefrontBlocks(role, templateKey = '', generated = {}) {
+  return defaultBlocks(role, templateKey, generated);
+}

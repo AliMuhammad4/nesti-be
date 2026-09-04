@@ -4,8 +4,7 @@ import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import { USER_ROLE, USER_ROLE_VALUES, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { evaluateProfessionalProfileSetup } from '../utils/professionalProfileSetup.js';
 import logger from '../utils/logger.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
+import { getJwtSecret } from '../utils/jwtSecret.js';
 
 function readAuthToken(req) {
   const auth = req.headers.authorization;
@@ -22,7 +21,7 @@ const protect = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, getJwtSecret());
     const doc = await User.findById(decoded.id).select('-password').lean();
     if (!doc) {
       return res.status(401).json({ success: false, message: 'Not authorized, user not found' });
@@ -47,7 +46,7 @@ const optionalAuth = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, getJwtSecret());
     req.user = await User.findById(decoded.id).select('-password');
   } catch (error) {
     logger.warn('Optional auth: token verification failed', { err: error.message });

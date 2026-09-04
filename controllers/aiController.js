@@ -32,7 +32,6 @@ export const getInsights = async (req, res, next) => {
     next(error);
   }
 };
-
 export const analyzeLeadInsights = async (req, res, next) => {
   try {
     const userId = req.user._id;

@@ -133,5 +133,6 @@ const leadProfileSchema = new mongoose.Schema(
 );
 
 leadProfileSchema.index({ 'ownership.user_id': 1, updatedAt: -1, createdAt: -1 });
+leadProfileSchema.index({ 'ownership.user_id': 1, 'lifecycle.last_seen_at': -1 });
 
 export default mongoose.model('LeadProfile', leadProfileSchema);

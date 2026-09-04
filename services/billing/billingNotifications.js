@@ -1,9 +1,11 @@
 import ProfessionalNotification from '../../models/ProfessionalNotification.js';
+import PublicProfile from '../../models/PublicProfile.js';
 import Subscription from '../../models/Subscription.js';
 import ClientSubscription from '../../models/ClientSubscription.js';
 import logger from '../../utils/logger.js';
 import { emitNotification } from '../realtime/workspaceSocket.js';
 import { getPlanByPriceId } from './plans.js';
+import { getStorefrontTemplateTier } from './storefrontTemplatePurchases.js';
 
 function normalizeStripeId(value) {
   if (!value) return '';
@@ -38,18 +40,53 @@ function invoicePricePlans(invoice = {}) {
   return plans;
 }
 
+function isStorefrontTemplateMetadata(source = {}) {
+  return (
+    String(source.purchase_type || '').trim() === 'storefront_template'
+    || String(source.subscription_type || '').trim() === 'storefront_template'
+  );
+}
+
+function invoiceStorefrontTemplatePurchase(invoice = {}) {
+  const sources = [
+    invoice.metadata,
+    invoice.subscription_details?.metadata,
+    invoice.parent?.subscription_details?.metadata,
+    invoice.parent?.quote_details?.metadata,
+    ...(invoice.lines?.data || []).map((line) => line.metadata),
+    ...(invoice.lines?.data || []).map((line) => line.parent?.subscription_item_details?.metadata),
+  ].filter(Boolean);
+
+  const metadata = sources.find((source) => (
+    isStorefrontTemplateMetadata(source)
+    && String(source.template_id || '').trim()
+  ));
+  if (!metadata) return null;
+
+  const template = getStorefrontTemplateTier(metadata.template_id);
+  return {
+    template_id: String(metadata.template_id || '').trim(),
+    tier: String(metadata.tier || template?.tier || '').trim(),
+    name: template?.name || 'Storefront template',
+  };
+}
+
 async function findUserIdForStripeObject(object = {}) {
   const metadataUserId = String(object.metadata?.user_id || '').trim();
   if (metadataUserId) return metadataUserId;
 
   const subscriptionId = normalizeStripeId(object.subscription || object.id);
   if (subscriptionId) {
-    const [proSub, clientSub] = await Promise.all([
+    const [proSub, clientSub, templateProfile] = await Promise.all([
       Subscription.findOne({ stripe_subscription_id: subscriptionId }).select('user_id').lean(),
       ClientSubscription.findOne({ stripe_subscription_id: subscriptionId }).select('user_id').lean(),
+      PublicProfile.findOne({
+        'storefront.template_purchases.stripe_subscription_id': subscriptionId,
+      }).select('user_id').lean(),
     ]);
     if (proSub?.user_id) return String(proSub.user_id);
     if (clientSub?.user_id) return String(clientSub.user_id);
+    if (templateProfile?.user_id) return String(templateProfile.user_id);
   }
 
   const customerId = normalizeStripeId(object.customer);
@@ -106,6 +143,23 @@ async function notifyInvoicePaid(event) {
   if (!userId) return null;
 
   const amount = formatAmount(invoice.amount_paid, invoice.currency);
+  const templatePurchase = invoiceStorefrontTemplatePurchase(invoice);
+  if (templatePurchase) {
+    return persistAndEmit(userId, event.id, {
+      notification_type: 'storefront_template_payment_paid',
+      title: 'Template subscription active',
+      body: `${templatePurchase.name} is active for ${amount}/month. You can publish with it while subscribed.`,
+      severity: 'info',
+      action: {
+        type: 'open_storefront_builder',
+        href: '/dashboard/public-profile',
+        invoice_id: invoice.id,
+        hosted_invoice_url: invoice.hosted_invoice_url || '',
+        template_id: templatePurchase.template_id,
+      },
+    });
+  }
+
   const reason = String(invoice.billing_reason || '');
   const plans = invoicePricePlans(invoice);
   const planName = plans.at(-1)?.name || 'subscription';
@@ -142,6 +196,23 @@ async function notifyInvoicePaymentFailed(event) {
   if (!userId) return null;
 
   const amount = formatAmount(invoice.amount_due || invoice.amount_remaining, invoice.currency);
+  const templatePurchase = invoiceStorefrontTemplatePurchase(invoice);
+  if (templatePurchase) {
+    return persistAndEmit(userId, event.id, {
+      notification_type: 'storefront_template_payment_failed',
+      title: 'Template subscription payment failed',
+      body: `We could not renew ${templatePurchase.name}. Update billing to keep this template unlocked.`,
+      severity: 'critical',
+      action: {
+        type: 'open_storefront_builder',
+        href: '/dashboard/public-profile',
+        invoice_id: invoice.id,
+        hosted_invoice_url: invoice.hosted_invoice_url || '',
+        template_id: templatePurchase.template_id,
+      },
+    });
+  }
+
   return persistAndEmit(userId, event.id, {
     notification_type: 'billing_payment_failed',
     title: 'Payment failed',
@@ -159,6 +230,9 @@ async function notifySubscriptionUpdated(event) {
   const previous = event.data.previous_attributes || {};
   const userId = await findUserIdForStripeObject(stripeSubscription);
   if (!userId) return null;
+
+  // Template cancel/resume already shows one immediate toast from the settings action.
+  if (isStorefrontTemplateMetadata(stripeSubscription?.metadata)) return null;
 
   if (
     Object.prototype.hasOwnProperty.call(previous, 'cancel_at_period_end') &&

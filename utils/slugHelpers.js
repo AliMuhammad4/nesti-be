@@ -76,7 +76,10 @@ export const validateSlug = (slug) => {
     'help',
     'support',
     'terms',
+    'terms-of-use',
     'privacy',
+    'privacy-policy',
+    'refund-policy',
   ];
 
   if (reservedSlugs.includes(slug)) {

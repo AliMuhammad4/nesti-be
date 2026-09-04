@@ -461,19 +461,61 @@ test('owner preview serializers expose public feedback and community profile inp
   assert.deepEqual(summary.core_specialization_tags, ['relocation']);
 });
 
+test('mortgage broker classic AI blocks use the focused lead template policy', () => {
+  const blocks = generateDefaultStorefrontBlocks('mortgage_broker', 'mortgage_broker-classic', {
+    headline: 'Mortgage options for your next move',
+    tagline: 'Clear financing guidance.',
+    about: 'A focused mortgage advisory practice.',
+    services: [{ title: 'Purchase financing', description: 'Compare suitable options.' }],
+  });
+
+  assert.deepEqual(blocks.map((block) => block.type), [
+    'hero',
+    'about',
+    'practice-snapshot',
+    'mortgage-programs',
+    'services',
+    'role-details',
+    'broker-compensation',
+    'faq',
+    'cta',
+    'footer',
+  ]);
+  assert.equal(blocks[0].content.broker_design_version, 16);
+});
+
 test('storefront block types are constrained by professional role', () => {
   assert.deepEqual(
     allowedStorefrontBlockTypes('mortgage_broker'),
     [
       'hero', 'expertise', 'role-details', 'about', 'testimonials', 'services', 'guidance', 'cta', 'footer',
-      'mortgage-calculator', 'mortgage-programs',
+      'mortgage-calculator', 'mortgage-programs', 'mortgage-rates', 'lender-network', 'broker-compensation',
+      'alternative-lending', 'credentials', 'practice-snapshot', 'faq',
     ],
   );
 
   const brokerDraft = validateStorefrontDraftForRole({
-    blocks: [{ id: 'calculator', type: 'mortgage-calculator', data: { content: {} } }],
+    blocks: [
+      { id: 'calculator', type: 'mortgage-calculator', data: { content: {} } },
+      { id: 'credentials', type: 'credentials', data: { content: {} } },
+      { id: 'snapshot', type: 'practice-snapshot', data: { content: {} } },
+      { id: 'faq', type: 'faq', data: { content: { faqs: [] } } },
+    ],
   }, 'mortgage_broker');
   assert.equal(brokerDraft.error, undefined);
+
+  assert.deepEqual(
+    allowedStorefrontBlockTypes('mortgage_broker', 'mortgage_broker-classic'),
+    [
+      'hero', 'about', 'practice-snapshot', 'mortgage-programs', 'services',
+      'role-details', 'broker-compensation', 'faq', 'cta', 'footer',
+    ],
+  );
+  const classicBrokerUsingRemovedLayer = validateStorefrontDraftForRole({
+    template: { id: 'mortgage_broker-classic' },
+    blocks: [{ id: 'rates', type: 'mortgage-rates', data: { content: {} } }],
+  }, 'mortgage_broker');
+  assert.match(classicBrokerUsingRemovedLayer.error.message, /Unsupported storefront block type/);
 
   const firstHomeLawyerDraft = validateStorefrontDraftForRole({
     template: { id: 'lawyer-first-home-closing' },

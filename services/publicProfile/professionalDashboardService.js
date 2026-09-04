@@ -572,7 +572,7 @@ export const publishStorefrontService = async (userId, draft = null, expected = 
       status: 402,
       body: {
         success: false,
-        message: `${templateAccess.name} is a ${templateAccess.tier} template. Unlock it for ${templateAccess.amount / 100} USD before publishing.`,
+        message: `${templateAccess.name} is a ${templateAccess.tier} template. Subscribe for ${templateAccess.amount / 100} USD/month before publishing.`,
         template: templateAccess,
       },
     };

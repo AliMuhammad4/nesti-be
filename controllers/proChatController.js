@@ -256,6 +256,7 @@ export const listCallRecords = async (req, res, next) => {
       status: req.query?.status,
       callType: req.query?.call_type,
       threadId: req.query?.thread_id,
+      otherUserId: req.query?.other_user_id,
       from: req.query?.from,
       to: req.query?.to,
     });

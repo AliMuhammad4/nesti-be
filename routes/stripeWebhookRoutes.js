@@ -9,7 +9,10 @@ import {
   syncSubscriptionSchedule,
   updateInvoicePaymentState,
 } from '../services/billing/subscriptionService.js';
-import { syncStorefrontTemplateCheckoutSession } from '../services/billing/storefrontTemplatePurchases.js';
+import {
+  syncStorefrontTemplateCheckoutSession,
+  syncStorefrontTemplateSubscription,
+} from '../services/billing/storefrontTemplatePurchases.js';
 import { syncClientStripeSubscription } from '../services/client/clientSubscriptionService.js';
 
 const router = express.Router();
@@ -102,6 +105,13 @@ async function processStripeEvent(event) {
     case 'customer.subscription.deleted': {
       // Route by metadata, then fall back to which DB collection owns this Stripe sub id
       const stripeSub = event.data.object;
+      if (
+        String(stripeSub?.metadata?.purchase_type || '').trim() === 'storefront_template'
+        || String(stripeSub?.metadata?.subscription_type || '').trim() === 'storefront_template'
+      ) {
+        result = await syncStorefrontTemplateSubscription(stripeSub);
+        break;
+      }
       const subscriptionType = String(stripeSub?.metadata?.subscription_type || '')
         .trim()
         .toLowerCase();

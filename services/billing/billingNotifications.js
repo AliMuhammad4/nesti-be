@@ -1,4 +1,5 @@
 import ProfessionalNotification from '../../models/ProfessionalNotification.js';
+import PublicProfile from '../../models/PublicProfile.js';
 import Subscription from '../../models/Subscription.js';
 import ClientSubscription from '../../models/ClientSubscription.js';
 import logger from '../../utils/logger.js';
@@ -39,6 +40,13 @@ function invoicePricePlans(invoice = {}) {
   return plans;
 }
 
+function isStorefrontTemplateMetadata(source = {}) {
+  return (
+    String(source.purchase_type || '').trim() === 'storefront_template'
+    || String(source.subscription_type || '').trim() === 'storefront_template'
+  );
+}
+
 function invoiceStorefrontTemplatePurchase(invoice = {}) {
   const sources = [
     invoice.metadata,
@@ -50,7 +58,7 @@ function invoiceStorefrontTemplatePurchase(invoice = {}) {
   ].filter(Boolean);
 
   const metadata = sources.find((source) => (
-    String(source.purchase_type || '').trim() === 'storefront_template'
+    isStorefrontTemplateMetadata(source)
     && String(source.template_id || '').trim()
   ));
   if (!metadata) return null;
@@ -69,12 +77,16 @@ async function findUserIdForStripeObject(object = {}) {
 
   const subscriptionId = normalizeStripeId(object.subscription || object.id);
   if (subscriptionId) {
-    const [proSub, clientSub] = await Promise.all([
+    const [proSub, clientSub, templateProfile] = await Promise.all([
       Subscription.findOne({ stripe_subscription_id: subscriptionId }).select('user_id').lean(),
       ClientSubscription.findOne({ stripe_subscription_id: subscriptionId }).select('user_id').lean(),
+      PublicProfile.findOne({
+        'storefront.template_purchases.stripe_subscription_id': subscriptionId,
+      }).select('user_id').lean(),
     ]);
     if (proSub?.user_id) return String(proSub.user_id);
     if (clientSub?.user_id) return String(clientSub.user_id);
+    if (templateProfile?.user_id) return String(templateProfile.user_id);
   }
 
   const customerId = normalizeStripeId(object.customer);
@@ -135,8 +147,8 @@ async function notifyInvoicePaid(event) {
   if (templatePurchase) {
     return persistAndEmit(userId, event.id, {
       notification_type: 'storefront_template_payment_paid',
-      title: 'Template unlocked',
-      body: `${templatePurchase.name} was unlocked for ${amount}. You can publish with it anytime.`,
+      title: 'Template subscription active',
+      body: `${templatePurchase.name} is active for ${amount}/month. You can publish with it while subscribed.`,
       severity: 'info',
       action: {
         type: 'open_storefront_builder',
@@ -188,8 +200,8 @@ async function notifyInvoicePaymentFailed(event) {
   if (templatePurchase) {
     return persistAndEmit(userId, event.id, {
       notification_type: 'storefront_template_payment_failed',
-      title: 'Template payment failed',
-      body: `We could not unlock ${templatePurchase.name}. Please try the template payment again.`,
+      title: 'Template subscription payment failed',
+      body: `We could not renew ${templatePurchase.name}. Update billing to keep this template unlocked.`,
       severity: 'critical',
       action: {
         type: 'open_storefront_builder',
@@ -218,6 +230,9 @@ async function notifySubscriptionUpdated(event) {
   const previous = event.data.previous_attributes || {};
   const userId = await findUserIdForStripeObject(stripeSubscription);
   if (!userId) return null;
+
+  // Template cancel/resume already shows one immediate toast from the settings action.
+  if (isStorefrontTemplateMetadata(stripeSubscription?.metadata)) return null;
 
   if (
     Object.prototype.hasOwnProperty.call(previous, 'cancel_at_period_end') &&

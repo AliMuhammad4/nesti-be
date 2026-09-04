@@ -2,6 +2,7 @@ import { isValidObjectId } from 'mongoose';
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import ProfessionalChatThread from '../../models/ProfessionalChatThread.js';
 import User from '../../models/User.js';
+import { normalizeId, toObjectId } from '../../utils/proChatUtils.js';
 import {
   participantConsentFields,
   redactCallArtifactsForViewer,
@@ -126,10 +127,11 @@ async function enrichCalls(calls, currentUserId) {
   const userIds = [
     ...new Set(calls.flatMap((call) => call.participant_ids || []).map(text).filter(Boolean)),
   ];
+  const userObjectIds = userIds.map((id) => toObjectId(id)).filter(Boolean);
   const threadIds = [...new Set(calls.map((call) => text(call.thread_id)).filter(isValidObjectId))];
   const [users, threads] = await Promise.all([
-    userIds.length
-      ? User.find({ _id: { $in: userIds } })
+    userObjectIds.length
+      ? User.find({ _id: { $in: userObjectIds } })
           .select('first_name last_name role profile_image')
           .lean()
       : [],
@@ -146,8 +148,17 @@ async function enrichCalls(calls, currentUserId) {
   );
 }
 
-function buildFilters({ currentUserId, status, callType, threadId, from, to }) {
-  const filter = { participant_ids: text(currentUserId) };
+function buildFilters({ currentUserId, status, callType, threadId, otherUserId, from, to }) {
+  const userId = normalizeId(currentUserId);
+  if (!userId || !isValidObjectId(userId)) {
+    return { error: { status: 400, body: { success: false, message: 'Invalid user id' } } };
+  }
+  const normalizedOtherUserId = normalizeId(otherUserId);
+  const filter = {
+    participant_ids: normalizedOtherUserId
+      ? { $all: [userId, normalizedOtherUserId] }
+      : userId,
+  };
   const normalizedStatus = text(status).toLowerCase();
   const normalizedType = text(callType).toLowerCase();
   const normalizedThreadId = text(threadId);
@@ -164,13 +175,13 @@ function buildFilters({ currentUserId, status, callType, threadId, from, to }) {
         {
           status: 'ended',
           started_at: null,
-          caller_id: { $ne: text(currentUserId) },
+          caller_id: { $ne: userId },
         },
       ];
     } else if (normalizedStatus === 'unanswered') {
       filter.status = 'ended';
       filter.started_at = null;
-      filter.caller_id = text(currentUserId);
+      filter.caller_id = userId;
     } else {
       filter.status = normalizedStatus;
     }
@@ -186,6 +197,11 @@ function buildFilters({ currentUserId, status, callType, threadId, from, to }) {
       return { error: { status: 400, body: { success: false, message: 'Invalid thread id' } } };
     }
     filter.thread_id = normalizedThreadId;
+  }
+  if (normalizedOtherUserId) {
+    if (!isValidObjectId(normalizedOtherUserId)) {
+      return { error: { status: 400, body: { success: false, message: 'Invalid other user id' } } };
+    }
   }
   const fromDate = parseDate(from);
   const toDate = parseDate(to);
@@ -207,12 +223,21 @@ export async function listCallRecords({
   status,
   callType,
   threadId,
+  otherUserId,
   from,
   to,
 }) {
   const pageNumber = positiveInt(page, 1);
   const pageSize = Math.min(MAX_PAGE_SIZE, positiveInt(limit, 20));
-  const built = buildFilters({ currentUserId, status, callType, threadId, from, to });
+  const built = buildFilters({
+    currentUserId,
+    status,
+    callType,
+    threadId,
+    otherUserId,
+    from,
+    to,
+  });
   if (built.error) return built.error;
   const [calls, total] = await Promise.all([
     ProfessionalCall.find(built.filter)
@@ -243,9 +268,13 @@ export async function getCallRecord({ currentUserId, callId }) {
   if (!isValidObjectId(normalizedCallId)) {
     return { status: 400, body: { success: false, message: 'Invalid call record id' } };
   }
+  const userId = normalizeId(currentUserId);
+  if (!userId || !isValidObjectId(userId)) {
+    return { status: 400, body: { success: false, message: 'Invalid user id' } };
+  }
   const call = await ProfessionalCall.findOne({
     _id: normalizedCallId,
-    participant_ids: text(currentUserId),
+    participant_ids: userId,
   }).lean();
   if (!call) {
     return { status: 404, body: { success: false, message: 'Call record not found' } };

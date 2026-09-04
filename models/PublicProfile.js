@@ -96,9 +96,14 @@ const storefrontTemplatePurchaseSchema = new mongoose.Schema({
   tier: { type: String, enum: ['free', 'basic', 'standard', 'premium'], default: 'free' },
   amount: { type: Number, default: 0, min: 0 },
   currency: { type: String, default: 'usd', maxlength: 8 },
+  billing_interval: { type: String, default: 'month', maxlength: 16 },
   stripe_checkout_session_id: { type: String, default: '', maxlength: 160 },
   stripe_payment_intent_id: { type: String, default: '', maxlength: 160 },
   stripe_invoice_id: { type: String, default: '', maxlength: 160 },
+  stripe_subscription_id: { type: String, default: '', maxlength: 160 },
+  subscription_status: { type: String, default: '', maxlength: 40 },
+  cancel_at_period_end: { type: Boolean, default: false },
+  current_period_end: { type: Date, default: null },
   purchased_at: { type: Date, default: Date.now },
 }, { _id: false });
 

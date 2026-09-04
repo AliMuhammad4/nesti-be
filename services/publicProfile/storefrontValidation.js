@@ -31,6 +31,13 @@ const ROLE_BLOCK_TYPES = Object.freeze({
   [PROFESSIONAL_TYPE.MORTGAGE_BROKER]: [
     'mortgage-calculator',
     'mortgage-programs',
+    'mortgage-rates',
+    'lender-network',
+    'broker-compensation',
+    'alternative-lending',
+    'credentials',
+    'practice-snapshot',
+    'faq',
   ],
   [PROFESSIONAL_TYPE.LAWYER]: [
     'practice-areas',
@@ -62,6 +69,19 @@ const LAWYER_FIRST_HOME_BLOCK_TYPES = Object.freeze([
   'engagement-scope',
   'practice-snapshot',
   'practice-logistics',
+]);
+const BROKER_CLASSIC_TEMPLATE_ID = 'mortgage_broker-classic';
+const BROKER_CLASSIC_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'about',
+  'practice-snapshot',
+  'mortgage-programs',
+  'services',
+  'role-details',
+  'broker-compensation',
+  'faq',
+  'cta',
+  'footer',
 ]);
 const MAX_CONTENT_DEPTH = 4;
 const MAX_CONTENT_KEYS = 30;
@@ -187,6 +207,7 @@ const storefrontContentSchema = Joi.object()
 
 const storefrontLayoutSchema = Joi.object({
   alignment: Joi.string().valid('left', 'center', 'right').optional(),
+  contentAlignment: Joi.string().valid('left', 'center', 'right').optional(),
   padding: Joi.string().valid('none', 'small', 'medium', 'large').optional(),
   width: Joi.string().valid('full', 'contained', 'narrow').optional(),
   hiddenOn: Joi.array().items(Joi.string().valid('desktop', 'tablet', 'mobile')).unique().max(3).optional(),
@@ -290,6 +311,12 @@ export function allowedStorefrontBlockTypes(role, templateId = '') {
     && templateId === LAWYER_NEWCOMER_TEMPLATE_ID
   ) {
     return [...LAWYER_NEWCOMER_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+    && templateId === BROKER_CLASSIC_TEMPLATE_ID
+  ) {
+    return [...BROKER_CLASSIC_BLOCK_TYPES];
   }
   return [
     ...SHARED_BLOCK_TYPES,

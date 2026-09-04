@@ -287,22 +287,24 @@ test('Newcomer validation allows flexible structure and enforces its block and i
   assert.match(tooManyTestimonials.error.message, /no more than 8 items/);
 });
 
-test('Newcomer remains a free lawyer entitlement without changing Classic access', () => {
+test('Newcomer remains a free lawyer entitlement while paid lawyer templates stay locked', () => {
   const newcomerTier = getStorefrontTemplateTier(LAWYER_NEWCOMER_TEMPLATE_ID);
   const lawyerProfile = {
     professional_type: 'lawyer',
-    storefront: { unlocked_template_ids: [] },
+    storefront: { unlocked_template_ids: [], template_purchases: [] },
   };
   const agentProfile = {
     professional_type: 'agent',
-    storefront: { unlocked_template_ids: [] },
+    storefront: { unlocked_template_ids: [], template_purchases: [] },
   };
 
   assert.equal(newcomerTier.tier, 'free');
   assert.equal(newcomerTier.amount, 0);
   assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, LAWYER_NEWCOMER_TEMPLATE_ID), true);
   assert.equal(userHasStorefrontTemplateAccess(agentProfile, LAWYER_NEWCOMER_TEMPLATE_ID), false);
-  assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, 'lawyer-classic'), true);
+  assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, 'lawyer-classic'), false);
+  assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, 'lawyer-investor'), false);
+  assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, 'lawyer-first-home-closing'), false);
 });
 
 test('public Newcomer revisions retain only the safe palette migration marker', () => {

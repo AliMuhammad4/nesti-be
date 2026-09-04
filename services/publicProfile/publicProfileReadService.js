@@ -13,6 +13,7 @@ import {
   getSellerCredentialMetrics,
 } from '../analytics/leadKpiService.js';
 import { serializePublishedStorefront } from './storefrontService.js';
+import { userHasStorefrontTemplateAccess } from '../billing/storefrontTemplatePurchases.js';
 import {
   publicProfileUnavailableResponse,
   userCanServePublicProfile,
@@ -340,7 +341,15 @@ export async function getPublishedStorefrontBySlugService(slug) {
   }
 
   const profile = await PublicProfile.findOne({ slug: slug.toLowerCase().trim() })
-    .select('slug enabled user_id storefront.published')
+    .select([
+      'slug',
+      'enabled',
+      'user_id',
+      'professional_type',
+      'storefront.published',
+      'storefront.template_purchases',
+      'storefront.unlocked_template_ids',
+    ].join(' '))
     .lean();
   if (!profile || !profile.enabled || !(await userCanServePublicProfile(profile.user_id))) {
     return publicProfileUnavailableResponse();
@@ -348,6 +357,14 @@ export async function getPublishedStorefrontBySlugService(slug) {
 
   const published = serializePublishedStorefront(profile.storefront);
   if (!published) return publicProfileUnavailableResponse();
+
+  const publishedTemplateId = String(published?.template?.id || '').trim();
+  if (
+    publishedTemplateId
+    && !userHasStorefrontTemplateAccess(profile, publishedTemplateId)
+  ) {
+    return publicProfileUnavailableResponse();
+  }
 
   return {
     status: 200,

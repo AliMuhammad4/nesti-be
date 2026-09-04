@@ -4,12 +4,13 @@ import { protect } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import {
-  checkoutSessionSchema,
   cancelSubscriptionSchema,
   changePlanSchema,
+  checkoutSessionSchema,
   resumeSubscriptionSchema,
   storefrontTemplateCheckoutConfirmSchema,
   storefrontTemplateCheckoutSessionSchema,
+  storefrontTemplateSubscriptionActionSchema,
 } from '../schemas/billingSchemas.js';
 import Subscription from '../models/Subscription.js';
 import { getStripeClient } from '../services/billing/stripeClient.js';
@@ -26,9 +27,11 @@ import {
   serializeSubscription,
 } from '../services/billing/subscriptionService.js';
 import {
+  cancelStorefrontTemplateSubscriptionForUser,
   confirmStorefrontTemplateCheckoutSession,
   createStorefrontTemplateCheckoutSession,
   getStorefrontTemplateEntitlementsForUser,
+  resumeStorefrontTemplateSubscriptionForUser,
 } from '../services/billing/storefrontTemplatePurchases.js';
 
 const setupIntent = async (req, res) => {
@@ -127,6 +130,54 @@ const confirmStorefrontTemplateCheckout = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: err?.message || 'Unable to confirm template checkout.',
+    });
+  }
+};
+
+const cancelStorefrontTemplateSubscription = async (req, res) => {
+  try {
+    const result = await cancelStorefrontTemplateSubscriptionForUser(
+      req.user,
+      req.body.template_id,
+      req.body.reason,
+    );
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    return res.json({
+      success: true,
+      template: result.template,
+      alreadyCanceled: Boolean(result.alreadyCanceled),
+      alreadyScheduled: Boolean(result.alreadyScheduled),
+      ...result.entitlements,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to cancel template subscription.',
+    });
+  }
+};
+
+const resumeStorefrontTemplateSubscription = async (req, res) => {
+  try {
+    const result = await resumeStorefrontTemplateSubscriptionForUser(
+      req.user,
+      req.body.template_id,
+    );
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    return res.json({
+      success: true,
+      template: result.template,
+      alreadyActive: Boolean(result.alreadyActive),
+      ...result.entitlements,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to resume template subscription.',
     });
   }
 };
@@ -265,6 +316,18 @@ router.post(
   protect,
   validateBody(storefrontTemplateCheckoutConfirmSchema),
   confirmStorefrontTemplateCheckout,
+);
+router.post(
+  '/storefront-templates/cancel',
+  protect,
+  validateBody(storefrontTemplateSubscriptionActionSchema),
+  cancelStorefrontTemplateSubscription,
+);
+router.post(
+  '/storefront-templates/resume',
+  protect,
+  validateBody(storefrontTemplateSubscriptionActionSchema),
+  resumeStorefrontTemplateSubscription,
 );
 router.post(
   '/checkout-session',

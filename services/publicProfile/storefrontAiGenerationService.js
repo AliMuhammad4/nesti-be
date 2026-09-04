@@ -66,6 +66,18 @@ const TEMPLATE_SPECIFIC_BLOCKS = Object.freeze({
     'cta',
     'footer',
   ],
+  'mortgage_broker-classic': [
+    'hero',
+    'about',
+    'practice-snapshot',
+    'mortgage-programs',
+    'services',
+    'role-details',
+    'broker-compensation',
+    'faq',
+    'cta',
+    'footer',
+  ],
   'agent-community-expert': [
     'hero',
     'featured-listings',
@@ -161,6 +173,17 @@ function generatedContentForBlock(type, generated = {}, templateKey = '') {
         lawyer_classic_design_version: 2,
       };
     }
+    if (templateKey === 'mortgage_broker-classic') {
+      return {
+        heading: generated.headline || '',
+        body: generated.tagline || '',
+        eyebrow: `Welcome to ${cleanText(generated.business_name || '', 80) || 'your practice'}`,
+        primary_cta_label: 'Apply for loan',
+        cta_label: 'Book a consultation',
+        join_label: 'Join Nesti',
+        broker_design_version: 16,
+      };
+    }
     return { heading: generated.headline || '', body: generated.tagline || '' };
   }
   if (type === 'about') {
@@ -175,6 +198,13 @@ function generatedContentForBlock(type, generated = {}, templateKey = '') {
       return {
         eyebrow: 'About the practice',
         heading: 'Real estate legal counsel',
+        body: generated.about || '',
+      };
+    }
+    if (templateKey === 'mortgage_broker-classic') {
+      return {
+        eyebrow: 'Company introductions',
+        heading: 'Our loans will fill your dreams come true',
         body: generated.about || '',
       };
     }
@@ -230,6 +260,21 @@ function generatedContentForBlock(type, generated = {}, templateKey = '') {
       ],
     };
   }
+  if (type === 'faq' && templateKey === 'mortgage_broker-classic') {
+    return {
+      eyebrow: 'Helpful questions',
+      heading: 'What clients often ask',
+      body: 'Clear answers to common mortgage questions before you start.',
+      faqs: [
+        { q: 'How long does mortgage approval usually take?', a: 'Timelines vary by lender and file complexity, but a well-prepared application can often move from first review to approval within a few business days.' },
+        { q: 'What documents should I prepare first?', a: 'Income proof, identification, down-payment source, credit consent, and property details (or a target purchase range) help keep the process moving.' },
+        { q: 'Can I get pre-approved before making an offer?', a: 'Yes. Pre-approval clarifies affordability and strengthens your position before you submit an offer on a home.' },
+        { q: 'Do you only help with purchases?', a: 'No. Support typically covers purchases, refinances, renewals, and investor financing depending on your goals and lender fit.' },
+        { q: 'Will this consultation lock me into a lender?', a: 'No. The first conversation is about fit, options, and next steps. You stay in control of whether to proceed.' },
+        { q: 'What happens after I submit an inquiry?', a: 'Your details are reviewed, clarifying questions may follow if needed, and you receive a clear path for consultation or application support.' },
+      ],
+    };
+  }
   if (type === 'services') {
     if (templateKey === 'lawyer-investor') {
       return {
@@ -237,6 +282,14 @@ function generatedContentForBlock(type, generated = {}, templateKey = '') {
         heading: 'Support across the transaction lifecycle',
         body: 'Choose the workstream that matches the deal, ownership structure, financing, and closing timeline.',
         resource_label: 'Transaction workstreams',
+        items: Array.isArray(generated.services) ? generated.services : [],
+      };
+    }
+    if (templateKey === 'mortgage_broker-classic') {
+      return {
+        eyebrow: 'Mortgage solutions',
+        heading: 'Advice for every stage of your mortgage',
+        body: 'Explore practical financing strategies backed by clear comparisons, careful preparation, and responsive support.',
         items: Array.isArray(generated.services) ? generated.services : [],
       };
     }
@@ -295,7 +348,9 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
       ? 'For the lawyer-investor template, write specifically for a real estate lawyer serving active property investors. Emphasize disciplined acquisitions, refinancing, assignments, ownership structures, title work, and repeat transaction intake. Do not imply a lawyer-client relationship, promise outcomes, provide legal advice, or invent transaction volume.'
       : resolvedTemplateKey === 'lawyer-newcomer'
         ? 'For the lawyer-newcomer template, write plain-language copy for a real estate lawyer helping newcomers understand a Canadian residential purchase closing. Emphasize agreements, title, lender instructions, identity documents, closing funds, signing, and practical next steps. Do not assume immigration status, imply a lawyer-client relationship, promise outcomes, provide legal or immigration advice, invent credentials, or invent client experiences.'
-        : '';
+        : resolvedTemplateKey === 'mortgage_broker-classic'
+          ? 'For the mortgage_broker-classic template, write specifically for a mortgage advisor. Emphasize financing programs, pre-approval, refinancing, renewals, and clear next steps. Do not invent rates, approvals, guarantees, credentials, or client testimonials.'
+          : '';
 
   const completion = await openai().chat.completions.create({
     model: MODEL,
@@ -347,6 +402,7 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
       generated_at: new Date().toISOString(),
       template_key: resolvedTemplateKey,
       ...(resolvedTemplateKey === 'lawyer-classic' ? { lawyer_classic_design_version: 2 } : {}),
+      ...(resolvedTemplateKey === 'mortgage_broker-classic' ? { broker_design_version: 16 } : {}),
       ...(resolvedTemplateKey === LAWYER_NEWCOMER_TEMPLATE_ID
         ? { lawyer_newcomer_design_version: LAWYER_NEWCOMER_DESIGN_VERSION }
         : {}),

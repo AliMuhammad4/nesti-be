@@ -2,7 +2,7 @@ import User from '../models/User.js';
 import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
 import logger from '../utils/logger.js';
 
-const KINDS = new Set(['profile', 'cover', 'logo']);
+const KINDS = new Set(['profile', 'cover', 'logo', 'gallery']);
 
 function clampNumber(value, { min, max, fallback }) {
   const n = Number(value);
@@ -11,12 +11,12 @@ function clampNumber(value, { min, max, fallback }) {
 }
 
 /**
- * POST multipart: field `file` (image), field `kind` = `profile` | `cover` | `logo`.
+ * POST multipart: field `file` (image), field `kind` = `profile` | `cover` | `logo` | `gallery`.
  * Optional field `scope` = `storefront`:
  *   - Uploads to a storefront-only R2 key and returns the URL.
  *   - Does NOT update User.profile_image / User.cover_image (page-only assets).
  * Without storefront scope, profile/cover images update the User record (account-wide).
- * Logo assets are always returned for the Brand Kit to persist with its draft.
+ * Logo / gallery assets are always returned for the Brand Kit or block content to persist.
  */
 export async function postProfileImageUpload(req, res, next) {
   try {
@@ -33,7 +33,7 @@ export async function postProfileImageUpload(req, res, next) {
     if (!KINDS.has(kind)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid kind. Use profile, cover, or logo.',
+        message: 'Invalid kind. Use profile, cover, logo, or gallery.',
       });
     }
 

@@ -66,10 +66,11 @@ test('public profile serialization never turns CRM leads into testimonials', () 
   const serialized = serializeFullPublicProfile(profile, 'user-1', context);
 
   assert.deepEqual(serialized.real_clients, []);
-  assert.equal(serialized.testimonials.length, 2);
-  assert.equal(serialized.testimonials.some((item) => item.client_name === 'Pending feedback'), false);
+  assert.equal(serialized.testimonials.length, 3);
+  assert.equal(serialized.testimonials.some((item) => item.client_name === 'Pending feedback'), true);
   assert.equal(JSON.stringify(serialized).includes('Private CRM'), false);
   assert.equal(JSON.stringify(serialized).includes('private-pending@example.com'), false);
+  assert.equal(JSON.stringify(serialized).includes('private-approved@example.com'), false);
   assert.equal('recent_closed_seller_leads' in serialized, false);
   assert.deepEqual(serialized.professional_credential_metrics, {
     active_pipeline_value: 999999,
@@ -77,5 +78,5 @@ test('public profile serialization never turns CRM leads into testimonials', () 
     closed_cases: 400,
     currency: '',
   });
-  assert.equal(serialized.client_rating_average, 4.5);
+  assert.equal(serialized.client_rating_average, 3.3);
 });

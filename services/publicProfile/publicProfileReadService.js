@@ -74,9 +74,9 @@ const PROFESSIONAL_PROFILE_ARRAY_FIELDS = [
 ];
 
 function serializeFeedback(profile) {
-  return (profile.feedback_submissions || [])
-    .filter((item) => item?.approved === true)
-    .map(serializeClientFeedbackItem);
+  // Keep public pages aligned with the storefront editor. There is no feedback
+  // moderation UI, so submissions are public once they exist.
+  return (profile.feedback_submissions || []).map(serializeClientFeedbackItem);
 }
 
 function serializeProfessionalProfile(profile) {

@@ -21,7 +21,8 @@ export async function submitPublicFeedbackService({ slug, payload }) {
             email: payload.email,
             rating: payload.rating,
             text: payload.text,
-            approved: false,
+            // No moderation UI exists; published pages and the editor must stay in sync.
+            approved: true,
             submitted_at: new Date(),
           }],
           $slice: -100,
@@ -36,7 +37,7 @@ export async function submitPublicFeedbackService({ slug, payload }) {
     status: 201,
     body: {
       success: true,
-      message: 'Thank you. Your feedback was submitted for review.',
+      message: 'Thank you. Your feedback is now visible.',
     },
   };
 }
@@ -55,7 +56,6 @@ export async function getApprovedPublicFeedbackService(slug) {
   }
 
   const feedback = (profile.feedback_submissions || [])
-    .filter((item) => item.approved === true)
     .sort((left, right) => new Date(right.submitted_at) - new Date(left.submitted_at))
     .map(serializeClientFeedbackItem);
   return {

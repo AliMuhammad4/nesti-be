@@ -39,7 +39,7 @@ const newcomerDraft = (blocks, version = '1') => ({
 test('lawyers default to Newcomer while other backend role defaults remain stable', () => {
   assert.equal(defaultStorefrontTemplateIdForRole('lawyer'), LAWYER_NEWCOMER_TEMPLATE_ID);
   assert.equal(defaultStorefrontTemplateIdForRole('agent'), 'agent-investor');
-  assert.equal(defaultStorefrontTemplateIdForRole('mortgage_broker'), 'mortgage_broker-classic');
+  assert.equal(defaultStorefrontTemplateIdForRole('mortgage_broker'), 'mortgage_broker-renewal');
 });
 
 test('Newcomer AI defaults produce the canonical nine-layer legal-safe contract', () => {

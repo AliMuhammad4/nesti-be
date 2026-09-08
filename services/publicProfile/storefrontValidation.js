@@ -83,6 +83,20 @@ const BROKER_CLASSIC_BLOCK_TYPES = Object.freeze([
   'cta',
   'footer',
 ]);
+const BROKER_RENEWAL_TEMPLATE_ID = 'mortgage_broker-renewal';
+/** Free/default broker template — exactly 10 layers. */
+const BROKER_RENEWAL_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'practice-snapshot',
+  'mortgage-programs',
+  'services',
+  'about',
+  'guidance',
+  'testimonials',
+  'faq',
+  'cta',
+  'footer',
+]);
 const BROKER_FIRST_HOME_TEMPLATE_ID = 'mortgage_broker-first-home';
 const BROKER_FIRST_HOME_BLOCK_TYPES = Object.freeze([
   'hero',
@@ -336,6 +350,12 @@ export function allowedStorefrontBlockTypes(role, templateId = '') {
     && templateId === BROKER_CLASSIC_TEMPLATE_ID
   ) {
     return [...BROKER_CLASSIC_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+    && templateId === BROKER_RENEWAL_TEMPLATE_ID
+  ) {
+    return [...BROKER_RENEWAL_BLOCK_TYPES];
   }
   if (
     role === PROFESSIONAL_TYPE.MORTGAGE_BROKER

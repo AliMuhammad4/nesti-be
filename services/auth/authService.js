@@ -437,6 +437,36 @@ export const loginService = async ({ email, password, invite_token }) => {
     return { status: 403, body: { success: false, message: 'Email not verified' } };
   }
 
+async function resolveUserLoginPresentation(user) {
+  let subscription = await getSubscriptionPresentationForUser(user).catch(() => ({}));
+  if (user.role === USER_ROLE.CLIENT) {
+    const clientSubscription = await getClientSubscriptionForUser(user._id).catch(() => null);
+    if (clientSubscription && isClientSubscriptionActive(clientSubscription)) {
+      subscription = {
+        ...subscription,
+        accountStatus: 'subscribed',
+        subscriptionPlan: String(clientSubscription.tier || '').trim().toLowerCase(),
+      };
+    } else {
+      subscription = {
+        ...subscription,
+        accountStatus: 'expired',
+      };
+    }
+  }
+
+  return {
+    id: String(user._id),
+    _id: String(user._id),
+    email: user.email,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    role: user.role,
+    accountStatus: subscription?.accountStatus || 'free_trial',
+    trialEndsAt: subscription?.trialEndsAt || null,
+  };
+}
+
   finalizeInviteForUser({
     invite_token,
     userId: user._id,
@@ -444,9 +474,16 @@ export const loginService = async ({ email, password, invite_token }) => {
     path: '/auth/login',
   });
 
+  const userPresentation = await resolveUserLoginPresentation(user);
+
   return {
     status: 200,
-    body: { success: true, token: signJwt({ id: user._id }, '30d') },
+    body: {
+      success: true,
+      token: signJwt({ id: user._id }, '30d'),
+      role: user.role,
+      user: userPresentation,
+    },
   };
 };
 
@@ -570,12 +607,16 @@ export const googleLoginService = async ({ token, token_type, invite_token }) =>
     path: '/auth/google',
   });
 
+  const userPresentation = await resolveUserLoginPresentation(user);
+
   return {
     status: 200,
     body: {
       success: true,
       message: 'Logged in with Google successfully',
       token: signJwt({ id: user._id }, '30d'),
+      role: user.role,
+      user: userPresentation,
     },
   };
 };

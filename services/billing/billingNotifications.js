@@ -6,12 +6,7 @@ import logger from '../../utils/logger.js';
 import { emitNotification } from '../realtime/workspaceSocket.js';
 import { getPlanByPriceId } from './plans.js';
 import { getStorefrontTemplateTier } from './storefrontTemplatePurchases.js';
-
-function normalizeStripeId(value) {
-  if (!value) return '';
-  if (typeof value === 'string') return value;
-  return String(value.id || '');
-}
+import { getInvoiceSubscriptionId, normalizeStripeId } from './subscriptionShared.js';
 
 function formatAmount(amount, currency = 'usd') {
   const value = Number(amount || 0) / 100;
@@ -75,7 +70,8 @@ async function findUserIdForStripeObject(object = {}) {
   const metadataUserId = String(object.metadata?.user_id || '').trim();
   if (metadataUserId) return metadataUserId;
 
-  const subscriptionId = normalizeStripeId(object.subscription || object.id);
+  const subscriptionId = getInvoiceSubscriptionId(object)
+    || normalizeStripeId(object.subscription || object.id);
   if (subscriptionId) {
     const [proSub, clientSub, templateProfile] = await Promise.all([
       Subscription.findOne({ stripe_subscription_id: subscriptionId }).select('user_id').lean(),

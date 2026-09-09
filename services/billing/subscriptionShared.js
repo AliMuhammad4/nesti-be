@@ -51,6 +51,27 @@ export function normalizeStripeId(value) {
   return String(value.id || '');
 }
 
+/**
+ * Stripe API 2025-03-31.basil+ moved invoice.subscription →
+ * invoice.parent.subscription_details.subscription.
+ */
+export function getInvoiceSubscriptionId(invoice = {}) {
+  const fromParent = normalizeStripeId(invoice?.parent?.subscription_details?.subscription);
+  if (fromParent) return fromParent;
+
+  const fromLegacy = normalizeStripeId(invoice?.subscription);
+  if (fromLegacy) return fromLegacy;
+
+  for (const line of invoice?.lines?.data || []) {
+    const fromLine = normalizeStripeId(
+      line?.parent?.subscription_item_details?.subscription
+      || line?.subscription,
+    );
+    if (fromLine) return fromLine;
+  }
+  return '';
+}
+
 export function firstSubscriptionPriceId(stripeSubscription = {}) {
   return String(stripeSubscription?.items?.data?.[0]?.price?.id || '').trim();
 }
@@ -97,6 +118,14 @@ export function isSubscriptionPeriodEnded(subscription) {
 export function subscriptionNeedsStripeRefresh(subscription) {
   if (!subscription?.stripe_customer_id && !subscription?.stripe_subscription_id) return false;
   if (isSubscriptionPeriodEnded(subscription)) return true;
+  // Near period end, pull Stripe so next-cycle fields stay accurate after renewals.
+  if (subscription?.current_period_end) {
+    const periodEnd = new Date(subscription.current_period_end);
+    if (!Number.isNaN(periodEnd.getTime())) {
+      const msUntilEnd = periodEnd.getTime() - Date.now();
+      if (msUntilEnd >= 0 && msUntilEnd <= 2 * 60 * 60 * 1000) return true;
+    }
+  }
   if (!subscription.pending_plan_effective_at) return false;
   const pendingEffectiveAt = new Date(subscription.pending_plan_effective_at);
   return !Number.isNaN(pendingEffectiveAt.getTime()) && pendingEffectiveAt.getTime() <= Date.now();

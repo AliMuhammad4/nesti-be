@@ -13,6 +13,7 @@ import {
   ACTIVE_ACCESS_STATUSES,
   STRIPE_BLOCKING_STATUSES,
   firstSubscriptionPriceId,
+  getInvoiceSubscriptionId,
   getStripeSubscriptionPeriodEnd,
   getStripeSubscriptionPeriodStart,
   invoiceLinePriceId,
@@ -57,7 +58,7 @@ async function findLatestPaidPlanForSubscription(stripe, customerId, subscriptio
     expand: ['data.lines'],
   });
   for (const invoice of invoices.data || []) {
-    const invoiceSubscriptionId = normalizeStripeId(invoice.subscription);
+    const invoiceSubscriptionId = getInvoiceSubscriptionId(invoice);
     if (invoiceSubscriptionId && subscriptionId && invoiceSubscriptionId !== subscriptionId) {
       continue;
     }
@@ -357,8 +358,36 @@ export async function syncCheckoutSession(session, eventId = '') {
 }
 
 export async function updateInvoicePaymentState(invoice, paymentStatus, eventId = '') {
-  const subscriptionId = normalizeStripeId(invoice?.subscription);
-  if (!subscriptionId) return null;
+  let subscriptionId = getInvoiceSubscriptionId(invoice);
+  const customerId = normalizeStripeId(invoice?.customer);
+
+  // Webhook payloads on newer Stripe API versions may omit legacy invoice.subscription.
+  // Fall back to customer → local subscription, then a live Stripe retrieve if needed.
+  if (!subscriptionId && customerId) {
+    const local = await Subscription.findOne({ stripe_customer_id: customerId })
+      .select('stripe_subscription_id')
+      .lean();
+    subscriptionId = String(local?.stripe_subscription_id || '').trim();
+  }
+  if (!subscriptionId && normalizeStripeId(invoice?.id)) {
+    try {
+      const liveInvoice = await getStripeClient().invoices.retrieve(normalizeStripeId(invoice.id), {
+        expand: ['parent.subscription_details.subscription'],
+      });
+      subscriptionId = getInvoiceSubscriptionId(liveInvoice);
+    } catch (error) {
+      console.warn('invoice subscription resolve via Stripe retrieve failed:', error?.message || error);
+    }
+  }
+  if (!subscriptionId) {
+    console.warn('invoice payment sync skipped: missing subscription id', {
+      invoiceId: normalizeStripeId(invoice?.id),
+      customerId,
+      paymentStatus,
+      eventId,
+    });
+    return null;
+  }
   let synced = null;
   try {
     const stripeSubscription = await getStripeClient().subscriptions.retrieve(subscriptionId);

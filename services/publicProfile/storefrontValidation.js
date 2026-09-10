@@ -116,6 +116,28 @@ const BROKER_FIRST_HOME_BLOCK_TYPES = Object.freeze([
   'cta',
   'footer',
 ]);
+const BROKER_COMMERCIAL_TEMPLATE_ID = 'mortgage_broker-commercial';
+const BROKER_COMMERCIAL_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'practice-snapshot',
+  'who-we-help',
+  'mortgage-programs',
+  'services',
+  'role-details',
+  'expertise',
+  'about',
+  'guidance',
+  'mortgage-rates',
+  'mortgage-calculator',
+  'lender-network',
+  'alternative-lending',
+  'broker-compensation',
+  'credentials',
+  'testimonials',
+  'faq',
+  'cta',
+  'footer',
+]);
 const MAX_CONTENT_DEPTH = 4;
 const MAX_CONTENT_KEYS = 30;
 const MAX_CONTENT_ITEMS = 30;
@@ -362,6 +384,12 @@ export function allowedStorefrontBlockTypes(role, templateId = '') {
     && templateId === BROKER_FIRST_HOME_TEMPLATE_ID
   ) {
     return [...BROKER_FIRST_HOME_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+    && templateId === BROKER_COMMERCIAL_TEMPLATE_ID
+  ) {
+    return [...BROKER_COMMERCIAL_BLOCK_TYPES];
   }
   return [
     ...SHARED_BLOCK_TYPES,

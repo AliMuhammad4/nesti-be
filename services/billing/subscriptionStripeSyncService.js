@@ -1,4 +1,5 @@
 import Subscription from '../../models/Subscription.js';
+import ClientSubscription from '../../models/ClientSubscription.js';
 import { getPlan, getPlanByPriceId, getPlanTier, getStripePriceId } from './plans.js';
 import { getStripeClient } from './stripeClient.js';
 import {
@@ -22,6 +23,11 @@ import {
   normalizeStripeId,
   toDateFromUnix,
 } from './subscriptionShared.js';
+import { syncClientStripeSubscription } from '../client/clientSubscriptionService.js';
+import {
+  processPaidSubscriptionReferralCredit,
+  syncPendingCreditFromStripeBalance,
+} from '../referral/networkCircle.js';
 
 export async function findBlockingStripeSubscription(customerId) {
   const normalizedCustomerId = String(customerId || '').trim();
@@ -327,7 +333,6 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
   );
   if (synced?.user_id && String(stripeSubscription.status || '') === 'active') {
     try {
-      const { processPaidSubscriptionReferralCredit } = await import('../referral/networkCircle.js');
       await processPaidSubscriptionReferralCredit(synced.user_id, {
         stripeEventId: extra.last_stripe_event_id || '',
       });
@@ -347,7 +352,6 @@ export async function syncCheckoutSession(session, eventId = '') {
     session?.metadata?.subscription_type || stripeSubscription?.metadata?.subscription_type || '',
   ).trim().toLowerCase();
   if (subscriptionType === 'client') {
-    const { syncClientStripeSubscription } = await import('../client/clientSubscriptionService.js');
     return syncClientStripeSubscription(stripeSubscription);
   }
   return syncStripeSubscription(stripeSubscription, {
@@ -395,15 +399,12 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
       stripeSubscription?.metadata?.subscription_type || '',
     ).trim().toLowerCase();
     if (subscriptionType === 'client') {
-      const { syncClientStripeSubscription } = await import('../client/clientSubscriptionService.js');
       synced = await syncClientStripeSubscription(stripeSubscription);
     } else {
-      const ClientSubscription = (await import('../../models/ClientSubscription.js')).default;
       const existingClient = await ClientSubscription.findOne({
         stripe_subscription_id: subscriptionId,
       }).select('_id').lean();
       if (existingClient) {
-        const { syncClientStripeSubscription } = await import('../client/clientSubscriptionService.js');
         synced = await syncClientStripeSubscription(stripeSubscription);
       } else {
         synced = await syncStripeSubscription(stripeSubscription, {
@@ -431,10 +432,6 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
 
   if (paymentStatus === 'paid' && synced?.user_id) {
     try {
-      const {
-        processPaidSubscriptionReferralCredit,
-        syncPendingCreditFromStripeBalance,
-      } = await import('../referral/networkCircle.js');
       await processPaidSubscriptionReferralCredit(synced.user_id, {
         stripeEventId: eventId,
         invoiceAmountPaid: Number(invoice?.amount_paid ?? invoice?.total ?? 0),

@@ -106,6 +106,15 @@ test('template access enforces professional type and monthly subscription status
   assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, 'lawyer-newcomer'), true);
   assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, 'lawyer-classic'), false);
   assert.equal(userHasStorefrontTemplateAccess(lawyerProfile, 'lawyer-investor'), false);
+
+  const brokerProfile = {
+    professional_type: 'mortgage_broker',
+    storefront: { unlocked_template_ids: [], template_purchases: [] },
+  };
+  assert.equal(userHasStorefrontTemplateAccess(brokerProfile, 'mortgage_broker-renewal'), true);
+  assert.equal(userHasStorefrontTemplateAccess(brokerProfile, 'mortgage_broker-classic'), false);
+  assert.equal(userHasStorefrontTemplateAccess(brokerProfile, 'mortgage_broker-first-home'), false);
+  assert.equal(userHasStorefrontTemplateAccess(brokerProfile, 'mortgage_broker-commercial'), false);
 });
 
 test('lawyer template tiers match free newcomer and paid investor classic first-home', () => {
@@ -128,6 +137,56 @@ test('lawyer template tiers match free newcomer and paid investor classic first-
       { id: 'lawyer-first-home-closing', tier: 'premium', amount: 9900, interval: 'month' },
     ],
   );
+});
+
+test('broker template tiers match free renewal and paid classic first-home commercial', () => {
+  assert.deepEqual(
+    [
+      getStorefrontTemplateTier('mortgage_broker-renewal'),
+      getStorefrontTemplateTier('mortgage_broker-classic'),
+      getStorefrontTemplateTier('mortgage_broker-first-home'),
+      getStorefrontTemplateTier('mortgage_broker-commercial'),
+    ].map((template) => ({
+      id: template.template_id,
+      tier: template.tier,
+      amount: template.amount,
+      interval: template.interval,
+    })),
+    [
+      { id: 'mortgage_broker-renewal', tier: 'free', amount: 0, interval: 'month' },
+      { id: 'mortgage_broker-classic', tier: 'basic', amount: 2500, interval: 'month' },
+      { id: 'mortgage_broker-first-home', tier: 'standard', amount: 7500, interval: 'month' },
+      { id: 'mortgage_broker-commercial', tier: 'premium', amount: 9900, interval: 'month' },
+    ],
+  );
+});
+
+test('broker entitlements unlock free renewal and lock paid templates without subscription', () => {
+  const entitlements = serializeStorefrontTemplateEntitlements({
+    professional_type: 'mortgage_broker',
+    storefront: {
+      template_purchases: [{
+        template_id: 'mortgage_broker-classic',
+        stripe_subscription_id: 'sub_broker',
+        subscription_status: 'active',
+        cancel_at_period_end: false,
+        current_period_end: new Date('2026-09-30T00:00:00.000Z'),
+      }],
+    },
+  });
+  const renewal = entitlements.templates.find((item) => item.template_id === 'mortgage_broker-renewal');
+  const classic = entitlements.templates.find((item) => item.template_id === 'mortgage_broker-classic');
+  const firstHome = entitlements.templates.find((item) => item.template_id === 'mortgage_broker-first-home');
+  const commercial = entitlements.templates.find((item) => item.template_id === 'mortgage_broker-commercial');
+
+  assert.equal(renewal.unlocked, true);
+  assert.equal(renewal.display_amount, 'Free');
+  assert.equal(classic.unlocked, true);
+  assert.equal(classic.display_amount, '$25/mo');
+  assert.equal(firstHome.unlocked, false);
+  assert.equal(firstHome.display_amount, '$75/mo');
+  assert.equal(commercial.unlocked, false);
+  assert.equal(commercial.display_amount, '$99/mo');
 });
 
 test('entitlements display monthly pricing and unlock only active subscriptions', () => {

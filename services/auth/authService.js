@@ -415,27 +415,6 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
   };
 };
 
-export const loginService = async ({ email, password, invite_token }) => {
-  const normalizedEmail = String(email || '').toLowerCase().trim();
-  const user = await User.findOne({ email: normalizedEmail });
-
-  if (!user) {
-    return { status: 401, body: { success: false, message: 'Invalid email or password' } };
-  }
-  if (user.auth_provider === 'google') {
-    return {
-      status: 400,
-      body: { success: false, message: 'This account uses Google sign-in. Please continue with Google.' },
-    };
-  }
-  if (!(await user.matchPassword(password))) {
-    return { status: 401, body: { success: false, message: 'Invalid email or password' } };
-  }
-
-  if (!user.is_verified) {
-    return { status: 403, body: { success: false, message: 'Email not verified' } };
-  }
-
 async function resolveUserLoginPresentation(user) {
   let subscription = await getSubscriptionPresentationForUser(user).catch(() => ({}));
   if (user.role === USER_ROLE.CLIENT) {
@@ -465,6 +444,27 @@ async function resolveUserLoginPresentation(user) {
     trialEndsAt: subscription?.trialEndsAt || null,
   };
 }
+
+export const loginService = async ({ email, password, invite_token }) => {
+  const normalizedEmail = String(email || '').toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail });
+
+  if (!user) {
+    return { status: 401, body: { success: false, message: 'Invalid email or password' } };
+  }
+  if (user.auth_provider === 'google') {
+    return {
+      status: 400,
+      body: { success: false, message: 'This account uses Google sign-in. Please continue with Google.' },
+    };
+  }
+  if (!(await user.matchPassword(password))) {
+    return { status: 401, body: { success: false, message: 'Invalid email or password' } };
+  }
+
+  if (!user.is_verified) {
+    return { status: 403, body: { success: false, message: 'Email not verified' } };
+  }
 
   finalizeInviteForUser({
     invite_token,

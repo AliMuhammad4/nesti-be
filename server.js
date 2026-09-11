@@ -7,6 +7,7 @@ import { scheduleMonthlyRewardJob } from './jobs/rewardMonthlyJob.js';
 import { scheduleNurtureFollowupJob } from './jobs/nurtureFollowupJob.js';
 import { startCallMinutesReconciliation } from './services/proChat/callMinutesService.js';
 import { ensureTranscriptionWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
+import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 import './models/index.js'; // Ensure all models are registered
 
 const PORT = process.env.PORT || 5000;
@@ -14,6 +15,7 @@ const PORT = process.env.PORT || 5000;
 const httpServer = http.createServer(app);
 
 async function startServer() {
+  assertJwtSecretConfigured();
   await connectDB();
   await initWorkspaceSocket(httpServer);
   httpServer.listen(PORT, () => {

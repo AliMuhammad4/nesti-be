@@ -3,7 +3,15 @@ const router = express.Router();
 import { protect } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
-import { checkoutSessionSchema, cancelSubscriptionSchema, changePlanSchema, resumeSubscriptionSchema } from '../schemas/billingSchemas.js';
+import {
+  cancelSubscriptionSchema,
+  changePlanSchema,
+  checkoutSessionSchema,
+  resumeSubscriptionSchema,
+  storefrontTemplateCheckoutConfirmSchema,
+  storefrontTemplateCheckoutSessionSchema,
+  storefrontTemplateSubscriptionActionSchema,
+} from '../schemas/billingSchemas.js';
 import Subscription from '../models/Subscription.js';
 import { getStripeClient } from '../services/billing/stripeClient.js';
 import { publicBillingPlans, publicBillingPlansFromStripe } from '../services/billing/plans.js';
@@ -18,6 +26,13 @@ import {
   resumeSubscriptionForUser,
   serializeSubscription,
 } from '../services/billing/subscriptionService.js';
+import {
+  cancelStorefrontTemplateSubscriptionForUser,
+  confirmStorefrontTemplateCheckoutSession,
+  createStorefrontTemplateCheckoutSession,
+  getStorefrontTemplateEntitlementsForUser,
+  resumeStorefrontTemplateSubscriptionForUser,
+} from '../services/billing/storefrontTemplatePurchases.js';
 
 const setupIntent = async (req, res) => {
   const subscription = await getOrCreateSubscriptionForUser(req.user);
@@ -55,6 +70,114 @@ const createCheckoutSession = async (req, res) => {
     res.status(500).json({
       success: false,
       message: err?.message || 'Unable to create checkout session.',
+    });
+  }
+};
+
+const getStorefrontTemplateEntitlements = async (req, res) => {
+  try {
+    const result = await getStorefrontTemplateEntitlementsForUser(req.user._id);
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    res.json({ success: true, ...result.entitlements });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to load storefront template access.',
+    });
+  }
+};
+
+const createStorefrontTemplateCheckout = async (req, res) => {
+  try {
+    const result = await createStorefrontTemplateCheckoutSession(req.user, req.body.template_id);
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    res.json({
+      success: true,
+      free: Boolean(result.free),
+      alreadyUnlocked: Boolean(result.alreadyUnlocked),
+      template: result.template,
+      url: result.session?.url || '',
+      sessionId: result.session?.id || '',
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to create template checkout session.',
+    });
+  }
+};
+
+const confirmStorefrontTemplateCheckout = async (req, res) => {
+  try {
+    const result = await confirmStorefrontTemplateCheckoutSession(
+      req.user,
+      req.body.session_id,
+      req.body.template_id,
+    );
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    return res.json({
+      success: true,
+      template: result.template,
+      ...result.entitlements,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to confirm template checkout.',
+    });
+  }
+};
+
+const cancelStorefrontTemplateSubscription = async (req, res) => {
+  try {
+    const result = await cancelStorefrontTemplateSubscriptionForUser(
+      req.user,
+      req.body.template_id,
+      req.body.reason,
+    );
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    return res.json({
+      success: true,
+      template: result.template,
+      alreadyCanceled: Boolean(result.alreadyCanceled),
+      alreadyScheduled: Boolean(result.alreadyScheduled),
+      ...result.entitlements,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to cancel template subscription.',
+    });
+  }
+};
+
+const resumeStorefrontTemplateSubscription = async (req, res) => {
+  try {
+    const result = await resumeStorefrontTemplateSubscriptionForUser(
+      req.user,
+      req.body.template_id,
+    );
+    if (!result.ok) {
+      return res.status(result.code || 400).json({ success: false, message: result.message });
+    }
+    return res.json({
+      success: true,
+      template: result.template,
+      alreadyActive: Boolean(result.alreadyActive),
+      ...result.entitlements,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to resume template subscription.',
     });
   }
 };
@@ -181,6 +304,31 @@ const getEnterpriseStatus = async (req, res) => {
 // Note: Stripe webhook is handled separately without protect middleware or JSON parsing
 router.get('/plans', listPlans);
 router.post('/setup-intent', protect, setupIntent);
+router.get('/storefront-templates', protect, getStorefrontTemplateEntitlements);
+router.post(
+  '/storefront-templates/checkout-session',
+  protect,
+  validateBody(storefrontTemplateCheckoutSessionSchema),
+  createStorefrontTemplateCheckout
+);
+router.post(
+  '/storefront-templates/checkout-session/confirm',
+  protect,
+  validateBody(storefrontTemplateCheckoutConfirmSchema),
+  confirmStorefrontTemplateCheckout,
+);
+router.post(
+  '/storefront-templates/cancel',
+  protect,
+  validateBody(storefrontTemplateSubscriptionActionSchema),
+  cancelStorefrontTemplateSubscription,
+);
+router.post(
+  '/storefront-templates/resume',
+  protect,
+  validateBody(storefrontTemplateSubscriptionActionSchema),
+  resumeStorefrontTemplateSubscription,
+);
 router.post(
   '/checkout-session',
   protect,

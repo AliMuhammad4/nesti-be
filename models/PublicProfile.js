@@ -16,6 +16,15 @@ const testimonialSchema = new mongoose.Schema({
   date: { type: Date, default: Date.now },
 }, { _id: true });
 
+const feedbackSubmissionSchema = new mongoose.Schema({
+  client_name: { type: String, required: true, trim: true, maxlength: 120 },
+  email: { type: String, required: true, trim: true, lowercase: true, maxlength: 180 },
+  rating: { type: Number, required: true, min: 1, max: 5 },
+  text: { type: String, required: true, trim: true, maxlength: 1000 },
+  approved: { type: Boolean, default: false },
+  submitted_at: { type: Date, default: Date.now },
+}, { _id: true });
+
 const mortgageProgramSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: { type: String, required: true },
@@ -28,6 +37,75 @@ const credentialSchema = new mongoose.Schema({
   issuer: { type: String, required: true },
   year: { type: Number, required: true },
 }, { _id: true });
+
+// Storefront content is revisioned so unpublished authoring changes cannot
+// affect the public storefront.
+const storefrontBlockSchema = new mongoose.Schema({
+  id: { type: String, required: true, maxlength: 100 },
+  type: { type: String, required: true, maxlength: 80 },
+  data: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+}, { _id: false });
+
+const storefrontBrandKitSchema = new mongoose.Schema({
+  logo_url: { type: String, default: null },
+  cover_url: { type: String, default: null },
+  profile_photo_url: { type: String, default: null },
+  logo_size: { type: Number, min: 24, max: 72, default: 40 },
+  cover_position_x: { type: Number, min: 0, max: 100, default: 50 },
+  cover_position_y: { type: Number, min: 0, max: 100, default: 50 },
+  cover_zoom: { type: Number, min: 1, max: 3, default: 1 },
+  profile_position_x: { type: Number, min: 0, max: 100, default: 50 },
+  profile_position_y: { type: Number, min: 0, max: 100, default: 25 },
+  profile_zoom: { type: Number, min: 1, max: 3, default: 1 },
+  primary_color: { type: String, default: null },
+  secondary_color: { type: String, default: null },
+  accent_color: { type: String, default: null },
+  page_background: { type: String, default: null },
+  font_family: { type: String, default: null },
+  logo_dark_url: { type: String, default: null },
+  business_name: { type: String, default: null },
+  button_shape: { type: String, enum: ['square', 'rounded', 'pill', null], default: null },
+  image_style: { type: String, default: null },
+  essentials: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+  show_chatbot: { type: Boolean, default: true },
+}, { _id: false });
+
+const storefrontTemplateSchema = new mongoose.Schema({
+  id: { type: String, default: null, maxlength: 100 },
+  name: { type: String, default: null, maxlength: 120 },
+  version: { type: String, default: null, maxlength: 40 },
+}, { _id: false });
+
+const storefrontRevisionSchema = new mongoose.Schema({
+  blocks: { type: [storefrontBlockSchema], default: [] },
+  brandKit: { type: storefrontBrandKitSchema, default: () => ({}) },
+  template: { type: storefrontTemplateSchema, default: () => ({}) },
+  seo_meta: {
+    title: { type: String, default: null, maxlength: 60 },
+    description: { type: String, default: null, maxlength: 160 },
+    keywords: { type: [String], default: [] },
+  },
+  revision_id: { type: String, default: null, maxlength: 80 },
+  revision_version: { type: Number, min: 0, default: 0 },
+  updated_at: { type: Date, default: null },
+  published_at: { type: Date, default: null },
+}, { _id: false });
+
+const storefrontTemplatePurchaseSchema = new mongoose.Schema({
+  template_id: { type: String, required: true, maxlength: 100 },
+  tier: { type: String, enum: ['free', 'basic', 'standard', 'premium'], default: 'free' },
+  amount: { type: Number, default: 0, min: 0 },
+  currency: { type: String, default: 'usd', maxlength: 8 },
+  billing_interval: { type: String, default: 'month', maxlength: 16 },
+  stripe_checkout_session_id: { type: String, default: '', maxlength: 160 },
+  stripe_payment_intent_id: { type: String, default: '', maxlength: 160 },
+  stripe_invoice_id: { type: String, default: '', maxlength: 160 },
+  stripe_subscription_id: { type: String, default: '', maxlength: 160 },
+  subscription_status: { type: String, default: '', maxlength: 40 },
+  cancel_at_period_end: { type: Boolean, default: false },
+  current_period_end: { type: Date, default: null },
+  purchased_at: { type: Date, default: Date.now },
+}, { _id: false });
 
 const publicProfileSchema = new mongoose.Schema({
   user_id: {
@@ -107,6 +185,7 @@ const publicProfileSchema = new mongoose.Schema({
   services: [serviceSchema],
   
   testimonials: [testimonialSchema],
+  feedback_submissions: [feedbackSubmissionSchema],
   
   // Agent-specific content
   featured_listings: [{
@@ -167,8 +246,20 @@ const publicProfileSchema = new mongoose.Schema({
     description: { type: String, default: null, maxlength: 160 },
     keywords: [{ type: String }],
   },
+
+  // AI business storefront foundation. Keep it separate from the legacy
+  // public-profile fields to preserve all existing profile API behavior.
+  storefront: {
+    // Legacy singleton retained for backward-compatible lazy migration.
+    draft: { type: storefrontRevisionSchema, default: null },
+    drafts: { type: [storefrontRevisionSchema], default: [] },
+    active_template_id: { type: String, default: null, maxlength: 100 },
+    published: { type: storefrontRevisionSchema, default: null },
+    unlocked_template_ids: { type: [String], default: [] },
+    template_purchases: { type: [storefrontTemplatePurchaseSchema], default: [] },
+  },
   
-}, { timestamps: true });
+}, { timestamps: true, optimisticConcurrency: true });
 
 // `slug` and `user_id` already get unique indexes from the `unique: true` field options.
 // Compound index for the public listing browser (enabled + role filter).

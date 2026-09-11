@@ -1,8 +1,8 @@
 
 import jwt from 'jsonwebtoken';
+import { getJwtSecret } from '../../utils/jwtSecret.js';
 const AUTH_BASE = 'https://auth.calendly.com';
 const API_BASE = 'https://api.calendly.com';
-const jwtSecret = () => process.env.JWT_SECRET || 'secret';
 export function getCalendlyRedirectUri() {
   const u = process.env.CALENDLY_REDIRECT_URI?.trim();
   if (!u) {
@@ -14,13 +14,13 @@ export function getCalendlyRedirectUri() {
 export function createCalendlyOAuthState(userId) {
   return jwt.sign(
     { purpose: 'calendly_oauth', sub: String(userId) },
-    jwtSecret(),
+    getJwtSecret(),
     { expiresIn: '10m' }
   );
 }
 
 export function parseCalendlyOAuthState(state) {
-  const decoded = jwt.verify(String(state), jwtSecret());
+  const decoded = jwt.verify(String(state), getJwtSecret());
   if (decoded.purpose !== 'calendly_oauth' || !decoded.sub) {
     throw new Error('Invalid OAuth state');
   }

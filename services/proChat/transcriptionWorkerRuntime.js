@@ -8,6 +8,7 @@ import { DEFAULT_TRANSCRIPTION_WORKER_PORT } from './callTranscriptionConstants.
 export { DEFAULT_TRANSCRIPTION_WORKER_PORT };
 export const TRANSCRIPTION_WORKER_READY_TIMEOUT_MS = 45_000;
 export const TRANSCRIPTION_WORKER_HEALTH_POLL_MS = 400;
+export const TRANSCRIPTION_WORKER_HEALTH_TIMEOUT_MS = 4_000;
 
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const workerEntryPath = path.join(backendRoot, 'workers', 'callTranscriberWorker.js');
@@ -28,10 +29,13 @@ export function transcriptionWorkerHealthUrl(port = resolveTranscriptionWorkerPo
   return `http://${host}:${port}/`;
 }
 
-export async function probeTranscriptionWorkerHealth(port = resolveTranscriptionWorkerPort()) {
+export async function probeTranscriptionWorkerHealth(
+  port = resolveTranscriptionWorkerPort(),
+  timeoutMs = TRANSCRIPTION_WORKER_HEALTH_TIMEOUT_MS,
+) {
   try {
     const response = await fetch(transcriptionWorkerHealthUrl(port), {
-      signal: AbortSignal.timeout(1500),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return response.ok;
   } catch {
@@ -66,7 +70,8 @@ export function spawnTranscriptionWorkerProcess({
 
   if (stdioMode === 'pipe-log') {
     try {
-      logFd = fs.openSync(logPath, 'w');
+      // Append instead of truncating so intermittent worker failures remain inspectable.
+      logFd = fs.openSync(logPath, 'a');
       stdio = ['ignore', logFd, logFd];
     } catch {
       stdio = 'ignore';

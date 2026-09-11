@@ -58,7 +58,11 @@ function selectedQuery(result) {
 
 test.before(() => {
   mock.method(ProfessionalCall, 'find', (filter) => {
-    assert.equal(filter.participant_ids, userId);
+    const participantFilter = filter.participant_ids;
+    const matchesUser =
+      participantFilter === userId ||
+      (participantFilter?.$all && participantFilter.$all.includes(userId));
+    assert.equal(matchesUser, true);
     return listQuery([call]);
   });
   mock.method(ProfessionalCall, 'countDocuments', async () => 1);
@@ -92,6 +96,20 @@ test('lists only the authenticated participant call records with details', async
   assert.equal(result.body.records[0].viewer_can_access_notes, true);
   assert.equal(result.body.records[0].viewer_transcription_consent, true);
   assert.equal(result.body.records[0].artifacts.minutes_status, 'ready');
+
+  mock.method(ProfessionalCall, 'find', (filter) => {
+    assert.deepEqual(filter.participant_ids, { $all: [userId, otherUserId] });
+    return listQuery([call]);
+  });
+  mock.method(ProfessionalCall, 'countDocuments', async () => 1);
+  const scoped = await listCallRecords({
+    currentUserId: userId,
+    otherUserId,
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(scoped.status, 200);
+  assert.equal(scoped.body.records.length, 1);
 });
 
 test('returns an authorized call detail and rejects malformed ids', async () => {
@@ -147,4 +165,10 @@ test('validates call history filters', async () => {
     status: 'unknown',
   });
   assert.equal(invalidStatus.status, 400);
+
+  const invalidOtherUser = await listCallRecords({
+    currentUserId: userId,
+    otherUserId: 'invalid',
+  });
+  assert.equal(invalidOtherUser.status, 400);
 });

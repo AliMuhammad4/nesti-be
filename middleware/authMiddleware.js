@@ -5,6 +5,9 @@ import { USER_ROLE, USER_ROLE_VALUES, PROFESSIONAL_TYPE_VALUES } from '../consta
 import { evaluateProfessionalProfileSetup } from '../utils/professionalProfileSetup.js';
 import logger from '../utils/logger.js';
 import { getJwtSecret } from '../utils/jwtSecret.js';
+import { buildCredentialGate } from '../services/credentials/credentialGate.js';
+import { CREDENTIAL_STATUS } from '../constants/credentialDocuments.js';
+import { adminHasPermission } from '../constants/adminPermissions.js';
 
 function readAuthToken(req) {
   const auth = req.headers.authorization;
@@ -25,6 +28,13 @@ const protect = async (req, res, next) => {
     const doc = await User.findById(decoded.id).select('-password').lean();
     if (!doc) {
       return res.status(401).json({ success: false, message: 'Not authorized, user not found' });
+    }
+    if (doc.is_active === false) {
+      return res.status(401).json({
+        success: false,
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'Account suspended',
+      });
     }
     req.user = User.hydrate(doc);
     if (!req.user) {
@@ -90,6 +100,34 @@ const ensureAgentPropertyMatches = async (req, res, next) => {
   next();
 };
 
+const ensureAdmin = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authenticated' });
+  }
+  if (req.user.role !== USER_ROLE.ADMIN) {
+    return res.status(403).json({ success: false, message: 'Admin access required' });
+  }
+  next();
+};
+
+/** Fine-grained admin capability check. Empty admin_permissions = full access. */
+const requirePermission = (permission) => (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authenticated' });
+  }
+  if (req.user.role !== USER_ROLE.ADMIN) {
+    return res.status(403).json({ success: false, message: 'Admin access required' });
+  }
+  if (!adminHasPermission(req.user, permission)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Missing admin permission',
+      permission,
+    });
+  }
+  return next();
+};
+
 /** Blocks non-admin professionals until personal + business basics are saved (see professionalProfileSetup). */
 const requireCompleteProfessionalProfile = async (req, res, next) => {
   if (!req.user) {
@@ -125,11 +163,63 @@ const requireCompleteProfessionalProfile = async (req, res, next) => {
   }
 };
 
+/**
+ * Shared credential gate for professionals (admins / non-pros skip).
+ * Returns null when allowed, otherwise an HTTP error payload.
+ */
+async function evaluateCredentialAccess(req) {
+  if (!req.user) {
+    return {
+      status: 401,
+      body: { success: false, message: 'Not authenticated' },
+    };
+  }
+  if (req.user.role === USER_ROLE.ADMIN || !PROFESSIONAL_TYPE_VALUES.includes(req.user.role)) {
+    return null;
+  }
+  try {
+    const professionalProfile =
+      req.professionalProfile
+      || (await ProfessionalProfile.findOne({ user_id: req.user._id }).lean());
+    req.professionalProfile = professionalProfile || null;
+    const gate = buildCredentialGate(professionalProfile, req.user.role);
+    req.credentialGate = gate;
+    if (!gate.locked) return null;
+    return {
+      status: 403,
+      body: {
+        success: false,
+        code: 'CREDENTIAL_VERIFICATION_REQUIRED',
+        message: gate.reason || 'Complete professional credential verification to continue.',
+        credential_gate: gate,
+        credential_status: gate.status || CREDENTIAL_STATUS.NOT_STARTED,
+      },
+    };
+  } catch (err) {
+    logger.error('evaluateCredentialAccess failed', { err: err?.message });
+    return {
+      status: 500,
+      body: { success: false, message: 'Unable to verify credentials' },
+    };
+  }
+}
+
+/** Blocks non-admin professionals until credentials are admin-approved. */
+const ensureCredentialApproved = async (req, res, next) => {
+  const denied = await evaluateCredentialAccess(req);
+  if (!denied) return next();
+  return res.status(denied.status).json(denied.body);
+};
+
 export {
   protect,
   optionalAuth,
+  ensureAdmin,
+  requirePermission,
   ensureAgent,
   ensureAgentOrMortgageBroker,
   ensureAgentPropertyMatches,
   requireCompleteProfessionalProfile,
+  ensureCredentialApproved,
+  evaluateCredentialAccess,
 };

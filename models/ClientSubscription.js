@@ -101,4 +101,7 @@ clientSubscriptionSchema.index(
   }
 );
 
+clientSubscriptionSchema.index({ status: 1, updatedAt: -1 });
+clientSubscriptionSchema.index({ status: 1, createdAt: -1 });
+
 export default mongoose.model('ClientSubscription', clientSubscriptionSchema);

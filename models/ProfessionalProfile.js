@@ -1,6 +1,53 @@
 import mongoose from 'mongoose';
 import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { PropertyMatchSettingsSchema } from './propertyMatchScoringShapes.js';
+import {
+  CREDENTIAL_DOC_TYPE_VALUES,
+  CREDENTIAL_EVENT_TYPE_VALUES,
+  CREDENTIAL_STATUS,
+  CREDENTIAL_STATUS_VALUES,
+} from '../constants/credentialDocuments.js';
+
+const credentialDocumentSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: CREDENTIAL_DOC_TYPE_VALUES,
+      required: true,
+    },
+    file_url: { type: String, required: true },
+    file_key: { type: String, default: '' },
+    file_name: { type: String, default: '' },
+    mime_type: { type: String, default: '' },
+    uploaded_at: { type: Date, default: Date.now },
+    status: {
+      type: String,
+      enum: ['uploaded', 'accepted', 'rejected'],
+      default: 'uploaded',
+    },
+  },
+  { _id: true },
+);
+
+const credentialEventSchema = new mongoose.Schema(
+  {
+    at: { type: Date, default: Date.now },
+    type: {
+      type: String,
+      enum: CREDENTIAL_EVENT_TYPE_VALUES,
+      required: true,
+    },
+    actor_user_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    actor_role: { type: String, default: '' },
+    reason: { type: String, default: '' },
+    meta: { type: mongoose.Schema.Types.Mixed, default: null },
+  },
+  { _id: true },
+);
 
 const professionalProfileSchema = new mongoose.Schema({
   user_id: {
@@ -42,6 +89,50 @@ const professionalProfileSchema = new mongoose.Schema({
   },
   license_number: {
     type: String,
+  },
+  /** Credential verification (US/Canada). Separate from User.is_verified (email). */
+  country: {
+    type: String,
+    default: null,
+  },
+  jurisdiction: {
+    type: String,
+    default: '',
+  },
+  nmls_id: {
+    type: String,
+    default: '',
+  },
+  credential_status: {
+    type: String,
+    enum: CREDENTIAL_STATUS_VALUES,
+    default: CREDENTIAL_STATUS.NOT_STARTED,
+    index: true,
+  },
+  credential_submitted_at: {
+    type: Date,
+    default: null,
+  },
+  credential_reviewed_at: {
+    type: Date,
+    default: null,
+  },
+  credential_reviewed_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
+  credential_reject_reason: {
+    type: String,
+    default: '',
+  },
+  credential_documents: {
+    type: [credentialDocumentSchema],
+    default: [],
+  },
+  credential_events: {
+    type: [credentialEventSchema],
+    default: [],
   },
   social_media: {
     type: String,
@@ -199,5 +290,9 @@ const professionalProfileSchema = new mongoose.Schema({
     },
   ],
 }, { timestamps: true });
+
+professionalProfileSchema.index({ credential_status: 1, credential_submitted_at: -1 });
+professionalProfileSchema.index({ professional_type: 1, updatedAt: -1 });
+professionalProfileSchema.index({ country: 1, credential_status: 1 });
 
 export default mongoose.model('ProfessionalProfile', professionalProfileSchema);

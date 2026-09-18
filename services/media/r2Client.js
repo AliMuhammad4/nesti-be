@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import logger from '../../utils/logger.js';
 
@@ -86,6 +86,67 @@ export function getR2PublicUrl(key) {
   return `${base}/${encodeKeyForUrl(objectKey)}`;
 }
 
+/** Best-effort reverse of getR2PublicUrl for objects we uploaded. */
+export function extractR2KeyFromPublicUrl(fileUrl) {
+  if (!isR2Configured() || !fileUrl) return null;
+  try {
+    const url = new URL(String(fileUrl));
+    const base = resolvePublicBaseUrl(r2Config);
+    if (base) {
+      const baseUrl = new URL(base);
+      if (url.origin === baseUrl.origin) {
+        const basePath = baseUrl.pathname.replace(/\/+$/, '');
+        let path = url.pathname || '';
+        if (basePath && path.startsWith(`${basePath}/`)) {
+          path = path.slice(basePath.length + 1);
+        } else {
+          path = path.replace(/^\/+/, '');
+        }
+        const key = path
+          .split('/')
+          .filter(Boolean)
+          .map((segment) => decodeURIComponent(segment))
+          .join('/');
+        return key || null;
+      }
+    }
+    const match = String(url.pathname || '').match(/(nesti\/users\/.+)$/i);
+    if (match?.[1]) {
+      return match[1]
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => decodeURIComponent(segment))
+        .join('/');
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function getObjectFromR2(key) {
+  if (!isR2Configured()) {
+    throw new Error('R2 is not configured');
+  }
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) {
+    throw new Error('Missing object key');
+  }
+  const response = await r2Client.send(
+    new GetObjectCommand({
+      Bucket: r2Config.bucket,
+      Key: objectKey,
+    }),
+  );
+  const bytes = await response.Body.transformToByteArray();
+  return {
+    buffer: Buffer.from(bytes),
+    contentType: response.ContentType || 'application/octet-stream',
+    contentLength: response.ContentLength ?? bytes.length,
+    key: objectKey,
+  };
+}
+
 export async function uploadBufferToR2(
   buffer,
   {
@@ -127,6 +188,29 @@ export async function uploadBufferToR2(
     public_id: objectKey,
     bytes: typeof buffer.length === 'number' ? Number(buffer.length) : null,
   };
+}
+
+/** Best-effort delete. Never throws — credential replace/delete must still succeed. */
+export async function deleteObjectFromR2(key) {
+  if (!isR2Configured()) {
+    return { deleted: false, reason: 'not_configured' };
+  }
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) {
+    return { deleted: false, reason: 'missing_key' };
+  }
+  try {
+    await r2Client.send(
+      new DeleteObjectCommand({
+        Bucket: r2Config.bucket,
+        Key: objectKey,
+      }),
+    );
+    return { deleted: true, key: objectKey };
+  } catch (error) {
+    logger.warn('Failed to delete R2 object', { key: objectKey, error: error?.message });
+    return { deleted: false, reason: error?.message || 'delete_failed' };
+  }
 }
 
 export async function createSignedReadUrl(

@@ -141,6 +141,36 @@ export async function createFreeTrialSubscription(userId, trialEndsAt) {
   );
 }
 
+/** Start or reset professional free trial after admin credential approval. */
+export async function startProfessionalTrialFromApproval(userId) {
+  const now = new Date();
+  const trialEnd = new Date(now.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
+
+  // Do not reset an existing free_trial or active paid subscription on re-approve races.
+  const existing = await Subscription.findOne({ user_id: userId });
+  if (existing) {
+    const status = String(existing.status || '').trim().toLowerCase();
+    if (status === 'free_trial' || status === 'active' || status === 'past_due') {
+      return existing;
+    }
+  }
+
+  return Subscription.findOneAndUpdate(
+    { user_id: userId },
+    {
+      $set: {
+        user_id: userId,
+        plan_key: 'basic',
+        status: 'free_trial',
+        trial_start: now,
+        trial_end: trialEnd,
+        cancel_at_period_end: false,
+      },
+    },
+    { returnDocument: 'after', upsert: true },
+  );
+}
+
 export async function getOrCreateSubscriptionForUser(user) {
   if (String(user?.role || '') === USER_ROLE.CLIENT) {
     const existing = await Subscription.findOne({ user_id: user._id });
@@ -156,6 +186,18 @@ export async function getOrCreateSubscriptionForUser(user) {
 
   let subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription) {
+    // Do not auto-create trials for professionals awaiting credential approval.
+    const { default: ProfessionalProfile } = await import('../../models/ProfessionalProfile.js');
+    const { CREDENTIAL_STATUS } = await import('../../constants/credentialDocuments.js');
+    const { isProfessionalRole } = await import('../../constants/roles.js');
+    if (isProfessionalRole(user?.role)) {
+      const profile = await ProfessionalProfile.findOne({ user_id: user._id })
+        .select('credential_status')
+        .lean();
+      if (String(profile?.credential_status || '') !== CREDENTIAL_STATUS.APPROVED) {
+        return null;
+      }
+    }
     const createdAt = user.createdAt ? new Date(user.createdAt) : new Date();
     const trialEnd = new Date(createdAt.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
     subscription = await createFreeTrialSubscription(user._id, trialEnd);

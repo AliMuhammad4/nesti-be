@@ -1,6 +1,6 @@
 import express from 'express';
 const router = express.Router();
-import { protect } from '../middleware/authMiddleware.js';
+import { protect, evaluateCredentialAccess } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import {
@@ -34,7 +34,15 @@ import {
   resumeStorefrontTemplateSubscriptionForUser,
 } from '../services/billing/storefrontTemplatePurchases.js';
 
+async function requireCredentialApproved(req, res) {
+  const denied = await evaluateCredentialAccess(req);
+  if (!denied) return true;
+  res.status(denied.status).json(denied.body);
+  return false;
+}
+
 const setupIntent = async (req, res) => {
+  if (!(await requireCredentialApproved(req, res))) return;
   const subscription = await getOrCreateSubscriptionForUser(req.user);
   const customerId = await ensureStripeCustomerForUser(req.user, subscription);
   const intent = await getStripeClient().setupIntents.create({
@@ -57,6 +65,7 @@ const listPlans = async (req, res) => {
 
 const createCheckoutSession = async (req, res) => {
   try {
+    if (!(await requireCredentialApproved(req, res))) return;
     const result = await createCheckoutSessionForUser(req.user, req.body.plan_key);
     if (!result.ok) {
       return res.status(result.code || 400).json({ success: false, message: result.message });
@@ -91,6 +100,7 @@ const getStorefrontTemplateEntitlements = async (req, res) => {
 
 const createStorefrontTemplateCheckout = async (req, res) => {
   try {
+    if (!(await requireCredentialApproved(req, res))) return;
     const result = await createStorefrontTemplateCheckoutSession(req.user, req.body.template_id);
     if (!result.ok) {
       return res.status(result.code || 400).json({ success: false, message: result.message });

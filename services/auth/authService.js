@@ -1,6 +1,3 @@
-import User from '../../models/User.js';
-import ProfessionalProfile from '../../models/ProfessionalProfile.js';
-import { USER_ROLE, USER_ROLE_VALUES, isProfessionalRole } from '../../constants/roles.js';
 import { evaluateProfessionalProfileSetup } from '../../utils/professionalProfileSetup.js';
 import jwt from 'jsonwebtoken';
 import sendEmail from '../../utils/sendEmail.js';
@@ -18,6 +15,11 @@ import {
 } from '../client/clientSubscriptionService.js';
 import { disposableEmailErrorResponse, isDisposableEmail } from './disposableEmailGuard.js';
 import { getJwtSecret } from '../../utils/jwtSecret.js';
+import { CREDENTIAL_STATUS } from '../../constants/credentialDocuments.js';
+import { buildCredentialGate, notifySignupAwaitingDocs } from '../credentials/credentialService.js';
+import { USER_ROLE, USER_ROLE_VALUES, isProfessionalRole } from '../../constants/roles.js';
+import User from '../../models/User.js';
+import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 
 const signJwt = (payload, expiresIn) => jwt.sign(payload, getJwtSecret(), { expiresIn });
 
@@ -175,11 +177,13 @@ const bootstrapProfessionalProfile = async (user) => {
     user_id: user._id,
     professional_type: user.role,
     full_name: `${user.first_name} ${user.last_name}`,
+    credential_status: CREDENTIAL_STATUS.NOT_STARTED,
   });
   if (user.role === USER_ROLE.AGENT) {
     const { ensureAgentPropertyMatchScoring } = await import('../agent/propertyMatch/scoringConfig.js');
     await ensureAgentPropertyMatchScoring(user._id);
   }
+  notifySignupAwaitingDocs(user);
 };
 
 const finalizeInviteForUser = ({ invite_token, userId, method, path }) => {
@@ -243,6 +247,13 @@ function normalizeProfessionalProfile(profileDoc) {
     target_neighborhoods: p.target_neighborhoods || '',
     experience: p.experience || '',
     license_number: p.license_number || '',
+    country: p.country || null,
+    jurisdiction: p.jurisdiction || '',
+    nmls_id: p.nmls_id || '',
+    credential_status: p.credential_status || CREDENTIAL_STATUS.NOT_STARTED,
+    credential_submitted_at: p.credential_submitted_at || null,
+    credential_reviewed_at: p.credential_reviewed_at || null,
+    credential_reject_reason: p.credential_reject_reason || '',
     social_media: p.social_media || '',
     transaction_volume: p.transaction_volume || '',
     avg_sale_price: p.avg_sale_price || '',
@@ -376,7 +387,10 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       is_verified: true,
       auth_provider: 'local',
     });
-    await createFreeTrialSubscription(user._id, trialEndsAt);
+    // Professionals start free trial only after admin credential approval.
+    if (!isProfessionalRole(user.role)) {
+      await createFreeTrialSubscription(user._id, trialEndsAt);
+    }
   } catch (error) {
     if (error?.code === 11000) {
       return {
@@ -462,6 +476,10 @@ export const loginService = async ({ email, password, invite_token }) => {
     return { status: 401, body: { success: false, message: 'Invalid email or password' } };
   }
 
+  if (user.is_active === false) {
+    return { status: 401, body: { success: false, code: 'ACCOUNT_SUSPENDED', message: 'Account suspended' } };
+  }
+
   if (!user.is_verified) {
     return { status: 403, body: { success: false, message: 'Email not verified' } };
   }
@@ -532,7 +550,9 @@ export const googleSignupService = async ({ token, token_type, role, invite_toke
       auth_provider: 'google',
       google_id: googleProfile.google_id,
     });
-    await createFreeTrialSubscription(user._id, trialEndsAt);
+    if (!isProfessionalRole(user.role)) {
+      await createFreeTrialSubscription(user._id, trialEndsAt);
+    }
   } catch (error) {
     if (error?.code === 11000) {
       return {
@@ -587,6 +607,10 @@ export const googleLoginService = async ({ token, token_type, invite_token }) =>
         message: 'This account uses email/password login. Please sign in with email.',
       },
     };
+  }
+
+  if (user.is_active === false) {
+    return { status: 401, body: { success: false, code: 'ACCOUNT_SUSPENDED', message: 'Account suspended' } };
   }
 
   if (!user.is_verified) {
@@ -680,12 +704,15 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
     profileSetup = evaluateProfessionalProfileSetup(user, professionalProfile);
   }
 
+  const credentialGate = buildCredentialGate(professionalProfile, user.role);
+
   return {
     status: 200,
     body: {
       success: true,
       // ICP is optional; gates use personal + business basics only (see requireCompleteProfessionalProfile).
       profile_setup: { ...profileSetup, icp_is_separate_from_workspace_basics: true },
+      credential_gate: credentialGate,
       user: {
         id: String(user._id),
         _id: String(user._id),
@@ -711,6 +738,7 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         pendingPlanEffectiveAt: subscription.pendingPlanEffectiveAt,
         planLimits: subscription.planLimits || null,
         usage: subscription.usage || null,
+        credential_status: credentialGate.status,
         isExpired,
         ...(isExpired && { message: 'Account expired. Please upgrade.' }),
       },

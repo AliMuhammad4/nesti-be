@@ -17,6 +17,14 @@ const httpServer = http.createServer(app);
 async function startServer() {
   assertJwtSecretConfigured();
   await connectDB();
+  try {
+    const { grandfatherExistingCredentials } = await import(
+      './services/credentials/credentialMigration.js'
+    );
+    await grandfatherExistingCredentials();
+  } catch (error) {
+    logger.warn('Credential grandfather skipped', { message: error?.message });
+  }
   await initWorkspaceSocket(httpServer);
   httpServer.listen(PORT, () => {
     logger.info(`Server running on port ${PORT} (HTTP + WebSocket)`);

@@ -58,8 +58,16 @@ const sendEmail = async (options) => {
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const timeoutMs = asInt(process.env.RESEND_SEND_TIMEOUT_MS, 20000, { min: 5000, max: 120000 });
-    const maxAttempts = asInt(process.env.RESEND_SEND_MAX_ATTEMPTS, 3, { min: 1, max: 5 });
+    const timeoutMs = asInt(
+      options.timeoutMs ?? process.env.RESEND_SEND_TIMEOUT_MS,
+      20000,
+      { min: 3000, max: 120000 },
+    );
+    const maxAttempts = asInt(
+      options.maxAttempts ?? process.env.RESEND_SEND_MAX_ATTEMPTS,
+      3,
+      { min: 1, max: 5 },
+    );
 
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {

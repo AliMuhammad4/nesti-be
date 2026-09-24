@@ -209,6 +209,7 @@ test('entitlements display monthly pricing and unlock only active subscriptions'
   assert.equal(investor.unlocked, true);
   assert.equal(investor.display_amount, '$25/mo');
   assert.equal(investor.subscription?.manageable, true);
+  assert.equal(investor.subscription?.legacy_lifetime, false);
   assert.equal(investor.subscription?.cancel_at_period_end, false);
   assert.equal(classic.unlocked, false);
   assert.equal(classic.display_amount, '$75/mo');
@@ -274,16 +275,81 @@ test('template checkout reconciles a completed paid session before opening anoth
   assert.equal(result.open, null);
 });
 
-test('legacy one-time template unlocks remain accessible without a subscription id', () => {
-  const profile = {
+test('checkout-only template purchases stay accessible through the current monthly period', () => {
+  const inPeriod = {
     professional_type: 'agent',
     storefront: {
       template_purchases: [{
         template_id: 'agent-classic',
-        stripe_checkout_session_id: 'cs_legacy',
+        stripe_checkout_session_id: 'cs_monthly',
         stripe_subscription_id: '',
+        purchased_at: new Date(),
       }],
     },
   };
-  assert.equal(userHasStorefrontTemplateAccess(profile, 'agent-classic'), true);
+  const expired = {
+    professional_type: 'agent',
+    storefront: {
+      template_purchases: [{
+        template_id: 'agent-classic',
+        stripe_checkout_session_id: 'cs_expired',
+        stripe_subscription_id: '',
+        purchased_at: new Date('2024-01-01T00:00:00.000Z'),
+      }],
+    },
+  };
+  assert.equal(userHasStorefrontTemplateAccess(inPeriod, 'agent-classic'), true);
+  assert.equal(userHasStorefrontTemplateAccess(expired, 'agent-classic'), false);
+
+  const entitlements = serializeStorefrontTemplateEntitlements(inPeriod);
+  const classic = entitlements.templates.find((item) => item.template_id === 'agent-classic');
+  assert.equal(classic.subscription?.legacy_lifetime, false);
+  assert.equal(classic.subscription?.status, 'active');
+  assert.equal(classic.subscription?.billing_interval, 'month');
+  assert.equal(classic.subscription?.manageable, false);
+  assert.equal(Boolean(classic.subscription?.current_period_end), true);
+  const renewsAt = new Date(classic.subscription.current_period_end);
+  const purchaseDay = new Date(inPeriod.storefront.template_purchases[0].purchased_at);
+  assert.equal(renewsAt.getMonth() !== purchaseDay.getMonth() || renewsAt.getFullYear() !== purchaseDay.getFullYear(), true);
+});
+
+test('same-day period end is treated as the next monthly cycle', () => {
+  const purchasedAt = new Date('2026-09-18T10:00:00.000Z');
+  const entitlements = serializeStorefrontTemplateEntitlements({
+    professional_type: 'agent',
+    storefront: {
+      template_purchases: [{
+        template_id: 'agent-seller-expert',
+        stripe_subscription_id: 'sub_seller',
+        stripe_checkout_session_id: 'cs_seller',
+        subscription_status: 'active',
+        purchased_at: purchasedAt,
+        current_period_end: purchasedAt,
+      }],
+    },
+  });
+  const seller = entitlements.templates.find((item) => item.template_id === 'agent-seller-expert');
+  assert.equal(seller.unlocked, true);
+  const renewsAt = new Date(seller.subscription.current_period_end);
+  assert.equal(renewsAt.getUTCFullYear(), 2026);
+  assert.equal(renewsAt.getUTCMonth(), 9);
+  assert.equal(renewsAt.getUTCDate(), 18);
+});
+
+test('storefront template metadata is detected from purchase_type or subscription_type', async () => {
+  const { isStorefrontTemplateStripeMetadata } = await import('../services/billing/storefrontTemplates/unlock.js');
+  assert.equal(isStorefrontTemplateStripeMetadata({ purchase_type: 'storefront_template' }), true);
+  assert.equal(isStorefrontTemplateStripeMetadata({ subscription_type: 'storefront_template' }), true);
+  assert.equal(isStorefrontTemplateStripeMetadata({ subscription_type: 'professional' }), false);
+});
+
+test('template period end reads Stripe item dates when subscription root has none', async () => {
+  const { getStripeSubscriptionPeriodEnd } = await import('../services/billing/subscriptionShared.js');
+  const end = getStripeSubscriptionPeriodEnd({
+    items: {
+      data: [{ current_period_end: 1780000000 }],
+    },
+  });
+  assert.equal(end instanceof Date, true);
+  assert.equal(end.getTime(), 1780000000 * 1000);
 });

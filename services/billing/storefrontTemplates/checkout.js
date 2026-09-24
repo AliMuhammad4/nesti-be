@@ -2,6 +2,7 @@ import PublicProfile from '../../../models/PublicProfile.js';
 import Subscription from '../../../models/Subscription.js';
 import { getStripeClient } from '../stripeClient.js';
 import { ensureStripeCustomerForUser } from '../subscriptionService.js';
+import { getStripeSubscriptionPeriodEnd } from '../subscriptionShared.js';
 import {
   getStorefrontTemplateTier,
   normalizeTemplateId,
@@ -83,12 +84,15 @@ export async function syncStorefrontTemplateCheckoutSession(session) {
       const stripeSubscription = await getStripeClient().subscriptions.retrieve(subscriptionId);
       subscriptionStatus = String(stripeSubscription.status || 'active').toLowerCase();
       cancelAtPeriodEnd = stripeSubscription.cancel_at_period_end === true;
-      currentPeriodEnd = stripeSubscription.current_period_end
-        ? new Date(Number(stripeSubscription.current_period_end) * 1000)
-        : null;
+      currentPeriodEnd = getStripeSubscriptionPeriodEnd(stripeSubscription);
     } catch {
       subscriptionStatus = 'active';
     }
+  }
+  if (!currentPeriodEnd && session.created) {
+    const inferred = new Date(session.created * 1000);
+    inferred.setMonth(inferred.getMonth() + 1);
+    currentPeriodEnd = inferred;
   }
 
   return unlockStorefrontTemplateForUser(validation.userId, validation.template.template_id, {

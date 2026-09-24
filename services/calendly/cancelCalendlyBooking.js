@@ -32,11 +32,26 @@ async function fetchInviteeResource(accessToken, inviteeUri) {
   }
 }
 
+/** True when Calendly indicates the event is already canceled (treat as success). */
+export function isCalendlyAlreadyCanceledMessage(status, message = '') {
+  const msg = String(message || '').toLowerCase();
+  if (/already\s*(been\s*)?(cancel|canceled|cancelled)/i.test(msg)) return true;
+  if (
+    (status === 400 || status === 404)
+    && /(cancel|canceled|cancelled)/i.test(msg)
+    && /already|not\s+active|inactive/i.test(msg)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Cancel a 1:1 (or whole) scheduled event via Calendly API v2.
  * @param {string} accessToken
  * @param {object} storedCal - `compatibility_factors.calendly` from invitee.created webhook
  * @param {string} [reason]
+ * @returns {Promise<{ ok: true, already_canceled?: boolean }>}
  */
 export async function cancelCalendlyScheduledEvent(accessToken, storedCal, reason) {
   const r = String(reason || 'Canceled from Nesti').trim().slice(0, 500) || 'Canceled from Nesti';
@@ -74,6 +89,9 @@ export async function cancelCalendlyScheduledEvent(accessToken, storedCal, reaso
       msg = j?.message || j?.title || j?.details?.[0]?.message || msg;
     } catch {
       /* ignore */
+    }
+    if (isCalendlyAlreadyCanceledMessage(res.status, msg)) {
+      return { ok: true, already_canceled: true };
     }
     throw new Error(`Calendly cancel failed (${res.status}): ${msg}`);
   }

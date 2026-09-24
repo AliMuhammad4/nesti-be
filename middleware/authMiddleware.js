@@ -5,6 +5,7 @@ import { USER_ROLE, USER_ROLE_VALUES, PROFESSIONAL_TYPE_VALUES } from '../consta
 import { evaluateProfessionalProfileSetup } from '../utils/professionalProfileSetup.js';
 import logger from '../utils/logger.js';
 import { getJwtSecret } from '../utils/jwtSecret.js';
+import { ACCOUNT_SUSPENDED_CODE, ACCOUNT_SUSPENDED_MESSAGE } from '../constants/accountStatus.js';
 import { buildCredentialGate } from '../services/credentials/credentialGate.js';
 import { CREDENTIAL_STATUS } from '../constants/credentialDocuments.js';
 import { adminHasPermission } from '../constants/adminPermissions.js';
@@ -32,8 +33,8 @@ const protect = async (req, res, next) => {
     if (doc.is_active === false) {
       return res.status(401).json({
         success: false,
-        code: 'ACCOUNT_SUSPENDED',
-        message: 'Account suspended',
+        code: ACCOUNT_SUSPENDED_CODE,
+        message: ACCOUNT_SUSPENDED_MESSAGE,
       });
     }
     req.user = User.hydrate(doc);
@@ -110,7 +111,7 @@ const ensureAdmin = async (req, res, next) => {
   next();
 };
 
-/** Fine-grained admin capability check. Empty admin_permissions = full access. */
+/** Fine-grained admin capability check. Fail-closed: only '*' grants all; empty grants nothing. */
 const requirePermission = (permission) => (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });

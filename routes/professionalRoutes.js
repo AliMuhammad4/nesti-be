@@ -22,24 +22,9 @@ import {
   submitCredentials,
   uploadCredentialDocument,
 } from '../controllers/credentialController.js';
-import { uploadProfileImage } from '../middleware/uploadProfileImage.js';
+import { runProfileUpload } from '../middleware/uploadProfileImage.js';
 import { uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
 import { MAX_IMAGE_UPLOAD_MB } from '../constants/mediaLimits.js';
-
-function runProfileUpload(req, res, next) {
-  uploadProfileImage.single('file')(req, res, (err) => {
-    if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({
-          success: false,
-          message: `Image must be under ${MAX_IMAGE_UPLOAD_MB}MB.`,
-        });
-      }
-      return res.status(400).json({ success: false, message: err.message || 'Invalid file upload' });
-    }
-    next();
-  });
-}
 
 function runCredentialUpload(req, res, next) {
   uploadCredentialMulter.single('file')(req, res, (err) => {

@@ -550,58 +550,120 @@ export async function buildLeadProfilesListPayload(req) {
   };
 }
 
-export async function buildLeadConversationPayload(leadId, leadMatch, query = {}) {
-  const directPayload = await buildClientInquiryDirectConversationPayload(leadMatch.user_id, leadId, leadMatch, query);
-  if (directPayload) return directPayload;
+function conversationIdQuery(conversationId) {
+  const raw = conversationId == null ? '' : conversationId;
+  const or = [{ conversation_id: raw }];
+  const asString = String(raw);
+  if (mongoose.Types.ObjectId.isValid(asString)) {
+    or.push({ conversation_id: new mongoose.Types.ObjectId(asString) });
+    or.push({ conversation_id: asString });
+  }
+  return or.length === 1 ? or[0] : { $or: or };
+}
 
-  if (!leadMatch.conversation_id) {
+async function resolveLeadChatConversationId(leadMatch) {
+  if (leadMatch?.conversation_id) return leadMatch.conversation_id;
+  const cf = leadMatch?.compatibility_factors || {};
+  for (const raw of [cf.conversation_id, cf.chat_conversation_id]) {
+    if (raw && mongoose.Types.ObjectId.isValid(String(raw))) return raw;
+  }
+  const sessionId = String(cf.session_id || '').trim();
+  if (sessionId) {
+    const sessionFilter = { session_id: sessionId };
+    if (leadMatch?.user_id) sessionFilter.user_id = leadMatch.user_id;
+    const bySession = await ChatConversation.findOne(sessionFilter)
+      .select('_id')
+      .lean();
+    if (bySession?._id) return bySession._id;
+  }
+  const embedToken = String(cf.embed_token || '').trim();
+  if (embedToken && leadMatch?.user_id) {
+    const byEmbed = await ChatConversation.findOne({
+      embed_token: embedToken,
+      user_id: leadMatch.user_id,
+    })
+      .sort({ updatedAt: -1 })
+      .select('_id')
+      .lean();
+    if (byEmbed?._id) return byEmbed._id;
+  }
+  return null;
+}
+
+export async function buildLeadConversationPayload(leadId, leadMatch, query = {}) {
+  const resolvedConversationId = await resolveLeadChatConversationId(leadMatch);
+  if (resolvedConversationId && !leadMatch.conversation_id && leadMatch?._id) {
+    await LeadMatch.updateOne(
+      { _id: leadMatch._id },
+      { $set: { conversation_id: resolvedConversationId } },
+    );
+  }
+
+  if (resolvedConversationId) {
+    const sessionId = String(leadMatch?.compatibility_factors?.session_id || '').trim();
+    const convFilter = conversationIdQuery(resolvedConversationId);
+    const { page, limit, skip } = parsePageLimitPagination(query, PAGINATION_PRESETS.leadConversation);
+    let [convoExists, total, messages] = await Promise.all([
+      ChatConversation.exists({ _id: resolvedConversationId }),
+      ChatMessage.countDocuments(convFilter),
+      ChatMessage.find(convFilter).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+    ]);
+    if (messages.length === 0 && sessionId) {
+      const sessionFilter = { session_id: sessionId };
+      [total, messages] = await Promise.all([
+        ChatMessage.countDocuments(sessionFilter),
+        ChatMessage.find(sessionFilter).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+      ]);
+      if (messages.length) convoExists = true;
+    }
+    const conversationMessages = messages.map((m) => ({
+      id: String(m._id),
+      role: m.role,
+      content: m.content,
+      intent: m.intent || null,
+      created_at: m.createdAt,
+    }));
+
+    let emptyState = null;
+    if (conversationMessages.length === 0) {
+      emptyState = convoExists
+        ? {
+            reason: 'Conversation thread is created but has no messages yet.',
+            action: 'Send the first outreach message to activate this thread.',
+          }
+        : {
+            reason:
+              'The chat thread record was removed (for example, the visitor reset the chat before this fix, which deleted the conversation while the lead stayed in CRM). New widget chats create a new thread.',
+            action: 'Reference compatibility/session metadata on the lead, or continue outreach from here; transcript cannot be recovered.',
+          };
+    }
+
     return {
       lead_id: leadId,
-      conversation_id: null,
-      messages: [],
-      empty_state: {
-        reason: 'No conversation thread exists for this lead yet.',
-        action: 'Start outreach from the lead card and message history will appear here.',
-      },
-      pagination: buildPaginationMeta({ page: 1, limit: 0, total: 0 }),
+      conversation_id: String(resolvedConversationId),
+      messages: conversationMessages,
+      empty_state: emptyState,
+      pagination: buildPaginationMeta({ page, limit, total }),
     };
   }
 
-  const convFilter = { conversation_id: leadMatch.conversation_id };
-  const { page, limit, skip } = parsePageLimitPagination(query, PAGINATION_PRESETS.leadConversation);
-  const [convoExists, total, messages] = await Promise.all([
-    ChatConversation.exists({ _id: leadMatch.conversation_id }),
-    ChatMessage.countDocuments(convFilter),
-    ChatMessage.find(convFilter).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
-  ]);
-  const conversationMessages = messages.map((m) => ({
-    id: String(m._id),
-    role: m.role,
-    content: m.content,
-    intent: m.intent || null,
-    created_at: m.createdAt,
-  }));
-
-  let emptyState = null;
-  if (conversationMessages.length === 0) {
-    emptyState = convoExists
-      ? {
-          reason: 'Conversation thread is created but has no messages yet.',
-          action: 'Send the first outreach message to activate this thread.',
-        }
-      : {
-          reason:
-            'The chat thread record was removed (for example, the visitor reset the chat before this fix, which deleted the conversation while the lead stayed in CRM). New widget chats create a new thread.',
-          action: 'Reference compatibility/session metadata on the lead, or continue outreach from here; transcript cannot be recovered.',
-        };
-  }
+  const directPayload = await buildClientInquiryDirectConversationPayload(
+    leadMatch.user_id,
+    leadId,
+    leadMatch,
+    query,
+  );
+  if (directPayload) return directPayload;
 
   return {
     lead_id: leadId,
-    conversation_id: String(leadMatch.conversation_id),
-    messages: conversationMessages,
-    empty_state: emptyState,
-    pagination: buildPaginationMeta({ page, limit, total }),
+    conversation_id: null,
+    messages: [],
+    empty_state: {
+      reason: 'No conversation thread exists for this lead yet.',
+      action: 'Start outreach from the lead card and message history will appear here.',
+    },
+    pagination: buildPaginationMeta({ page: 1, limit: 0, total: 0 }),
   };
 }
 

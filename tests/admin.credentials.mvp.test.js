@@ -52,9 +52,15 @@ test('credential requirement copy is audience-specific', async () => {
   assert.doesNotMatch(admin, /Upload your/);
 });
 
-test('adminHasPermission grants full access when permissions empty', () => {
-  assert.equal(adminHasPermission({ role: 'admin', admin_permissions: [] }, ADMIN_PERMISSION.PROFESSIONALS_READ), true);
+test('adminHasPermission is fail-closed: empty grants nothing; only * grants all', () => {
+  assert.equal(adminHasPermission({ role: 'admin', admin_permissions: [] }, ADMIN_PERMISSION.PROFESSIONALS_READ), false);
+  assert.equal(adminHasPermission({ role: 'admin' }, ADMIN_PERMISSION.PROFESSIONALS_READ), false);
+  assert.equal(adminHasPermission({ role: 'admin', admin_permissions: null }, ADMIN_PERMISSION.PROFESSIONALS_READ), false);
   assert.equal(adminHasPermission({ role: 'admin', admin_permissions: ['*'] }, ADMIN_PERMISSION.VERIFICATIONS_APPROVE), true);
+  assert.equal(
+    adminHasPermission({ role: 'admin', admin_permissions: [ADMIN_PERMISSION.PROFESSIONALS_READ] }, ADMIN_PERMISSION.PROFESSIONALS_READ),
+    true,
+  );
   assert.equal(
     adminHasPermission({ role: 'admin', admin_permissions: [ADMIN_PERMISSION.PROFESSIONALS_READ] }, ADMIN_PERMISSION.USERS_WRITE),
     false,

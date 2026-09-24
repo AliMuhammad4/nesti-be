@@ -25,6 +25,7 @@ import Subscription from './Subscription.js';
 import ProfessionalCall from './ProfessionalCall.js';
 import ProfessionalCallTranscriptSegment from './ProfessionalCallTranscriptSegment.js';
 import ProfessionalCallMinutes from './ProfessionalCallMinutes.js';
+import AdminAuditLog from './AdminAuditLog.js';
 export {
   User,
   ChatConversation,
@@ -53,4 +54,5 @@ export {
   ProfessionalCall,
   ProfessionalCallTranscriptSegment,
   ProfessionalCallMinutes,
+  AdminAuditLog,
 };

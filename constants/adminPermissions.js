@@ -21,10 +21,14 @@ export const ADMIN_PERMISSION = Object.freeze({
 
 export const ADMIN_PERMISSION_VALUES = Object.freeze(Object.values(ADMIN_PERMISSION));
 
-/** Empty / missing permissions on an admin means full access (backward compatible). */
+/**
+ * Fail-closed: empty/missing admin_permissions grants nothing.
+ * Only ADMIN_PERMISSION.ALL ('*') grants all capabilities.
+ */
 export function adminHasPermission(user, permission) {
   if (!user || user.role !== 'admin') return false;
   const list = Array.isArray(user.admin_permissions) ? user.admin_permissions : [];
-  if (!list.length || list.includes(ADMIN_PERMISSION.ALL) || list.includes('*')) return true;
+  if (list.includes(ADMIN_PERMISSION.ALL) || list.includes('*')) return true;
+  if (!list.length) return false;
   return list.includes(permission);
 }

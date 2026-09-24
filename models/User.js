@@ -41,7 +41,10 @@ const userSchema = new mongoose.Schema({
     enum: USER_ROLE_VALUES,
     default: USER_ROLE.AGENT,
   },
-  /** Optional fine-grained admin capabilities. Empty = full access for role=admin. */
+  /**
+   * Fine-grained admin capabilities. Fail-closed: empty grants nothing;
+   * include '*' (ADMIN_PERMISSION.ALL) for full access.
+   */
   admin_permissions: {
     type: [String],
     default: [],

@@ -1,5 +1,6 @@
 import Subscription from '../../models/Subscription.js';
 import ClientSubscription from '../../models/ClientSubscription.js';
+import PublicProfile from '../../models/PublicProfile.js';
 import { getPlan, getPlanByPriceId, getPlanTier, getStripePriceId } from './plans.js';
 import { getStripeClient } from './stripeClient.js';
 import {
@@ -24,6 +25,11 @@ import {
   toDateFromUnix,
 } from './subscriptionShared.js';
 import { syncClientStripeSubscription } from '../client/clientSubscriptionService.js';
+import {
+  isStorefrontTemplateStripeMetadata,
+  stripeSubscriptionBelongsToStorefrontTemplate,
+  syncStorefrontTemplateSubscription,
+} from './storefrontTemplates/unlock.js';
 import {
   processPaidSubscriptionReferralCredit,
   syncPendingCreditFromStripeBalance,
@@ -281,6 +287,9 @@ export async function refreshSubscriptionFromStripeForUser(user) {
 export async function syncStripeSubscription(stripeSubscription, extra = {}) {
   const subscriptionId = normalizeStripeId(stripeSubscription?.id);
   if (!subscriptionId) return null;
+  if (await stripeSubscriptionBelongsToStorefrontTemplate(subscriptionId, stripeSubscription)) {
+    return syncStorefrontTemplateSubscription(stripeSubscription);
+  }
   const priceId = firstSubscriptionPriceId(stripeSubscription);
   const plan = getPlanByPriceId(priceId);
   const customerId = normalizeStripeId(stripeSubscription.customer);
@@ -343,6 +352,46 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
   return synced;
 }
 
+export async function repairPlatformSubscriptionIfTemplateCollision(userId) {
+  const subscription = await Subscription.findOne({ user_id: userId }).lean();
+  if (!subscription?.stripe_subscription_id) return subscription;
+  const publicProfile = await PublicProfile.findOne({ user_id: userId })
+    .select('storefront.template_purchases')
+    .lean();
+  const templateSubIds = new Set(
+    (publicProfile?.storefront?.template_purchases || [])
+      .map((purchase) => String(purchase.stripe_subscription_id || '').trim())
+      .filter(Boolean),
+  );
+  const currentId = String(subscription.stripe_subscription_id || '').trim();
+  if (!templateSubIds.has(currentId)) return subscription;
+
+  const customerId = String(subscription.stripe_customer_id || '').trim();
+  if (!customerId) return subscription;
+  try {
+    const listed = await getStripeClient().subscriptions.list({
+      customer: customerId,
+      status: 'all',
+      limit: 30,
+    });
+    const platformSub = (listed.data || []).find((item) => {
+      const id = normalizeStripeId(item);
+      if (!id || templateSubIds.has(id)) return false;
+      if (isStorefrontTemplateStripeMetadata(item.metadata)) return false;
+      const type = String(item.metadata?.subscription_type || '').trim().toLowerCase();
+      return type !== 'client';
+    });
+    if (!platformSub) return subscription;
+    const synced = await syncStripeSubscription(platformSub, {
+      user_id: String(userId),
+      last_stripe_event_id: 'admin-template-collision-repair',
+    });
+    return synced?.toObject?.() || synced || subscription;
+  } catch {
+    return subscription;
+  }
+}
+
 export async function syncCheckoutSession(session, eventId = '') {
   const stripe = getStripeClient();
   const subscriptionId = normalizeStripeId(session.subscription);
@@ -367,7 +416,7 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
 
   // Webhook payloads on newer Stripe API versions may omit legacy invoice.subscription.
   // Fall back to customer → local subscription, then a live Stripe retrieve if needed.
-  if (!subscriptionId && customerId) {
+  if (!subscriptionId && customerId && !isStorefrontTemplateStripeMetadata(invoice?.metadata)) {
     const local = await Subscription.findOne({ stripe_customer_id: customerId })
       .select('stripe_subscription_id')
       .lean();
@@ -393,12 +442,17 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
     return null;
   }
   let synced = null;
+  let isTemplateInvoice = isStorefrontTemplateStripeMetadata(invoice?.metadata);
   try {
     const stripeSubscription = await getStripeClient().subscriptions.retrieve(subscriptionId);
+    isTemplateInvoice = isTemplateInvoice
+      || await stripeSubscriptionBelongsToStorefrontTemplate(subscriptionId, stripeSubscription);
     const subscriptionType = String(
       stripeSubscription?.metadata?.subscription_type || '',
     ).trim().toLowerCase();
-    if (subscriptionType === 'client') {
+    if (isTemplateInvoice) {
+      synced = await syncStorefrontTemplateSubscription(stripeSubscription);
+    } else if (subscriptionType === 'client') {
       synced = await syncClientStripeSubscription(stripeSubscription);
     } else {
       const existingClient = await ClientSubscription.findOne({
@@ -415,6 +469,8 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
   } catch (error) {
     console.warn('invoice payment sync from Stripe subscription failed:', error?.message || error);
   }
+
+  if (isTemplateInvoice) return synced;
 
   const update = {
     latest_invoice_id: normalizeStripeId(invoice.id),

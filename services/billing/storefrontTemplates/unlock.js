@@ -7,8 +7,9 @@ import {
   uniqueTemplateIds,
   userHasStorefrontTemplateAccess,
 } from './access.js';
+import { getStripeSubscriptionPeriodEnd } from '../subscriptionShared.js';
 
-function normalizeStripeId(value) {
+export function normalizeStripeId(value) {
   if (!value) return '';
   if (typeof value === 'string') return value.trim();
   return String(value.id || '').trim();
@@ -116,19 +117,56 @@ export async function unlockStorefrontTemplateForUser(userId, templateId, purcha
   return reconcileUnlockedTemplateIds(profileFilter, template.template_id);
 }
 
+export function isStorefrontTemplateStripeMetadata(metadata = {}) {
+  return (
+    String(metadata.purchase_type || '').trim() === 'storefront_template'
+    || String(metadata.subscription_type || '').trim().toLowerCase() === 'storefront_template'
+  );
+}
+
+export async function stripeSubscriptionBelongsToStorefrontTemplate(
+  subscriptionId,
+  stripeSubscription = {},
+) {
+  if (isStorefrontTemplateStripeMetadata(stripeSubscription?.metadata)) return true;
+  const id = normalizeStripeId(stripeSubscription) || String(subscriptionId || '').trim();
+  if (!id) return false;
+  const profile = await PublicProfile.findOne({
+    'storefront.template_purchases.stripe_subscription_id': id,
+  })
+    .select('_id')
+    .lean();
+  return Boolean(profile);
+}
+
 export async function syncStorefrontTemplateSubscription(stripeSubscription) {
   const metadata = stripeSubscription?.metadata || {};
-  if (String(metadata.purchase_type || '').trim() !== 'storefront_template') return null;
+  const subscriptionId = normalizeStripeId(stripeSubscription);
+  let userId = String(metadata.user_id || '').trim();
+  let templateId = metadata.template_id;
 
-  const userId = String(metadata.user_id || '').trim();
-  const template = getStorefrontTemplateTier(metadata.template_id);
+  if (!userId || !getStorefrontTemplateTier(templateId)) {
+    const profile = await PublicProfile.findOne({
+      'storefront.template_purchases.stripe_subscription_id': subscriptionId,
+    })
+      .select('user_id storefront.template_purchases')
+      .lean();
+    const purchase = (profile?.storefront?.template_purchases || []).find(
+      (row) => String(row.stripe_subscription_id || '').trim() === subscriptionId,
+    );
+    if (profile?.user_id) userId = String(profile.user_id);
+    if (purchase?.template_id) templateId = purchase.template_id;
+  }
+
+  if (!isStorefrontTemplateStripeMetadata(metadata) && !userId) {
+    return null;
+  }
+
+  const template = getStorefrontTemplateTier(templateId);
   if (!userId || !template) return null;
 
-  const subscriptionId = normalizeStripeId(stripeSubscription);
   const status = String(stripeSubscription.status || '').trim().toLowerCase();
-  const periodEnd = stripeSubscription.current_period_end
-    ? new Date(Number(stripeSubscription.current_period_end) * 1000)
-    : null;
+  const periodEnd = getStripeSubscriptionPeriodEnd(stripeSubscription);
 
   return unlockStorefrontTemplateForUser(userId, template.template_id, {
     amount: template.amount,
@@ -138,10 +176,5 @@ export async function syncStorefrontTemplateSubscription(stripeSubscription) {
     subscription_status: status,
     cancel_at_period_end: stripeSubscription.cancel_at_period_end === true,
     current_period_end: periodEnd,
-    purchased_at: stripeSubscription.created
-      ? new Date(Number(stripeSubscription.created) * 1000)
-      : new Date(),
   });
 }
-
-export { normalizeStripeId };

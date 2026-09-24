@@ -1,6 +1,6 @@
 import { Joi, objectId, str } from './common.js';
 import { USER_ROLE_VALUES } from '../constants/roles.js';
-import { MATCH_STATUSES, REFERRAL_STATUSES } from '../constants/validationEnums.js';
+import { LEAD_TYPES, MATCH_STATUSES, REFERRAL_STATUSES } from '../constants/validationEnums.js';
 import { SUBSCRIPTION_PLAN_KEYS, SUBSCRIPTION_STATUSES } from '../models/Subscription.js';
 import { CLIENT_TIER_KEYS, CLIENT_SUBSCRIPTION_STATUSES } from '../models/ClientSubscription.js';
 import { PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
@@ -30,7 +30,7 @@ export const adminListQuerySchema = Joi.object({
 });
 
 export const adminSuspendUserSchema = Joi.object({
-  reason: str.max(500).optional().default(''),
+  reason: Joi.string().allow('').max(500).trim().optional().default(''),
 });
 
 export const adminPatchProfessionalSchema = Joi.object({
@@ -55,7 +55,34 @@ export const adminPatchClientSchema = Joi.object({
 export const adminPatchLeadSchema = Joi.object({
   match_status: Joi.string().valid(...MATCH_STATUSES).optional(),
   user_id: objectId.optional(),
-  lead_type: str.max(80).optional(),
+  lead_type: Joi.string().valid(...LEAD_TYPES).optional(),
+  note: Joi.string().max(8000).allow('').optional(),
+  close_reason: Joi.string().max(100).optional(),
+  closed_value: Joi.number().min(0).max(999_999_999).optional(),
+  agent_closing_checklist: Joi.object({
+    client_ready_to_proceed: Joi.string().max(300).allow('').optional(),
+    property_identified: Joi.string().max(300).allow('').optional(),
+    price_captured: Joi.string().max(200).allow('').optional(),
+    target_closing_date: Joi.string().max(120).allow('').optional(),
+    remaining_conditions: Joi.string().max(500).allow('').optional(),
+    next_step: Joi.string().max(1000).allow('').optional(),
+  }).optional(),
+  lawyer_closing_checklist: Joi.object({
+    transaction_type: Joi.string().max(200).allow('').optional(),
+    property_or_legal_matter: Joi.string().max(300).allow('').optional(),
+    closing_date: Joi.string().max(120).allow('').optional(),
+    agreement_and_docs_received: Joi.string().max(300).allow('').optional(),
+    outstanding_legal_requirements: Joi.string().max(1000).allow('').optional(),
+    next_step: Joi.string().max(1000).allow('').optional(),
+  }).optional(),
+  mortgage_closing_checklist: Joi.object({
+    client_ready_to_move_forward: Joi.string().max(300).allow('').optional(),
+    property_value_and_mortgage_need: Joi.string().max(300).allow('').optional(),
+    financing_status: Joi.string().max(300).allow('').optional(),
+    income_docs_ready: Joi.string().max(300).allow('').optional(),
+    funding_timeline: Joi.string().max(300).allow('').optional(),
+    next_step: Joi.string().max(1000).allow('').optional(),
+  }).optional(),
 }).min(1);
 
 export const adminPatchPropertySchema = Joi.object({
@@ -81,4 +108,15 @@ export const adminPatchReferralSchema = Joi.object({
 
 export const adminRejectVerificationSchema = Joi.object({
   reason: Joi.string().trim().min(3).max(500).required(),
+});
+
+/** Admin-as-professional: acting user may be sent in body or query. */
+export const adminActingUserIdSchema = Joi.object({
+  acting_user_id: objectId.required(),
+});
+
+/** Admin cancel booking — lead id is in the path; body only needs optional reason. */
+export const adminCalendlyCancelBookingBodySchema = Joi.object({
+  lead_match_id: objectId.optional(),
+  reason: Joi.string().trim().max(500).optional().allow(''),
 });

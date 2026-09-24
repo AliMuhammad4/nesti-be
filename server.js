@@ -8,6 +8,7 @@ import { scheduleNurtureFollowupJob } from './jobs/nurtureFollowupJob.js';
 import { startCallMinutesReconciliation } from './services/proChat/callMinutesService.js';
 import { ensureTranscriptionWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
+import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
 import './models/index.js'; // Ensure all models are registered
 
 const PORT = process.env.PORT || 5000;
@@ -18,9 +19,6 @@ async function startServer() {
   assertJwtSecretConfigured();
   await connectDB();
   try {
-    const { grandfatherExistingCredentials } = await import(
-      './services/credentials/credentialMigration.js'
-    );
     await grandfatherExistingCredentials();
   } catch (error) {
     logger.warn('Credential grandfather skipped', { message: error?.message });

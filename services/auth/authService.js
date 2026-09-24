@@ -18,6 +18,7 @@ import { getJwtSecret } from '../../utils/jwtSecret.js';
 import { CREDENTIAL_STATUS } from '../../constants/credentialDocuments.js';
 import { buildCredentialGate, notifySignupAwaitingDocs } from '../credentials/credentialService.js';
 import { USER_ROLE, USER_ROLE_VALUES, isProfessionalRole } from '../../constants/roles.js';
+import { ACCOUNT_SUSPENDED_CODE, ACCOUNT_SUSPENDED_MESSAGE } from '../../constants/accountStatus.js';
 import User from '../../models/User.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 
@@ -456,6 +457,14 @@ async function resolveUserLoginPresentation(user) {
     role: user.role,
     accountStatus: subscription?.accountStatus || 'free_trial',
     trialEndsAt: subscription?.trialEndsAt || null,
+    ...adminPermissionsPayload(user),
+  };
+}
+
+function adminPermissionsPayload(user) {
+  if (user?.role !== USER_ROLE.ADMIN) return {};
+  return {
+    admin_permissions: Array.isArray(user.admin_permissions) ? user.admin_permissions : [],
   };
 }
 
@@ -477,7 +486,10 @@ export const loginService = async ({ email, password, invite_token }) => {
   }
 
   if (user.is_active === false) {
-    return { status: 401, body: { success: false, code: 'ACCOUNT_SUSPENDED', message: 'Account suspended' } };
+    return {
+      status: 401,
+      body: { success: false, code: ACCOUNT_SUSPENDED_CODE, message: ACCOUNT_SUSPENDED_MESSAGE },
+    };
   }
 
   if (!user.is_verified) {
@@ -610,7 +622,10 @@ export const googleLoginService = async ({ token, token_type, invite_token }) =>
   }
 
   if (user.is_active === false) {
-    return { status: 401, body: { success: false, code: 'ACCOUNT_SUSPENDED', message: 'Account suspended' } };
+    return {
+      status: 401,
+      body: { success: false, code: ACCOUNT_SUSPENDED_CODE, message: ACCOUNT_SUSPENDED_MESSAGE },
+    };
   }
 
   if (!user.is_verified) {
@@ -722,6 +737,7 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
         email: user.email,
         phone: user.phone || '',
         role: user.role,
+        ...adminPermissionsPayload(user),
         auth_provider: user.auth_provider || 'local',
         authProvider: user.auth_provider || 'local',
         profile_image: user.profile_image || null,

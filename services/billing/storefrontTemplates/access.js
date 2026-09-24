@@ -24,12 +24,56 @@ export function isActiveTemplateSubscriptionStatus(status) {
   return ACTIVE_TEMPLATE_SUBSCRIPTION_STATUSES.has(String(status || '').trim().toLowerCase());
 }
 
+function addOneMonth(date) {
+  const end = new Date(date);
+  end.setMonth(end.getMonth() + 1);
+  return end;
+}
+
+export function templatePurchasePeriodEnd(purchase = {}) {
+  const start = purchase?.purchased_at ? new Date(purchase.purchased_at) : null;
+  const startValid = start && !Number.isNaN(start.getTime());
+  const explicit = purchase?.current_period_end ? new Date(purchase.current_period_end) : null;
+  const explicitValid = explicit && !Number.isNaN(explicit.getTime());
+  // A stored end that matches purchase time is not a billing cycle; treat it as monthly from purchase.
+  if (explicitValid && startValid && (explicit.getTime() - start.getTime()) < 12 * 60 * 60 * 1000) {
+    return addOneMonth(start);
+  }
+  if (explicitValid) return explicit;
+  if (startValid) return addOneMonth(start);
+  return null;
+}
+
+export function serializePaidTemplateSubscriptions(profile) {
+  const { templates } = serializeStorefrontTemplateEntitlements(profile);
+  return templates
+    .filter((template) => Number(template.amount || 0) > 0 && template.unlocked && template.subscription)
+    .map((template) => ({
+      template_id: template.template_id,
+      name: template.name,
+      display_amount: template.display_amount,
+      billing_interval: template.billing_interval || template.subscription.billing_interval || 'month',
+      status: template.subscription.status,
+      cancel_at_period_end: Boolean(template.subscription.cancel_at_period_end),
+      current_period_end: template.subscription.current_period_end,
+      manageable: Boolean(template.subscription.manageable),
+    }));
+}
+
 export function templatePurchaseGrantsAccess(purchase = {}) {
   const subscriptionId = String(purchase.stripe_subscription_id || '').trim();
+  const status = String(purchase.subscription_status || '').trim().toLowerCase();
+  const periodEnd = templatePurchasePeriodEnd(purchase);
+  const now = new Date();
+
   if (subscriptionId) {
-    return isActiveTemplateSubscriptionStatus(purchase.subscription_status);
+    if (isActiveTemplateSubscriptionStatus(status || 'active')) return true;
+    if (purchase.cancel_at_period_end && periodEnd && periodEnd > now) return true;
+    return false;
   }
-  // Legacy one-time unlocks remain valid until replaced by a monthly subscription.
+
+  if (['canceled', 'incomplete_expired', 'unpaid', 'expired'].includes(status)) return false;
+  if (periodEnd) return periodEnd > now;
   return Boolean(String(purchase.stripe_checkout_session_id || '').trim());
 }
 
@@ -82,11 +126,10 @@ export function serializeStorefrontTemplateEntitlements(profile) {
     templates: listStorefrontTemplateTiers().map((template) => {
       const purchase = latestPurchaseByTemplate.get(template.template_id) || null;
       const hasSubscription = Boolean(String(purchase?.stripe_subscription_id || '').trim());
-      const legacyLifetime = Boolean(
-        purchase
-        && !hasSubscription
-        && String(purchase.stripe_checkout_session_id || '').trim(),
-      );
+      const hasCheckout = Boolean(String(purchase?.stripe_checkout_session_id || '').trim());
+      const rawStatus = String(purchase?.subscription_status || '').toLowerCase();
+      const status = rawStatus === 'lifetime' ? 'active' : (rawStatus || (hasSubscription || hasCheckout ? 'active' : ''));
+      const periodEnd = purchase ? templatePurchasePeriodEnd(purchase) : null;
       const unlocked = (
         storefrontTemplateSupportsProfile(template, profile)
         && unlockedTemplateIds.includes(template.template_id)
@@ -96,15 +139,13 @@ export function serializeStorefrontTemplateEntitlements(profile) {
         unlocked,
         display_amount: displayAmountForTemplate(template),
         billing_interval: template.interval || 'month',
-        subscription: purchase && (hasSubscription || legacyLifetime) ? {
-          status: String(purchase.subscription_status || (legacyLifetime ? 'lifetime' : '')).toLowerCase(),
+        subscription: purchase && (hasSubscription || hasCheckout) ? {
+          status,
           cancel_at_period_end: purchase.cancel_at_period_end === true,
-          current_period_end: purchase.current_period_end || null,
+          current_period_end: periodEnd,
           billing_interval: purchase.billing_interval || template.interval || 'month',
-          legacy_lifetime: legacyLifetime,
-          manageable: hasSubscription && unlocked && isActiveTemplateSubscriptionStatus(
-            purchase.subscription_status || 'active',
-          ),
+          legacy_lifetime: false,
+          manageable: hasSubscription && unlocked && isActiveTemplateSubscriptionStatus(status || 'active'),
         } : null,
       };
     }),
@@ -123,7 +164,7 @@ export async function ensureFreeStorefrontTemplateUnlock(profile) {
       changed = true;
     }
   });
-  // Drop paid templates that no longer have an active monthly subscription (or legacy purchase).
+  // Drop paid templates that no longer have an active monthly period.
   const nextUnlocked = unlocked.filter((templateId) => {
     if (isStorefrontTemplateFree(templateId)) return true;
     return userHasStorefrontTemplateAccess(profile, templateId);
@@ -150,12 +191,4 @@ export async function assertStorefrontTemplateAccess(userId, templateId) {
     message: lockedTemplateMessage(template),
     template,
   };
-}
-
-export async function getStorefrontTemplateEntitlementsForUser(userId) {
-  const profile = await PublicProfile.findOne({ user_id: userId });
-  if (!profile) return { ok: false, code: 404, message: 'Public profile not found.' };
-  await ensureFreeStorefrontTemplateUnlock(profile);
-  if (profile.isModified('storefront')) await profile.save();
-  return { ok: true, entitlements: serializeStorefrontTemplateEntitlements(profile) };
 }

@@ -213,6 +213,68 @@ export async function deleteObjectFromR2(key) {
   }
 }
 
+function privateRecordingsBucket() {
+  return String(process.env.R2_BUCKET_PUBLIC || '').trim();
+}
+
+export function isPrivateRecordingsConfigured() {
+  return isR2Configured() && Boolean(privateRecordingsBucket());
+}
+
+export function buildRecordingObjectKey({ callId, recordingSid, extension = 'mp3', now = new Date() }) {
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  return sanitizeKey(
+    `voice-recordings/${year}/${month}/${callId}/${recordingSid}.${extension}`,
+  );
+}
+
+export async function uploadPrivateRecordingBuffer(buffer, { key, mimeType, metadata } = {}) {
+  if (!isPrivateRecordingsConfigured()) {
+    throw new Error('Private recording bucket is not configured');
+  }
+  const objectKey = sanitizeKey(key);
+  if (!objectKey || !buffer) throw new Error('Missing private recording upload');
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: privateRecordingsBucket(),
+      Key: objectKey,
+      Body: buffer,
+      ContentType: mimeType || 'audio/mpeg',
+      CacheControl: 'private, no-store',
+      Metadata: metadata || undefined,
+    }),
+  );
+  return { key: objectKey, bytes: buffer.length };
+}
+
+export async function deletePrivateRecording(key) {
+  if (!isPrivateRecordingsConfigured()) return { deleted: false, reason: 'not_configured' };
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) return { deleted: false, reason: 'missing_key' };
+  try {
+    await r2Client.send(new DeleteObjectCommand({ Bucket: privateRecordingsBucket(), Key: objectKey }));
+    return { deleted: true, key: objectKey };
+  } catch (error) {
+    logger.warn('Failed to delete private recording', { key: objectKey, error: error?.message });
+    return { deleted: false, reason: error?.message || 'delete_failed' };
+  }
+}
+
+export async function createPrivateRecordingReadUrl(key, { expiresIn = 10 * 60 } = {}) {
+  if (!isPrivateRecordingsConfigured()) return null;
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) return null;
+  const safeExpires = Math.max(60, Math.min(Number(expiresIn) || 600, 15 * 60));
+  const command = new GetObjectCommand({
+    Bucket: privateRecordingsBucket(),
+    Key: objectKey,
+    ResponseContentDisposition: 'inline',
+    ResponseContentType: 'audio/mpeg',
+  });
+  return getSignedUrl(r2Client, command, { expiresIn: safeExpires });
+}
+
 export async function createSignedReadUrl(
   key,
   { expiresIn = 60 * 60 * 24 * 7, download = false, filename, responseContentType } = {},

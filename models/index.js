@@ -25,6 +25,8 @@ import Subscription from './Subscription.js';
 import ProfessionalCall from './ProfessionalCall.js';
 import ProfessionalCallTranscriptSegment from './ProfessionalCallTranscriptSegment.js';
 import ProfessionalCallMinutes from './ProfessionalCallMinutes.js';
+import ProfessionalCallRecording from './ProfessionalCallRecording.js';
+import VoiceAgentSuggestion from './VoiceAgentSuggestion.js';
 import AdminAuditLog from './AdminAuditLog.js';
 export {
   User,
@@ -54,5 +56,7 @@ export {
   ProfessionalCall,
   ProfessionalCallTranscriptSegment,
   ProfessionalCallMinutes,
+  ProfessionalCallRecording,
+  VoiceAgentSuggestion,
   AdminAuditLog,
 };

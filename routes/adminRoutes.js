@@ -73,6 +73,15 @@ import {
   adminProcessReferralAsProfessional,
   adminReferralLeadDetails,
   adminCancelLeadCalendlyBooking,
+  adminStartVoiceCall,
+  adminStopVoiceCall,
+  adminListVoiceCalls,
+  adminListCallRecordings,
+  adminRecordingPlayback,
+  adminCallTranscript,
+  adminListVoiceSuggestions,
+  adminDecideVoiceSuggestion,
+  adminListSalesPipeline,
   listAdminProperties,
   getAdminProperty,
   patchAdminProperty,
@@ -300,5 +309,15 @@ router.patch(
   validateBody(adminPatchReferralSchema),
   patchAdminReferral,
 );
+
+router.get('/sales-pipeline', requirePermission(P.LEADS_READ), adminListSalesPipeline);
+router.post('/voice/calls', adminStartVoiceCall);
+router.post('/voice/calls/:id/stop', adminStopVoiceCall);
+router.get('/voice/calls', adminListVoiceCalls);
+router.get('/voice/calls/:id/recordings', adminListCallRecordings);
+router.get('/voice/recordings/:id/playback', adminRecordingPlayback);
+router.get('/voice/calls/:id/transcript', adminCallTranscript);
+router.get('/voice/calls/:id/suggestions', adminListVoiceSuggestions);
+router.post('/voice/suggestions/:id/decision', adminDecideVoiceSuggestion);
 
 export default router;

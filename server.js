@@ -6,6 +6,7 @@ import { initWorkspaceSocket } from './services/realtime/workspaceSocket.js';
 import { scheduleMonthlyRewardJob } from './jobs/rewardMonthlyJob.js';
 import { scheduleNurtureFollowupJob } from './jobs/nurtureFollowupJob.js';
 import { startCallMinutesReconciliation } from './services/proChat/callMinutesService.js';
+import { startRecordingIngestion } from './services/proChat/recordingIngestionService.js';
 import { ensureTranscriptionWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
@@ -29,6 +30,7 @@ async function startServer() {
     scheduleMonthlyRewardJob();
     scheduleNurtureFollowupJob();
     startCallMinutesReconciliation();
+    startRecordingIngestion();
     void ensureTranscriptionWorkerRunning().catch((error) => {
       logger.warn('Transcription worker did not start with the API server', {
         message: error?.message,

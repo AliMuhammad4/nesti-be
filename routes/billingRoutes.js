@@ -1,6 +1,6 @@
 import express from 'express';
 const router = express.Router();
-import { protect, evaluateCredentialAccess } from '../middleware/authMiddleware.js';
+import { protect, optionalAuth, evaluateCredentialAccess } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import {
@@ -13,6 +13,7 @@ import {
   storefrontTemplateSubscriptionActionSchema,
 } from '../schemas/billingSchemas.js';
 import Subscription from '../models/Subscription.js';
+import EnterpriseInquiry from '../models/EnterpriseInquiry.js';
 import { getStripeClient } from '../services/billing/stripeClient.js';
 import { publicBillingPlans, publicBillingPlansFromStripe } from '../services/billing/plans.js';
 import {
@@ -304,6 +305,29 @@ const getPaymentMethods = async (req, res) => {
 };
 
 const handleEnterpriseInquiry = async (req, res) => {
+  const body = req.body || {};
+  const email = String(body.email || req.user?.email || '').trim().toLowerCase();
+  const phone = String(body.phone || '').trim();
+  const fullName = String(body.full_name || '').trim();
+  const source = body.source === 'contact' ? 'contact' : 'demo';
+  if (!phone) {
+    return res.status(400).json({ success: false, message: 'A phone number is required' });
+  }
+  if (!email) {
+    return res.status(400).json({ success: false, message: 'Email is required' });
+  }
+  await EnterpriseInquiry.create({
+    user_id: req.user?._id || body.user_id || null,
+    company_name: String(body.company_name || fullName || 'Demo request').slice(0, 160),
+    team_size: body.team_size,
+    message: body.message || '',
+    email,
+    phone,
+    full_name: fullName,
+    interest_role: body.interest_role || req.user?.role || '',
+    source,
+    status: 'pending',
+  });
   res.json({ success: true, message: 'Inquiry received' });
 };
 
@@ -368,10 +392,8 @@ router.post(
 router.get('/payment-methods', protect, getPaymentMethods);
 router.post(
   '/enterprise-inquiry',
-  protect,
-  validateBody(
-    enterpriseInquiryCreateSchema.fork(['user_id'], (s) => s.optional())
-  ),
+  optionalAuth,
+  validateBody(enterpriseInquiryCreateSchema),
   handleEnterpriseInquiry
 );
 router.get('/enterprise-status', protect, getEnterpriseStatus);

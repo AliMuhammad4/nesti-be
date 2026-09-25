@@ -56,6 +56,17 @@ import {
   approveAdminVerificationService,
   rejectAdminVerificationService,
 } from '../services/admin/adminService.js';
+import {
+  adminCallTranscriptService,
+  adminDecideVoiceSuggestionService,
+  adminListCallRecordingsService,
+  adminListVoiceCallsService,
+  adminListVoiceSuggestionsService,
+  adminRecordingPlaybackService,
+  adminStartVoiceCallService,
+  adminStopVoiceCallService,
+} from '../services/admin/adminVoiceService.js';
+import { listAdminSalesPipelineService } from '../services/admin/adminSalesPipelineService.js';
 
 const send = (res, result) => res.status(result.status).json(result.body);
 
@@ -327,4 +338,21 @@ export const adminReferralLeadDetails = handle((req) =>
 );
 export const adminCancelLeadCalendlyBooking = handle((req) =>
   adminCancelLeadCalendlyBookingService(req.params.id, req.body, req.user),
+);
+export const adminListSalesPipeline = handle((req) => listAdminSalesPipelineService());
+export const adminStartVoiceCall = handle((req) => adminStartVoiceCallService(req.body, req.user));
+export const adminStopVoiceCall = handle((req) => adminStopVoiceCallService(req.params.id, req.user));
+export const adminListVoiceCalls = handle((req) => adminListVoiceCallsService(req.query, req.user));
+export const adminListCallRecordings = handle((req) =>
+  adminListCallRecordingsService(req.params.id, req.user),
+);
+export const adminRecordingPlayback = handle((req) =>
+  adminRecordingPlaybackService(req.params.id, req.user),
+);
+export const adminCallTranscript = handle((req) => adminCallTranscriptService(req.params.id, req.user));
+export const adminListVoiceSuggestions = handle((req) =>
+  adminListVoiceSuggestionsService(req.params.id, req.user),
+);
+export const adminDecideVoiceSuggestion = handle((req) =>
+  adminDecideVoiceSuggestionService(req.params.id, req.body, req.user),
 );

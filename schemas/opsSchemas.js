@@ -36,11 +36,16 @@ export const nurtureLogUpdateSchema = nurtureLogCreateSchema.fork(
 );
 
 export const enterpriseInquiryCreateSchema = Joi.object({
-  user_id: objectId.required(),
-  company_name: Joi.string().required(),
+  user_id: objectId.optional().allow(null, ''),
+  company_name: Joi.string().allow('', null),
   team_size: Joi.number().integer().min(0),
   message: str,
   status: Joi.string().valid(...ENTERPRISE_INQUIRY_STATUSES).default('pending'),
+  email: Joi.string().email().allow('', null),
+  phone: str.max(40),
+  full_name: str.max(160),
+  interest_role: Joi.string().valid('agent', 'mortgage_broker', 'lawyer', 'client', '').allow(null),
+  source: Joi.string().valid('demo', 'contact').default('demo'),
 });
 
 export const enterpriseInquiryUpdateSchema = enterpriseInquiryCreateSchema.fork(

@@ -39,6 +39,28 @@ const professionalCallSchema = new mongoose.Schema(
       default: 'direct',
     },
     call_type: { type: String, enum: ['voice', 'video'], required: true },
+    provider: {
+      type: String,
+      enum: ['livekit', 'twilio'],
+      default: 'livekit',
+      index: true,
+    },
+    provider_call_sid: { type: String, default: '', index: true },
+    provider_parent_call_sid: { type: String, default: '' },
+    voice_target_type: { type: String, enum: ['', 'lead', 'client', 'sales'], default: '' },
+    voice_target_id: { type: String, default: '', index: true },
+    voice_to_phone: { type: String, default: '' },
+    voice_lead_ids: { type: [String], default: [] },
+    voice_empty_turns: { type: Number, default: 0 },
+    recording_status: {
+      type: String,
+      enum: ['not_requested', 'pending', 'processing', 'ready', 'failed', 'expired'],
+      default: 'not_requested',
+      index: true,
+    },
+    recording_count: { type: Number, default: 0 },
+    recording_duration_seconds_total: { type: Number, default: 0 },
+    recording_last_error: { type: String, default: '' },
     transcription_policy_version: { type: String, required: true, default: '1' },
     transcription_status: {
       type: String,
@@ -102,5 +124,7 @@ professionalCallSchema.index({ delete_at: 1 }, { expireAfterSeconds: 0 });
 professionalCallSchema.index({ cleanup_status: 1, cleanup_next_attempt_at: 1 });
 professionalCallSchema.index({ participant_ids: 1, createdAt: -1 });
 professionalCallSchema.index({ status: 1, minutes_status: 1, ended_at: 1 });
+professionalCallSchema.index({ provider: 1, provider_call_sid: 1 });
+professionalCallSchema.index({ voice_target_type: 1, voice_target_id: 1, createdAt: -1 });
 
 export default mongoose.model('ProfessionalCall', professionalCallSchema);

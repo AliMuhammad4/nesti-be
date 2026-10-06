@@ -63,10 +63,23 @@ import {
   adminListVoiceCallsService,
   adminListVoiceSuggestionsService,
   adminRecordingPlaybackService,
+  adminStoreCallRecordingService,
   adminStartVoiceCallService,
+  adminStartVoicePreviewService,
+  adminStartLiveKitVoiceService,
+  adminVoicePreviewTurnService,
   adminStopVoiceCallService,
+  adminGetSalesSettingsService,
+  adminSaveSalesSettingsService,
+  adminSaveSalesVoiceSampleService,
 } from '../services/admin/adminVoiceService.js';
-import { listAdminSalesPipelineService } from '../services/admin/adminSalesPipelineService.js';
+import {
+  adminEnsureLandingEmbedService,
+  adminGetLandingChatSettingsService,
+  adminSaveLandingChatSettingsService,
+} from '../services/admin/adminLandingChatService.js';
+import { getAdminSalesLeadService, listAdminSalesPipelineService } from '../services/admin/adminSalesPipelineService.js';
+import { closeAdminLeadService, draftAdminLeadEmailService, insightAdminLeadService, saveAdminLeadEmailDraftService, sendAdminLeadEmailService } from '../services/admin/adminLeadGuideEmailService.js';
 
 const send = (res, result) => res.status(result.status).json(result.body);
 
@@ -340,11 +353,29 @@ export const adminCancelLeadCalendlyBooking = handle((req) =>
   adminCancelLeadCalendlyBookingService(req.params.id, req.body, req.user),
 );
 export const adminListSalesPipeline = handle((req) => listAdminSalesPipelineService());
+export const adminGetSalesLead = handle((req) => getAdminSalesLeadService(req.params.id));
+export const adminDraftSalesLeadEmail = handle((req) => draftAdminLeadEmailService(req.params.id, req.body || {}));
+export const adminSaveSalesLeadEmailDraft = handle((req) => saveAdminLeadEmailDraftService(req.params.id, req.body || {}));
+export const adminSendSalesLeadEmail = handle((req) => sendAdminLeadEmailService(req.params.id, req.body));
+export const adminInsightSalesLead = handle((req) => insightAdminLeadService(req.params.id));
+export const adminCloseSalesLead = handle((req) => closeAdminLeadService(req.params.id, req.body));
+export const adminGetLandingChatSettings = handle((req) => adminGetLandingChatSettingsService(req.user));
+export const adminSaveLandingChatSettings = handle((req) => adminSaveLandingChatSettingsService(req.body, req.user));
+export const adminEnsureLandingEmbed = handle((req) => adminEnsureLandingEmbedService(req.user));
+export const adminGetSalesSettings = handle((req) => adminGetSalesSettingsService(req.user));
+export const adminSaveSalesSettings = handle((req) => adminSaveSalesSettingsService(req.body, req.user));
+export const adminSaveSalesVoiceSample = handle((req) => adminSaveSalesVoiceSampleService(req.file, req.user));
 export const adminStartVoiceCall = handle((req) => adminStartVoiceCallService(req.body, req.user));
+export const adminStartVoicePreview = handle((req) => adminStartVoicePreviewService(req.body, req.user));
+export const adminStartLiveKitVoice = handle((req) => adminStartLiveKitVoiceService(req.body, req.user));
+export const adminVoicePreviewTurn = handle((req) => adminVoicePreviewTurnService(req.params.id, req.body, req.user));
 export const adminStopVoiceCall = handle((req) => adminStopVoiceCallService(req.params.id, req.user));
 export const adminListVoiceCalls = handle((req) => adminListVoiceCallsService(req.query, req.user));
 export const adminListCallRecordings = handle((req) =>
   adminListCallRecordingsService(req.params.id, req.user),
+);
+export const adminStoreCallRecording = handle((req) =>
+  adminStoreCallRecordingService(req.params.id, req.file, req.body, req.user),
 );
 export const adminRecordingPlayback = handle((req) =>
   adminRecordingPlaybackService(req.params.id, req.user),

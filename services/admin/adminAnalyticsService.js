@@ -7,6 +7,7 @@ import ClientSubscription from '../../models/ClientSubscription.js';
 import Referral from '../../models/Referral.js';
 import InviteLink from '../../models/InviteLink.js';
 import ProfessionalCall from '../../models/ProfessionalCall.js';
+import EnterpriseInquiry from '../../models/EnterpriseInquiry.js';
 import { USER_ROLE } from '../../constants/roles.js';
 import { CREDENTIAL_STATUS } from '../../constants/credentialDocuments.js';
 import { BILLING_PLANS } from '../billing/plans.js';
@@ -135,6 +136,9 @@ export async function getAdminOverviewService() {
     newLeads30d,
     recentUsers,
     recentLeads,
+    deskLeadTotal,
+    deskLeadOpen,
+    deskLeads7d,
     pendingVerifications,
     approvedVerifications,
     rejectedVerifications,
@@ -181,6 +185,15 @@ export async function getAdminOverviewService() {
       .select('match_status lead_type user_id createdAt compatibility_factors')
       .populate('user_id', 'first_name last_name email role')
       .lean(),
+    EnterpriseInquiry.countDocuments({ source: { $in: ['demo', 'contact', 'landing_chat', 'direct_inquiry'] } }),
+    EnterpriseInquiry.countDocuments({
+      source: { $in: ['demo', 'contact', 'landing_chat', 'direct_inquiry'] },
+      close_outcome: { $nin: ['won', 'lost'] },
+    }),
+    EnterpriseInquiry.countDocuments({
+      source: { $in: ['demo', 'contact', 'landing_chat', 'direct_inquiry'] },
+      createdAt: { $gte: since7 },
+    }),
     ProfessionalProfile.countDocuments({ credential_status: CREDENTIAL_STATUS.PENDING_REVIEW }),
     ProfessionalProfile.countDocuments({ credential_status: CREDENTIAL_STATUS.APPROVED }),
     ProfessionalProfile.countDocuments({ credential_status: CREDENTIAL_STATUS.REJECTED }),
@@ -219,6 +232,25 @@ export async function getAdminOverviewService() {
   const trialToPaidConversion =
     conversionDenom > 0 ? Math.round((paidProCount / conversionDenom) * 1000) / 10 : 0;
 
+  const landingChatFilter = { 'compatibility_factors.source': 'landing_chat' };
+  const [landingChatLeads7d, recentLandingRows] = await Promise.all([
+    LeadMatch.countDocuments({ ...landingChatFilter, createdAt: { $gte: since7 } }),
+    LeadMatch.find(landingChatFilter)
+      .sort({ createdAt: -1 })
+      .limit(8)
+      .select('match_score lead_type createdAt compatibility_factors')
+      .lean(),
+  ]);
+  const recentLandingChatLeads = recentLandingRows.map((lead) => ({
+    id: String(lead._id),
+    score: Number(lead.match_score || 0),
+    grade: lead.compatibility_factors?.lead_grade || '',
+    audience_role: lead.compatibility_factors?.audience_role || '',
+    name: lead.compatibility_factors?.contact?.name || '',
+    email: lead.compatibility_factors?.contact?.email || '',
+    createdAt: lead.createdAt,
+  }));
+
   return {
     status: 200,
     body: {
@@ -227,7 +259,15 @@ export async function getAdminOverviewService() {
         users: { total: totalUsers, active: activeUsers, suspended: suspendedUsers, by_role: roleMap },
         professionals: { total: totalProfessionals, by_type: proTypeMap },
         clients: { total: totalClients },
-        leads: { total: totalLeads, open: openLeads, closed: closedLeads },
+        leads: {
+          total: totalLeads,
+          open: openLeads,
+          closed: closedLeads,
+          landing_chat_7d: landingChatLeads7d,
+          desk_total: deskLeadTotal,
+          desk_open: deskLeadOpen,
+          desk_7d: deskLeads7d,
+        },
         properties: { inquired: propertyInquiries },
         subscriptions: {
           professional: {
@@ -265,6 +305,7 @@ export async function getAdminOverviewService() {
         },
       },
       recent: {
+        landing_chat_leads: recentLandingChatLeads,
         users: recentUsers,
         leads: recentLeads.map((lead) => ({
           id: String(lead._id),

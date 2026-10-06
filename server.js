@@ -7,10 +7,10 @@ import { scheduleMonthlyRewardJob } from './jobs/rewardMonthlyJob.js';
 import { scheduleNurtureFollowupJob } from './jobs/nurtureFollowupJob.js';
 import { startCallMinutesReconciliation } from './services/proChat/callMinutesService.js';
 import { startRecordingIngestion } from './services/proChat/recordingIngestionService.js';
-import { ensureTranscriptionWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
+import { ensureTranscriptionWorkerRunning, ensureRaviWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
-import './models/index.js'; // Ensure all models are registered
+import './models/index.js'; 
 
 const PORT = process.env.PORT || 5000;
 
@@ -36,8 +36,14 @@ async function startServer() {
         message: error?.message,
       });
     });
+    void ensureRaviWorkerRunning().catch((error) => {
+      logger.warn('Ravi worker did not start with the API server', {
+        message: error?.message,
+      });
+    });
   });
 }
+
 
 startServer().catch((error) => {
   logger.error('Server startup failed', { message: error?.message });

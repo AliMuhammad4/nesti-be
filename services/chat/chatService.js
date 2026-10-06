@@ -42,6 +42,9 @@ import {
   buildChatResponseMeta,
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
+import { allowLandingChatRate, isLandingEmbed, loadLandingChatSettings } from './nestiLanding/landingChatConfig.js';
+import { nestiLandingFlow } from './nestiLanding/nestiLandingFlow.js';
+import { handleLandingChatTurn } from './nestiLanding/landingChatTurnService.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
 import { appendCalendlyBookingLink } from './utils/chatBookingReply.js';
 import { shouldRefetchPropertyMatchesForMessage } from './utils/propertyMatchesRequestIntent.js';
@@ -340,6 +343,24 @@ export const handleChatService = async ({
   if (!embed) {
     return { status: 403, body: { success: false, message: 'Invalid or inactive embed token' } };
   }
+  if (isLandingEmbed(embed) || normalizedChannel === 'landing') {
+    return handleLandingChatTurn({
+      message: trimmedMessage,
+      embedToken,
+      sessionId,
+      visitorId,
+      clientIp,
+      formContact,
+    });
+  }
+  const landingMode = isLandingEmbed(embed);
+  if (landingMode && !allowLandingChatRate(clientIp, visitorId)) {
+    return { status: 429, body: { success: false, message: 'Too many messages. Try again in a minute.' } };
+  }
+  const landingSettings = landingMode ? await loadLandingChatSettings().catch(() => null) : null;
+  if (landingMode && landingSettings && landingSettings.enabled === false) {
+    return { status: 403, body: { success: false, message: 'Landing chat is turned off.' } };
+  }
   const userId = embed.user_id;
 
   const [visitor, professionalProfile, subscription] = await Promise.all([
@@ -348,17 +369,19 @@ export const handleChatService = async ({
     getOrCreateSubscriptionForUser({ _id: userId }),
   ]);
 
-  const flowType = resolveChatFlowType({
-    embed,
-    normalizedAgentType,
-    professionalProfile,
-  });
-  const effectiveWidgetType = professionalTypeToWidgetAgentType(flowType);
-  const flow = getFlowForRole(flowType);
-  const propertyMatchesEnabled = propertyMatchesEnabledForPlan(flow, subscription);
+  const flowType = landingMode
+    ? 'landing'
+    : resolveChatFlowType({
+      embed,
+      normalizedAgentType,
+      professionalProfile,
+    });
+  const effectiveWidgetType = professionalTypeToWidgetAgentType(landingMode ? 'agent' : flowType);
+  const flow = landingMode ? nestiLandingFlow : getFlowForRole(flowType);
+  const propertyMatchesEnabled = landingMode ? false : propertyMatchesEnabledForPlan(flow, subscription);
   const canCreateLeads = Boolean(flow?.flowRole);
 
-  const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow);
+  const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow) || Boolean(flow.landingMode);
   const intent = nonAgentBuyerSellerIntent
     ? 'unspecified'
     : formContact?.intent === 'sell' || formContact?.intent === 'buy'
@@ -478,11 +501,13 @@ export const handleChatService = async ({
     leadGrade,
     conversation
   );
-  const isAutomatedBookingEnabled = isAutomatedBookingEnabledForFlow(
-    flow,
-    professionalProfile,
-    conversation
-  );
+  const isAutomatedBookingEnabled = landingMode
+    ? false
+    : isAutomatedBookingEnabledForFlow(
+      flow,
+      professionalProfile,
+      conversation
+    );
   const conversationPromptSnapshot = {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,
     lead_grade: conversation?.lead_grade ?? null,
@@ -508,6 +533,14 @@ export const handleChatService = async ({
     calendlyLinkForVisitor,
     propertyMatchesEnabled,
   });
+  if (landingMode) {
+    systemPromptOptions.audience = String(storedForm?.audience_role || formContact?.audience_role || 'client');
+    systemPromptOptions.landingGuides = landingSettings || {};
+    systemPromptOptions.contactKnown = Boolean(
+      storedForm?.email || storedForm?.phone || storedForm?.name
+      || formContact?.email || formContact?.phone || formContact?.name
+    );
+  }
   const systemPrompt = flow.buildSystemPrompt(professionalProfile, systemPromptOptions);
   const openaiMessages = [
     { role: 'system', content: systemPrompt },

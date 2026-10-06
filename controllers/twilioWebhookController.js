@@ -24,9 +24,7 @@ export async function twilioVoiceWebhook(req, res) {
   const callId = call ? String(call._id) : String(req.query.callId || '');
   const twiml = buildVoiceTwiml({
     callId,
-    say: call?.voice_target_type === 'sales'
-      ? 'Hello, this is Maya from Nesti. This call may be recorded. I will explain the tools that match your work, then recommend one subscription. What are you hoping to use Nesti for?'
-      : 'Hello, this is Maya from Nesti. This call may be recorded. How can I help?',
+    say: 'Hi, this is Ravi from Nesti. This call may be recorded. Tell me what you want to get done, and I will match it to the right tools and one plan.',
   });
   return res.type('text/xml').send(twiml);
 }

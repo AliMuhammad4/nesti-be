@@ -4,7 +4,9 @@ import logger from '../../utils/logger.js';
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import {
   probeTranscriptionWorkerHealth,
+  resolveRaviWorkerPort,
   resolveTranscriptionWorkerPort,
+  spawnRaviWorkerProcess,
   spawnTranscriptionWorkerProcess,
   transcriptionWorkerHealthUrl,
   transcriptionWorkerLogPath,
@@ -86,9 +88,13 @@ function killTrackedTranscriptionWorker() {
 function registerTranscriptionWorkerShutdownHooks() {
   if (shutdownHooksRegistered) return;
   shutdownHooksRegistered = true;
-  process.once('SIGINT', killTrackedTranscriptionWorker);
-  process.once('SIGTERM', killTrackedTranscriptionWorker);
-  process.once('exit', killTrackedTranscriptionWorker);
+  const stopChildren = () => {
+    killTrackedTranscriptionWorker();
+    killTrackedRaviWorker();
+  };
+  process.once('SIGINT', stopChildren);
+  process.once('SIGTERM', stopChildren);
+  process.once('exit', stopChildren);
 }
 
 async function adoptExternalTranscriptionWorker(reason) {
@@ -273,5 +279,132 @@ export async function ensureTranscriptionWorkerRunning() {
   workerReadyResolve?.(false);
   workerReadyResolve = null;
   workerReadyPromise = null;
+  return false;
+}
+
+let raviWorkerProcess = null;
+let raviWorkerState = 'stopped';
+let raviReadyPromise = null;
+let raviReadyResolve = null;
+let usingExternalRaviWorker = false;
+
+function liveKitConfigured() {
+  return Boolean(text(process.env.LIVEKIT_URL) && text(process.env.LIVEKIT_API_KEY) && text(process.env.LIVEKIT_API_SECRET));
+}
+
+function raviWorkerRunning() {
+  return raviWorkerProcess && raviWorkerProcess.exitCode === null;
+}
+
+function killTrackedRaviWorker() {
+  if (!raviWorkerProcess || raviWorkerProcess.exitCode !== null) return;
+  try {
+    raviWorkerProcess.kill('SIGTERM');
+  } catch {
+    // Already gone.
+  }
+  raviWorkerProcess = null;
+}
+
+function shouldStartEmbeddedRaviWorker() {
+  const embedded = text(process.env.RAVI_WORKER_EMBEDDED).toLowerCase();
+  if (embedded === 'false' || isTestLifecycle()) return false;
+  const concurrency = Number(
+    process.env.WEB_CONCURRENCY || process.env.RENDER_INSTANCE_COUNT || process.env.RAVI_WORKER_API_REPLICAS || 1,
+  );
+  if (Number.isFinite(concurrency) && concurrency > 1 && embedded !== 'true') return false;
+  return true;
+}
+
+/** Start Ravi as a child of this API process (npm start and npm run dev). */
+export async function ensureRaviWorkerRunning() {
+  if (isTestLifecycle()) return true;
+  if (!liveKitConfigured()) {
+    logger.warn('Ravi worker not started because LiveKit credentials are missing');
+    return false;
+  }
+
+  const workerPort = resolveRaviWorkerPort();
+  const healthUrl = transcriptionWorkerHealthUrl(workerPort);
+
+  if (!shouldStartEmbeddedRaviWorker()) {
+    if (await probeTranscriptionWorkerHealth(workerPort) || await waitForTranscriptionWorkerHealth(workerPort, 20_000)) {
+      usingExternalRaviWorker = true;
+      raviWorkerState = 'ready';
+      return true;
+    }
+    logger.warn('External Ravi worker is not healthy', { port: workerPort, health_url: healthUrl });
+    return false;
+  }
+
+  if (raviWorkerState === 'ready' && (raviWorkerRunning() || usingExternalRaviWorker)) return true;
+  if (raviWorkerState === 'starting' && raviReadyPromise) return raviReadyPromise;
+  if (raviWorkerRunning()) {
+    raviWorkerState = 'ready';
+    return true;
+  }
+  if (await probeTranscriptionWorkerHealth(workerPort)) {
+    usingExternalRaviWorker = true;
+    raviWorkerState = 'ready';
+    logger.info('Reusing existing Ravi worker', { port: workerPort, health_url: healthUrl });
+    return true;
+  }
+
+  raviWorkerState = 'starting';
+  raviReadyPromise = new Promise((resolve) => {
+    raviReadyResolve = resolve;
+  });
+  registerTranscriptionWorkerShutdownHooks();
+
+  raviWorkerProcess = spawnRaviWorkerProcess({ port: workerPort });
+  raviWorkerProcess.on('error', (error) => {
+    logger.warn('Ravi worker failed to start', { message: error.message, port: workerPort });
+    raviWorkerProcess = null;
+    raviWorkerState = 'stopped';
+    raviReadyResolve?.(false);
+    raviReadyResolve = null;
+    raviReadyPromise = null;
+  });
+  raviWorkerProcess.on('exit', (code, signal) => {
+    const wasStarting = raviWorkerState === 'starting';
+    raviWorkerProcess = null;
+    if (wasStarting) {
+      raviWorkerState = 'stopped';
+      raviReadyResolve?.(false);
+      raviReadyResolve = null;
+      raviReadyPromise = null;
+      logger.warn('Ravi worker process exited while starting', { code, signal, port: workerPort });
+      return;
+    }
+    if (code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGINT') {
+      logger.warn('Ravi worker exited unexpectedly', { code, signal, port: workerPort });
+    }
+    if (!usingExternalRaviWorker) raviWorkerState = 'stopped';
+    if (!usingExternalRaviWorker && shouldStartEmbeddedRaviWorker() && signal !== 'SIGTERM' && signal !== 'SIGINT') {
+      setTimeout(() => {
+        void ensureRaviWorkerRunning().catch((error) => {
+          logger.error('Could not restart Ravi worker', { message: error?.message });
+        });
+      }, 2_000).unref?.();
+    }
+  });
+
+  logger.info('Starting Ravi worker', { port: workerPort, pid: raviWorkerProcess.pid, cwd: backendRoot });
+  const ready = await waitForTranscriptionWorkerHealth(workerPort);
+  if (ready) {
+    usingExternalRaviWorker = false;
+    raviWorkerState = 'ready';
+    raviReadyResolve?.(true);
+    raviReadyResolve = null;
+    logger.info('Ravi worker registered', { port: workerPort, pid: raviWorkerProcess?.pid, health_url: healthUrl });
+    return true;
+  }
+
+  logger.warn('Ravi worker registration timed out', { port: workerPort });
+  killTrackedRaviWorker();
+  raviWorkerState = 'stopped';
+  raviReadyResolve?.(false);
+  raviReadyResolve = null;
+  raviReadyPromise = null;
   return false;
 }

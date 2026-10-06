@@ -58,6 +58,7 @@ const CLIENT_INITIATED_FILTER = {
 export function deriveLeadInquirySource(lead = {}) {
   const factors = lead.compatibility_factors || {};
   const raw = String(factors.source || factors.inquiry_source || '').trim().toLowerCase();
+  if (raw === 'landing_chat') return 'landing_chat';
   if (raw === 'chatbot' || raw.includes('chat')) return 'chatbot';
   if (!raw && (lead.conversation_id || factors.session_id)) return 'chatbot';
   if (raw === 'public_web_form' || raw === 'form' || raw.endsWith('_form')) return 'form';
@@ -76,12 +77,20 @@ export function deriveLeadInquirySource(lead = {}) {
 function sourceFilter(source) {
   const key = String(source || '').trim().toLowerCase();
   if (!key || key === 'all') return null;
+  if (key === 'landing_chat') {
+    return { 'compatibility_factors.source': 'landing_chat' };
+  }
   if (key === 'chatbot') {
     return {
-      $or: [
-        { conversation_id: { $exists: true, $ne: null } },
-        { 'compatibility_factors.chat_thread_id': { $exists: true, $nin: [null, ''] } },
-        { 'compatibility_factors.source': /chat/i },
+      $and: [
+        {
+          $or: [
+            { conversation_id: { $exists: true, $ne: null } },
+            { 'compatibility_factors.chat_thread_id': { $exists: true, $nin: [null, ''] } },
+            { 'compatibility_factors.source': /chat/i },
+          ],
+        },
+        { 'compatibility_factors.source': { $ne: 'landing_chat' } },
       ],
     };
   }
@@ -111,10 +120,11 @@ export function inquirySourceMatchFilter(source) {
   if (specific) return specific;
   return {
     $or: [
-      sourceFilter('chatbot').$or,
-      sourceFilter('form').$or,
-      sourceFilter('direct_inquiry').$or,
-    ].flat(),
+      sourceFilter('chatbot'),
+      sourceFilter('landing_chat'),
+      sourceFilter('form'),
+      sourceFilter('direct_inquiry'),
+    ],
   };
 }
 

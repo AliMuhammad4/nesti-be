@@ -165,6 +165,9 @@ export async function initWorkspaceSocket(httpServer) {
   io.on('connection', (socket) => {
     const uid = socket.data.userId;
     socket.join(userRoom(uid));
+    if (String(socket.data.role || '').toLowerCase() === 'admin') {
+      socket.join('admin:platform_leads');
+    }
     socket.emit('workspace:ready', {
       schema: 1,
       user_id: uid,
@@ -739,6 +742,19 @@ export function getWorkspaceIo() {
   return io;
 }
 
+export function emitMayaIncomingCall(clientUserId, payload) {
+  const userId = String(clientUserId || '').trim();
+  if (!io || !userId) return false;
+  const roomSize = io.sockets?.adapter?.rooms?.get(userRoom(userId))?.size || 0;
+  if (!roomSize) return false;
+  io.to(userRoom(userId)).emit('maya:incoming_call', {
+    schema: 1,
+    occurred_at: new Date().toISOString(),
+    ...payload,
+  });
+  return true;
+}
+
 export function emitCallAccepted(callerId, payload) {
   const normalizedCallerId = String(callerId || '').trim();
   if (!io || !normalizedCallerId) return false;
@@ -773,6 +789,16 @@ export function emitCallTerminal(participantIds, payload) {
   for (const participantId of [...new Set((participantIds || []).map(String))]) {
     if (participantId) io.to(userRoom(participantId)).emit('prochat:call_ended', body);
   }
+  return true;
+}
+
+export function emitAdminPlatformLead(payload) {
+  if (!io) return false;
+  io.to('admin:platform_leads').emit('admin:landing_lead', {
+    schema: 1,
+    occurred_at: new Date().toISOString(),
+    ...payload,
+  });
   return true;
 }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import LeadProfile from '../../models/LeadProfile.js';
@@ -8,7 +9,12 @@ import EnterpriseInquiry from '../../models/EnterpriseInquiry.js';
 import logger from '../../utils/logger.js';
 import { fail, ok } from '../admin/adminCommon.js';
 import { recordAdminAudit } from '../admin/adminAuditService.js';
-import { CALL_PROVIDERS, twilioVoiceEnabled, voiceRecordingEnabled } from './callProviders.js';
+import { CALL_PROVIDERS, twilioVoiceEnabled, voiceAgentEnabled, voiceRecordingEnabled } from './callProviders.js';
+import { isPrivateRecordingsConfigured } from '../media/r2Client.js';
+import { emitMayaIncomingCall } from '../realtime/workspaceSocket.js';
+import { ingestFinalTranscriptSegment } from './transcriptSegmentService.js';
+import { handleVoiceGather } from './voiceAgentTurnService.js';
+import { dispatchRaviAgent } from './raviAgentDispatchService.js';
 import { normalizeE164, pickSalesPhone } from './voicePhone.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { TERMINAL_RETENTION_MS } from './callRegistryShared.js';
@@ -32,6 +38,14 @@ export function twilioConfigured(config = twilioConfig()) {
   return Boolean(config.accountSid && config.authToken && config.from && config.webhookBase);
 }
 
+export function agentVoice(value) {
+  return value === 'female' ? 'female' : 'male';
+}
+
+export function spokenGreeting() {
+  return 'Hi, I am Ravi from Nesti, and I am glad we connected. People use Nesti to track the goal, plan the money, and get matched with the right professional. What are you hoping to get done?';
+}
+
 function xmlEscape(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -40,12 +54,11 @@ function xmlEscape(value) {
     .replace(/"/g, '&quot;');
 }
 
-const FEMALE_VOICE = 'Polly.Joanna';
-
 export function buildVoiceTwiml({ callId, say, done = false }) {
-  const message = xmlEscape(say || 'Hello, this is Maya from Nesti. I can walk you through the tools and the plan that fits your work.');
+  const polly = 'Polly.Matthew';
+  const message = xmlEscape(say || 'Hello, this is Ravi from Nesti. I can walk you through the tools and the plan that fits your work.');
   const action = `${text(process.env.TWILIO_WEBHOOK_BASE_URL).replace(/\/+$/, '')}/api/webhooks/twilio/gather?callId=${encodeURIComponent(callId)}`;
-  const sayTag = `<Say voice="${FEMALE_VOICE}" language="en-US">${message}</Say>`;
+  const sayTag = `<Say voice="${polly}" language="en-US">${message}</Say>`;
   if (done) {
     return `<?xml version="1.0" encoding="UTF-8"?><Response>${sayTag}<Hangup/></Response>`;
   }
@@ -116,6 +129,7 @@ export async function startAdminVoiceCall({
   targetId,
   toPhone,
   transcriptionConsent,
+  voice,
   fetchImpl = fetch,
 }) {
   if (!twilioVoiceEnabled()) return fail(503, 'Voice agent is disabled');
@@ -155,6 +169,7 @@ export async function startAdminVoiceCall({
     voice_target_type: targetType,
     voice_target_id: String(targetId),
     voice_to_phone: destination,
+    voice_agent_voice: agentVoice(voice),
     voice_lead_ids: loaded.leadIds || [],
     transcription_policy_version: '1',
     transcription_status: 'pending',
@@ -237,11 +252,247 @@ export async function startAdminVoiceCall({
   return ok({ call: { id: String(call._id), status: 'ringing', provider: 'twilio', to: destination } });
 }
 
+export async function startAdminVoicePreview({ actorUser, targetType, targetId, voice }) {
+  if (!voiceAgentEnabled()) return fail(503, 'Voice agent is disabled');
+  if (!['lead', 'client', 'sales'].includes(targetType)) return fail(400, 'Invalid voice target');
+  const loaded = await loadTarget({ targetType, targetId });
+  if (loaded.error) return loaded.error;
+  const roomName = `preview:${targetType}:${targetId}:${randomUUID()}`;
+  const threadId = `admin-voice:${targetType}:${targetId}`;
+  const actorId = String(actorUser?._id || actorUser?.id || '');
+  const now = new Date();
+  let call;
+  try {
+    call = await ProfessionalCall.create({
+      room_name: roomName,
+      thread_id: threadId,
+      active_thread_key: `${threadId}:live`,
+      caller_id: actorId || 'voice-agent',
+      participant_ids: [actorId || 'voice-agent'],
+      participant_states: [{
+        user_id: actorId || 'voice-agent',
+        status: 'joined',
+        joined_at: now,
+        transcription_consent: true,
+        transcription_consented_at: now,
+        transcription_consent_recorded_at: now,
+        transcription_consent_version: '1',
+      }],
+      call_scope: 'direct',
+      call_type: 'voice',
+      provider: CALL_PROVIDERS.PREVIEW,
+      voice_target_type: targetType,
+      voice_target_id: String(targetId),
+      voice_to_phone: loaded.phone || '',
+    voice_lead_ids: loaded.leadIds || [],
+    voice_agent_voice: agentVoice(voice),
+    transcription_policy_version: '1',
+    transcription_status: 'active',
+    transcription_started_at: now,
+    minutes_status: 'not_ready',
+    recording_status: 'not_requested',
+    status: 'active',
+    started_at: now,
+    connecting_at: now,
+    expires_at: new Date(Date.now() + ACTIVE_TTL_MS),
+    delete_at: new Date(Date.now() + ACTIVE_TTL_MS + TERMINAL_RETENTION_MS),
+  });
+  } catch (error) {
+    if (error?.code === 11000) return fail(409, 'A call is already open for this person');
+    throw error;
+  }
+  const greeting = spokenGreeting(call.voice_agent_voice);
+  await ingestFinalTranscriptSegment({
+    callId: call._id,
+    segmentId: `agent-open-${call._id}`,
+    speakerUserId: 'nesti-voice-agent',
+    speakerName: 'Nesti Voice',
+    text: greeting,
+    provider: 'openai',
+    providerEventId: `agent:${call._id}:open`,
+    model: process.env.OPENAI_VOICE_AGENT_MODEL || 'gpt-4o-mini',
+  });
+  return ok({ call: { id: String(call._id), status: 'active', provider: 'preview' }, say: greeting });
+}
+
+export async function startAdminLiveKitVoice({ actorUser, targetType, targetId, voice }) {
+  if (!voiceAgentEnabled()) return fail(503, 'Voice agent is disabled');
+  const livekitUrl = text(process.env.LIVEKIT_URL);
+  const apiKey = text(process.env.LIVEKIT_API_KEY);
+  const apiSecret = text(process.env.LIVEKIT_API_SECRET);
+  if (!livekitUrl || !apiKey || !apiSecret) return fail(503, 'LiveKit is not configured');
+  if (!['lead', 'client', 'sales'].includes(targetType)) return fail(400, 'Invalid voice target');
+  const loaded = await loadTarget({ targetType, targetId });
+  if (loaded.error) return loaded.error;
+  const threadId = `admin-voice:${targetType}:${targetId}`;
+  await ProfessionalCall.updateMany(
+    { thread_id: threadId, provider: { $in: [CALL_PROVIDERS.PREVIEW, CALL_PROVIDERS.LIVEKIT] }, status: { $in: ['connecting', 'ringing', 'active'] } },
+    { $set: { status: 'ended', ended_at: new Date(), active_thread_key: null, transcription_status: 'completed' } },
+  );
+  const roomName = `admin-voice:${targetType}:${targetId}:${randomUUID()}`;
+  const actorId = String(actorUser?._id || actorUser?.id || 'admin');
+  const now = new Date();
+  const call = await ProfessionalCall.create({
+    room_name: roomName,
+    thread_id: threadId,
+    active_thread_key: `${threadId}:live`,
+    caller_id: actorId,
+    participant_ids: [actorId],
+    participant_states: [{
+      user_id: actorId,
+      status: 'joined',
+      joined_at: now,
+      transcription_consent: true,
+      transcription_consented_at: now,
+      transcription_consent_recorded_at: now,
+      transcription_consent_version: '1',
+    }],
+    call_scope: 'direct',
+    call_type: 'voice',
+    provider: CALL_PROVIDERS.LIVEKIT,
+    voice_target_type: targetType,
+    voice_target_id: String(targetId),
+    voice_to_phone: loaded.phone || '',
+    voice_lead_ids: loaded.leadIds || [],
+    voice_agent_voice: agentVoice(voice),
+    transcription_policy_version: '1',
+    transcription_status: 'active',
+    transcription_started_at: now,
+    minutes_status: 'not_ready',
+    recording_status: isPrivateRecordingsConfigured() ? 'pending' : 'not_requested',
+    status: 'connecting',
+    connecting_at: now,
+    expires_at: new Date(Date.now() + ACTIVE_TTL_MS),
+    delete_at: new Date(Date.now() + ACTIVE_TTL_MS + TERMINAL_RETENTION_MS),
+  });
+  const greeting = spokenGreeting();
+  const dispatched = await dispatchRaviAgent({
+    roomName,
+    callId: call._id,
+    role: targetType === 'client' ? 'client' : loaded.role || 'professional',
+    greeting,
+  });
+  if (!dispatched.ok) {
+    await ProfessionalCall.updateOne(
+      { _id: call._id },
+      { $set: { status: 'ended', ended_at: new Date(), active_thread_key: null, transcription_error_message: dispatched.message } },
+    );
+    return fail(503, dispatched.message);
+  }
+  const token = new AccessToken(apiKey, apiSecret, { identity: actorId, ttl: 60 * 30 });
+  token.addGrant({
+    roomJoin: true,
+    room: roomName,
+    canPublish: true,
+    canSubscribe: true,
+    canPublishSources: [TrackSource.MICROPHONE],
+  });
+  const clientUserId = String(loaded.client?.user_id?._id || loaded.client?.user_id || '');
+  let ringing = false;
+  if (targetType === 'client' && clientUserId) {
+    const clientToken = new AccessToken(apiKey, apiSecret, { identity: `client:${clientUserId}`, ttl: 60 * 30 });
+    clientToken.addGrant({
+      roomJoin: true,
+      room: roomName,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishSources: [TrackSource.MICROPHONE],
+    });
+    ringing = emitMayaIncomingCall(clientUserId, {
+      call_id: String(call._id),
+      url: livekitUrl,
+      token: await clientToken.toJwt(),
+      say: greeting,
+      agent_name: 'Ravi',
+    });
+  }
+  const nextStatus = ringing ? 'ringing' : 'active';
+  await ProfessionalCall.updateOne(
+    { _id: call._id, status: 'connecting' },
+    { $set: nextStatus === 'active' ? { status: 'active', started_at: new Date() } : { status: 'ringing', invited_at: new Date() } },
+  );
+  return ok({
+    call: { id: String(call._id), status: nextStatus, provider: 'livekit' },
+    url: livekitUrl,
+    token: ringing ? '' : await token.toJwt(),
+    say: greeting,
+    agent_name: 'Ravi',
+    ringing,
+    offline: Boolean(targetType === 'client' && clientUserId && !ringing),
+  });
+}
+
+async function clientOwnsCall(userId, call) {
+  const profile = await ClientProfile.findById(call.voice_target_id).select('user_id').lean();
+  const owner = String(profile?.user_id?._id || profile?.user_id || '');
+  return Boolean(owner) && owner === String(userId || '');
+}
+
+async function closeClientCall(callId, status) {
+  await ProfessionalCall.updateOne(
+    { _id: callId, status: { $in: ['connecting', 'ringing', 'active'] } },
+    { $set: { status, ended_at: new Date(), active_thread_key: null, transcription_status: 'completed' } },
+  );
+}
+
+export async function answerClientRaviCall({ userId, callId }) {
+  const call = await ProfessionalCall.findById(callId).select('provider status voice_target_type voice_target_id').lean();
+  if (!call || call.provider !== CALL_PROVIDERS.LIVEKIT || call.voice_target_type !== 'client') return fail(404, 'Call not found');
+  if (!(await clientOwnsCall(userId, call))) return fail(403, 'This call is for another client');
+  if (['ended', 'expired', 'declined'].includes(call.status)) return fail(400, 'This call has ended');
+  await ProfessionalCall.updateOne(
+    { _id: callId, status: { $in: ['connecting', 'ringing', 'active'] } },
+    { $set: { status: 'active', started_at: new Date() } },
+  );
+  return ok({ call: { id: String(callId), status: 'active' } });
+}
+
+export async function declineClientRaviCall({ userId, callId }) {
+  const call = await ProfessionalCall.findById(callId).select('provider status voice_target_type voice_target_id').lean();
+  if (!call || call.provider !== CALL_PROVIDERS.LIVEKIT || call.voice_target_type !== 'client') return fail(404, 'Call not found');
+  if (!(await clientOwnsCall(userId, call))) return fail(403, 'This call is for another client');
+  await closeClientCall(callId, 'declined');
+  return ok({ call: { id: String(callId), status: 'declined' } });
+}
+
+export async function endClientRaviCall({ userId, callId }) {
+  const call = await ProfessionalCall.findById(callId).select('provider status voice_target_type voice_target_id').lean();
+  if (!call || call.provider !== CALL_PROVIDERS.LIVEKIT || call.voice_target_type !== 'client') return fail(404, 'Call not found');
+  if (!(await clientOwnsCall(userId, call))) return fail(403, 'This call is for another client');
+  await closeClientCall(callId, 'ended');
+  return ok({ call: { id: String(callId), status: 'ended' } });
+}
+
+export async function clientMayaTurn({ userId, callId, text: spoken }) {
+  const call = await ProfessionalCall.findById(callId).select('provider status voice_target_type voice_target_id').lean();
+  if (!call || call.provider !== CALL_PROVIDERS.LIVEKIT || call.voice_target_type !== 'client') {
+    return fail(404, 'Call not found');
+  }
+  const profile = await ClientProfile.findById(call.voice_target_id).select('user_id').lean();
+  const owner = String(profile?.user_id?._id || profile?.user_id || '');
+  if (!owner || owner !== String(userId || '')) return fail(403, 'This call is for another client');
+  if (call.status === 'ended') return fail(400, 'This call has ended');
+  const reply = await handleVoiceGather({ callId, speechResult: spoken });
+  return ok({ say: reply.say, audio: reply.audio || '', done: Boolean(reply.done) });
+}
+
+export async function sendAdminVoicePreviewTurn({ callId, text: spoken }) {
+  const call = await ProfessionalCall.findById(callId).select('provider status').lean();
+  if (!call || (call.provider !== CALL_PROVIDERS.PREVIEW && call.provider !== CALL_PROVIDERS.LIVEKIT)) {
+    return fail(404, 'Preview call not found');
+  }
+  if (call.status === 'ended') return fail(400, 'This test has ended');
+  const reply = await handleVoiceGather({ callId, speechResult: spoken });
+  return ok({ say: reply.say, audio: reply.audio || '', done: Boolean(reply.done) });
+}
+
 export async function stopAdminVoiceCall({ actorUser, callId, fetchImpl = fetch }) {
   const call = await ProfessionalCall.findById(callId);
-  if (!call || call.provider !== CALL_PROVIDERS.TWILIO) return fail(404, 'Voice call not found');
+  if (!call || ![CALL_PROVIDERS.TWILIO, CALL_PROVIDERS.PREVIEW, CALL_PROVIDERS.LIVEKIT].includes(call.provider)) {
+    return fail(404, 'Voice call not found');
+  }
   const config = twilioConfig();
-  if (call.provider_call_sid && twilioConfigured(config)) {
+  if (call.provider === CALL_PROVIDERS.TWILIO && call.provider_call_sid && twilioConfigured(config)) {
     const body = new URLSearchParams({ Status: 'completed' });
     await fetchImpl(
       `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls/${call.provider_call_sid}.json`,

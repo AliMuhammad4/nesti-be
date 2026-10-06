@@ -6,7 +6,9 @@ import {
   appendTranscriptionWorkerLog,
   probeTranscriptionWorkerHealth,
   readTranscriptionWorkerLogTail,
+  resolveRaviWorkerPort,
   resolveTranscriptionWorkerPort,
+  spawnRaviWorkerProcess,
   spawnTranscriptionWorkerProcess,
   transcriptionWorkerLogPath,
   waitForTranscriptionWorkerHealth,
@@ -14,9 +16,9 @@ import {
 
 /**
  * `npm run dev` launcher:
- *   parent owns transcription worker (hidden, not detached)
- *   child runs API under `node --watch` with EMBEDDED=false
- *   restarts the worker if LiveKit health drops
+ *   parent owns LiveKit workers so `--watch` API restarts do not break
+ *   LiveKit IPC (InitializeResponse) or drop in-progress jobs
+ *   child runs API under `node --watch` with workers EMBEDDED=false
  */
 
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,6 +31,7 @@ const WORKER_HEALTH_FAILURE_THRESHOLD = Math.max(
 );
 
 let worker = null;
+let raviWorker = null;
 let server = null;
 let shuttingDown = false;
 let healthTimer = null;
@@ -75,6 +78,28 @@ async function startWorker({ reuseHealthy = true } = {}) {
   return child;
 }
 
+async function startRaviWorker({ reuseHealthy = true } = {}) {
+  const raviPort = resolveRaviWorkerPort();
+  if (reuseHealthy && (await probeTranscriptionWorkerHealth(raviPort))) {
+    console.log(`[dev] Reusing Ravi worker on :${raviPort}`);
+    return null;
+  }
+  console.log(`[dev] Starting Ravi worker on :${raviPort}`);
+  const child = spawnRaviWorkerProcess({ port: raviPort });
+  child.on('exit', (code, signal) => {
+    if (!shuttingDown) {
+      console.warn(`[dev] Ravi worker exited (code=${code}, signal=${signal})`);
+    }
+  });
+  const ready = await waitForTranscriptionWorkerHealth(raviPort);
+  if (!ready) {
+    console.error('[dev] Ravi worker did not become ready. Test calls cannot connect until it does.');
+  } else {
+    console.log(`[dev] Ravi worker ready (pid ${child.pid})`);
+  }
+  return child;
+}
+
 function startServer() {
   return spawn(process.execPath, ['--watch', 'server.js'], {
     cwd: backendRoot,
@@ -82,9 +107,11 @@ function startServer() {
       ...process.env,
       CALL_TRANSCRIPTION_WORKER_EMBEDDED: 'false',
       CALL_TRANSCRIPTION_WORKER_PORT: String(workerPort),
+      RAVI_WORKER_EMBEDDED: 'false',
     },
     stdio: 'inherit',
     windowsHide: true,
+    shell: false,
   });
 }
 
@@ -158,7 +185,7 @@ function shutdown(code = 0) {
     serverRestartTimer = null;
   }
   if (healthTimer) clearInterval(healthTimer);
-  for (const child of [server, worker]) {
+  for (const child of [server, worker, raviWorker]) {
     if (!child || child.exitCode !== null) continue;
     try {
       child.kill('SIGTERM');
@@ -170,6 +197,7 @@ function shutdown(code = 0) {
 }
 
 worker = await startWorker();
+raviWorker = await startRaviWorker();
 server = startServer();
 wireServerLifecycle(server);
 startHealthWatch();

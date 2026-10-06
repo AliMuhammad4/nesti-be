@@ -31,6 +31,7 @@ import { leadConversationMessageSchema } from '../schemas/leadSchemas.js';
 import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
 import { objectId } from '../schemas/common.js';
 import { runProfileUpload } from '../middleware/uploadProfileImage.js';
+import { runCallRecordingUpload } from '../middleware/uploadCallRecording.js';
 import {
   getAdminOverview,
   getAdminAnalytics,
@@ -73,15 +74,31 @@ import {
   adminProcessReferralAsProfessional,
   adminReferralLeadDetails,
   adminCancelLeadCalendlyBooking,
+  adminGetLandingChatSettings,
+  adminSaveLandingChatSettings,
+  adminEnsureLandingEmbed,
+  adminGetSalesSettings,
+  adminSaveSalesSettings,
+  adminSaveSalesVoiceSample,
   adminStartVoiceCall,
+  adminStartVoicePreview,
+  adminStartLiveKitVoice,
+  adminVoicePreviewTurn,
   adminStopVoiceCall,
   adminListVoiceCalls,
   adminListCallRecordings,
+  adminStoreCallRecording,
   adminRecordingPlayback,
   adminCallTranscript,
   adminListVoiceSuggestions,
   adminDecideVoiceSuggestion,
   adminListSalesPipeline,
+  adminGetSalesLead,
+  adminDraftSalesLeadEmail,
+  adminSaveSalesLeadEmailDraft,
+  adminSendSalesLeadEmail,
+  adminInsightSalesLead,
+  adminCloseSalesLead,
   listAdminProperties,
   getAdminProperty,
   patchAdminProperty,
@@ -311,10 +328,26 @@ router.patch(
 );
 
 router.get('/sales-pipeline', requirePermission(P.LEADS_READ), adminListSalesPipeline);
+router.get('/sales-pipeline/:id', requirePermission(P.LEADS_READ), adminGetSalesLead);
+router.post('/sales-pipeline/:id/email/draft', requirePermission(P.LEADS_WRITE), adminDraftSalesLeadEmail);
+router.put('/sales-pipeline/:id/email/draft', requirePermission(P.LEADS_WRITE), adminSaveSalesLeadEmailDraft);
+router.post('/sales-pipeline/:id/email/send', requirePermission(P.LEADS_WRITE), adminSendSalesLeadEmail);
+router.post('/sales-pipeline/:id/insights', requirePermission(P.LEADS_WRITE), adminInsightSalesLead);
+router.post('/sales-pipeline/:id/close', requirePermission(P.LEADS_WRITE), adminCloseSalesLead);
+router.get('/landing-chat/settings', adminGetLandingChatSettings);
+router.put('/landing-chat/settings', adminSaveLandingChatSettings);
+router.post('/landing-chat/embed', adminEnsureLandingEmbed);
+router.get('/voice/sales-settings', adminGetSalesSettings);
+router.put('/voice/sales-settings', adminSaveSalesSettings);
+router.post('/voice/sales-settings/sample', runCallRecordingUpload, adminSaveSalesVoiceSample);
 router.post('/voice/calls', adminStartVoiceCall);
+router.post('/voice/calls/preview', adminStartVoicePreview);
+router.post('/voice/calls/livekit', adminStartLiveKitVoice);
+router.post('/voice/calls/:id/turns', adminVoicePreviewTurn);
 router.post('/voice/calls/:id/stop', adminStopVoiceCall);
 router.get('/voice/calls', adminListVoiceCalls);
 router.get('/voice/calls/:id/recordings', adminListCallRecordings);
+router.post('/voice/calls/:id/recording', runCallRecordingUpload, adminStoreCallRecording);
 router.get('/voice/recordings/:id/playback', adminRecordingPlayback);
 router.get('/voice/calls/:id/transcript', adminCallTranscript);
 router.get('/voice/calls/:id/suggestions', adminListVoiceSuggestions);

@@ -160,6 +160,11 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
   const parsedBudget = parseBudgetRange(budgetText);
   const profType = professionalType || payload.ownership?.professional_type || 'agent';
   const primaryIntent = profType === 'agent' ? payload.intent || 'unknown' : 'client';
+  const allowedPrimary = new Set(['buy', 'sell', 'client', 'unknown']);
+  const requestedPrimary = payload.intent_summary?.primary_intent || primaryIntent;
+  const safePrimaryIntent = allowedPrimary.has(requestedPrimary)
+    ? requestedPrimary
+    : (profType === 'agent' ? 'unknown' : 'client');
   const defaultIntent =
     profType === PROFESSIONAL_TYPE.LAWYER || profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
       ? 'unspecified'
@@ -186,7 +191,7 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
       last_inquiry_at: new Date(),
     },
     intent_summary: {
-      primary_intent: payload.intent_summary?.primary_intent || primaryIntent,
+      primary_intent: safePrimaryIntent,
       buy_count: payload.intent_summary?.buy_count || 0,
       sell_count: payload.intent_summary?.sell_count || 0,
       client_count: payload.intent_summary?.client_count || 0,

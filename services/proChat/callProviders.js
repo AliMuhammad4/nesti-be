@@ -1,6 +1,7 @@
 export const CALL_PROVIDERS = Object.freeze({
   LIVEKIT: 'livekit',
   TWILIO: 'twilio',
+  PREVIEW: 'preview',
 });
 
 export const RECORDING_STATUSES = Object.freeze([

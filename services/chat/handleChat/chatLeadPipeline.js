@@ -15,8 +15,12 @@ import { buildLeadType, buildLawyerLeadType, buildMortgageBrokerLeadType } from 
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
+import { maybeLandingSideEffects, notifyAdminsOfLandingLead } from '../nestiLanding/notifyAdminsOfLandingLead.js';
 
 function computeLeadTypeForMatch(flow, persistedGrade, aiIntent) {
+  if (typeof flow?.computeLeadType === 'function') {
+    return flow.computeLeadType(persistedGrade, aiIntent);
+  }
   const role = flow?.flowRole;
   if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return buildMortgageBrokerLeadType(persistedGrade);
@@ -238,6 +242,18 @@ export async function syncLeadMatchAfterTurn({
           persistedGrade,
           conversion_preview,
         });
+        if (flow.landingMode) {
+          void notifyAdminsOfLandingLead({
+            leadMatch: newLeadMatch,
+            persistedGrade,
+            finalScore,
+            conversationId: conversation._id,
+            sessionId,
+          }).catch((error) => logger.warn('Landing lead admin notify failed', { error: error?.message }));
+          void maybeLandingSideEffects({ leadMatch: newLeadMatch, contactInfo }).catch((error) => {
+            logger.warn('Landing lead follow-up failed', { error: error?.message });
+          });
+        }
         await afterLeadCapturedNotifyOverQuota(userId);
       } catch (e) {
         logger.warn('Workspace lead event (create) failed', { error: e.message });
@@ -264,6 +280,11 @@ export async function syncLeadMatchAfterTurn({
   }
   nextFactors.lead_grade = persistedGrade;
   nextFactors.message_snippet = trimmedMessage.slice(0, 200);
+  if (flow.landingMode) {
+    nextFactors.source = 'landing_chat';
+    nextFactors.page_path = '/';
+    if (formContact?.audience_role) nextFactors.audience_role = String(formContact.audience_role);
+  }
   existingLeadMatch.compatibility_factors = nextFactors;
 
   existingLeadMatch.match_score = finalScore;

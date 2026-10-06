@@ -8,6 +8,7 @@ import { CLIENT_PLANS } from '../client/plans.js';
 import { ingestFinalTranscriptSegment } from './transcriptSegmentService.js';
 import { voiceAgentAutocommitEnabled } from './callProviders.js';
 import { applyVoiceSuggestion } from '../admin/adminVoiceActionService.js';
+import { canReactivateVoiceCall } from './raviAgentConstants.js';
 
 const ALLOWED = new Set([
   'lead.patch',
@@ -68,28 +69,29 @@ export function subscriptionPitchFacts(role) {
   const client = String(role || '').toLowerCase() === 'client';
   const plans = Object.values(client ? CLIENT_PLANS : BILLING_PLANS);
   const catalog = plans
-    .map((plan) => `${plan.name} at ${plan.display_amount} per month${plan.features ? ` (${plan.features.slice(0, 2).join('; ')})` : ''}`)
+    .map((plan) => `${plan.name} at ${plan.display_amount} per month${plan.features ? ` (${plan.features.slice(0, 4).join('; ')})` : ''}`)
     .join('. ');
   const tools = client
-    ? 'Clients use progress tracking, budget tools, and professional matching.'
-    : 'Professionals use lead qualification, nurture, consultations, a storefront, and the chatbot.';
+    ? 'Nesti helps clients buy a home. Services: homeownership progress tracking, budget and financial planning tools, matching with agents and other professionals, priority matching, recommendations, market insights, and support. Guide them to use these inside their Nesti account.'
+    : 'Nesti helps professionals win clients. Services: lead qualification, nurture, consultations, a storefront, and the chatbot.';
   return `${tools} Only mention these plans: ${catalog}. Do not invent prices, features, or a checkout.`;
 }
 
 async function requestVoiceReply({ call, history, spoken, fallback }) {
   try {
-    const sales = call.voice_target_type === 'sales';
-    const inquiry = sales
+    const guiding = call.voice_target_type === 'sales' || call.voice_target_type === 'client';
+    const inquiry = call.voice_target_type === 'sales'
       ? await EnterpriseInquiry.findById(call.voice_target_id).select('interest_role').lean()
       : null;
+    const role = call.voice_target_type === 'client' ? 'client' : inquiry?.interest_role;
     const completion = await openai().chat.completions.create({
       model: process.env.OPENAI_VOICE_AGENT_MODEL || 'gpt-4o-mini',
       response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
-          content: sales
-            ? `You are Maya, Nesti's subscription advisor. Speak as a calm professional woman. This person is not subscribed and came from a demo or contact request. Teach first, then recommend one plan. ${subscriptionPitchFacts(inquiry?.interest_role)} In order: ask what they want to do, explain only the tools that fit, name one real plan and its price, and ask them to subscribe in their Nesti account. Two short spoken sentences. Reply JSON with say, done, suggestions, outcome, plan. suggestions must be []. outcome is interested, callback, declined, plan_recommended, or empty. Never say the purchase is complete.`
+          content: guiding
+            ? `${raviSalesInstructions(role)} Reply JSON with say, done, suggestions, outcome, plan. suggestions must be []. outcome is interested, callback, declined, plan_recommended, or empty. Set done true only after they agree, decline, or ask to stop.`
             : 'You are Nesti sales voice agent for admin clients. Reply JSON with say, done, suggestions. suggestions items: action, payload, confidence, rationale. Allowed actions: lead.patch, lead.nurture.draft, lead.insights.refresh, client.patch. For lead actions set payload.lead_id to one of the provided pipeline lead ids. Never invent an action outside the list.',
         },
         {
@@ -207,12 +209,60 @@ export async function handleVoiceGather({ callId, speechResult }) {
     call.minutes_status = 'pending';
     call.active_thread_key = null;
     await call.save();
-  } else if (call.status !== 'active') {
+  } else if (canReactivateVoiceCall(call.status) && call.status !== 'active') {
     call.status = 'active';
     call.started_at = call.started_at || new Date();
     call.transcription_started_at = call.transcription_started_at || new Date();
     call.transcription_status = 'active';
     await call.save();
   }
-  return { say, done: Boolean(parsed.done) };
+  return { say, audio: await synthesizeMayaVoice(say, call.voice_agent_voice), done: Boolean(parsed.done) };
+}
+
+export function raviSalesInstructions(role) {
+  return `You are Ravi, a passionate Nesti sales advisor on a live phone call. You lead. The caller may be a man or a woman. Sound energetic, warm, and sure of the product. Use contractions. Never assume their gender, pronouns, family, or budget. Start in English, introduce yourself as Ravi from Nesti, and ask what they want to get done. Languages: English first, then Urdu, Spanish, and French. If they speak one of those or ask you to switch, stay in that language. Never say you cannot speak them. ${subscriptionPitchFacts(role)} Every reply is two short sentences and the second one is a question. After they answer, connect one real benefit, name one plan and its monthly price when it fits, and ask the next question. Do not stop, summarize, or wait for them to carry the call. When they agree, decline, ask for a callback, or you recommend a plan, call record_sales_outcome. Never say the purchase is complete.`;
+}
+
+export async function persistSalesOutcome({ callId, outcome, plan, note }) {
+  const call = await ProfessionalCall.findById(callId).select('voice_target_type voice_target_id status').lean();
+  if (!call) return { ok: false, message: 'Call was not found.' };
+  const normalized = text(outcome).toLowerCase();
+  if (!SALES_OUTCOMES.has(normalized)) {
+    return { ok: false, message: 'Outcome must be interested, callback, declined, or plan_recommended.' };
+  }
+  const fields = {
+    voice_outcome: normalized,
+    voice_outcome_plan: text(plan).slice(0, 80),
+    voice_outcome_note: text(note).slice(0, 240),
+    voice_outcome_at: new Date(),
+  };
+  if (call.voice_target_type === 'sales') {
+    await EnterpriseInquiry.updateOne({ _id: call.voice_target_id }, { $set: fields });
+    return { ok: true, message: 'Saved.' };
+  }
+  if (call.voice_target_type === 'client' || call.voice_target_type === 'lead') {
+    await ProfessionalCall.updateOne({ _id: callId }, { $set: fields });
+    return { ok: true, message: 'Saved.' };
+  }
+  return { ok: false, message: 'This call cannot store a sales outcome.' };
+}
+
+export function agentName() {
+  return 'Ravi';
+}
+
+export async function synthesizeMayaVoice(spoken) {
+  const line = text(spoken).slice(0, 700);
+  if (!line || !process.env.OPENAI_API_KEY) return '';
+  try {
+    const speech = await openai().audio.speech.create({
+      model: 'gpt-4o-mini-tts',
+      voice: 'ash',
+      input: line,
+      instructions: 'Speak as a real man on a phone call. Warm, calm, and confident. Natural pace with small rises and falls, like a trusted advisor, not an announcer or a recording. Contractions. Brief pauses between thoughts.',
+    });
+    return Buffer.from(await speech.arrayBuffer()).toString('base64');
+  } catch {
+    return '';
+  }
 }

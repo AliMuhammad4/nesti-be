@@ -13,7 +13,6 @@ import {
   storefrontTemplateSubscriptionActionSchema,
 } from '../schemas/billingSchemas.js';
 import Subscription from '../models/Subscription.js';
-import EnterpriseInquiry from '../models/EnterpriseInquiry.js';
 import { getStripeClient } from '../services/billing/stripeClient.js';
 import { publicBillingPlans, publicBillingPlansFromStripe } from '../services/billing/plans.js';
 import {
@@ -307,28 +306,24 @@ const getPaymentMethods = async (req, res) => {
 const handleEnterpriseInquiry = async (req, res) => {
   const body = req.body || {};
   const email = String(body.email || req.user?.email || '').trim().toLowerCase();
-  const phone = String(body.phone || '').trim();
-  const fullName = String(body.full_name || '').trim();
-  const source = body.source === 'contact' ? 'contact' : 'demo';
-  if (!phone) {
-    return res.status(400).json({ success: false, message: 'A phone number is required' });
-  }
+  const message = String(body.message || '').trim();
   if (!email) {
     return res.status(400).json({ success: false, message: 'Email is required' });
   }
-  await EnterpriseInquiry.create({
-    user_id: req.user?._id || body.user_id || null,
-    company_name: String(body.company_name || fullName || 'Demo request').slice(0, 160),
-    team_size: body.team_size,
-    message: body.message || '',
+  if (!message) {
+    return res.status(400).json({ success: false, message: 'A message is required' });
+  }
+  const { createDirectAdminInquiry } = await import('../services/admin/directInquiryService.js');
+  const inquiry = await createDirectAdminInquiry({
+    ...body,
     email,
-    phone,
-    full_name: fullName,
+    full_name: body.full_name,
     interest_role: body.interest_role || req.user?.role || '',
-    source,
-    status: 'pending',
   });
-  res.json({ success: true, message: 'Inquiry received' });
+  if (!inquiry) {
+    return res.status(400).json({ success: false, message: 'Could not save that request' });
+  }
+  res.json({ success: true, message: 'Inquiry received', id: String(inquiry._id) });
 };
 
 const getEnterpriseStatus = async (req, res) => {

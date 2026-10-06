@@ -8,7 +8,9 @@ import { buildRecordingObjectKey } from '../services/media/r2Client.js';
 import { flagEnabled, voiceAgentAutocommitEnabled } from '../services/proChat/callProviders.js';
 import { mapTwilioStatus, buildVoiceTwiml, shouldAdvanceCallStatus, terminalVoiceUpdate } from '../services/proChat/twilioVoiceService.js';
 import { normalizeE164, pickSalesPhone } from '../services/proChat/voicePhone.js';
-import { subscriptionPitchFacts } from '../services/proChat/voiceAgentTurnService.js';
+import { subscriptionPitchFacts, raviSalesInstructions } from '../services/proChat/voiceAgentTurnService.js';
+import { composeGuide, liveSalesInstructions, parseGuide, SERVICE_SEEDS, serviceLine, speakAmount } from '../services/proChat/voiceSalesBrief.js';
+import { voiceRoomMinHumans, canReactivateVoiceCall } from '../services/proChat/raviAgentConstants.js';
 
 test('twilio signature rejects tampering and accepts the canonical payload', () => {
   const params = { CallSid: 'CA1', RecordingSid: 'RE1' };
@@ -67,7 +69,7 @@ test('twilio status mapping and twiml stay inside the existing call lifecycle', 
   const twiml = buildVoiceTwiml({ callId: 'abc', say: 'Hello & welcome' });
   assert.match(twiml, /Hello &amp; welcome/);
   assert.match(twiml, /Gather input="speech"/);
-  assert.match(twiml, /voice="Polly\.Joanna"/);
+  assert.match(twiml, /voice="Polly\.Matthew"/);
   assert.match(twiml, /actionOnEmptyResult="true"/);
   assert.equal(shouldAdvanceCallStatus('active', 'ringing'), false);
   assert.equal(shouldAdvanceCallStatus('ringing', 'ended'), true);
@@ -95,4 +97,39 @@ test('admin and webhook entry points are wired', async () => {
   assert.match(routes, /\/voice\/recordings\/:id\/playback/);
   assert.match(routes, /\/voice\/suggestions\/:id\/decision/);
   assert.match(server, /startRecordingIngestion/);
+});
+
+test('ravi sales calls stay with one human and cannot restart after they end', () => {
+  assert.equal(voiceRoomMinHumans({ voice_target_type: 'client', call_scope: 'direct' }), 1);
+  assert.equal(voiceRoomMinHumans({ call_scope: 'direct' }), 2);
+  assert.equal(canReactivateVoiceCall('ended'), false);
+  assert.equal(canReactivateVoiceCall('ringing'), true);
+  const instructions = raviSalesInstructions('client');
+  assert.match(instructions, /You are Ravi/);
+  assert.doesNotMatch(instructions, /Maya/);
+  assert.match(instructions, /Never say the purchase is complete/);
+});
+
+test('browser sales brief names the caller and speaks prices in words', () => {
+  const instructions = liveSalesInstructions({
+    role: 'client',
+    caller: { name: 'Sara Khan', note: 'buy a first home' },
+    settings: {},
+  });
+  assert.match(instructions, /Sara Khan/);
+  assert.match(instructions, /buy a first home/);
+  assert.match(instructions, /too expensive/);
+  assert.match(instructions, /buy or sell/);
+  assert.match(instructions, /Do not call record_sales_outcome on the greeting/);
+  assert.match(serviceLine('agent', {}), /Nurture/);
+  assert.match(serviceLine('broker', {}), /pre-approval/);
+  assert.match(instructions, /nine dollars and ninety-nine cents/);
+  assert.equal(instructions.includes('$'), false);
+  assert.match(instructions, /Never say the purchase is complete/);
+  assert.equal(speakAmount('$150'), 'one hundred fifty dollars');
+  assert.match(serviceLine('lawyer', {}), /newcomer/);
+  assert.equal(parseGuide('agent', SERVICE_SEEDS.agent)?.length, 5);
+  assert.equal(composeGuide('broker'), SERVICE_SEEDS.broker);
+  assert.match(liveSalesInstructions({ role: 'agent', caller: {}, settings: {} }), /one topic/);
+  assert.equal(serviceLine('agent', { agent_services: 'Custom storefront line' }), 'Custom storefront line');
 });

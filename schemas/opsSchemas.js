@@ -44,8 +44,11 @@ export const enterpriseInquiryCreateSchema = Joi.object({
   email: Joi.string().email().allow('', null),
   phone: str.max(40),
   full_name: str.max(160),
-  interest_role: Joi.string().valid('agent', 'mortgage_broker', 'lawyer', 'client', '').allow(null),
-  source: Joi.string().valid('demo', 'contact').default('demo'),
+  interest_role: Joi.string().valid('agent', 'mortgage_broker', 'lawyer', 'client', '').allow(null, ''),
+  source: Joi.string().valid('demo', 'contact', 'inquiry', 'support', 'direct_inquiry').default('inquiry'),
+  city: Joi.string().allow('', null).max(120),
+  country: Joi.string().allow('', null).max(80),
+  inquiry_topic: Joi.string().valid('demo', 'inquiry', 'support', '').allow(null),
 });
 
 export const enterpriseInquiryUpdateSchema = enterpriseInquiryCreateSchema.fork(

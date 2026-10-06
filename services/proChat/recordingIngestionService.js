@@ -53,6 +53,63 @@ export async function enqueueRecordingFromWebhook({ callId, body = {} }) {
   return { ok: true, id: String(doc._id) };
 }
 
+export async function storeBrowserCallRecording({
+  callId,
+  buffer,
+  durationSeconds = 0,
+  extension = 'webm',
+  mimeType = 'audio/webm',
+}) {
+  if (!isPrivateRecordingsConfigured()) {
+    throw new Error('Recording storage is not configured');
+  }
+  if (!buffer?.length) throw new Error('Empty recording');
+  const recordingSid = `browser-${callId}-${Date.now()}`;
+  const checksum = createHash('sha256').update(buffer).digest('hex');
+  const key = buildRecordingObjectKey({
+    callId: String(callId),
+    recordingSid,
+    extension,
+  });
+  await uploadPrivateRecordingBuffer(buffer, {
+    key,
+    mimeType,
+    metadata: { checksum, recording_sid: recordingSid },
+  });
+  await ProfessionalCallRecording.create({
+    call_id: callId,
+    recording_sid: recordingSid,
+    codec: 'opus',
+    mime_type: mimeType,
+    channels: 1,
+    duration_seconds: Math.max(0, Number(durationSeconds) || 0),
+    r2_key: key,
+    checksum_sha256: checksum,
+    bytes: buffer.length,
+    ingest_status: 'ready',
+    idempotency_key: `browser-recording:${recordingSid}`,
+    delete_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+  });
+  const readyCount = await ProfessionalCallRecording.countDocuments({
+    call_id: callId,
+    ingest_status: 'ready',
+    deleted_at: null,
+  });
+  await ProfessionalCall.updateOne(
+    { _id: callId },
+    {
+      $set: {
+        recording_status: 'ready',
+        recording_count: readyCount,
+        recording_last_error: '',
+      },
+      $inc: { recording_duration_seconds_total: Math.max(0, Number(durationSeconds) || 0) },
+    },
+  );
+  logger.info('Browser call recording stored', { call_id: String(callId), bytes: buffer.length });
+  return { key, bytes: buffer.length };
+}
+
 export async function processRecordingJob(job, { fetchImpl = fetch } = {}) {
   if (!voiceRecordingEnabled() || !isPrivateRecordingsConfigured()) {
     throw new Error('Recording storage is not enabled');

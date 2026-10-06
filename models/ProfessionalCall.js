@@ -41,7 +41,7 @@ const professionalCallSchema = new mongoose.Schema(
     call_type: { type: String, enum: ['voice', 'video'], required: true },
     provider: {
       type: String,
-      enum: ['livekit', 'twilio'],
+      enum: ['livekit', 'twilio', 'preview'],
       default: 'livekit',
       index: true,
     },
@@ -52,6 +52,12 @@ const professionalCallSchema = new mongoose.Schema(
     voice_to_phone: { type: String, default: '' },
     voice_lead_ids: { type: [String], default: [] },
     voice_empty_turns: { type: Number, default: 0 },
+    voice_agent_voice: { type: String, enum: ['male', 'female'], default: 'male' },
+    voice_outcome: { type: String, default: '' },
+    voice_outcome_plan: { type: String, default: '' },
+    voice_outcome_note: { type: String, default: '' },
+    voice_outcome_at: { type: Date, default: null },
+    voice_checkout_url: { type: String, default: '' },
     recording_status: {
       type: String,
       enum: ['not_requested', 'pending', 'processing', 'ready', 'failed', 'expired'],

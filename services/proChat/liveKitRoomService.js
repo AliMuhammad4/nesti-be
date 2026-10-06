@@ -296,7 +296,7 @@ export async function reconcileCallRoomCleanup() {
     status: 'active',
     started_at: { $lte: new Date(now.getTime() - ABANDONED_ACTIVE_GRACE_MS) },
   })
-    .select('_id room_name thread_id participant_ids started_at call_scope')
+    .select('_id room_name thread_id participant_ids started_at call_scope voice_target_type')
     .limit(50)
     .lean();
   const abandonedCalls = [];
@@ -309,7 +309,7 @@ export async function reconcileCallRoomCleanup() {
     if (humanCount === null) {
       if (ageMs < ABANDONED_ACTIVE_GRACE_MS * 4) continue;
     } else {
-      const minHumans = call.call_scope === 'multiparty' ? 1 : 2;
+      const minHumans = call.voice_target_type ? 1 : (call.call_scope === 'multiparty' ? 1 : 2);
       if (humanCount >= minHumans) continue;
     }
     const ended = await ProfessionalCall.findOneAndUpdate(

@@ -6,10 +6,11 @@ import { TRANSCRIPTION_AGENT_NAME } from './callTranscriptionConstants.js';
 import { consentingParticipantIds } from './callTranscriptionSessionService.js';
 import {
   ensureTranscriptionWorkerRunning,
+  ensureRaviWorkerRunning,
   featureEnabled,
 } from './transcriptionWorkerLifecycle.js';
 
-export { TRANSCRIPTION_AGENT_NAME, ensureTranscriptionWorkerRunning };
+export { TRANSCRIPTION_AGENT_NAME, ensureTranscriptionWorkerRunning, ensureRaviWorkerRunning };
 
 function text(value) {
   return String(value || '').trim();

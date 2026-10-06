@@ -15,8 +15,76 @@ import {
 import { optionalAuth } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { submitPublicFeedbackSchema, submitPublicLeadSchema } from '../schemas/publicProfileSchemas.js';
+import { publicLandingChatConfigService } from '../services/admin/adminLandingChatService.js';
+import { handleLandingChatTurn, loadLandingChatSession } from '../services/chat/nestiLanding/landingChatTurnService.js';
+import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
+import { createDirectAdminInquiry } from '../services/admin/directInquiryService.js';
 
 const router = express.Router();
+
+router.get('/landing-chat/config', async (_req, res, next) => {
+  try {
+    const result = await publicLandingChatConfigService();
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/landing-chat/session', async (req, res, next) => {
+  try {
+    const result = await loadLandingChatSession({
+      embedToken: req.query.embedToken || req.query.embed_token,
+      sessionId: req.query.session_id || req.query.id,
+    });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/landing-chat/message', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const result = await handleLandingChatTurn({
+      message: body.message,
+      embedToken: body.embedToken || body.embed_token,
+      sessionId: body.id || body.session_id,
+      visitorId: body.visitorId || body.visitor_id,
+      clientIp: req.ip,
+      opening: Boolean(body.opening),
+      formContact: body.formContact || body.form_contact || {
+        name: body.name,
+        email: body.email,
+        phone: body.phone,
+        audience_role: body.audience_role,
+      },
+    });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/direct-inquiry', validateBody(enterpriseInquiryCreateSchema), async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const email = String(body.email || '').trim().toLowerCase();
+    const message = String(body.message || '').trim();
+    if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
+    if (!message) return res.status(400).json({ success: false, message: 'A message is required' });
+    const inquiry = await createDirectAdminInquiry({
+      ...body,
+      email,
+      full_name: body.full_name,
+      interest_role: body.interest_role || '',
+    });
+    if (!inquiry) return res.status(400).json({ success: false, message: 'Could not save that request' });
+    res.json({ success: true, message: 'Inquiry received', id: String(inquiry._id) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/professionals', getPublicProfessionalsList);
 router.get('/professional-network', getPublicProfessionalNetwork);

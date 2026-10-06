@@ -19,6 +19,7 @@ import {
 dotenv.config({
   path: path.join(path.dirname(fileURLToPath(import.meta.url)), '../.env'),
   override: true,
+  quiet: true,
 });
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

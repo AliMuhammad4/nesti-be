@@ -261,7 +261,7 @@ export async function deletePrivateRecording(key) {
   }
 }
 
-export async function createPrivateRecordingReadUrl(key, { expiresIn = 10 * 60 } = {}) {
+export async function createPrivateRecordingReadUrl(key, { expiresIn = 10 * 60, contentType = 'audio/mpeg' } = {}) {
   if (!isPrivateRecordingsConfigured()) return null;
   const objectKey = sanitizeKey(key);
   if (!objectKey) return null;
@@ -270,7 +270,7 @@ export async function createPrivateRecordingReadUrl(key, { expiresIn = 10 * 60 }
     Bucket: privateRecordingsBucket(),
     Key: objectKey,
     ResponseContentDisposition: 'inline',
-    ResponseContentType: 'audio/mpeg',
+    ResponseContentType: contentType || 'audio/mpeg',
   });
   return getSignedUrl(r2Client, command, { expiresIn: safeExpires });
 }

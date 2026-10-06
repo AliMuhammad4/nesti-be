@@ -11,7 +11,7 @@ export const chatBodySchema = Joi.object({
   clientIp: Joi.string().optional(),
   userAgent: Joi.string().optional(),
   referer: Joi.string().optional(),
-  formContact: Joi.object().optional(),
+  formContact: Joi.object().unknown(true).optional(),
 });
 
 export const propertyMatchesSchema = Joi.object({

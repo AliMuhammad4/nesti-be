@@ -55,9 +55,18 @@ const CLIENT_INITIATED_FILTER = {
   ],
 };
 
+function normalizeSourceValue(value) {
+  if (value == null) return '';
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
 export function deriveLeadInquirySource(lead = {}) {
   const factors = lead.compatibility_factors || {};
-  const raw = String(factors.source || factors.inquiry_source || '').trim().toLowerCase();
+  const raw = normalizeSourceValue(factors.source || factors.inquiry_source || '');
   if (raw === 'landing_chat') return 'landing_chat';
   if (raw === 'chatbot' || raw.includes('chat')) return 'chatbot';
   if (!raw && (lead.conversation_id || factors.session_id)) return 'chatbot';
@@ -75,10 +84,12 @@ export function deriveLeadInquirySource(lead = {}) {
 }
 
 function sourceFilter(source) {
-  const key = String(source || '').trim().toLowerCase();
+  const key = normalizeSourceValue(source);
   if (!key || key === 'all') return null;
   if (key === 'landing_chat') {
-    return { 'compatibility_factors.source': 'landing_chat' };
+    return {
+      'compatibility_factors.source': /landing[\s_-]?chat/i,
+    };
   }
   if (key === 'chatbot') {
     return {
@@ -90,14 +101,14 @@ function sourceFilter(source) {
             { 'compatibility_factors.source': /chat/i },
           ],
         },
-        { 'compatibility_factors.source': { $ne: 'landing_chat' } },
+        { 'compatibility_factors.source': { $not: /landing[\s_-]?chat/i } },
       ],
     };
   }
   if (key === 'form') {
     return {
       $or: [
-        { 'compatibility_factors.source': 'public_web_form' },
+        { 'compatibility_factors.source': /public[\s_-]?web[\s_-]?form|^form$/i },
         { 'compatibility_factors.source': /form/i },
       ],
     };
@@ -105,13 +116,12 @@ function sourceFilter(source) {
   if (key === 'direct_inquiry') {
     return {
       $or: [
-        { 'compatibility_factors.source': 'client_professional_inquiry' },
-        { 'compatibility_factors.source': 'client_property_inquiry' },
+        { 'compatibility_factors.source': /client[\s_-]?professional[\s_-]?inquiry|client[\s_-]?property[\s_-]?inquiry|direct[\s_-]?inquiry|public[\s_-]?inquiry/i },
         { 'compatibility_factors.source': /direct|inquiry/i },
       ],
     };
   }
-  return { 'compatibility_factors.source': key };
+  return { 'compatibility_factors.source': new RegExp(`^${escapeRegex(key).replace(/_/g, '[\\s_-]+')}$`, 'i') };
 }
 
 /** Leads that came from chatbot, public form, or direct inquiry. */

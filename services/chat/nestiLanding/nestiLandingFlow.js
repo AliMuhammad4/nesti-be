@@ -75,29 +75,41 @@ export function replyWithoutVisitorName(value, name) {
 }
 
 export function landingRoleReply(audience) {
+  const normalized = String(audience || '').trim();
+  const raw = normalized.toLowerCase();
+  const key = raw.includes('lawyer')
+    ? 'lawyer'
+    : raw.includes('mortgage') || raw.includes('broker')
+      ? 'broker'
+      : raw.includes('agent') || raw.includes('realtor')
+        ? 'agent'
+        : 'client';
+
   const lines = (items) => items.map((item) => `- ${item}`).join('\n');
-  if (audience === 'client') {
-    return `I can see you want a clear difference, and that is a fair place to start. Nesti matches you with an agent, a mortgage broker, and a lawyer, then stays with you through the purchase or sale.\n${lines([
-      'Progress tracking shows the next step.',
-      'Budget tools keep the numbers clear.',
-      'Support stays with you while you buy or sell.',
-    ])}\nWould you like to start with the match, or with how the steps are tracked?`;
+  if (key === 'client') {
+    return `I can guide you to the right next step. Nesti helps you connect with the right agent, mortgage broker, and lawyer while keeping the journey organized from first look to close.\n${lines([
+      'Progress tracking keeps the next step clear.',
+      'Budget tools make the numbers easier to understand.',
+      'Support stays with you as you buy or sell.',
+    ])}\nWould you like to start with the match, or with how the steps are managed?`;
   }
-  const role = audience === 'lawyer'
-    ? 'As a lawyer, the difference is one workspace for the file and the follow-up.'
-    : (audience === 'broker' || audience === 'mortgage_broker')
-      ? 'As a mortgage broker, the difference is one workspace for new inquiries and follow-up.'
-      : 'As an agent, the difference is one workspace for new inquiries and follow-up.';
-  const extra = audience === 'lawyer'
-    ? 'The agreement, title, and closing stay with that same file.'
-    : (audience === 'broker' || audience === 'mortgage_broker')
-      ? 'Pre-approval, renewal, and first-home financing sit in that same workspace.'
-      : 'You place your chatbot on any page and publish your own web page.';
+
+  const role = key === 'lawyer'
+    ? 'As a lawyer, the value is one organized workspace for the file, follow-up, and closing process.'
+    : key === 'broker'
+      ? 'As a mortgage broker, the value is one organized workspace for new inquiries, follow-up, and financing conversations.'
+      : 'As an agent, the value is one organized workspace for new inquiries, follow-up, and your client experience.';
+  const extra = key === 'lawyer'
+    ? 'The agreement, title, lender instructions, and closing stay in one place.'
+    : key === 'broker'
+      ? 'Pre-approval, affordability, renewal, and first-home financing all fit in that same workspace.'
+      : 'Your chatbot can live on any page, and your storefront becomes your own polished web presence.';
+
   return `That is a fair question, and I can walk you through it. ${role}\n${lines([
     extra,
-    'Your storefront is your own web page.',
-    'The voice agent answers calls when you are away.',
-  ])}\nWhich of those should we look at first?`;
+    'Your storefront gives you a professional web presence.',
+    'The voice agent helps you answer calls and follow up when you are away.',
+  ])}\nWhich of these would you like to see first?`;
 }
 
 export function shortenLandingReply(value, { greeting = false, feature = '' } = {}) {
@@ -171,7 +183,14 @@ export const nestiLandingFlow = {
   getLeadProfileUpdate: () => ({}),
   computeLeadType: (grade) => clientLeadType(grade),
   buildSystemPrompt(_profile, options = {}) {
-    const audience = text(options.audience) || 'client';
+    const rawAudience = text(options.audience) || 'client';
+    const audience = rawAudience.toLowerCase().includes('lawyer')
+      ? 'lawyer'
+      : rawAudience.toLowerCase().includes('mortgage') || rawAudience.toLowerCase().includes('broker')
+        ? 'broker'
+        : rawAudience.toLowerCase().includes('agent') || rawAudience.toLowerCase().includes('realtor')
+          ? 'agent'
+          : 'client';
     const guides = options.landingGuides || {};
     const cta = text(guides.signup_cta_copy) || 'When they are ready, invite them once to create an account and start the plan that fits.';
     const known = options.contactKnown
@@ -183,7 +202,7 @@ export const nestiLandingFlow = {
       ? 'This visitor is a client who is buying or selling. Answer only with that experience: a match with a real estate agent, a mortgage broker, and a real estate lawyer, plus progress tracking, budget tools, and support. Do not describe the chatbot, storefront, pipeline, email tools, or voice agent.'
       : audience === 'lawyer'
         ? 'This visitor is a real estate lawyer. Answer only with the lawyer workspace: a chatbot they create and place on any page, a storefront that is their own web page, referrals, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent, plus the agreement, title, lender instructions, and closing. Do not describe buyer matching or budget tools.'
-        : (audience === 'broker' || audience === 'mortgage_broker')
+        : audience === 'broker'
           ? 'This visitor is a mortgage broker. Answer only with the broker workspace: a chatbot they create and place on any page, a storefront that is their own web page, referrals, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent, plus pre-approval, affordability, renewal, and first-home financing. Do not describe buyer matching or budget tools.'
           : 'This visitor is a real estate agent. Answer only with the agent workspace: a chatbot they create and place on any page, a storefront that is their own web page, referrals, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent. Do not describe buyer matching or budget tools.';
     const nameLine = options.opening

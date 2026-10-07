@@ -12,6 +12,7 @@ import { agreesToWalkthrough, askedForWalkthrough, detectPain, mentionsPricing, 
 import { appendChatEvents, nextChatState, questionFromReply, readChatState } from './landingChatState.js';
 import { notifyAdminsOfAdminLead } from './notifyAdminsOfLandingLead.js';
 import { queueAdminLeadFollowUp } from '../../admin/adminLeadGuideEmailService.js';
+import { nextAutoPipelineStage } from '../../admin/adminPipelineStage.js';
 
 function text(value) {
   return String(value || '').trim();
@@ -50,7 +51,8 @@ async function saveAdminLead({ sessionId, contact, audience, spoken, reply, scor
       interest_role: audience,
       source: 'landing_chat',
       message: skipUser ? 'Started a homepage chat with Ravi.' : spoken.slice(0, 2000),
-      status: 'pending',
+      status: skipUser ? 'pending' : 'contacted',
+      pipeline_stage: skipUser ? 'new' : 'calling',
       session_id: sessionId,
       lead_score: score,
       lead_grade: grade,
@@ -73,6 +75,8 @@ async function saveAdminLead({ sessionId, contact, audience, spoken, reply, scor
   inquiry.transcript = [...(inquiry.transcript || []), ...turns].slice(-24);
   if (chatState) inquiry.chat_state = chatState;
   if (chatEvents) inquiry.chat_events = chatEvents;
+  inquiry.pipeline_stage = nextAutoPipelineStage(inquiry);
+  if (inquiry.pipeline_stage === 'calling' && inquiry.status === 'pending') inquiry.status = 'contacted';
   await inquiry.save();
   if (!skipUser) queueAdminLeadFollowUp(inquiry._id);
   return inquiry;

@@ -9,9 +9,18 @@ import { pickSalesPhone } from '../proChat/voicePhone.js';
 import { syncLandingChatsOntoDesk } from '../chat/nestiLanding/notifyAdminsOfLandingLead.js';
 import ChatConversation from '../../models/ChatConversation.js';
 import ChatMessage from '../../models/ChatMessage.js';
+import { parsePageLimitPagination } from '../../utils/pagination.js';
+import { emitAdminPlatformLead } from '../realtime/workspaceSocket.js';
+import {
+  lastVisibleMessage,
+  resolveAdminPipelineStage,
+  userChatTurns,
+} from './adminPipelineStage.js';
 
 const SUBSCRIBED = ['free_trial', 'trialing', 'active', 'past_due'];
-const DESK_SOURCES = ['demo', 'contact', 'landing_chat', 'direct_inquiry'];
+// Admin lead pipeline should only include homepage chatbot and direct inquiry records.
+// Property-match records are a separate lead detail surface and should not be counted here.
+const DESK_SOURCES = ['landing_chat', 'direct_inquiry'];
 
 function text(value) {
   return String(value || '').trim();
@@ -74,6 +83,8 @@ async function presentInquiries(inquiries) {
       country: text(row.country),
       company_name: text(row.company_name),
       message: text(row.message),
+      last_message: lastVisibleMessage(row),
+      conversation_turns: userChatTurns(row),
       on_plan: Boolean(user && subscribed.has(String(user._id))),
       created_at: row.createdAt || null,
       transcript: Array.isArray(row.transcript)
@@ -82,11 +93,7 @@ async function presentInquiries(inquiries) {
           text: text(item.text),
         }))
         : [],
-      stage: ['interested', 'plan_recommended'].includes(row.voice_outcome)
-        ? 'ready'
-        : row.status === 'contacted'
-          ? 'calling'
-          : 'new',
+      stage: resolveAdminPipelineStage(row),
       voice_outcome: row.voice_outcome || '',
       voice_outcome_plan: row.voice_outcome_plan || '',
       user_id: user?._id ? String(user._id) : '',
@@ -151,20 +158,61 @@ export async function getAdminSalesLeadService(id) {
   return ok({ item });
 }
 
-export async function listAdminSalesPipelineService() {
+export async function listAdminSalesPipelineService(query = {}) {
   await syncLandingChatsOntoDesk().catch(() => {});
-  const inquiries = await EnterpriseInquiry.find({
-    source: { $in: DESK_SOURCES },
-  })
-    .sort({ createdAt: -1 })
-    .limit(40)
-    .lean();
-  const items = await presentInquiries(inquiries);
+  const { page, limit, skip } = parsePageLimitPagination(query, { defaultLimit: 10, maxLimit: 1000 });
+  const filter = { source: { $in: DESK_SOURCES } };
+  const [total, allInquiries] = await Promise.all([
+    EnterpriseInquiry.countDocuments(filter),
+    EnterpriseInquiry.find(filter)
+      .sort({ createdAt: -1 })
+      .lean(),
+  ]);
+  const pageInquiries = allInquiries.slice(skip, skip + limit);
+  const items = await presentInquiries(pageInquiries);
+  const counts = {
+    new: 0,
+    calling: 0,
+    ready: 0,
+  };
+  for (const inquiry of allInquiries) {
+    const stage = resolveAdminPipelineStage(inquiry);
+    if (stage === 'new') counts.new += 1;
+    if (stage === 'calling') counts.calling += 1;
+    if (stage === 'ready') counts.ready += 1;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / limit));
   return ok({
     items,
-    counts: {
-      new: items.filter((item) => item.stage === 'new').length,
-      calling: items.filter((item) => item.stage === 'calling').length,
+    counts,
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: totalPages,
+      total_pages: totalPages,
+      has_prev_page: page > 1,
+      has_next_page: page < totalPages,
     },
   });
+}
+
+export async function moveAdminLeadStageService(id, body = {}) {
+  if (!mongoose.isValidObjectId(id)) return fail(400, 'Lead id is invalid.');
+  const stage = text(body.stage);
+  if (!['new', 'calling', 'ready'].includes(stage)) return fail(400, 'Choose a pipeline stage.');
+  const row = await EnterpriseInquiry.findById(id);
+  if (!row || !DESK_SOURCES.includes(row.source || '')) return fail(404, 'Admin lead not found.');
+  row.pipeline_stage = stage;
+  if (stage === 'calling' && row.status === 'pending') row.status = 'contacted';
+  if (stage === 'ready' && row.status !== 'resolved') row.status = 'contacted';
+  await row.save();
+  emitAdminPlatformLead({
+    schema: 1,
+    kind: 'admin_lead_updated',
+    inquiry_id: String(row._id),
+    stage,
+  });
+  const [item] = await presentInquiries([row.toObject()]);
+  return ok({ item });
 }

@@ -30,6 +30,11 @@ const enterpriseInquirySchema = new mongoose.Schema({
     enum: ENTERPRISE_INQUIRY_STATUSES,
     default: 'pending',
   },
+  pipeline_stage: {
+    type: String,
+    enum: ['', 'new', 'calling', 'ready'],
+    default: '',
+  },
   voice_outcome: {
     type: String,
     enum: ['', 'interested', 'callback', 'declined', 'plan_recommended'],

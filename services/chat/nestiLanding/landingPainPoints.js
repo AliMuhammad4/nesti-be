@@ -47,10 +47,14 @@ const FEATURE_WORDS = {
 };
 
 export function roleKey(role) {
-  const raw = text(role).toLowerCase();
-  if (raw === 'broker' || raw === 'mortgage_broker') return 'broker';
-  if (raw === 'lawyer') return 'lawyer';
-  if (raw === 'agent' || raw === 'realtor') return 'agent';
+  const raw = text(role)
+    .toLowerCase()
+    .replace(/[^a-z]+/g, ' ')
+    .trim();
+
+  if (raw.includes('mortgage') || raw.includes('broker')) return 'broker';
+  if (raw.includes('lawyer')) return 'lawyer';
+  if (raw.includes('agent') || raw.includes('realtor')) return 'agent';
   return 'client';
 }
 

@@ -18,6 +18,22 @@ function text(value) {
   return String(value || '').trim();
 }
 
+export function sanitizeLandingGuideText(value, { maxLength = 600 } = {}) {
+  let next = text(value)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[(.*?)\]/g, '$1')
+    .replace(/\*\*|\*|_+|#{1,6}|`/g, ' ')
+    .replace(/^(?:[-*•]\s*)+/gm, '')
+    .replace(/\b(?:ignore|override|system|prompt|instructions?|assistant|developer|always|never|do not|don't|stop|bypass)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!next) return '';
+  next = next.replace(/\s+(?:and|or)\s+/gi, ' ');
+  if (next.length > maxLength) next = next.slice(0, maxLength).trim();
+  return next.replace(/\s+([,.!?])/g, '$1');
+}
+
 function clip(value, max = 2000) {
   return text(value).slice(0, max);
 }
@@ -115,10 +131,10 @@ export function landingSettingsView(doc, embed = null) {
     display_name: text(doc?.display_name) || 'Nesti',
     consent_line: text(doc?.consent_line),
     signup_cta_copy: text(doc?.signup_cta_copy),
-    client_guide: text(doc?.client_guide),
-    agent_guide: text(doc?.agent_guide),
-    broker_guide: text(doc?.broker_guide),
-    lawyer_guide: text(doc?.lawyer_guide),
+    client_guide: sanitizeLandingGuideText(doc?.client_guide),
+    agent_guide: sanitizeLandingGuideText(doc?.agent_guide),
+    broker_guide: sanitizeLandingGuideText(doc?.broker_guide),
+    lawyer_guide: sanitizeLandingGuideText(doc?.lawyer_guide),
     seeds: GUIDE_SEEDS,
     auto_welcome_followup: Boolean(doc?.auto_welcome_followup),
     dual_write_inquiry: Boolean(doc?.dual_write_inquiry),
@@ -130,7 +146,7 @@ export function landingSettingsView(doc, embed = null) {
 export function guideForAudience(settings, audience) {
   const key = audience === 'mortgage_broker' || audience === 'broker' ? 'broker' : audience;
   const field = key === 'client' || key === 'agent' || key === 'broker' || key === 'lawyer' ? `${key}_guide` : 'client_guide';
-  const custom = text(settings?.[field]);
+  const custom = sanitizeLandingGuideText(settings?.[field]);
   const seedKey = key === 'broker' ? 'broker' : key;
   return custom || GUIDE_SEEDS[seedKey] || GUIDE_SEEDS.client;
 }
@@ -146,10 +162,10 @@ export function settingsPayload(body = {}) {
     display_name: clip(body.display_name, 80) || 'Nesti',
     consent_line: clip(body.consent_line, 400),
     signup_cta_copy: clip(body.signup_cta_copy, 400),
-    client_guide: clip(body.client_guide),
-    agent_guide: clip(body.agent_guide),
-    broker_guide: clip(body.broker_guide),
-    lawyer_guide: clip(body.lawyer_guide),
+    client_guide: sanitizeLandingGuideText(body.client_guide),
+    agent_guide: sanitizeLandingGuideText(body.agent_guide),
+    broker_guide: sanitizeLandingGuideText(body.broker_guide),
+    lawyer_guide: sanitizeLandingGuideText(body.lawyer_guide),
     auto_welcome_followup: Boolean(body.auto_welcome_followup),
     dual_write_inquiry: Boolean(body.dual_write_inquiry),
   };

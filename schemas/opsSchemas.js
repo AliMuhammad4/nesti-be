@@ -56,6 +56,10 @@ export const enterpriseInquiryUpdateSchema = enterpriseInquiryCreateSchema.fork(
   (s) => s.optional()
 );
 
+export const adminPipelineStageSchema = Joi.object({
+  stage: Joi.string().valid('new', 'calling', 'ready').required(),
+});
+
 export const calendarIntegrationCreateSchema = Joi.object({
   user_id: objectId.required(),
   provider: Joi.string().valid(...CALENDAR_PROVIDERS).required(),

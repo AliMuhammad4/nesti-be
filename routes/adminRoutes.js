@@ -30,6 +30,7 @@ import {
 import { leadConversationMessageSchema } from '../schemas/leadSchemas.js';
 import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
 import { objectId } from '../schemas/common.js';
+import { adminPipelineStageSchema } from '../schemas/opsSchemas.js';
 import { runProfileUpload } from '../middleware/uploadProfileImage.js';
 import { runCallRecordingUpload } from '../middleware/uploadCallRecording.js';
 import {
@@ -99,6 +100,7 @@ import {
   adminSendSalesLeadEmail,
   adminInsightSalesLead,
   adminCloseSalesLead,
+  adminMoveSalesLeadStage,
   listAdminProperties,
   getAdminProperty,
   patchAdminProperty,
@@ -334,6 +336,12 @@ router.put('/sales-pipeline/:id/email/draft', requirePermission(P.LEADS_WRITE), 
 router.post('/sales-pipeline/:id/email/send', requirePermission(P.LEADS_WRITE), adminSendSalesLeadEmail);
 router.post('/sales-pipeline/:id/insights', requirePermission(P.LEADS_WRITE), adminInsightSalesLead);
 router.post('/sales-pipeline/:id/close', requirePermission(P.LEADS_WRITE), adminCloseSalesLead);
+router.patch(
+  '/sales-pipeline/:id/stage',
+  requirePermission(P.LEADS_WRITE),
+  validateBody(adminPipelineStageSchema),
+  adminMoveSalesLeadStage,
+);
 router.get('/landing-chat/settings', adminGetLandingChatSettings);
 router.put('/landing-chat/settings', adminSaveLandingChatSettings);
 router.post('/landing-chat/embed', adminEnsureLandingEmbed);

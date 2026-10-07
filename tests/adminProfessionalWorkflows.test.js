@@ -155,6 +155,47 @@ test('patchAdminReferralService routes accept through processReferralForTarget',
   }
 });
 
+test('listAdminSalesPipelineService counts the full filtered lead set instead of the current page slice', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const User = (await import('../models/User.js')).default;
+  const ProfessionalProfile = (await import('../models/ProfessionalProfile.js')).default;
+  const Subscription = (await import('../models/Subscription.js')).default;
+  const ClientSubscription = (await import('../models/ClientSubscription.js')).default;
+  const { listAdminSalesPipelineService } = await import('../services/admin/adminSalesPipelineService.js');
+
+  const allDocs = [
+    { _id: '507f1f77bcf86cd799439031', source: 'landing_chat', full_name: 'A', email: 'a@example.com', interest_role: 'client', message: 'hello', createdAt: new Date('2024-01-01T00:00:00Z'), pipeline_stage: 'new' },
+    { _id: '507f1f77bcf86cd799439032', source: 'landing_chat', full_name: 'B', email: 'b@example.com', interest_role: 'agent', message: 'hi', createdAt: new Date('2024-01-02T00:00:00Z'), pipeline_stage: 'new' },
+    { _id: '507f1f77bcf86cd799439033', source: 'landing_chat', full_name: 'C', email: 'c@example.com', interest_role: 'broker', message: 'there', createdAt: new Date('2024-01-03T00:00:00Z'), pipeline_stage: 'ready' },
+    { _id: '507f1f77bcf86cd799439034', source: 'direct_inquiry', full_name: 'D', email: 'd@example.com', interest_role: 'lawyer', message: 'need help', createdAt: new Date('2024-01-04T00:00:00Z'), pipeline_stage: 'calling' },
+  ];
+  const pageDocs = allDocs.slice(0, 2);
+
+  try {
+    bag.stub(EnterpriseInquiry, 'countDocuments', async () => allDocs.length);
+    bag.stub(EnterpriseInquiry, 'find', () => ({
+      sort() { return this; },
+      skip() { return { limit() { return { lean: async () => pageDocs }; } }; },
+      limit() { return { lean: async () => pageDocs }; },
+      lean: async () => allDocs,
+    }));
+    bag.stub(User, 'find', () => ({ collation() { return this; }, select() { return { lean: async () => [] }; } }));
+    bag.stub(ProfessionalProfile, 'find', () => ({ select() { return { lean: async () => [] }; } }));
+    bag.stub(Subscription, 'find', () => ({ select() { return { lean: async () => [] }; } }));
+    bag.stub(ClientSubscription, 'find', () => ({ select() { return { lean: async () => [] }; } }));
+
+    const result = await listAdminSalesPipelineService({ page: 1, limit: 2 });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.pagination.total, 4);
+    assert.equal(result.body.counts.new, 2);
+    assert.equal(result.body.counts.ready, 1);
+    assert.equal(result.body.counts.calling, 1);
+  } finally {
+    bag.restoreAll();
+  }
+});
+
 test('isCalendlyAlreadyCanceledMessage treats already-canceled as idempotent', async () => {
   const { isCalendlyAlreadyCanceledMessage } = await import(
     '../services/calendly/cancelCalendlyBooking.js'

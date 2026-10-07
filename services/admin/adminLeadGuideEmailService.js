@@ -469,6 +469,7 @@ export async function closeAdminLeadService(id, body) {
   row.close_note = text(body?.note).slice(0, 1000);
   row.closed_at = new Date();
   row.status = 'resolved';
+  if (outcome === 'won') row.pipeline_stage = 'ready';
   await row.save();
   return ok({
     close_outcome: row.close_outcome,

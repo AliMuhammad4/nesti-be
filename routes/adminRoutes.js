@@ -30,7 +30,7 @@ import {
 import { leadConversationMessageSchema } from '../schemas/leadSchemas.js';
 import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
 import { objectId } from '../schemas/common.js';
-import { adminPipelineStageSchema } from '../schemas/opsSchemas.js';
+import { adminPipelineRoleSchema, adminPipelineStageSchema, adminSalesLeadCloseSchema, adminSalesLeadEmailSendSchema, landingChatFaqGenerateSchema, landingChatPreviewSchema, landingChatSettingsSchema } from '../schemas/opsSchemas.js';
 import { runProfileUpload } from '../middleware/uploadProfileImage.js';
 import { runCallRecordingUpload } from '../middleware/uploadCallRecording.js';
 import {
@@ -77,6 +77,8 @@ import {
   adminCancelLeadCalendlyBooking,
   adminGetLandingChatSettings,
   adminSaveLandingChatSettings,
+  adminPreviewLandingChat,
+  adminGenerateLandingChatFaqs,
   adminEnsureLandingEmbed,
   adminGetSalesSettings,
   adminSaveSalesSettings,
@@ -101,6 +103,8 @@ import {
   adminInsightSalesLead,
   adminCloseSalesLead,
   adminMoveSalesLeadStage,
+  adminUpdateSalesLeadRole,
+  adminDeleteSalesLead,
   listAdminProperties,
   getAdminProperty,
   patchAdminProperty,
@@ -331,19 +335,28 @@ router.patch(
 
 router.get('/sales-pipeline', requirePermission(P.LEADS_READ), adminListSalesPipeline);
 router.get('/sales-pipeline/:id', requirePermission(P.LEADS_READ), adminGetSalesLead);
+router.delete('/sales-pipeline/:id', requirePermission(P.LEADS_WRITE), adminDeleteSalesLead);
 router.post('/sales-pipeline/:id/email/draft', requirePermission(P.LEADS_WRITE), adminDraftSalesLeadEmail);
 router.put('/sales-pipeline/:id/email/draft', requirePermission(P.LEADS_WRITE), adminSaveSalesLeadEmailDraft);
-router.post('/sales-pipeline/:id/email/send', requirePermission(P.LEADS_WRITE), adminSendSalesLeadEmail);
+router.post('/sales-pipeline/:id/email/send', requirePermission(P.LEADS_WRITE), validateBody(adminSalesLeadEmailSendSchema), adminSendSalesLeadEmail);
 router.post('/sales-pipeline/:id/insights', requirePermission(P.LEADS_WRITE), adminInsightSalesLead);
-router.post('/sales-pipeline/:id/close', requirePermission(P.LEADS_WRITE), adminCloseSalesLead);
+router.post('/sales-pipeline/:id/close', requirePermission(P.LEADS_WRITE), validateBody(adminSalesLeadCloseSchema), adminCloseSalesLead);
 router.patch(
   '/sales-pipeline/:id/stage',
   requirePermission(P.LEADS_WRITE),
   validateBody(adminPipelineStageSchema),
   adminMoveSalesLeadStage,
 );
+router.patch(
+  '/sales-pipeline/:id/role',
+  requirePermission(P.LEADS_WRITE),
+  validateBody(adminPipelineRoleSchema),
+  adminUpdateSalesLeadRole,
+);
 router.get('/landing-chat/settings', adminGetLandingChatSettings);
-router.put('/landing-chat/settings', adminSaveLandingChatSettings);
+router.put('/landing-chat/settings', validateBody(landingChatSettingsSchema), adminSaveLandingChatSettings);
+router.post('/landing-chat/preview', validateBody(landingChatPreviewSchema), adminPreviewLandingChat);
+router.post('/landing-chat/faqs/generate', validateBody(landingChatFaqGenerateSchema), adminGenerateLandingChatFaqs);
 router.post('/landing-chat/embed', adminEnsureLandingEmbed);
 router.get('/voice/sales-settings', adminGetSalesSettings);
 router.put('/voice/sales-settings', adminSaveSalesSettings);

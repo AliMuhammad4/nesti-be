@@ -77,8 +77,10 @@ import {
   adminEnsureLandingEmbedService,
   adminGetLandingChatSettingsService,
   adminSaveLandingChatSettingsService,
+  generateLandingChatFaqsService,
+  landingChatPreviewService,
 } from '../services/admin/adminLandingChatService.js';
-import { getAdminSalesLeadService, listAdminSalesPipelineService, moveAdminLeadStageService } from '../services/admin/adminSalesPipelineService.js';
+import { deleteAdminSalesLeadService, getAdminSalesLeadService, listAdminSalesPipelineService, moveAdminLeadStageService, updateAdminSalesLeadRoleService } from '../services/admin/adminSalesPipelineService.js';
 import { closeAdminLeadService, draftAdminLeadEmailService, insightAdminLeadService, saveAdminLeadEmailDraftService, sendAdminLeadEmailService } from '../services/admin/adminLeadGuideEmailService.js';
 
 const send = (res, result) => res.status(result.status).json(result.body);
@@ -360,8 +362,12 @@ export const adminSendSalesLeadEmail = handle((req) => sendAdminLeadEmailService
 export const adminInsightSalesLead = handle((req) => insightAdminLeadService(req.params.id));
 export const adminCloseSalesLead = handle((req) => closeAdminLeadService(req.params.id, req.body));
 export const adminMoveSalesLeadStage = handle((req) => moveAdminLeadStageService(req.params.id, req.body));
+export const adminUpdateSalesLeadRole = handle((req) => updateAdminSalesLeadRoleService(req.params.id, req.body));
+export const adminDeleteSalesLead = handle((req) => deleteAdminSalesLeadService(req.params.id));
 export const adminGetLandingChatSettings = handle((req) => adminGetLandingChatSettingsService(req.user));
 export const adminSaveLandingChatSettings = handle((req) => adminSaveLandingChatSettingsService(req.body, req.user));
+export const adminPreviewLandingChat = handle((req) => landingChatPreviewService(req.body, req.user));
+export const adminGenerateLandingChatFaqs = handle((req) => generateLandingChatFaqsService(req.body, req.user));
 export const adminEnsureLandingEmbed = handle((req) => adminEnsureLandingEmbedService(req.user));
 export const adminGetSalesSettings = handle((req) => adminGetSalesSettingsService(req.user));
 export const adminSaveSalesSettings = handle((req) => adminSaveSalesSettingsService(req.body, req.user));

@@ -1,3 +1,5 @@
+import { applyRegister, PERSONALITY_PROFILES } from './landingChatConfig.js';
+
 function text(value) {
   return String(value || '').trim();
 }
@@ -86,10 +88,17 @@ export function askedForWalkthrough(value) {
   return /walk (you |me )?through/i.test(text(value));
 }
 
-export function roleFallbackQuestion(role) {
+export function roleFallbackQuestion(role, personality = '', formality = 'professional') {
   const key = roleKey(role);
-  if (key === 'agent') return 'Are you trying to follow up with leads, or set up your own page?';
-  if (key === 'broker') return 'Are the repetitive questions about rates, or about who qualifies?';
-  if (key === 'lawyer') return 'Are the repeat questions about closing, or about booking a consultation?';
-  return 'Are you trying to figure out what you can afford, or who should help you buy or sell?';
+  const persona = personality ? PERSONALITY_PROFILES[String(personality).trim()] : null;
+  const inPersona = persona?.fallbackQuestion?.[key];
+  const question = inPersona
+    || (key === 'agent'
+      ? 'Are you trying to follow up with leads, or set up your own page?'
+      : key === 'broker'
+        ? 'Are the repetitive questions about rates, or about who qualifies?'
+        : key === 'lawyer'
+          ? 'Are the repeat questions about closing, or about booking a consultation?'
+          : 'Are you trying to figure out what you can afford, or who should help you buy or sell?');
+  return applyRegister(question, formality);
 }

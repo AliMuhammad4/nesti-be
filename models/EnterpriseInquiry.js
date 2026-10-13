@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import crypto from 'crypto';
 import { ENTERPRISE_INQUIRY_STATUSES } from '../constants/validationEnums.js';
 
 const enterpriseInquirySchema = new mongoose.Schema({
@@ -79,6 +80,8 @@ const enterpriseInquirySchema = new mongoose.Schema({
   close_outcome: { type: String, enum: ['', 'won', 'lost'], default: '' },
   close_note: { type: String, default: '' },
   closed_at: { type: Date, default: null },
+  reopen_count: { type: Number, default: 0 },
+  reopened_at: { type: Date, default: null },
   email_draft: {
     subject: { type: String, default: '' },
     body: { type: String, default: '' },
@@ -87,13 +90,19 @@ const enterpriseInquirySchema = new mongoose.Schema({
   },
   guide_emails: {
     type: [{
+      to_email: { type: String, default: '' },
       subject: { type: String, default: '' },
       body: { type: String, default: '' },
-      status: { type: String, enum: ['sent', 'failed'], default: 'sent' },
+      type: { type: String, enum: ['automatic', 'manual'], default: 'manual' },
+      status: { type: String, enum: ['sending', 'sent', 'failed'], default: 'sent' },
+      idempotency_key: { type: String, default: () => crypto.randomUUID() },
       sent_at: { type: Date, default: Date.now },
     }],
     default: [],
   },
 }, { timestamps: true });
+
+enterpriseInquirySchema.index({ source: 1, close_outcome: 1, createdAt: -1 });
+enterpriseInquirySchema.index({ source: 1, createdAt: -1 });
 
 export default mongoose.model('EnterpriseInquiry', enterpriseInquirySchema);

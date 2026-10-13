@@ -19,6 +19,7 @@ import { publicLandingChatConfigService } from '../services/admin/adminLandingCh
 import { handleLandingChatTurn, loadLandingChatSession } from '../services/chat/nestiLanding/landingChatTurnService.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import { createDirectAdminInquiry } from '../services/admin/directInquiryService.js';
+import { publicChatSessionLimiter } from '../middleware/rateLimit.js';
 
 const router = express.Router();
 
@@ -31,11 +32,11 @@ router.get('/landing-chat/config', async (_req, res, next) => {
   }
 });
 
-router.get('/landing-chat/session', async (req, res, next) => {
+router.post('/landing-chat/session', publicChatSessionLimiter, async (req, res, next) => {
   try {
     const result = await loadLandingChatSession({
-      embedToken: req.query.embedToken || req.query.embed_token,
-      sessionId: req.query.session_id || req.query.id,
+      embedToken: req.body?.embedToken || req.body?.embed_token,
+      sessionId: req.body?.session_id || req.body?.id,
     });
     res.status(result.status).json(result.body);
   } catch (error) {

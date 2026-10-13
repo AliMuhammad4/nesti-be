@@ -23,19 +23,21 @@ export const EMAIL_LINK_STYLE = `color:${EMAIL_BRAND.link};text-decoration:under
 export const EMAIL_GREEN_CTA_STYLE = `display:inline-block;background:${EMAIL_BRAND.primaryDark};color:#ffffff !important;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;`;
 export const EMAIL_BLUE_CTA_STYLE = `display:inline-block;background:${EMAIL_BRAND.ctaBlue};color:#ffffff !important;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;`;
 
-export function renderBrandedEmailShell({ kicker, title, innerHtml, footerHtml = '', maxWidth = 600 }) {
+export function renderBrandedEmailShell({ kicker, title, innerHtml, footerHtml = '', maxWidth = 600, headerFrom, headerTo }) {
   const safeKicker = String(kicker || '').trim();
   const safeTitle = String(title || '').trim();
   const safeInner = String(innerHtml || '').trim();
   const safeFooter = String(footerHtml || '').trim();
+  const from = headerFrom || EMAIL_BRAND.primary;
+  const to = headerTo || EMAIL_BRAND.primaryDark;
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
 <body style="margin:0;padding:0;background-color:${EMAIL_BRAND.pageBg};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${EMAIL_BRAND.pageBg};padding:28px 16px;">
   <tr><td align="center">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:${Number(maxWidth) || 600}px;background:${EMAIL_BRAND.cardBg};border-radius:12px;overflow:hidden;border:1px solid ${EMAIL_BRAND.border};">
-      <tr><td style="background:linear-gradient(135deg,${EMAIL_BRAND.primary} 0%,${EMAIL_BRAND.primaryDark} 100%);padding:22px 28px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:${Number(maxWidth) || 600}px;background:${EMAIL_BRAND.cardBg};border-radius:16px;overflow:hidden;border:1px solid ${EMAIL_BRAND.border};">
+      <tr><td style="background:linear-gradient(135deg,${from} 0%,${to} 100%);padding:22px 28px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td style="width:36px;vertical-align:middle;">${EMAIL_ICON_BADGE_HTML}</td>

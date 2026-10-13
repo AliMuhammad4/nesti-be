@@ -9,6 +9,7 @@ import { ingestFinalTranscriptSegment } from './transcriptSegmentService.js';
 import { voiceAgentAutocommitEnabled } from './callProviders.js';
 import { applyVoiceSuggestion } from '../admin/adminVoiceActionService.js';
 import { canReactivateVoiceCall } from './raviAgentConstants.js';
+import { fieldsForVoiceOutcome } from '../admin/adminPipelineStage.js';
 
 const ALLOWED = new Set([
   'lead.patch',
@@ -196,10 +197,12 @@ export async function handleVoiceGather({ callId, speechResult }) {
   if (call.voice_target_type === 'sales') {
     const outcome = text(parsed.outcome).toLowerCase();
     if (SALES_OUTCOMES.has(outcome)) {
-      await EnterpriseInquiry.updateOne(
-        { _id: call.voice_target_id },
-        { $set: { voice_outcome: outcome, voice_outcome_plan: text(parsed.plan).slice(0, 80), voice_outcome_note: say.slice(0, 240), voice_outcome_at: new Date() } },
-      );
+      await saveSalesVoiceOutcome(call, {
+        voice_outcome: outcome,
+        voice_outcome_plan: text(parsed.plan).slice(0, 80),
+        voice_outcome_note: say.slice(0, 240),
+        voice_outcome_at: new Date(),
+      });
     }
   }
   if (parsed.done) {
@@ -217,6 +220,15 @@ export async function handleVoiceGather({ callId, speechResult }) {
     await call.save();
   }
   return { say, audio: await synthesizeMayaVoice(say, call.voice_agent_voice), done: Boolean(parsed.done) };
+}
+
+async function saveSalesVoiceOutcome(call, fields) {
+  const row = await EnterpriseInquiry.findById(call.voice_target_id).select('pipeline_stage close_outcome').lean();
+  await EnterpriseInquiry.updateOne(
+    { _id: call.voice_target_id },
+    { $set: { ...fields, ...fieldsForVoiceOutcome(fields.voice_outcome, row) } },
+  );
+  await ProfessionalCall.updateOne({ _id: call._id }, { $set: fields });
 }
 
 export function raviSalesInstructions(role) {
@@ -237,7 +249,7 @@ export async function persistSalesOutcome({ callId, outcome, plan, note }) {
     voice_outcome_at: new Date(),
   };
   if (call.voice_target_type === 'sales') {
-    await EnterpriseInquiry.updateOne({ _id: call.voice_target_id }, { $set: fields });
+    await saveSalesVoiceOutcome(call, fields);
     return { ok: true, message: 'Saved.' };
   }
   if (call.voice_target_type === 'client' || call.voice_target_type === 'lead') {

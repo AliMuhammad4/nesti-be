@@ -161,3 +161,11 @@ export const callArtifactReadLimiter = buildLimiter({
   keyGenerator: authKeyByUserOrIp,
   shared: true,
 });
+
+export const publicChatSessionLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: 'Too many chat session requests. Please try again later.',
+  keyGenerator: authKeyByIp,
+  shared: true,
+});

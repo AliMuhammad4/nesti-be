@@ -1,10 +1,16 @@
 import OpenAI from 'openai';
+import crypto from 'crypto';
 import EnterpriseInquiry from '../../models/EnterpriseInquiry.js';
+import User from '../../models/User.js';
+import Subscription from '../../models/Subscription.js';
+import ClientSubscription from '../../models/ClientSubscription.js';
 import { fail, ok } from './adminCommon.js';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
-import { guideForAudience, landingChatPlanCards, loadLandingChatSettings } from '../chat/nestiLanding/landingChatConfig.js';
-import { EMAIL_BRAND, EMAIL_FONT, EMAIL_GREEN_CTA_STYLE, renderBrandedEmailShell } from '../email/emailTheme.js';
+import { formalityFor, guideForAudience, landingBotIdentity, landingChatPlanCards, loadLandingChatSettings, personalityFor } from '../chat/nestiLanding/landingChatConfig.js';
+import { EMAIL_BRAND, EMAIL_FONT, renderBrandedEmailShell } from '../email/emailTheme.js';
+
+export const salesEmailDeps = { sendEmail };
 
 function text(value) {
   return String(value || '').trim();
@@ -209,15 +215,20 @@ function emailHtml(subject, body) {
   const innerHtml = `
     ${parts.join('') || `<p style="margin:0;font-size:15px;line-height:1.6;color:${EMAIL_BRAND.body};">${escapeHtml(body)}</p>`}
     <p style="margin:22px 0 0;">
-      <a href="${escapeHtml(signupUrl)}" style="${EMAIL_GREEN_CTA_STYLE}">Start subscription</a>
+      <a href="${escapeHtml(signupUrl)}" style="display:inline-block;background:#0a6b3a;color:#ffffff !important;padding:14px 28px;border-radius:999px;text-decoration:none;font-weight:600;font-size:15px;font-family:${EMAIL_FONT.body};">Join Nesti</a>
     </p>
-    <p style="margin:18px 0 0;font-size:13px;line-height:1.55;color:${EMAIL_BRAND.muted};font-family:${EMAIL_FONT.body};">
-      Reply to this email if you want a walkthrough before you subscribe.
+    <p style="margin:14px 0 0;font-size:13px;line-height:1.55;color:${EMAIL_BRAND.muted};font-family:${EMAIL_FONT.body};">
+      Or open this link: <a href="${escapeHtml(signupUrl)}" style="color:#0a6b3a;font-weight:600;">${escapeHtml(signupUrl)}</a>
+    </p>
+    <p style="margin:14px 0 0;font-size:13px;line-height:1.55;color:${EMAIL_BRAND.muted};font-family:${EMAIL_FONT.body};">
+      Reply to this email if you want a walkthrough before you join.
     </p>`;
   return renderBrandedEmailShell({
     kicker: 'Nesti',
     title: escapeHtml(subject || 'Your next step with Nesti'),
     innerHtml,
+    headerFrom: '#0a6b3a',
+    headerTo: '#004b25',
     maxWidth: 600,
   });
 }
@@ -291,6 +302,9 @@ async function readEmail({ row, insight, instruction = '', currentSubject = '', 
   const settings = await loadLandingChatSettings().catch(() => null);
   const services = guideForAudience(settings || {}, audience);
   const plans = planLines(audience);
+  const { botName } = landingBotIdentity(settings || {});
+  const persona = personalityFor(settings?.personality);
+  const register = formalityFor(settings?.formality);
   const fallback = fallbackEmail({ name: text(row.full_name), audience, services, plans });
   const serviceLines = (insight?.services || []).map((line) => `- ${line}`).join('\n');
   try {
@@ -302,7 +316,7 @@ async function readEmail({ row, insight, instruction = '', currentSubject = '', 
       messages: [
         {
           role: 'system',
-          content: 'You are Ravi at Nesti. Write a polished, warm, professional subscription email. Return only JSON with keys subject and body. Body is plain text. Open with their name and one paragraph that acknowledges their situation from the insight summary. Then one line per service, each starting with "- ", then the service name, a colon, and two sentences. For a professional, include all of these lines even when the chat mentioned only one: Chatbot, Storefront, Voice agent, Pipeline, Email marketing, and Support. The chatbot line must say they can place it on their own site or any page. The storefront line must say it is their own web page. The voice agent line must describe answering calls. The pipeline line must describe tracking each lead through follow-up. The email marketing line must describe personal campaigns. The support line must describe the support module for notes and client questions. You may add other relevant service lines after these. For a client, include matched professionals, progress tracking, budget tools, and support, and do not add those professional modules. Then a short paragraph that names the recommended plan, its price, and why it fits. Close by inviting them once to create an account and start that subscription. Never use asterisks or markdown. Do not mention a score. Do not say the purchase is complete. If a revision note is present, revise the current email to follow it, keep the same person, and still include every required service line.',
+          content: `You are ${botName} at Nesti. ${persona.directive} ${register.directive} Write the subscription email in that voice. Return only JSON with keys subject and body. Body is plain text. Open with their name and one paragraph that acknowledges their situation from the insight summary. Then one line per service, each starting with "- ", then the service name, a colon, and two sentences. For a professional, include all of these lines even when the chat mentioned only one: Chatbot, Storefront, Voice agent, Pipeline, Email marketing, and Support. The chatbot line must say they can place it on their own site or any page. The storefront line must say it is their own web page. The voice agent line must describe answering calls. The pipeline line must describe tracking each lead through follow-up. The email marketing line must describe personal campaigns. The support line must describe the support module for notes and client questions. You may add other relevant service lines after these. For a client, include matched professionals, progress tracking, budget tools, and support, and do not add those professional modules. Then a short paragraph that names the recommended plan, its price, and why it fits. Close by inviting them once to create an account and start that subscription. Never use asterisks or markdown. Do not mention a score. Do not say the purchase is complete. If a revision note is present, revise the current email to follow it, keep the same person, and still include every required service line.`,
         },
         {
           role: 'user',
@@ -416,25 +430,51 @@ export async function sendAdminLeadEmailService(id, body) {
   if (!row) return fail(404, 'Admin lead not found.');
   const to = text(row.email);
   const subject = text(body?.subject).slice(0, 200);
-  const message = ensureServiceCards(cleanEmailBody(body?.body), audienceKey(row.interest_role)).slice(0, 6000);
+  const message = cleanEmailBody(body?.body).slice(0, 6000);
   if (!to) return fail(400, 'This lead has no email address.');
   if (!subject || !message) return fail(400, 'Subject and message are required.');
-  const result = await sendEmail({ email: to, subject, message, htmlMessage: emailHtml(subject, message) });
   row.guide_emails = row.guide_emails || [];
-  row.guide_emails.push({
+  let attempt = [...row.guide_emails].reverse().find((item) => (
+    item.status === 'sending'
+    && item.to_email === to
+    && item.subject === subject
+    && item.body === message
+    && item.idempotency_key
+  ));
+  if (!attempt) {
+    attempt = {
+      to_email: to,
+      subject,
+      body: message,
+      type: 'manual',
+      status: 'sending',
+      idempotency_key: crypto.randomUUID(),
+      sent_at: new Date(),
+    };
+    row.guide_emails.push(attempt);
+    await row.save();
+  }
+  const result = await salesEmailDeps.sendEmail({
+    email: to,
     subject,
-    body: message,
-    status: result?.success ? 'sent' : 'failed',
-    sent_at: new Date(),
+    message,
+    htmlMessage: emailHtml(subject, message),
+    idempotencyKey: attempt.idempotency_key,
   });
-  assignEmailDraft(row, subject, message, row.email_draft?.origin === 'manual' ? 'manual' : 'auto');
+  attempt.status = result?.success ? 'sent' : 'failed';
+  if (result?.success) {
+    attempt.sent_at = new Date();
+    assignEmailDraft(row, subject, message, row.email_draft?.origin === 'manual' ? 'manual' : 'auto');
+  }
   await row.save();
-  if (!result?.success) return fail(502, 'The email could not be sent.');
+  if (!result?.success) return fail(502, 'The email could not be sent. The attempt has been recorded.');
   return ok({
     sent: true,
     guide_emails: row.guide_emails.map((item) => ({
+      to_email: item.to_email,
       subject: item.subject,
       body: item.body,
+      type: item.type || 'manual',
       status: item.status,
       sent_at: item.sent_at,
     })),
@@ -465,15 +505,44 @@ export async function closeAdminLeadService(id, body) {
   if (!row) return fail(404, 'Admin lead not found.');
   const outcome = text(body?.outcome).toLowerCase();
   if (outcome !== 'won' && outcome !== 'lost') return fail(400, 'Choose won or lost.');
+  if (outcome === 'won') {
+    let user = row.user_id
+      ? await User.findById(row.user_id).select('_id').lean()
+      : null;
+    if (!user && text(row.email)) {
+      user = await User.findOne({ email: text(row.email) })
+        .collation({ locale: 'en', strength: 2 })
+        .select('_id')
+        .lean();
+    }
+    if (!user?._id) return fail(409, 'A lead can be marked joined only after a linked account subscribes.');
+    const [professionalSubscription, clientSubscription] = await Promise.all([
+      Subscription.exists({ user_id: user._id, status: { $in: ['free_trial', 'trialing', 'active', 'past_due'] } }),
+      ClientSubscription.exists({ user_id: user._id, status: { $in: ['trialing', 'active', 'past_due'] } }),
+    ]);
+    if (!professionalSubscription && !clientSubscription) {
+      return fail(409, 'A lead can be marked joined only after a linked account subscribes.');
+    }
+  }
   row.close_outcome = outcome;
   row.close_note = text(body?.note).slice(0, 1000);
   row.closed_at = new Date();
   row.status = 'resolved';
   if (outcome === 'won') row.pipeline_stage = 'ready';
   await row.save();
+  const { emitAdminPlatformLead } = await import('../realtime/workspaceSocket.js');
+  emitAdminPlatformLead({
+    schema: 1,
+    kind: 'admin_lead_updated',
+    inquiry_id: String(row._id),
+    stage: outcome === 'lost' ? 'closed' : 'ready',
+    close_outcome: row.close_outcome,
+    href: `/admin/leads/detail/${row._id}`,
+  });
   return ok({
     close_outcome: row.close_outcome,
     close_note: row.close_note,
     closed_at: row.closed_at,
+    stage: outcome === 'lost' ? 'closed' : 'ready',
   });
 }

@@ -7,6 +7,242 @@ import { BILLING_PLANS } from '../../billing/plans.js';
 
 export const LANDING_AUDIENCES = ['client', 'agent', 'mortgage_broker', 'lawyer'];
 
+export const PERSONALITY_KEYS = ['friendly', 'executive', 'consultative', 'sales'];
+export const FORMALITY_KEYS = ['formal', 'professional', 'casual'];
+export const DEFAULT_BOT_NAME = 'Ravi';
+export const DEFAULT_DISPLAY_NAME = 'Nesti';
+export const DEFAULT_PERSONA_TITLE = '24/7 Real Estate Copilot';
+export const PERSONA_ROLES = ['client', 'agent', 'broker', 'lawyer'];
+export const LANDING_ROLE_CUSTOMIZATIONS = ['client', 'agent', 'broker', 'lawyer'];
+const ROLE_CUSTOMIZATION_PERSONALITIES = ['friendly', 'executive', 'consultative', 'sales'];
+const ROLE_CUSTOMIZATION_COMMUNICATION = ['quick', 'conversational', 'educational', 'consultative'];
+const ROLE_CUSTOMIZATION_LANGUAGES = [
+  'english', 'french', 'spanish', 'mandarin', 'cantonese', 'hindi', 'tamil',
+  'punjabi', 'arabic', 'urdu', 'portuguese', 'tagalog', 'italian', 'german',
+  'japanese', 'vietnamese', 'other',
+];
+
+const SAMPLE_VISITOR = {
+  client: 'I am buying my first home and I do not know where to start.',
+  agent: 'I keep missing follow-ups with new leads. How would Nesti help my team?',
+  broker: 'Can Nesti help me speed up pre-approvals and keep renewals from slipping?',
+  lawyer: 'How does Nesti fit a conveyancing practice with lender instructions and closings?',
+};
+
+/**
+ * Each persona carries:
+ * - directive: how it speaks (injected into the system prompt)
+ * - opening: what the second greeting sentence should do
+ * - style: reply shape budget used by shortenLandingReply
+ * - roleLens: vocabulary focus per visitor role
+ * - fallbackQuestion: the question used when the model fails
+ * - differenceIntro: the first sentence of the "how is Nesti different" answer
+ * - sample: canned preview reply per role (used when OpenAI is unavailable)
+ */
+export const PERSONALITY_PROFILES = {
+  friendly: {
+    id: 'friendly',
+    name: 'Warm Concierge',
+    tagline: 'Listens first, then offers one easy choice.',
+    manner: 'A calm person in the room. Names what feels heavy, then asks which part to take first.',
+    description: 'For every role: acknowledge what they just said, in their words, before you mention Nesti.',
+    bestFor: PERSONA_ROLES,
+    directive: 'Persona: Warm Concierge. You are talking with a person, not presenting a product. Buyers, sellers, agents, brokers, and lawyers all get the same care and a different subject. Use contractions. React to what they actually said. Never open with Certainly, Absolutely, or I would be happy to.',
+    cadence: 'Two short spoken sentences. No feature list. The question should feel like a choice between two human next steps, not a menu.',
+    opening: 'notice what their situation feels like and say, in plain words, that you can take it one piece at a time',
+    style: { sentences: 2, bullets: 2, question: 'gentle' },
+    roleLens: {
+      client: 'Talk about the home search as something they do not have to figure out alone: budget, then the agent, broker, and lawyer who stay with them.',
+      agent: 'Talk about the worry of a lead going quiet. A reply that goes out, and a page that feels like theirs.',
+      broker: 'Talk about the pile of documents and the renewal that sneaks up. Make it feel manageable, not like a process diagram.',
+      lawyer: 'Talk about the file, the lender, and the people waiting on a closing date. Keep it calm and specific.',
+    },
+    fallbackQuestion: {
+      client: 'Want to start with what you can afford, or with who should be in your corner?',
+      agent: 'Is the hard part the follow up, or getting your own page up?',
+      broker: 'Is the tiring part the documents, or remembering who is coming up for renewal?',
+      lawyer: 'Is the heavy part the closing itself, or keeping everyone updated while you get there?',
+    },
+    differenceIntro: 'The short version is that you stop juggling five tools for one transaction.',
+    sample: {
+      visitor: SAMPLE_VISITOR,
+      reply: {
+        client: 'A first home can feel like everyone else already knows the steps. You do not have to sort the budget and the people at the same time. Which one do you want to put down first?',
+        agent: 'That quiet lead is the one that stings. Nesti can send the follow up while you are in a showing, from a page that is actually yours. Want the follow up sorted first, or the page?',
+        broker: 'Pre-approvals drag when the documents are scattered, and renewals slip when nobody calls in time. We can take one of those off your desk. Which one is louder this week?',
+        lawyer: 'A closing gets noisy when the lender, the client, and the realtor are all asking where the file stands. Nesti keeps the agreement and the closing date in one place. Want to start with the file, or with the updates people keep requesting?',
+      },
+    },
+  },
+  executive: {
+    id: 'executive',
+    name: 'Executive Advisor',
+    tagline: 'States the result, then asks for the decision.',
+    manner: 'A sharp colleague. Short sentences, no slogans, one decision and then they stop.',
+    description: 'For every role: name the outcome in one line, then ask which decision they want to make.',
+    bestFor: PERSONA_ROLES,
+    directive: 'Persona: Executive Advisor. Speak like a sharp colleague to buyers, sellers, agents, brokers, and lawyers. Short sentences. No exclamation marks. No jargon such as leverage, throughput, velocity, actionable, or operational. Change the decision for the role. Do not change into a brochure.',
+    cadence: 'One result, then one decision question. Do not list services. Do not soften the point with filler.',
+    opening: 'name the result you can take off their plate, in one plain sentence, with no slogan',
+    style: { sentences: 2, bullets: 3, question: 'direct' },
+    roleLens: {
+      client: 'The result is a purchase with a budget, a team, and a closing date that someone is watching.',
+      agent: 'The result is a lead that gets a reply, and a team that can see which conversations are still open.',
+      broker: 'The result is a faster pre-approval and a renewal that is called before it leaves.',
+      lawyer: 'The result is a file that moves from intake to closing without a scavenger hunt for the lender instructions.',
+    },
+    fallbackQuestion: {
+      client: 'Which decision comes first: the budget, or who represents you?',
+      agent: 'Which break is costing deals: the first reply, or the follow up after it?',
+      broker: 'Which number do you want back: pre-approval time, or renewals kept?',
+      lawyer: 'Which delay do you want gone: intake, or the closing itself?',
+    },
+    differenceIntro: 'Nesti is one system for the work you already do, not another place to store notes.',
+    sample: {
+      visitor: SAMPLE_VISITOR,
+      reply: {
+        client: 'A first purchase goes better when the budget and the team are decided before you tour. Nesti holds both. Budget, or the team?',
+        agent: 'A missed follow up is a lost conversation, not a software problem. Nesti replies and keeps the thread where the team can see it. First reply, or the follow up after?',
+        broker: 'Slow pre-approvals and missed renewals are the same leak: nobody owns the date. Nesti does. Which one do you want back first?',
+        lawyer: 'Closings slip when the agreement and the lender instructions live in different inboxes. Nesti puts them on one file. Intake, or the closing date?',
+      },
+    },
+  },
+  consultative: {
+    id: 'consultative',
+    name: 'Consultative Specialist',
+    tagline: 'Offers two causes, then waits.',
+    manner: 'Curious, not scripted. They guess the cause, you correct them, then you talk about one fix.',
+    description: 'For every role: do not explain the product until they tell you which problem is actually theirs.',
+    bestFor: PERSONA_ROLES,
+    directive: 'Persona: Consultative Specialist. Be curious with buyers, sellers, agents, brokers, and lawyers. Offer two likely causes in everyday words and wait. Do not pitch. Do not say root cause, workflow, or diagnostic. Map their answer to one Nesti capability only after they choose.',
+    cadence: 'One observation, then a question that makes them pick. If they have not picked yet, do not explain a feature.',
+    opening: 'mention the two reasons people in their role usually write in, and ask which one sounds like them',
+    style: { sentences: 2, bullets: 2, question: 'diagnostic' },
+    roleLens: {
+      client: 'The two causes are not knowing the budget, or not knowing who should help. Wait for which one they pick.',
+      agent: 'The two causes are no reply before the lead goes cold, or no follow up after the first conversation.',
+      broker: 'The two causes are slow document collection, or no call before a renewal date.',
+      lawyer: 'The two causes are lender instructions arriving late, or client documents that never show up.',
+    },
+    fallbackQuestion: {
+      client: 'Which is it for you: the budget, or who you should work with?',
+      agent: 'Where does the lead go quiet: before you reply, or after the first conversation?',
+      broker: 'Where does time go: collecting documents, or calling clients before renewal?',
+      lawyer: 'Where does the file stall: late lender instructions, or documents the client still owes you?',
+    },
+    differenceIntro: 'Nesti is useful at the exact moment this work usually stalls.',
+    sample: {
+      visitor: SAMPLE_VISITOR,
+      reply: {
+        client: 'First-time buyers usually stall in one of two places: they do not know the budget, or they do not know who should be on the team. Which one is yours?',
+        agent: 'Follow ups die in two places. Either nobody replies while the lead is still warm, or the thread dies after hello. Which one is happening?',
+        broker: 'Pre-approvals slow down in the documents. Renewals slip because nobody calls in time. Which of those is the one you feel?',
+        lawyer: 'Closings slip for two boring reasons: the lender instructions arrive late, or the client documents never land. Which one shows up more?',
+      },
+    },
+  },
+  sales: {
+    id: 'sales',
+    name: 'High-Velocity Growth',
+    tagline: 'One win, then a choice of what to do first.',
+    manner: 'Forward, not a pitch deck. They name one win for that role and ask which to do now.',
+    description: 'For every role: one concrete win, then they pick the first move. No invented numbers.',
+    bestFor: PERSONA_ROLES,
+    directive: 'Persona: High-Velocity Growth. Be direct with buyers, sellers, agents, brokers, and lawyers. One win for their role, then a choice. Sound like a person who wants them moving, not a campaign. Never say unlock, supercharge, game-changer, or revenue engine. Never invent a number.',
+    cadence: 'Name one win in a sentence they could say out loud. Then ask which move they want first. Stop. Do not add a second benefit.',
+    opening: 'offer one specific win for their role and invite them to pick what to do first',
+    style: { sentences: 2, bullets: 2, question: 'cta' },
+    roleLens: {
+      client: 'The win is a team and a budget in place before they waste weeks touring the wrong homes.',
+      agent: 'The win is a new lead getting a reply before they call the next agent, from a page with your name on it.',
+      broker: 'The win is a pre-approval that is not waiting on a missing document, and a renewal you call first.',
+      lawyer: 'The win is another closing that does not need a second inbox, plus work sent by agents and brokers you already know.',
+    },
+    fallbackQuestion: {
+      client: 'Team first, or the budget?',
+      agent: 'The first reply, or the page clients land on?',
+      broker: 'Faster pre-approvals, or the renewal call?',
+      lawyer: 'The closing file, or referrals from agents and brokers?',
+    },
+    differenceIntro: 'Other tools store the deal. Nesti moves the next step.',
+    sample: {
+      visitor: SAMPLE_VISITOR,
+      reply: {
+        client: 'You can have a budget and a team before you book a single showing. That is the part that saves the wasted weeks. Budget, or the team?',
+        agent: 'The agent who replies first usually gets the conversation. Nesti sends that reply from a page with your name on it. Want the reply, or the page, first?',
+        broker: 'A pre-approval moves when the documents are in one place. A renewal stays yours when you call before someone else does. Which do you want this week?',
+        lawyer: 'You can close the file you have, or you can also take work that agents and brokers send you. Which matters more right now?',
+      },
+    },
+  },
+};
+
+export const FORMALITY_LEVELS = {
+  formal: {
+    id: 'formal',
+    short: 'Formal',
+    name: 'Formal & Polished',
+    description: 'Full words and no exclamation marks. "I am" stays "I am".',
+    directive: 'Register: formal. Use refined, formal business English with full sentences. Avoid contractions, idioms, and casual phrasing. Do not use exclamation marks.',
+  },
+  professional: {
+    id: 'professional',
+    short: 'Professional',
+    name: 'Business Professional',
+    description: 'The written reply, kept as it is. This is the default.',
+    directive: 'Register: professional. Use crisp, direct business language. Contractions are fine. Stay respectful and clear.',
+  },
+  casual: {
+    id: 'casual',
+    short: 'Casual',
+    name: 'Conversational',
+    description: 'Spoken contractions. "I am" becomes "I\'m".',
+    directive: 'Register: casual. Use relaxed, conversational phrasing, contractions, and plain words while keeping full domain authority.',
+  },
+};
+
+export function personalityFor(key) {
+  return PERSONALITY_PROFILES[String(key || '').trim()] || PERSONALITY_PROFILES.friendly;
+}
+
+export function formalityFor(key) {
+  return FORMALITY_LEVELS[String(key || '').trim()] || FORMALITY_LEVELS.professional;
+}
+
+export function personaRoleKey(audience) {
+  const raw = String(audience || '').trim().toLowerCase();
+  if (raw.includes('lawyer')) return 'lawyer';
+  if (raw.includes('mortgage') || raw.includes('broker')) return 'broker';
+  if (raw.includes('agent') || raw.includes('realtor')) return 'agent';
+  return 'client';
+}
+
+export function landingBotIdentity(settings = {}) {
+  const botName = text(settings?.bot_name) || DEFAULT_BOT_NAME;
+  const displayName = text(settings?.display_name) || DEFAULT_DISPLAY_NAME;
+  const personaTitle = text(settings?.bot_persona_title) || DEFAULT_PERSONA_TITLE;
+  return { botName, displayName, personaTitle };
+}
+
+export function landingJoinUrl() {
+  const base = String(process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  return `${base}/sign-up`;
+}
+
+export function landingWelcomeCopy(settings = {}, name = '') {
+  const { botName } = landingBotIdentity(settings);
+  const formality = formalityFor(settings?.formality).id;
+  const who = text(name) || 'there';
+  const joinUrl = landingJoinUrl();
+  const subject = applyRegister(`Thanks for talking with ${botName}`, formality);
+  const message = applyRegister(
+    `Hi ${who}, I am ${botName}. Thank you for the conversation. A specialist can walk you through the plan that fits.\n\nJoin Nesti: ${joinUrl}`,
+    formality,
+  );
+  return { subject, message, joinUrl, botName };
+}
+
 const GUIDE_SEEDS = {
   client: 'A client buying or selling is matched with a real estate agent, a mortgage broker, and a real estate lawyer. Nesti then gives progress tracking, budget tools, and support through the purchase or sale.',
   agent: 'Agents get a chatbot they create and customize, a storefront that is their own web page, a lead inbox, referrals so they can refer a lead, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent.',
@@ -18,18 +254,96 @@ function text(value) {
   return String(value || '').trim();
 }
 
-export function sanitizeLandingGuideText(value, { maxLength = 600 } = {}) {
+const CONTRACTIONS = [
+  [/\bI'm\b/g, 'I am'],
+  [/\bi'm\b/g, 'i am'],
+  [/\bDon't\b/g, 'Do not'],
+  [/\bdon't\b/g, 'do not'],
+  [/\bCan't\b/g, 'Cannot'],
+  [/\bcan't\b/g, 'cannot'],
+  [/\bWon't\b/g, 'Will not'],
+  [/\bwon't\b/g, 'will not'],
+  [/\bIt's\b/g, 'It is'],
+  [/\bit's\b/g, 'it is'],
+  [/\bThat's\b/g, 'That is'],
+  [/\bthat's\b/g, 'that is'],
+  [/\bYou're\b/g, 'You are'],
+  [/\byou're\b/g, 'you are'],
+  [/\bWe're\b/g, 'We are'],
+  [/\bwe're\b/g, 'we are'],
+  [/\bThey're\b/g, 'They are'],
+  [/\bthey're\b/g, 'they are'],
+  [/\bLet's\b/g, 'Let us'],
+  [/\blet's\b/g, 'let us'],
+  [/\bI've\b/g, 'I have'],
+  [/\bi've\b/g, 'i have'],
+  [/\bI'd\b/g, 'I would'],
+  [/\bi'd\b/g, 'i would'],
+  [/\bYou'll\b/g, 'You will'],
+  [/\byou'll\b/g, 'you will'],
+  [/\bWe'll\b/g, 'We will'],
+  [/\bwe'll\b/g, 'we will'],
+  [/\bIsn't\b/g, 'Is not'],
+  [/\bisn't\b/g, 'is not'],
+  [/\bAren't\b/g, 'Are not'],
+  [/\baren't\b/g, 'are not'],
+  [/\bDoesn't\b/g, 'Does not'],
+  [/\bdoesn't\b/g, 'does not'],
+  [/\bDidn't\b/g, 'Did not'],
+  [/\bdidn't\b/g, 'did not'],
+];
+
+const EXPANSIONS = [
+  [/\bLet us\b/g, "Let's"],
+  [/\blet us\b/g, "let's"],
+  [/\bI am\b/g, "I'm"],
+  [/\bI have\b/g, "I've"],
+  [/\bI would\b/g, "I'd"],
+  [/\bDo not\b/g, "Don't"],
+  [/\bdo not\b/g, "don't"],
+  [/\bCannot\b/g, "Can't"],
+  [/\bcannot\b/g, "can't"],
+  [/\bWill not\b/g, "Won't"],
+  [/\bwill not\b/g, "won't"],
+  [/\bIt is\b/g, "It's"],
+  [/\bit is\b/g, "it's"],
+  [/\bThat is\b/g, "That's"],
+  [/\bthat is\b/g, "that's"],
+  [/\bYou are\b/g, "You're"],
+  [/\byou are\b/g, "you're"],
+  [/\bWe are\b/g, "We're"],
+  [/\bwe are\b/g, "we're"],
+  [/\bThey are\b/g, "They're"],
+  [/\bthey are\b/g, "they're"],
+];
+
+/** Formal expands contractions and drops exclamation marks. Casual uses contractions. Professional stays as written. */
+export function applyRegister(value, formality = 'professional') {
+  const raw = String(value || '');
+  if (formality === 'casual') {
+    let next = raw;
+    for (const [pattern, replacement] of EXPANSIONS) next = next.replace(pattern, replacement);
+    return next;
+  }
+  if (formality !== 'formal') return raw;
+  let next = raw;
+  for (const [pattern, replacement] of CONTRACTIONS) next = next.replace(pattern, replacement);
+  next = next.replace(/!+/g, '.').replace(/\.{2,}/g, '.');
+  return next.replace(/(^|[.]\s+)([a-z])/g, (match, lead, letter) => lead + letter.toUpperCase());
+}
+
+export function sanitizeLandingGuideText(value, { maxLength = 2000 } = {}) {
   let next = text(value)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\[(.*?)\]/g, '$1')
     .replace(/\*\*|\*|_+|#{1,6}|`/g, ' ')
     .replace(/^(?:[-*•]\s*)+/gm, '')
-    .replace(/\b(?:ignore|override|system|prompt|instructions?|assistant|developer|always|never|do not|don't|stop|bypass)\b/gi, ' ')
+    .replace(/\b(?:ignore|override|bypass|jailbreak)\b/gi, ' ')
+    .replace(/\b(?:system|developer)\s+prompt\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
   if (!next) return '';
-  next = next.replace(/\s+(?:and|or)\s+/gi, ' ');
   if (next.length > maxLength) next = next.slice(0, maxLength).trim();
   return next.replace(/\s+([,.!?])/g, '$1');
 }
@@ -128,19 +442,74 @@ export function landingSettingsView(doc, embed = null) {
   return {
     enabled: doc?.enabled !== false,
     welcome_message: text(doc?.welcome_message),
-    display_name: text(doc?.display_name) || 'Nesti',
+    bot_name: text(doc?.bot_name) || DEFAULT_BOT_NAME,
+    display_name: text(doc?.display_name) || DEFAULT_DISPLAY_NAME,
+    bot_persona_title: text(doc?.bot_persona_title) || DEFAULT_PERSONA_TITLE,
+    personality: PERSONALITY_KEYS.includes(doc?.personality) ? doc.personality : 'friendly',
+    formality: FORMALITY_KEYS.includes(doc?.formality) ? doc.formality : 'professional',
+    personalities: PERSONALITY_PROFILES,
+    formalities: FORMALITY_LEVELS,
+    defaults: {
+      bot_name: DEFAULT_BOT_NAME,
+      display_name: DEFAULT_DISPLAY_NAME,
+      bot_persona_title: DEFAULT_PERSONA_TITLE,
+    },
     consent_line: text(doc?.consent_line),
     signup_cta_copy: text(doc?.signup_cta_copy),
     client_guide: sanitizeLandingGuideText(doc?.client_guide),
     agent_guide: sanitizeLandingGuideText(doc?.agent_guide),
     broker_guide: sanitizeLandingGuideText(doc?.broker_guide),
     lawyer_guide: sanitizeLandingGuideText(doc?.lawyer_guide),
+    role_customizations: sanitizeLandingRoleCustomizations(doc?.role_customizations),
     seeds: GUIDE_SEEDS,
     auto_welcome_followup: Boolean(doc?.auto_welcome_followup),
     dual_write_inquiry: Boolean(doc?.dual_write_inquiry),
     embed_ready: Boolean(embed?.token),
     embed_id: embed?._id ? String(embed._id) : '',
   };
+}
+
+export function sanitizeLandingRoleCustomizations(input = {}) {
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const output = {};
+  for (const role of LANDING_ROLE_CUSTOMIZATIONS) {
+    const value = source[role] && typeof source[role] === 'object' && !Array.isArray(source[role])
+      ? source[role]
+      : {};
+    const list = (key, maxItems, maxLength = 100) => (
+      Array.isArray(value[key])
+        ? [...new Set(value[key].map((item) => clip(item, maxLength)).filter(Boolean))].slice(0, maxItems)
+        : []
+    );
+    const questions = Array.isArray(value.faqs)
+      ? value.faqs.slice(0, 15).map((faq) => ({
+        question: clip(faq?.question, 240),
+        answer: clip(faq?.answer, 1200),
+      })).filter((faq) => faq.question && faq.answer)
+      : [];
+    output[role] = {
+      enabled: Boolean(value.enabled),
+      personalities: list('personalities', 2, 24).filter((item) => ROLE_CUSTOMIZATION_PERSONALITIES.includes(item)),
+      languages: list('languages', 20, 60).filter((item) => (
+        ROLE_CUSTOMIZATION_LANGUAGES.includes(item.toLowerCase()) || /^[\p{L}\p{M} .'-]{2,60}$/u.test(item)
+      )),
+      auto_detect_language: value.auto_detect_language !== false,
+      communication_style: ROLE_CUSTOMIZATION_COMMUNICATION.includes(value.communication_style)
+        ? value.communication_style
+        : 'conversational',
+      use_emojis: Boolean(value.use_emojis),
+      address_by_first_name: value.address_by_first_name !== false,
+      focus_areas: list('focus_areas', 20, 120),
+      differentiators: list('differentiators', 15, 120),
+      custom_guidance: sanitizeLandingGuideText(value.custom_guidance, { maxLength: 2000 }),
+      website_reference: sanitizeLandingGuideText(value.website_reference, { maxLength: 3000 }),
+      services_pricing: sanitizeLandingGuideText(value.services_pricing, { maxLength: 2000 }),
+      qualification_questions: list('qualification_questions', 12, 180),
+      next_actions: list('next_actions', 7, 40),
+      faqs: questions,
+    };
+  }
+  return output;
 }
 
 export function guideForAudience(settings, audience) {
@@ -159,13 +528,18 @@ export function settingsPayload(body = {}) {
   return {
     enabled: body.enabled !== false && body.enabled !== 'false',
     welcome_message: clip(body.welcome_message),
-    display_name: clip(body.display_name, 80) || 'Nesti',
+    bot_name: clip(body.bot_name, 40) || DEFAULT_BOT_NAME,
+    display_name: clip(body.display_name, 80) || DEFAULT_DISPLAY_NAME,
+    bot_persona_title: clip(body.bot_persona_title, 80) || DEFAULT_PERSONA_TITLE,
+    personality: PERSONALITY_KEYS.includes(body.personality) ? body.personality : 'friendly',
+    formality: FORMALITY_KEYS.includes(body.formality) ? body.formality : 'professional',
     consent_line: clip(body.consent_line, 400),
     signup_cta_copy: clip(body.signup_cta_copy, 400),
     client_guide: sanitizeLandingGuideText(body.client_guide),
     agent_guide: sanitizeLandingGuideText(body.agent_guide),
     broker_guide: sanitizeLandingGuideText(body.broker_guide),
     lawyer_guide: sanitizeLandingGuideText(body.lawyer_guide),
+    role_customizations: sanitizeLandingRoleCustomizations(body.role_customizations),
     auto_welcome_followup: Boolean(body.auto_welcome_followup),
     dual_write_inquiry: Boolean(body.dual_write_inquiry),
   };

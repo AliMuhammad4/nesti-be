@@ -662,4 +662,3 @@ export async function patchAdminProfessionalService(id, patch = {}) {
   await profile.save();
   return getAdminProfessionalService(id);
 }
-

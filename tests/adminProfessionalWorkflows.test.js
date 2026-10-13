@@ -162,24 +162,40 @@ test('listAdminSalesPipelineService counts the full filtered lead set instead of
   const ProfessionalProfile = (await import('../models/ProfessionalProfile.js')).default;
   const Subscription = (await import('../models/Subscription.js')).default;
   const ClientSubscription = (await import('../models/ClientSubscription.js')).default;
-  const { listAdminSalesPipelineService } = await import('../services/admin/adminSalesPipelineService.js');
+  const {
+    listAdminSalesPipelineService,
+    buildAdminSalesPipelineAggregation,
+  } = await import('../services/admin/adminSalesPipelineService.js');
+  const pipeline = buildAdminSalesPipelineAggregation({}, { skip: 0, limit: 2, activeOnly: false });
+  const countGroup = pipeline.find((step) => step.$facet?.counts).$facet.counts[0].$group;
+  assert.deepEqual(
+    countGroup.open.$sum.$cond[0],
+    { $not: [{ $in: ['$close_outcome', ['won', 'lost']] }] },
+  );
+  assert.deepEqual(
+    countGroup.ready_open.$sum.$cond[0].$and[1],
+    { $not: [{ $in: ['$close_outcome', ['won', 'lost']] }] },
+  );
 
   const allDocs = [
-    { _id: '507f1f77bcf86cd799439031', source: 'landing_chat', full_name: 'A', email: 'a@example.com', interest_role: 'client', message: 'hello', createdAt: new Date('2024-01-01T00:00:00Z'), pipeline_stage: 'new' },
-    { _id: '507f1f77bcf86cd799439032', source: 'landing_chat', full_name: 'B', email: 'b@example.com', interest_role: 'agent', message: 'hi', createdAt: new Date('2024-01-02T00:00:00Z'), pipeline_stage: 'new' },
-    { _id: '507f1f77bcf86cd799439033', source: 'landing_chat', full_name: 'C', email: 'c@example.com', interest_role: 'broker', message: 'there', createdAt: new Date('2024-01-03T00:00:00Z'), pipeline_stage: 'ready' },
-    { _id: '507f1f77bcf86cd799439034', source: 'direct_inquiry', full_name: 'D', email: 'd@example.com', interest_role: 'lawyer', message: 'need help', createdAt: new Date('2024-01-04T00:00:00Z'), pipeline_stage: 'calling' },
+    { _id: '507f1f77bcf86cd799439031', source: 'landing_chat', full_name: 'A', email: 'a@example.com', interest_role: 'client', message: 'hello', createdAt: new Date('2024-01-01T00:00:00Z'), pipeline_stage: 'new', resolved_pipeline_stage: 'new' },
+    { _id: '507f1f77bcf86cd799439032', source: 'landing_chat', full_name: 'B', email: 'b@example.com', interest_role: 'agent', message: 'hi', createdAt: new Date('2024-01-02T00:00:00Z'), pipeline_stage: 'new', resolved_pipeline_stage: 'new' },
+    { _id: '507f1f77bcf86cd799439033', source: 'landing_chat', full_name: 'C', email: 'c@example.com', interest_role: 'broker', message: 'there', createdAt: new Date('2024-01-03T00:00:00Z'), pipeline_stage: 'ready', resolved_pipeline_stage: 'ready' },
+    { _id: '507f1f77bcf86cd799439034', source: 'direct_inquiry', full_name: 'D', email: 'd@example.com', interest_role: 'lawyer', message: 'need help', createdAt: new Date('2024-01-04T00:00:00Z'), pipeline_stage: 'calling', resolved_pipeline_stage: 'calling' },
   ];
   const pageDocs = allDocs.slice(0, 2);
 
   try {
-    bag.stub(EnterpriseInquiry, 'countDocuments', async () => allDocs.length);
-    bag.stub(EnterpriseInquiry, 'find', () => ({
-      sort() { return this; },
-      skip() { return { limit() { return { lean: async () => pageDocs }; } }; },
-      limit() { return { lean: async () => pageDocs }; },
-      lean: async () => allDocs,
-    }));
+    bag.stub(EnterpriseInquiry, 'aggregate', async (pipeline) => {
+      assert.ok(pipeline.some((step) => step.$facet?.filtered));
+      assert.ok(pipeline.some((step) => step.$facet?.counts));
+      assert.ok(pipeline.at(-1).$facet.items.some((step) => step.$limit === 2));
+      return [{
+        items: pageDocs,
+        filtered: [{ total: 4 }],
+        counts: [{ total: 4, new: 2, ready: 1, calling: 1 }],
+      }];
+    });
     bag.stub(User, 'find', () => ({ collation() { return this; }, select() { return { lean: async () => [] }; } }));
     bag.stub(ProfessionalProfile, 'find', () => ({ select() { return { lean: async () => [] }; } }));
     bag.stub(Subscription, 'find', () => ({ select() { return { lean: async () => [] }; } }));
@@ -191,6 +207,211 @@ test('listAdminSalesPipelineService counts the full filtered lead set instead of
     assert.equal(result.body.counts.new, 2);
     assert.equal(result.body.counts.ready, 1);
     assert.equal(result.body.counts.calling, 1);
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('listAdminSalesPipelineService active board puts joined leads in ready and lost leads in closed', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const User = (await import('../models/User.js')).default;
+  const ProfessionalProfile = (await import('../models/ProfessionalProfile.js')).default;
+  const Subscription = (await import('../models/Subscription.js')).default;
+  const ClientSubscription = (await import('../models/ClientSubscription.js')).default;
+  const { listAdminSalesPipelineService } = await import('../services/admin/adminSalesPipelineService.js');
+
+  const allDocs = [
+    { _id: '507f1f77bcf86cd799439031', source: 'landing_chat', full_name: 'A', email: 'a@example.com', interest_role: 'client', message: 'hello', createdAt: new Date('2024-01-01T00:00:00Z'), pipeline_stage: 'new', resolved_pipeline_stage: 'new' },
+    { _id: '507f1f77bcf86cd799439032', source: 'landing_chat', full_name: 'B', email: 'b@example.com', interest_role: 'agent', message: 'hi', createdAt: new Date('2024-01-02T00:00:00Z'), pipeline_stage: 'ready', close_outcome: 'won', close_note: 'Subscribed', resolved_pipeline_stage: 'ready' },
+    { _id: '507f1f77bcf86cd799439033', source: 'direct_inquiry', full_name: 'C', email: 'c@example.com', interest_role: 'broker', message: 'there', createdAt: new Date('2024-01-03T00:00:00Z'), pipeline_stage: 'calling', close_outcome: 'lost', resolved_pipeline_stage: 'closed' },
+  ];
+
+  try {
+    const filteredDocs = [allDocs, [allDocs[0]], [allDocs[2]], [allDocs[1]]];
+    const aggregateCalls = [];
+    bag.stub(EnterpriseInquiry, 'aggregate', async (pipeline) => {
+      aggregateCalls.push(pipeline);
+      const index = aggregateCalls.length - 1;
+      const docs = filteredDocs[index] || [];
+      return [{
+        items: docs,
+        filtered: [{ total: docs.length }],
+        counts: [{
+          total: 3, new: 1, ready: 1, calling: 0, closed: 1,
+          open: 1, joined: 1, nurture: 1, chatbot: 2, direct: 1, ready_open: 0,
+        }],
+      }];
+    });
+    bag.stub(User, 'find', () => ({ collation() { return this; }, select() { return { lean: async () => [] }; } }));
+    bag.stub(ProfessionalProfile, 'find', () => ({ select() { return { lean: async () => [] }; } }));
+    bag.stub(Subscription, 'find', () => ({ select() { return { lean: async () => [] }; } }));
+    bag.stub(ClientSubscription, 'find', () => ({ select() { return { lean: async () => [] }; } }));
+
+    const result = await listAdminSalesPipelineService({ page: 1, limit: 10, active: '1' });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.pagination.total, 3);
+    assert.equal(result.body.items.length, 3);
+    assert.equal(result.body.items.find((item) => item.name === 'A').stage, 'new');
+    assert.equal(result.body.items.find((item) => item.name === 'B').stage, 'ready');
+    assert.equal(result.body.items.find((item) => item.name === 'B').close_outcome, 'won');
+    assert.equal(result.body.items.find((item) => item.name === 'B').close_note, 'Subscribed');
+    assert.equal(result.body.items.find((item) => item.name === 'C').stage, 'closed');
+    assert.equal(result.body.counts.new, 1);
+    assert.equal(result.body.counts.ready, 1);
+    assert.equal(result.body.counts.calling, 0);
+    assert.equal(result.body.counts.closed, 1);
+    assert.equal(result.body.counts.open, 1);
+    assert.equal(result.body.counts.joined, 1);
+    assert.equal(result.body.counts.nurture, 1);
+    assert.equal(result.body.items.find((item) => item.name === 'B').status, 'joined');
+    assert.equal(result.body.items.find((item) => item.name === 'C').status, 'nurture');
+    assert.equal(result.body.pagination.has_next_page, false);
+
+    const openOnly = await listAdminSalesPipelineService({ page: 1, limit: 10, status: 'open' });
+    assert.deepEqual(openOnly.body.items.map((item) => item.name), ['A']);
+    assert.equal(openOnly.body.pagination.total, 1);
+
+    const nurtureBrokers = await listAdminSalesPipelineService({ page: 1, limit: 10, status: 'nurture', role: 'broker', source: 'direct-query' });
+    assert.deepEqual(nurtureBrokers.body.items.map((item) => item.name), ['C']);
+
+    const searched = await listAdminSalesPipelineService({ page: 1, limit: 10, q: 'b@example' });
+    assert.deepEqual(searched.body.items.map((item) => item.name), ['B']);
+    assert.ok(aggregateCalls[1].some((step) => step.$facet?.items?.[0]?.$match?.$and?.some((clause) => clause.close_outcome)));
+    assert.ok(aggregateCalls[2].some((step) => step.$facet?.items?.[0]?.$match?.$and?.some((clause) => clause.$expr)));
+    assert.ok(aggregateCalls[3].some((step) => step.$facet?.items?.[0]?.$match?.$and?.some((clause) => clause.$or)));
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('a returning direct query reopens the nurture lead instead of creating a duplicate', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const User = (await import('../models/User.js')).default;
+  const { createDirectAdminInquiry } = await import('../services/admin/directInquiryService.js');
+
+  let saved = 0;
+  let created = 0;
+  const nurture = {
+    _id: '507f1f77bcf86cd799439041',
+    source: 'direct_inquiry',
+    email: 'back@example.com',
+    full_name: 'Back Again',
+    close_outcome: 'lost',
+    close_note: 'Not now',
+    closed_at: new Date('2024-01-01T00:00:00Z'),
+    status: 'resolved',
+    pipeline_stage: 'new',
+    reopen_count: 0,
+    async save() { saved += 1; return this; },
+  };
+
+  try {
+    bag.stub(EnterpriseInquiry, 'findOne', (query) => ({
+      sort: async () => (query.close_outcome === 'lost' ? nurture : null),
+    }));
+    bag.stub(EnterpriseInquiry, 'findById', async () => null);
+    bag.stub(EnterpriseInquiry, 'create', async () => { created += 1; return {}; });
+    bag.stub(User, 'find', () => ({ select() { return { lean: async () => [] }; } }));
+
+    const result = await createDirectAdminInquiry({
+      email: 'back@example.com',
+      full_name: 'Back Again',
+      message: 'Ready to look at plans now',
+    });
+    assert.equal(result, nurture);
+    assert.equal(created, 0);
+    assert.equal(saved, 1);
+    assert.equal(nurture.close_outcome, '');
+    assert.equal(nurture.pipeline_stage, 'calling');
+    assert.equal(nurture.reopen_count, 1);
+    assert.equal(nurture.message, 'Ready to look at plans now');
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('a successful direct inquiry thank-you is recorded in that lead email history', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const { directInquiryDeps, createDirectAdminInquiry } = await import('../services/admin/directInquiryService.js');
+  const inquiry = {
+    _id: '507f1f77bcf86cd799439043',
+    email: 'new@example.com',
+    source: 'direct_inquiry',
+    guide_emails: [],
+    async save() { return this; },
+  };
+
+  try {
+    bag.stub(EnterpriseInquiry, 'findOne', () => ({ sort: async () => null }));
+    bag.stub(EnterpriseInquiry, 'create', async () => inquiry);
+    bag.stub(directInquiryDeps, 'notifyAdminsOfAdminLead', async () => {});
+    bag.stub(directInquiryDeps, 'queueAdminLeadFollowUp', () => {});
+    bag.stub(directInquiryDeps, 'sendLandingThanksEmail', async () => ({
+      sent: true,
+      to: 'new@example.com',
+      subject: 'Welcome to Nesti',
+      message: 'Thanks for reaching out.',
+    }));
+
+    await createDirectAdminInquiry({
+      email: 'new@example.com',
+      full_name: 'New Lead',
+      message: 'I want to learn about plans.',
+    });
+
+    assert.equal(inquiry.guide_emails.length, 1);
+    assert.deepEqual(inquiry.guide_emails[0], {
+      to_email: 'new@example.com',
+      subject: 'Welcome to Nesti',
+      body: 'Thanks for reaching out.',
+      type: 'automatic',
+      status: 'sent',
+      idempotency_key: `direct_inquiry_thanks:${inquiry._id}`,
+      sent_at: inquiry.guide_emails[0].sent_at,
+    });
+    assert.ok(inquiry.guide_emails[0].sent_at instanceof Date);
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('a successful chatbot welcome is linked to the matching admin lead once', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const { recordLandingWelcomeOnAdminLead } = await import('../services/chat/nestiLanding/notifyAdminsOfLandingLead.js');
+  const updates = [];
+  const inquiryId = '507f1f77bcf86cd799439044';
+  const leadMatchId = '507f1f77bcf86cd799439045';
+
+  try {
+    bag.stub(EnterpriseInquiry, 'findOne', () => ({
+      sort() { return this; },
+      select() { return this; },
+      lean: async () => ({ _id: inquiryId }),
+    }));
+    bag.stub(EnterpriseInquiry, 'updateOne', async (filter, update) => { updates.push({ filter, update }); });
+
+    const recorded = await recordLandingWelcomeOnAdminLead({
+      leadMatchId,
+      email: 'chat@example.com',
+      sent: { sent: true, to: 'chat@example.com', subject: 'Welcome', message: 'Thanks for chatting.' },
+    });
+    const failed = await recordLandingWelcomeOnAdminLead({
+      leadMatchId: '507f1f77bcf86cd799439046',
+      email: 'chat@example.com',
+      sent: { sent: false, to: 'chat@example.com', subject: 'Welcome', message: 'Not sent.' },
+    });
+
+    assert.equal(recorded, true);
+    assert.equal(failed, false);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].filter._id, inquiryId);
+    assert.equal(updates[0].filter['guide_emails.idempotency_key'].$ne, `landing_welcome:${leadMatchId}`);
+    assert.equal(updates[0].update.$push.guide_emails.body, 'Thanks for chatting.');
+    assert.equal(updates[0].update.$push.guide_emails.type, 'automatic');
   } finally {
     bag.restoreAll();
   }
@@ -436,3 +657,158 @@ test('patchAdminLeadService fails closed when transactions are unavailable', asy
   }
 });
 
+test('deleteAdminSalesLeadService removes a desk inquiry and rejects other sources', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const { deleteAdminSalesLeadService } = await import('../services/admin/adminSalesPipelineService.js');
+  const id = '507f1f77bcf86cd799439041';
+  let deleted = '';
+
+  try {
+    bag.stub(EnterpriseInquiry, 'findById', (asked) => ({
+      select() {
+        return {
+          lean: async () => (String(asked) === id
+            ? { _id: id, source: 'landing_chat' }
+            : { _id: asked, source: 'demo' }),
+        };
+      },
+    }));
+    bag.stub(EnterpriseInquiry, 'findByIdAndDelete', async (asked) => {
+      deleted = String(asked);
+      return { _id: asked };
+    });
+
+    const removed = await deleteAdminSalesLeadService(id);
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.deleted, true);
+    assert.equal(deleted, id);
+
+    const rejected = await deleteAdminSalesLeadService('507f1f77bcf86cd799439042');
+    assert.equal(rejected.status, 404);
+    const invalid = await deleteAdminSalesLeadService('not-an-id');
+    assert.equal(invalid.status, 400);
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('admin sales close and send schemas reject bad payloads', async () => {
+  const { adminSalesLeadCloseSchema, adminSalesLeadEmailSendSchema } = await import('../schemas/opsSchemas.js');
+  assert.ok(adminSalesLeadCloseSchema.validate({ outcome: 'maybe' }).error);
+  assert.equal(adminSalesLeadCloseSchema.validate({ outcome: 'won', note: 'subscribed' }).error, undefined);
+  assert.ok(adminSalesLeadEmailSendSchema.validate({ subject: '', body: 'hello' }).error);
+  assert.equal(adminSalesLeadEmailSendSchema.validate({ subject: 'Hello', body: 'Just this letter.' }).error, undefined);
+});
+
+test('admin sales lead can only be marked joined with a linked subscription', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const User = (await import('../models/User.js')).default;
+  const Subscription = (await import('../models/Subscription.js')).default;
+  const ClientSubscription = (await import('../models/ClientSubscription.js')).default;
+  const { closeAdminLeadService } = await import('../services/admin/adminLeadGuideEmailService.js');
+  const id = '507f1f77bcf86cd799439052';
+  const userId = '507f1f77bcf86cd799439053';
+  let saved = 0;
+  const row = {
+    _id: id,
+    source: 'direct_inquiry',
+    email: 'joined@example.com',
+    user_id: userId,
+    async save() { saved += 1; return this; },
+  };
+
+  try {
+    bag.stub(EnterpriseInquiry, 'findById', async () => row);
+    bag.stub(User, 'findById', () => ({ select() { return { lean: async () => ({ _id: userId }) }; } }));
+    bag.stub(Subscription, 'exists', async () => null);
+    bag.stub(ClientSubscription, 'exists', async () => null);
+
+    const rejected = await closeAdminLeadService(id, { outcome: 'won', note: 'Looks ready' });
+    assert.equal(rejected.status, 409);
+    assert.equal(saved, 0);
+    assert.equal(row.close_outcome, undefined);
+
+    bag.stub(ClientSubscription, 'exists', async () => ({ _id: 'subscription-id' }));
+    const joined = await closeAdminLeadService(id, { outcome: 'won', note: 'Subscribed' });
+    assert.equal(joined.status, 200);
+    assert.equal(row.close_outcome, 'won');
+    assert.equal(saved, 1);
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('sales voice outcome is saved on both the inquiry and its call record', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const ProfessionalCall = (await import('../models/ProfessionalCall.js')).default;
+  const { persistSalesOutcome } = await import('../services/proChat/voiceAgentTurnService.js');
+  const callId = '507f1f77bcf86cd799439061';
+  const leadId = '507f1f77bcf86cd799439062';
+  const callUpdates = [];
+  const leadUpdates = [];
+
+  try {
+    bag.stub(ProfessionalCall, 'findById', () => ({
+      select() { return { lean: async () => ({ _id: callId, voice_target_type: 'sales', voice_target_id: leadId }) }; },
+    }));
+    bag.stub(EnterpriseInquiry, 'findById', () => ({
+      select() { return { lean: async () => ({ pipeline_stage: 'new', close_outcome: '' }) }; },
+    }));
+    bag.stub(EnterpriseInquiry, 'updateOne', async (filter, update) => { leadUpdates.push({ filter, update }); });
+    bag.stub(ProfessionalCall, 'updateOne', async (filter, update) => { callUpdates.push({ filter, update }); });
+
+    const result = await persistSalesOutcome({ callId, outcome: 'callback', plan: '', note: 'Call tomorrow morning.' });
+
+    assert.equal(result.ok, true);
+    assert.equal(leadUpdates[0].filter._id, leadId);
+    assert.equal(leadUpdates[0].update.$set.voice_outcome, 'callback');
+    assert.equal(callUpdates[0].filter._id, callId);
+    assert.equal(callUpdates[0].update.$set.voice_outcome, 'callback');
+    assert.equal(callUpdates[0].update.$set.voice_outcome_note, 'Call tomorrow morning.');
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('sendAdminLeadEmailService records sent and failed attempts', async () => {
+  const bag = createRestoreBag();
+  const EnterpriseInquiry = (await import('../models/EnterpriseInquiry.js')).default;
+  const { salesEmailDeps, sendAdminLeadEmailService } = await import('../services/admin/adminLeadGuideEmailService.js');
+  const id = '507f1f77bcf86cd799439051';
+    const posted = 'Hello Dana.\n- Chatbot: You can place it on your own site.';
+  let saved = null;
+
+  const row = {
+    _id: id,
+    source: 'landing_chat',
+    email: 'dana@example.com',
+    interest_role: 'agent',
+    email_draft: { origin: 'manual', subject: '', body: '' },
+    guide_emails: [],
+    async save() { saved = this; return this; },
+  };
+
+  try {
+    bag.stub(EnterpriseInquiry, 'findById', async () => row);
+    bag.stub(salesEmailDeps, 'sendEmail', async () => ({ success: true }));
+    const sent = await sendAdminLeadEmailService(id, { subject: 'Your Nesti note', body: posted });
+    assert.equal(sent.status, 200);
+    assert.equal(saved.guide_emails.length, 1);
+    assert.equal(saved.guide_emails[0].body, posted);
+    assert.equal(saved.guide_emails[0].body.includes('Storefront'), false);
+    assert.equal(saved.guide_emails[0].to_email, 'dana@example.com');
+    assert.equal(saved.guide_emails[0].type, 'manual');
+    assert.equal(saved.guide_emails[0].status, 'sent');
+
+    bag.stub(salesEmailDeps, 'sendEmail', async () => ({ success: false }));
+    const failed = await sendAdminLeadEmailService(id, { subject: 'Your Nesti note', body: posted });
+    assert.equal(failed.status, 502);
+    assert.equal(row.guide_emails.length, 2);
+    assert.equal(row.guide_emails[1].status, 'failed');
+  } finally {
+    bag.restoreAll();
+  }
+});

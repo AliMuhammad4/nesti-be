@@ -185,13 +185,13 @@ export async function getAdminOverviewService() {
       .select('match_status lead_type user_id createdAt compatibility_factors')
       .populate('user_id', 'first_name last_name email role')
       .lean(),
-    EnterpriseInquiry.countDocuments({ source: { $in: ['demo', 'contact', 'landing_chat', 'direct_inquiry'] } }),
+    EnterpriseInquiry.countDocuments({ source: { $in: ['landing_chat', 'direct_inquiry'] } }),
     EnterpriseInquiry.countDocuments({
-      source: { $in: ['demo', 'contact', 'landing_chat', 'direct_inquiry'] },
+      source: { $in: ['landing_chat', 'direct_inquiry'] },
       close_outcome: { $nin: ['won', 'lost'] },
     }),
     EnterpriseInquiry.countDocuments({
-      source: { $in: ['demo', 'contact', 'landing_chat', 'direct_inquiry'] },
+      source: { $in: ['landing_chat', 'direct_inquiry'] },
       createdAt: { $gte: since7 },
     }),
     ProfessionalProfile.countDocuments({ credential_status: CREDENTIAL_STATUS.PENDING_REVIEW }),

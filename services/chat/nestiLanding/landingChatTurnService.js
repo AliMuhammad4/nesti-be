@@ -5,14 +5,20 @@ import { runChatOpenAiTurn } from '../handleChat/chatOpenAiTurn.js';
 import {
   allowLandingChatRate,
   isLandingEmbed,
+  landingBotIdentity,
   loadLandingChatSettings,
+  applyRegister,
+  personalityFor,
+  formalityFor,
 } from './landingChatConfig.js';
 import { asksHowNestiIsDifferent, cleanLandingReply, landingRoleReply, nestiLandingFlow, replyIsUsable, replyWithoutVisitorName, scoreLandingLead, shortenLandingReply } from './nestiLandingFlow.js';
 import { agreesToWalkthrough, askedForWalkthrough, detectPain, mentionsPricing, painById, roleFallbackQuestion } from './landingPainPoints.js';
 import { appendChatEvents, nextChatState, questionFromReply, readChatState } from './landingChatState.js';
 import { notifyAdminsOfAdminLead } from './notifyAdminsOfLandingLead.js';
 import { queueAdminLeadFollowUp } from '../../admin/adminLeadGuideEmailService.js';
-import { nextAutoPipelineStage } from '../../admin/adminPipelineStage.js';
+import { nextAutoPipelineStage, reopenNurtureLead } from '../../admin/adminPipelineStage.js';
+
+export const landingChatLeadDeps = { notifyAdminsOfAdminLead, queueAdminLeadFollowUp };
 
 function text(value) {
   return String(value || '').trim();
@@ -22,35 +28,79 @@ function visibleReply(value) {
   return String(value || '').split('###META###')[0].trim();
 }
 
+const INQUIRY_TOPICS = new Set(['demo', 'inquiry', 'support']);
+const SESSION_CAPABILITY_PATTERN = /^[a-f0-9]{64}$/i;
+
+export function isSecureLandingSessionId(value) {
+  return SESSION_CAPABILITY_PATTERN.test(text(value));
+}
+
 function isHiddenOpening(value) {
   const raw = text(value);
   return raw.startsWith('My name, email, and mobile are already saved')
-    || (raw.startsWith('This is ') && raw.includes('Greet them by name as Ravi'));
+    || (raw.startsWith('This is ') && raw.includes('Greet them by name as Ravi'))
+    || (raw.startsWith('Visitor ') && /Greet them now\.?$/.test(raw));
 }
 
-async function saveAdminLead({ sessionId, contact, audience, spoken, reply, score, grade, skipUser = false, chatState, chatEvents }) {
+function inquiryTopic(value) {
+  const raw = text(value).toLowerCase();
+  return INQUIRY_TOPICS.has(raw) ? raw : '';
+}
+
+function readContact(formContact = {}) {
+  return {
+    name: text(formContact.name),
+    email: text(formContact.email).toLowerCase(),
+    phone: text(formContact.phone),
+    company: text(formContact.company_name || formContact.company).slice(0, 160),
+    city: text(formContact.city).slice(0, 120),
+    country: text(formContact.country).slice(0, 80),
+    topic: inquiryTopic(formContact.inquiry_topic || formContact.topic),
+  };
+}
+
+function applyLeadProfile(inquiry, contact) {
+  if (contact.company) inquiry.company_name = contact.company;
+  if (contact.city) inquiry.city = contact.city;
+  if (contact.country) inquiry.country = contact.country;
+  if (contact.topic) inquiry.inquiry_topic = contact.topic;
+}
+
+export async function saveAdminLead({ sessionId, contact, audience, spoken, reply, score, grade, skipUser = false, chatState, chatEvents, botName = 'Ravi' }) {
   const email = text(contact.email).toLowerCase();
   const phone = text(contact.phone);
   const name = text(contact.name);
   let inquiry = sessionId
     ? await EnterpriseInquiry.findOne({ session_id: sessionId, source: 'landing_chat' })
     : null;
-  if (!inquiry && email) {
-    inquiry = await EnterpriseInquiry.findOne({ email, source: 'landing_chat' });
+  if (inquiry && inquiry.close_outcome === 'won') {
+    inquiry = null;
   }
+  if (!inquiry && email) {
+    const past = await EnterpriseInquiry.findOne({ email, source: 'landing_chat' }).sort({ createdAt: -1 });
+    const isRecent = past?.createdAt && (Date.now() - new Date(past.createdAt).getTime() < 24 * 60 * 60 * 1000);
+    if (past?.close_outcome === 'lost' || (past && !past.close_outcome && isRecent)) {
+      inquiry = past;
+    }
+  }
+  const cameBack = Boolean(inquiry && !skipUser && reopenNurtureLead(inquiry));
   const turns = [
     ...(!skipUser && spoken ? [{ role: 'user', text: spoken.slice(0, 2000), at: new Date() }] : []),
     { role: 'assistant', text: reply.slice(0, 4000), at: new Date() },
   ];
   if (!inquiry) {
+    if (skipUser) return null;
     inquiry = await EnterpriseInquiry.create({
       email,
       phone,
       full_name: name,
-      company_name: name || 'Homepage chat',
+      company_name: text(contact.company) || 'Homepage chat',
+      city: text(contact.city),
+      country: text(contact.country),
+      inquiry_topic: inquiryTopic(contact.topic),
       interest_role: audience,
       source: 'landing_chat',
-      message: skipUser ? 'Started a homepage chat with Ravi.' : spoken.slice(0, 2000),
+      message: skipUser ? `Started a homepage chat with ${botName}.` : spoken.slice(0, 2000),
       status: skipUser ? 'pending' : 'contacted',
       pipeline_stage: skipUser ? 'new' : 'calling',
       session_id: sessionId,
@@ -60,25 +110,33 @@ async function saveAdminLead({ sessionId, contact, audience, spoken, reply, scor
       chat_state: chatState,
       chat_events: chatEvents,
     });
-    await notifyAdminsOfAdminLead({ inquiry }).catch(() => {});
-    queueAdminLeadFollowUp(inquiry._id);
+    await landingChatLeadDeps.notifyAdminsOfAdminLead({ inquiry }).catch(() => {});
+    landingChatLeadDeps.queueAdminLeadFollowUp(inquiry._id);
     return inquiry;
   }
   inquiry.email = email || inquiry.email;
   inquiry.phone = phone || inquiry.phone;
   inquiry.full_name = name || inquiry.full_name;
+  applyLeadProfile(inquiry, contact);
   inquiry.interest_role = audience || inquiry.interest_role;
   if (!skipUser) inquiry.message = spoken.slice(0, 2000);
-  inquiry.session_id = inquiry.session_id || sessionId;
+  inquiry.session_id = sessionId;
   inquiry.lead_score = score;
   inquiry.lead_grade = grade;
-  inquiry.transcript = [...(inquiry.transcript || []), ...turns].slice(-24);
+  inquiry.transcript = [...(inquiry.transcript || []), ...turns].slice(-100);
   if (chatState) inquiry.chat_state = chatState;
   if (chatEvents) inquiry.chat_events = chatEvents;
   inquiry.pipeline_stage = nextAutoPipelineStage(inquiry);
   if (inquiry.pipeline_stage === 'calling' && inquiry.status === 'pending') inquiry.status = 'contacted';
   await inquiry.save();
-  if (!skipUser) queueAdminLeadFollowUp(inquiry._id);
+  if (cameBack) {
+    await landingChatLeadDeps.notifyAdminsOfAdminLead({
+      inquiry,
+      title: 'Nurture lead came back',
+      body: `${text(inquiry.full_name) || 'A nurture lead'} is chatting on the homepage again and is back in conversation.`,
+    }).catch(() => {});
+  }
+  if (!skipUser) landingChatLeadDeps.queueAdminLeadFollowUp(inquiry._id);
   return inquiry;
 }
 
@@ -108,12 +166,16 @@ export async function handleLandingChatTurn({
     return { status: 403, body: { success: false, message: 'Landing chat is turned off.' } };
   }
 
-  const sid = text(sessionId) || crypto.randomBytes(8).toString('hex');
-  const contact = {
-    name: text(formContact.name),
-    email: text(formContact.email).toLowerCase(),
-    phone: text(formContact.phone),
-  };
+  const sid = text(sessionId) || crypto.randomBytes(32).toString('hex');
+  if (!isSecureLandingSessionId(sid)) {
+    return { status: 400, body: { success: false, message: 'session_id must be a secure session capability.' } };
+  }
+  const contact = readContact(formContact);
+  const phoneDigits = contact.phone.replace(/\D/g, '');
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email);
+  if (!contact.name || !emailOk || phoneDigits.length < 8) {
+    return { status: 400, body: { success: false, message: 'Name, email, and mobile number are required.' } };
+  }
   const audience = text(formContact.audience_role) || 'client';
   const prior = sid
     ? await EnterpriseInquiry.findOne({ session_id: sid, source: 'landing_chat' }).select('transcript chat_state chat_events').lean()
@@ -129,6 +191,9 @@ export async function handleLandingChatTurn({
   const detected = greeting ? null : detectPain(audience, spoken);
   const pain = detected || painById(audience, state.pain_point);
   const guides = settings || {};
+  const personalityKey = personalityFor(guides.personality).id;
+  const formalityKey = formalityFor(guides.formality).id;
+  const { botName } = landingBotIdentity(guides);
   const scored = scoreLandingLead({
     message: spoken,
     hasContact: Boolean(contact.email || contact.phone || contact.name),
@@ -140,6 +205,12 @@ export async function handleLandingChatTurn({
     landingGuides: { ...guides, signup_cta_copy: guides.signup_cta_copy },
     contactKnown: Boolean(contact.name && contact.email && contact.phone),
     visitorName: contact.name,
+    profile: {
+      company: contact.company,
+      city: contact.city,
+      country: contact.country,
+      topic: contact.topic,
+    },
     opening: greeting,
     pain: greeting ? null : pain,
     featuresExplained: state.features_explained,
@@ -154,7 +225,7 @@ export async function handleLandingChatTurn({
   let reply = '';
   let failed = false;
   if (!greeting && asksHowNestiIsDifferent(spoken) && !detected) {
-    reply = landingRoleReply(audience);
+    reply = landingRoleReply(audience, personalityKey, formalityKey);
   } else {
     try {
       const turn = await runChatOpenAiTurn({
@@ -172,16 +243,21 @@ export async function handleLandingChatTurn({
       reply = cleanLandingReply(visibleReply(turn?.aiReply));
     } catch {
       failed = true;
-      reply = roleFallbackQuestion(audience);
+      reply = roleFallbackQuestion(audience, personalityKey, formalityKey);
     }
   }
   if (!failed && !replyIsUsable(reply)) {
     failed = true;
-    reply = roleFallbackQuestion(audience);
+    reply = roleFallbackQuestion(audience, personalityKey, formalityKey);
   }
   if (greeting) reply = reply.replace(/\[\[plans\]\]/gi, '').trim();
   if (!greeting) reply = replyWithoutVisitorName(reply, contact.name);
-  reply = shortenLandingReply(reply, { greeting, feature: failed ? '' : pain?.feature || '' }) || roleFallbackQuestion(audience);
+  reply = shortenLandingReply(reply, { greeting, feature: failed ? '' : pain?.feature || '', personality: personalityKey })
+    || roleFallbackQuestion(audience, personalityKey, formalityKey);
+  reply = applyRegister(reply, formalityKey);
+  if (!text(reply)) {
+    reply = applyRegister(`Tell me a little more. I am ${botName}, and I can help with the next step.`, formalityKey);
+  }
   const featureUsed = greeting || failed ? '' : (pain?.feature || '');
   const chatState = nextChatState(state, {
     pain: detected || pain,
@@ -206,6 +282,7 @@ export async function handleLandingChatTurn({
     skipUser: Boolean(opening),
     chatState,
     chatEvents,
+    botName,
   });
   return {
     status: 200,
@@ -221,6 +298,9 @@ export async function handleLandingChatTurn({
 export async function loadLandingChatSession({ embedToken, sessionId }) {
   if (!text(embedToken)) return { status: 400, body: { success: false, message: 'embedToken is required' } };
   if (!text(sessionId)) return { status: 400, body: { success: false, message: 'session_id is required' } };
+  if (!isSecureLandingSessionId(sessionId)) {
+    return { status: 404, body: { success: false, message: 'Chat session not found.' } };
+  }
   const embed = await ChatbotEmbedUrl.findOne({ token: text(embedToken) }).lean();
   if (!embed || !isLandingEmbed(embed)) {
     return { status: 403, body: { success: false, message: 'This chat is only for the homepage guide.' } };
@@ -245,6 +325,10 @@ export async function loadLandingChatSession({ embedToken, sessionId }) {
         name: text(inquiry.full_name),
         email: text(inquiry.email),
         phone: text(inquiry.phone),
+        company_name: text(inquiry.company_name) === 'Homepage chat' ? '' : text(inquiry.company_name),
+        city: text(inquiry.city),
+        country: text(inquiry.country),
+        inquiry_topic: inquiryTopic(inquiry.inquiry_topic),
       },
       messages,
     },

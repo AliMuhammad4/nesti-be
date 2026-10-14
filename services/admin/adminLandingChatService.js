@@ -15,7 +15,7 @@ import {
   saveLandingChatSettings,
   settingsPayload,
 } from '../chat/nestiLanding/landingChatConfig.js';
-import { cleanLandingReply, nestiLandingFlow, replyIsUsable, shortenLandingReply } from '../chat/nestiLanding/nestiLandingFlow.js';
+import { cleanLandingReply, enabledRoleCustomization, nestiLandingFlow, replyIsUsable, shortenLandingReply } from '../chat/nestiLanding/nestiLandingFlow.js';
 import { detectPain } from '../chat/nestiLanding/landingPainPoints.js';
 import { runChatOpenAiTurn } from '../chat/handleChat/chatOpenAiTurn.js';
 
@@ -186,6 +186,7 @@ export async function landingChatPreviewService(body = {}, actorUser) {
   const merged = settingsPayload({ ...(saved || {}), ...draft });
   const audience = String(body.role || 'client');
   const roleKey = personaRoleKey(audience);
+  const roleCustomization = enabledRoleCustomization(merged, audience);
   const persona = personalityFor(merged.personality);
   const identity = landingBotIdentity(merged);
   const visitor = { ...PREVIEW_VISITOR[roleKey], name: String(body.visitor_name || '').trim() || PREVIEW_VISITOR[roleKey].name };
@@ -247,7 +248,12 @@ export async function landingChatPreviewService(body = {}, actorUser) {
     let reply = cleanLandingReply(String(turn?.aiReply || '').split('###META###')[0]);
     if (!replyIsUsable(reply)) throw new Error('Model reply was too short.');
     reply = reply.replace(/\[\[plans\]\]/gi, '').trim();
-    reply = shortenLandingReply(reply, { greeting: opening, feature: pain?.feature || '', personality: persona.id }) || reply;
+    reply = shortenLandingReply(reply, {
+      greeting: opening,
+      feature: pain?.feature || '',
+      personality: persona.id,
+      communicationStyle: roleCustomization?.communication_style || '',
+    }) || reply;
     return ok({ ...base, reply: applyRegister(reply, merged.formality), fallback: false });
   } catch (error) {
     logger.warn('Landing chat preview fell back to the canned sample', { error: error?.message });

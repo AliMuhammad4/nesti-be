@@ -14,8 +14,46 @@ export const DEFAULT_DISPLAY_NAME = 'Nesti';
 export const DEFAULT_PERSONA_TITLE = '24/7 Real Estate Copilot';
 export const PERSONA_ROLES = ['client', 'agent', 'broker', 'lawyer'];
 export const LANDING_ROLE_CUSTOMIZATIONS = ['client', 'agent', 'broker', 'lawyer'];
-const ROLE_CUSTOMIZATION_PERSONALITIES = ['friendly', 'executive', 'consultative', 'sales'];
+const ROLE_CUSTOMIZATION_PERSONALITIES = [
+  'friendly', 'executive', 'consultative', 'sales',
+  'plain_language', 'real_estate_guide', 'detail_focused', 'proactive_next_step',
+];
+export const ROLE_CUSTOMIZATION_TONES = {
+  friendly: {
+    label: 'Warm guide',
+    guidance: 'Acknowledge the visitor’s situation and make the next real-estate step feel manageable.',
+  },
+  executive: {
+    label: 'Clear and direct',
+    guidance: 'Explain the outcome plainly, stay concise, and end with one useful decision.',
+  },
+  consultative: {
+    label: 'Needs-first advisor',
+    guidance: 'Understand whether the visitor is buying, selling, or working professionally before recommending a next step.',
+  },
+  sales: {
+    label: 'Confident and proactive',
+    guidance: 'Connect one relevant Nesti benefit to the visitor’s goal without pressure or invented promises.',
+  },
+  plain_language: {
+    label: 'Plain-language explainer',
+    guidance: 'Explain property, mortgage, and closing terms simply; clarify uncertainty instead of guessing.',
+  },
+  real_estate_guide: {
+    label: 'Real-estate guide',
+    guidance: 'Keep guidance relevant to the visitor’s role and the stage of a property transaction.',
+  },
+  detail_focused: {
+    label: 'Detail-focused',
+    guidance: 'Be careful with dates, documents, and process details; distinguish confirmed facts from items to verify.',
+  },
+  proactive_next_step: {
+    label: 'Proactive next step',
+    guidance: 'Suggest one practical next action and ask before offering contact or follow-up.',
+  },
+};
 const ROLE_CUSTOMIZATION_COMMUNICATION = ['quick', 'conversational', 'educational', 'consultative'];
+const ROLE_CUSTOMIZATION_ACTIONS = ['schedule', 'collect_contact', 'callback', 'follow_up'];
 const ROLE_CUSTOMIZATION_LANGUAGES = [
   'english', 'french', 'spanish', 'mandarin', 'cantonese', 'hindi', 'tamil',
   'punjabi', 'arabic', 'urdu', 'portuguese', 'tagalog', 'italian', 'german',
@@ -487,9 +525,24 @@ export function sanitizeLandingRoleCustomizations(input = {}) {
         answer: clip(faq?.answer, 1200),
       })).filter((faq) => faq.question && faq.answer)
       : [];
+    const customTones = Array.isArray(value.custom_tones)
+      ? [...new Map(value.custom_tones.slice(0, 8)
+      .map((tone) => ({
+        id: clip(tone?.id, 39),
+        name: clip(tone?.name, 40),
+        guidance: sanitizeLandingGuideText(tone?.guidance, { maxLength: 200 }),
+      }))
+      .filter((tone) => /^custom-[a-f0-9]{32}$/.test(tone.id) && tone.name.length >= 2 && tone.guidance.length >= 8)
+      .map((tone) => [tone.id, tone])).values()]
+      : [];
+    const allowedTones = new Set([
+      ...ROLE_CUSTOMIZATION_PERSONALITIES,
+      ...customTones.map((tone) => tone.id),
+    ]);
     output[role] = {
       enabled: Boolean(value.enabled),
-      personalities: list('personalities', 2, 24).filter((item) => ROLE_CUSTOMIZATION_PERSONALITIES.includes(item)),
+      personalities: list('personalities', 2, 39).filter((item) => allowedTones.has(item)),
+      custom_tones: customTones,
       languages: list('languages', 20, 60).filter((item) => (
         ROLE_CUSTOMIZATION_LANGUAGES.includes(item.toLowerCase()) || /^[\p{L}\p{M} .'-]{2,60}$/u.test(item)
       )),
@@ -505,7 +558,7 @@ export function sanitizeLandingRoleCustomizations(input = {}) {
       website_reference: sanitizeLandingGuideText(value.website_reference, { maxLength: 3000 }),
       services_pricing: sanitizeLandingGuideText(value.services_pricing, { maxLength: 2000 }),
       qualification_questions: list('qualification_questions', 12, 180),
-      next_actions: list('next_actions', 7, 40),
+      next_actions: list('next_actions', 7, 40).filter((item) => ROLE_CUSTOMIZATION_ACTIONS.includes(item)),
       faqs: questions,
     };
   }

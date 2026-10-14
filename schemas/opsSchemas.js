@@ -75,12 +75,24 @@ export const adminSalesLeadEmailSendSchema = Joi.object({
 });
 
 const LANDING_PERSONALITIES = ['friendly', 'executive', 'consultative', 'sales'];
+const LANDING_ROLE_TONES = [
+  ...LANDING_PERSONALITIES,
+  'plain_language', 'real_estate_guide', 'detail_focused', 'proactive_next_step',
+];
 const LANDING_FORMALITIES = ['formal', 'professional', 'casual'];
 const LANDING_COMMUNICATION_STYLES = ['quick', 'conversational', 'educational', 'consultative'];
 const landingText = (max) => Joi.string().trim().allow('', null).max(max);
 const landingRoleCustomizationSchema = Joi.object({
   enabled: Joi.boolean(),
-  personalities: Joi.array().items(Joi.string().valid(...LANDING_PERSONALITIES)).unique().max(2),
+  personalities: Joi.array().items(Joi.alternatives().try(
+    Joi.string().valid(...LANDING_ROLE_TONES),
+    Joi.string().pattern(/^custom-[a-f0-9]{32}$/),
+  )).unique().max(2),
+  custom_tones: Joi.array().items(Joi.object({
+    id: Joi.string().pattern(/^custom-[a-f0-9]{32}$/).required(),
+    name: Joi.string().trim().min(2).max(40).required(),
+    guidance: Joi.string().trim().min(8).max(200).required(),
+  }).unknown(false).required()).unique('id').max(8),
   languages: Joi.array().items(Joi.string().trim().min(2).max(60)).unique().max(20),
   auto_detect_language: Joi.boolean(),
   communication_style: Joi.string().valid(...LANDING_COMMUNICATION_STYLES),
@@ -93,8 +105,8 @@ const landingRoleCustomizationSchema = Joi.object({
   services_pricing: landingText(2000),
   qualification_questions: Joi.array().items(Joi.string().trim().max(180)).unique().max(12),
   next_actions: Joi.array().items(Joi.string().valid(
-    'schedule', 'collect_contact', 'notify', 'callback', 'transfer_call', 'crm', 'follow_up',
-  )).unique().max(7),
+    'schedule', 'collect_contact', 'callback', 'follow_up',
+  )).unique().max(4),
   faqs: Joi.array().items(Joi.object({
     question: Joi.string().trim().max(240).required(),
     answer: Joi.string().trim().max(1200).required(),

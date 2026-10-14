@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { deriveLeadInquirySource, sourceFilter } from '../services/admin/adminLeadService.js';
 import { applyRegister, FORMALITY_LEVELS, guideForAudience, landingBotIdentity, landingChatPlanCards, landingSettingsView, landingWelcomeCopy, PERSONALITY_PROFILES, planFacts, sanitizeLandingGuideText, sanitizeLandingRoleCustomizations, settingsPayload } from '../services/chat/nestiLanding/landingChatConfig.js';
 import { landingChatFaqGenerateSchema, landingChatPreviewSchema, landingChatSettingsSchema } from '../schemas/opsSchemas.js';
-import { asksHowNestiIsDifferent, cleanLandingReply, landingRoleReply, nestiLandingFlow, replyWithoutVisitorName, scoreLandingLead, shortenLandingReply } from '../services/chat/nestiLanding/nestiLandingFlow.js';
+import { asksHowNestiIsDifferent, cleanLandingReply, enabledRoleCustomization, landingRoleReply, nestiLandingFlow, replyWithoutVisitorName, roleCustomizationUsesModelForDifference, scoreLandingLead, shortenLandingReply } from '../services/chat/nestiLanding/nestiLandingFlow.js';
 import { agreesToWalkthrough, askedForWalkthrough, detectPain, mentionsPricing, roleFallbackQuestion } from '../services/chat/nestiLanding/landingPainPoints.js';
 import { emptyChatState, nextChatState } from '../services/chat/nestiLanding/landingChatState.js';
 import { adminHasPermission, ADMIN_PERMISSION } from '../constants/adminPermissions.js';
@@ -23,14 +23,27 @@ test('landing settings keep empty guides on the built-in copy', () => {
 });
 
 test('admin role chatbot customizations are isolated to the selected homepage audience', () => {
+  const customToneId = 'custom-0123456789abcdef0123456789abcdef';
   const roleSettings = {
     agent: {
       enabled: true,
-      personalities: ['friendly', 'executive'],
+      personalities: ['friendly', customToneId],
+      custom_tones: [{
+        id: customToneId,
+        name: 'Calm deal guide',
+        guidance: 'Explain the next transaction step in plain language and ask one helpful question.',
+      }],
       languages: ['english', 'french'],
       communication_style: 'quick',
       use_emojis: false,
-      focus_areas: ['Lead follow-up'],
+      focus_areas: [
+        'Lead follow-up',
+        'Luxury rentals',
+        'AI chatbot',
+        'Professional storefront',
+        'Voice agent',
+        'AI-assisted email composer',
+      ],
       custom_guidance: 'Keep the demo conversation brief.',
       faqs: [{ question: 'Does Nesti help agents?', answer: 'Nesti includes professional tools.' }],
     },
@@ -38,6 +51,8 @@ test('admin role chatbot customizations are isolated to the selected homepage au
   const saved = settingsPayload({ role_customizations: roleSettings });
   assert.equal(saved.role_customizations.agent.enabled, true);
   assert.equal(saved.role_customizations.broker.enabled, false);
+  assert.deepEqual(saved.role_customizations.agent.personalities, ['friendly', customToneId]);
+  assert.equal(saved.role_customizations.agent.custom_tones[0].name, 'Calm deal guide');
   assert.equal(landingChatSettingsSchema.validate({ role_customizations: roleSettings }).error, undefined);
   assert.equal(
     landingChatFaqGenerateSchema.validate({
@@ -54,7 +69,14 @@ test('admin role chatbot customizations are isolated to the selected homepage au
     contactKnown: true,
   });
   assert.match(agentPrompt, /Admin-only role customization for the Nesti homepage assistant/i);
+  assert.match(agentPrompt, /Calm deal guide/);
+  assert.match(agentPrompt, /transaction step in plain language/i);
   assert.match(agentPrompt, /Lead follow-up/);
+  assert.match(agentPrompt, /Luxury rentals/);
+  assert.match(agentPrompt, /AI chatbot/);
+  assert.match(agentPrompt, /Professional storefront/);
+  assert.match(agentPrompt, /Voice agent/);
+  assert.match(agentPrompt, /AI-assisted email composer/);
   assert.match(agentPrompt, /Admin-approved FAQ references/);
 
   const lawyerPrompt = nestiLandingFlow.buildSystemPrompt(null, {
@@ -63,6 +85,33 @@ test('admin role chatbot customizations are isolated to the selected homepage au
     contactKnown: true,
   });
   assert.doesNotMatch(lawyerPrompt, /Lead follow-up/);
+  assert.doesNotMatch(lawyerPrompt, /Calm deal guide/);
+
+  const customToneSchema = landingChatSettingsSchema.validate({
+    role_customizations: {
+      agent: {
+        personalities: [customToneId, 'plain_language'],
+        custom_tones: [{ id: customToneId, name: 'A tone', guidance: 'Explain real-estate steps clearly.' }],
+      },
+    },
+  });
+  assert.equal(customToneSchema.error, undefined);
+  const expandedToneSettings = settingsPayload({
+    role_customizations: { agent: { enabled: true, personalities: ['plain_language'] } },
+  });
+  const expandedTonePrompt = nestiLandingFlow.buildSystemPrompt(null, {
+    audience: 'agent',
+    landingGuides: expandedToneSettings,
+    contactKnown: true,
+  });
+  assert.match(expandedTonePrompt, /Plain-language explainer/);
+  assert.ok(landingChatSettingsSchema.validate({
+    role_customizations: {
+      agent: {
+        personalities: ['custom-not-a-valid-id'],
+      },
+    },
+  }).error);
 
   const disabled = sanitizeLandingRoleCustomizations({
     agent: { enabled: false, custom_guidance: 'This remains disabled.' },
@@ -73,6 +122,26 @@ test('admin role chatbot customizations are isolated to the selected homepage au
     contactKnown: true,
   });
   assert.doesNotMatch(disabledPrompt, /This remains disabled/);
+  assert.equal(roleCustomizationUsesModelForDifference(enabledRoleCustomization(saved, 'agent')), true);
+  assert.equal(roleCustomizationUsesModelForDifference(enabledRoleCustomization({ role_customizations: disabled }, 'agent')), false);
+
+  const firstNamePrompt = nestiLandingFlow.buildSystemPrompt(null, {
+    audience: 'agent',
+    landingGuides: saved,
+    contactKnown: true,
+    visitorName: 'Sara',
+  });
+  assert.match(firstNamePrompt, /You may use the visitor's first name, Sara/i);
+  const noFirstName = settingsPayload({
+    role_customizations: { agent: { enabled: true, address_by_first_name: false } },
+  });
+  const noFirstNamePrompt = nestiLandingFlow.buildSystemPrompt(null, {
+    audience: 'agent',
+    landingGuides: noFirstName,
+    contactKnown: true,
+    visitorName: 'Sara',
+  });
+  assert.match(noFirstNamePrompt, /Do not address the visitor by first name after the initial greeting/i);
 });
 
 test('landing score rises when contact and a signup ask are present', () => {

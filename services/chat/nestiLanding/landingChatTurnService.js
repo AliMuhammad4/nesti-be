@@ -11,7 +11,7 @@ import {
   personalityFor,
   formalityFor,
 } from './landingChatConfig.js';
-import { asksHowNestiIsDifferent, cleanLandingReply, landingRoleReply, nestiLandingFlow, replyIsUsable, replyWithoutVisitorName, scoreLandingLead, shortenLandingReply } from './nestiLandingFlow.js';
+import { asksHowNestiIsDifferent, cleanLandingReply, enabledRoleCustomization, landingRoleReply, nestiLandingFlow, replyIsUsable, replyWithoutVisitorName, roleCustomizationUsesModelForDifference, scoreLandingLead, shortenLandingReply } from './nestiLandingFlow.js';
 import { agreesToWalkthrough, askedForWalkthrough, detectPain, mentionsPricing, painById, roleFallbackQuestion } from './landingPainPoints.js';
 import { appendChatEvents, nextChatState, questionFromReply, readChatState } from './landingChatState.js';
 import { notifyAdminsOfAdminLead } from './notifyAdminsOfLandingLead.js';
@@ -191,6 +191,7 @@ export async function handleLandingChatTurn({
   const detected = greeting ? null : detectPain(audience, spoken);
   const pain = detected || painById(audience, state.pain_point);
   const guides = settings || {};
+  const roleCustomization = enabledRoleCustomization(guides, audience);
   const personalityKey = personalityFor(guides.personality).id;
   const formalityKey = formalityFor(guides.formality).id;
   const { botName } = landingBotIdentity(guides);
@@ -224,7 +225,7 @@ export async function handleLandingChatTurn({
   ];
   let reply = '';
   let failed = false;
-  if (!greeting && asksHowNestiIsDifferent(spoken) && !detected) {
+  if (!greeting && asksHowNestiIsDifferent(spoken) && !detected && !roleCustomizationUsesModelForDifference(roleCustomization)) {
     reply = landingRoleReply(audience, personalityKey, formalityKey);
   } else {
     try {
@@ -251,8 +252,15 @@ export async function handleLandingChatTurn({
     reply = roleFallbackQuestion(audience, personalityKey, formalityKey);
   }
   if (greeting) reply = reply.replace(/\[\[plans\]\]/gi, '').trim();
-  if (!greeting) reply = replyWithoutVisitorName(reply, contact.name);
-  reply = shortenLandingReply(reply, { greeting, feature: failed ? '' : pain?.feature || '', personality: personalityKey })
+  if (!greeting && !roleCustomization?.address_by_first_name) {
+    reply = replyWithoutVisitorName(reply, contact.name);
+  }
+  reply = shortenLandingReply(reply, {
+    greeting,
+    feature: failed ? '' : pain?.feature || '',
+    personality: personalityKey,
+    communicationStyle: roleCustomization?.communication_style || '',
+  })
     || roleFallbackQuestion(audience, personalityKey, formalityKey);
   reply = applyRegister(reply, formalityKey);
   if (!text(reply)) {

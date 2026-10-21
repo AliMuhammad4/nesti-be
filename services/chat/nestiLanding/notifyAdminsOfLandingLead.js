@@ -6,6 +6,7 @@ import { emitAdminPlatformLead, emitNotification } from '../../realtime/workspac
 import { sendIdempotentEmail } from '../../email/emailDeliveryService.js';
 import logger from '../../../utils/logger.js';
 import { EMAIL_FONT, renderBrandedEmailShell } from '../../email/emailTheme.js';
+import { ADMIN_PERMISSION, adminHasPermission } from '../../../constants/adminPermissions.js';
 import { landingWelcomeCopy, loadLandingChatSettings } from './landingChatConfig.js';
 
 function text(value) {
@@ -72,7 +73,8 @@ async function inquiryIdForLandingLead(leadMatch, sessionId) {
 }
 
 export async function listLandingLeadAdmins() {
-  return User.find({ role: 'admin' }).select('_id role admin_permissions').lean();
+  const admins = await User.find({ role: 'admin' }).select('_id role admin_permissions').lean();
+  return admins.filter((admin) => adminHasPermission(admin, ADMIN_PERMISSION.LEADS_READ));
 }
 
 export async function notifyAdminsOfLandingLead({ leadMatch, conversationId, sessionId }) {

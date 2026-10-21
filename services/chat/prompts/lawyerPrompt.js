@@ -8,6 +8,8 @@ import {
   buildLawyerPostBookingBlock,
   buildLawyerPromptMainTemplate,
 } from './lawyerPromptBlocks.js';
+import { appendAssistantOverlay } from '../../professionalAssistant/professionalAssistantService.js';
+import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
 
 export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
   const name = professionalProfile?.full_name || 'a real estate lawyer';
@@ -20,7 +22,8 @@ export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
     postBookingChatChecklist = [],
     deferCalendlyLink = false,
   } = options;
-  const hasBookingLink = isAutomatedBookingEnabled && calendlyLink;
+  const blockSchedule = options.assistantSetting?.applied && !(options.assistantSetting.next_actions || []).includes('schedule');
+  const hasBookingLink = !blockSchedule && isAutomatedBookingEnabled && calendlyLink;
   const effectiveHasBookingLink = Boolean(hasBookingLink && !deferCalendlyLink);
 
   const actionFlow = getLawyerActionFlow(leadGrade);
@@ -36,12 +39,14 @@ export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
     postBookingChatChecklist,
   });
 
-  return buildLawyerPromptMainTemplate({
+  const prompt = appendAssistantOverlay(buildLawyerPromptMainTemplate({
     name,
     location,
     hasBookingLink: effectiveHasBookingLink,
     deferCalendlyLink,
     automationBlock,
     postBookedBlock,
-  }).trim();
+    assistantSetting: options.assistantSetting,
+  }).trim(), options.assistantSetting);
+  return `${prompt}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
 };

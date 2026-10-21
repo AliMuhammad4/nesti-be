@@ -25,6 +25,11 @@ import {
 import { runProfileUpload } from '../middleware/uploadProfileImage.js';
 import { uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
 import { MAX_IMAGE_UPLOAD_MB } from '../constants/mediaLimits.js';
+import {
+  draftMyAssistantFaqs,
+  getMyAssistant,
+  saveMyAssistant,
+} from '../controllers/professionalAssistantController.js';
 
 function runCredentialUpload(req, res, next) {
   uploadCredentialMulter.single('file')(req, res, (err) => {
@@ -60,6 +65,10 @@ function validateIcpByRole(req, res, next) {
 }
 
 // Credential verification — available without active subscription / before approval
+router.get('/me/assistant', protect, getMyAssistant);
+router.put('/me/assistant', protect, saveMyAssistant);
+router.post('/me/assistant/faq-drafts', protect, draftMyAssistantFaqs);
+
 router.get('/me/credentials', protect, getMyCredentials);
 router.patch('/me/credentials', protect, patchCredentialMeta);
 router.post('/me/credentials/documents', protect, runCredentialUpload, uploadCredentialDocument);

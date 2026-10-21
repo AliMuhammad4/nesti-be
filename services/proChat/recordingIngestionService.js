@@ -42,7 +42,7 @@ export async function enqueueRecordingFromWebhook({ callId, body = {} }) {
         delete_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
       },
     },
-    { upsert: true, returnDocument: 'after', new: true },
+    { upsert: true, returnDocument: 'after' },
   );
   if (doc.ingest_status === 'pending' && !doc.r2_key) {
     await ProfessionalCall.updateOne(

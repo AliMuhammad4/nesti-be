@@ -56,8 +56,9 @@ function replyStillCollectingContactPrefs(replyText) {
 export function appendCalendlyBookingLink(
   reply,
   calendlyUrl,
-  { userMessage = '' } = {},
+  { userMessage = '', allowSchedule = true } = {},
 ) {
+  if (!allowSchedule) return String(reply || '').trim();
   const url = String(calendlyUrl || '').trim();
   if (!url) return String(reply || '');
   const raw = String(reply || '').trim();

@@ -27,7 +27,7 @@ function hasChatContact(meta) {
 export const handleChat = async (req, res, next) => {
   const startedAt = Date.now();
   try {
-    const { id, message, embedToken, visitorId, agentType, channel, formContact, forceNewLead } = req.body;
+    const { id, message, embedToken, visitorId, agentType, channel, formContact, forceNewLead, opening, preview } = req.body;
 
     logger.info('Chat API: request', {
       op:           'chat.message',
@@ -58,6 +58,9 @@ export const handleChat = async (req, res, next) => {
       referer,
       formContact,
       forceNewLead,
+      opening: Boolean(opening),
+      preview: preview === true,
+      viewerUserId: req.user?._id || null,
     });
 
     const meta = result.body?.meta;

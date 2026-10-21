@@ -44,7 +44,7 @@ export async function approveCredentialsService({ userId, adminId }) {
         }),
       },
     },
-    { new: true },
+    { returnDocument: 'after' },
   );
 
   if (!profile) {
@@ -128,7 +128,7 @@ export async function rejectCredentialsService({ userId, adminId, reason }) {
         }),
       },
     },
-    { new: true },
+    { returnDocument: 'after' },
   );
 
   if (!profile) {

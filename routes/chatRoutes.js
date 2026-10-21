@@ -2,6 +2,7 @@ import express from 'express';
 const router = express.Router();
 import {
   protect,
+  optionalAuth,
   ensureAgentOrMortgageBroker,
   requireCompleteProfessionalProfile,
 } from '../middleware/authMiddleware.js';
@@ -59,7 +60,7 @@ import {
 } from '../controllers/nurtureBulkController.js';
 const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
 
-router.post('/', validateBody(chatBodySchema), handleChat);
+router.post('/', optionalAuth, validateBody(chatBodySchema), handleChat);
 router.post('/property-images', uploadPropertyImages.array('images', 8), postPropertyImagesUpload);
 router.delete('/clear/:id', clearChatSession);
 router.post('/session-messages', validateBody(sessionMessagesSchema), getSessionMessages);

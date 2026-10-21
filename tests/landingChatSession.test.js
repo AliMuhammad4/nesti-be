@@ -1,12 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import EnterpriseInquiry from '../models/EnterpriseInquiry.js';
+import LandingChatSession from '../models/LandingChatSession.js';
+import LandingChatSetting from '../models/LandingChatSetting.js';
 import {
   isSecureLandingSessionId,
   landingChatLeadDeps,
   loadLandingChatSession,
   saveAdminLead,
 } from '../services/chat/nestiLanding/landingChatTurnService.js';
+import {
+  bindLandingChatSessionAudience,
+  isLandingAudience,
+  loadLandingChatSettingsRequired,
+} from '../services/chat/nestiLanding/landingChatConfig.js';
 
 function stub(object, key, replacement) {
   const original = object[key];
@@ -34,6 +41,53 @@ test('landing chat session capabilities require 256 bits of unpredictable hex', 
   assert.equal(isSecureLandingSessionId('a'.repeat(64)), true);
   assert.equal(isSecureLandingSessionId('a'.repeat(63)), false);
   assert.equal(isSecureLandingSessionId('g'.repeat(64)), false);
+});
+
+test('landing chat accepts only supported audience roles', () => {
+  assert.equal(isLandingAudience('mortgage_broker'), true);
+  assert.equal(isLandingAudience('client'), true);
+  assert.equal(isLandingAudience('unknown'), false);
+  assert.equal(isLandingAudience(''), false);
+});
+
+test('landing chat session audience is pinned independently from lead persistence', async () => {
+  const session = { audience_role: 'agent' };
+  let callCount = 0;
+  const restore = stub(LandingChatSession, 'findOneAndUpdate', (filter, update, options) => {
+    callCount += 1;
+    assert.equal(filter.session_id, 'd'.repeat(64));
+    assert.equal(update.$setOnInsert.audience_role, callCount === 1 ? 'agent' : 'client');
+    assert.equal(options.upsert, true);
+    return { lean: async () => session };
+  });
+  try {
+    assert.deepEqual(
+      await bindLandingChatSessionAudience('d'.repeat(64), 'agent'),
+      { audience: 'agent', matches: true },
+    );
+    assert.deepEqual(
+      await bindLandingChatSessionAudience('d'.repeat(64), 'client'),
+      { audience: 'agent', matches: false },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('landing chat settings database failures surface as retryable service errors', async () => {
+  const restore = stub(LandingChatSetting, 'findOne', () => {
+    throw new Error('database connection failure');
+  });
+  try {
+    await assert.rejects(loadLandingChatSettingsRequired(), (error) => {
+      assert.equal(error.status, 503);
+      assert.match(error.message, /temporarily unavailable/i);
+      assert.doesNotMatch(error.message, /database connection failure/i);
+      return true;
+    });
+  } finally {
+    restore();
+  }
 });
 
 test('a returning lead adopts the current chat session capability', async () => {

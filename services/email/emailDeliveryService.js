@@ -54,7 +54,7 @@ export async function sendIdempotentEmail(options = {}) {
               last_error: 'Delivery reservation expired before its result was recorded; verify provider status before retrying.',
             },
           },
-          { new: true },
+          { returnDocument: 'after' },
         );
         if (uncertain) return { success: false, uncertain: true };
         const latest = await emailDeliveryDeps.EmailDelivery.findOne({ idempotency_key: idempotencyKey });
@@ -69,7 +69,7 @@ export async function sendIdempotentEmail(options = {}) {
             $set: { ...payload, status: 'sending', last_error: '' },
             $inc: { attempt_count: 1 },
           },
-          { new: true },
+          { returnDocument: 'after' },
         );
         if (!delivery) return { success: false, inProgress: true };
       } else {
@@ -84,7 +84,7 @@ export async function sendIdempotentEmail(options = {}) {
           $set: { ...payload, status: 'sending', last_error: '' },
           $inc: { attempt_count: 1 },
         },
-        { new: true },
+        { returnDocument: 'after' },
       );
       if (!delivery) return { success: false, inProgress: true };
     }

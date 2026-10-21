@@ -3,20 +3,21 @@ import OpenAI from 'openai';
 import logger from '../../utils/logger.js';
 import { fail, ok } from './adminCommon.js';
 import {
-  ensureLandingEmbed,
-  findLandingEmbed,
-  applyRegister,
   landingBotIdentity,
   landingChatPlanCards,
+  guideForAudience,
   landingSettingsView,
-  loadLandingChatSettings,
+  loadLandingChatSettingsRequired,
+  findLandingEmbedRequired,
+  ensureLandingEmbedRequired,
   personaRoleKey,
   personalityFor,
   saveLandingChatSettings,
   settingsPayload,
 } from '../chat/nestiLanding/landingChatConfig.js';
-import { cleanLandingReply, enabledRoleCustomization, nestiLandingFlow, replyIsUsable, shortenLandingReply } from '../chat/nestiLanding/nestiLandingFlow.js';
+import { cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, nestiLandingFlow, replyFromSavedKnowledge, replyIsUsable, shortenLandingReply } from '../chat/nestiLanding/nestiLandingFlow.js';
 import { detectPain } from '../chat/nestiLanding/landingPainPoints.js';
+import { agreesToWalkthrough, askedForWalkthrough } from '../chat/nestiLanding/landingPainPoints.js';
 import { runChatOpenAiTurn } from '../chat/handleChat/chatOpenAiTurn.js';
 
 let faqOpenAiClient;
@@ -28,7 +29,9 @@ function getFaqOpenAiClient() {
 }
 
 function canRead(user) {
-  return adminHasPermission(user, ADMIN_PERMISSION.LEADS_READ) || adminHasPermission(user, ADMIN_PERMISSION.CLIENTS_READ);
+  return adminHasPermission(user, ADMIN_PERMISSION.LEADS_READ)
+    || adminHasPermission(user, ADMIN_PERMISSION.CLIENTS_READ)
+    || canWrite(user);
 }
 
 function canWrite(user) {
@@ -37,14 +40,14 @@ function canWrite(user) {
 
 export async function adminGetLandingChatSettingsService(actorUser) {
   if (!canRead(actorUser)) return fail(403, 'Missing read permission');
-  const [doc, embed] = await Promise.all([loadLandingChatSettings(), findLandingEmbed()]);
+  const [doc, embed] = await Promise.all([loadLandingChatSettingsRequired(), findLandingEmbedRequired()]);
   return ok(landingSettingsView(doc, embed));
 }
 
 export async function adminSaveLandingChatSettingsService(body, actorUser) {
   if (!canWrite(actorUser)) return fail(403, 'Missing write permission');
   const doc = await saveLandingChatSettings(body || {});
-  const embed = await findLandingEmbed();
+  const embed = await findLandingEmbedRequired();
   return ok(landingSettingsView(doc, embed));
 }
 
@@ -54,7 +57,7 @@ export async function generateLandingChatFaqsService(body = {}, actorUser) {
   if (!client) return fail(503, 'AI FAQ generation is not configured.');
 
   const role = String(body.role || '');
-  const saved = await loadLandingChatSettings();
+  const saved = await loadLandingChatSettingsRequired();
   const mergedSettings = settingsPayload({
     ...(saved || {}),
     role_customizations: {
@@ -62,20 +65,13 @@ export async function generateLandingChatFaqsService(body = {}, actorUser) {
       [role]: body.role_customization || {},
     },
   });
-  const guide = {
-    client: mergedSettings.client_guide,
-    agent: mergedSettings.agent_guide,
-    broker: mergedSettings.broker_guide,
-    lawyer: mergedSettings.lawyer_guide,
-  }[role];
   const config = mergedSettings.role_customizations?.[role] || {};
   const context = {
     audience_role: role,
-    nesti_role_guide: guide,
-    focus_areas: config.focus_areas,
-    approved_differentiators: config.differentiators,
-    reviewed_website_reference: config.website_reference,
-    approved_services_and_pricing: config.services_pricing,
+    nesti_role_guide: guideForAudience(mergedSettings, role),
+    approved_difference_line: config.difference_line,
+    approved_facts: config.differentiators,
+    role_guidance: config.custom_guidance,
     existing_faqs: config.faqs,
   };
 
@@ -124,9 +120,9 @@ export async function generateLandingChatFaqsService(body = {}, actorUser) {
 
 export async function adminEnsureLandingEmbedService(actorUser) {
   if (!canWrite(actorUser)) return fail(403, 'Missing write permission');
-  const created = await ensureLandingEmbed();
+  const created = await ensureLandingEmbedRequired();
   if (!created.ok) return fail(400, created.message);
-  const doc = await loadLandingChatSettings();
+  const doc = await loadLandingChatSettingsRequired();
   return ok({
     ...landingSettingsView(doc, created.embed),
     embed_token: created.token,
@@ -162,6 +158,7 @@ function allowPreview(userId) {
 
 const PREVIEW_VISITOR = {
   client: { name: 'Alex', company: '', city: 'Toronto', country: 'Canada', topic: 'inquiry' },
+  investor: { name: 'Alex', company: '', city: 'Toronto', country: 'Canada', topic: 'inquiry' },
   agent: { name: 'Sarah', company: 'Northline Realty', city: 'Vancouver', country: 'Canada', topic: 'demo' },
   broker: { name: 'Mark', company: 'Summit Mortgage Group', city: 'Calgary', country: 'Canada', topic: 'inquiry' },
   lawyer: { name: 'David', company: 'Hart & Lowe LLP', city: 'Ottawa', country: 'Canada', topic: 'demo' },
@@ -173,25 +170,61 @@ function excerpt(prompt) {
 
 /**
  * Runs the real prompt builder + model with the admin's *unsaved* draft so the
- * preview matches what the homepage widget would say. Falls back to the
- * persona's canned sample when the model is unavailable.
+ * preview matches what the homepage widget would say. Falls back to a matching
+ * saved answer, then the existing canned landing reply for that role.
  */
+function previewFallbackReply({ roleCustomization, message, roleKey, personality, formality, previousAssistant, walkthrough, opening, visitorName, botName, welcomeMessage }) {
+  if (opening) {
+    return landingGreetingFallback({ visitorName, botName, welcomeMessage });
+  }
+  const fallback = landingFallbackReply({
+    audience: roleKey,
+    personality,
+    formality,
+    roleCustomization,
+    message,
+    previousAssistant,
+    walkthrough,
+  });
+  return shortenLandingReply(fallback, {
+    personality: landingBackupTone(roleCustomization, personality),
+    communicationStyle: roleCustomization?.communication_style || '',
+  }) || fallback;
+}
+
 export async function landingChatPreviewService(body = {}, actorUser) {
   if (!canRead(actorUser)) return fail(403, 'Missing read permission');
   if (!allowPreview(actorUser?._id)) return fail(429, 'Too many previews. Wait a minute and try again.');
 
-  const saved = await loadLandingChatSettings().catch(() => null);
+  const saved = await loadLandingChatSettingsRequired();
   const draft = body.settings && typeof body.settings === 'object' ? body.settings : {};
-  // Draft wins over saved; settingsPayload normalises enums and defaults.
-  const merged = settingsPayload({ ...(saved || {}), ...draft });
+  let merged;
+  try {
+    merged = settingsPayload({ ...(saved || {}), ...draft });
+  } catch (error) {
+    logger.warn('Landing chat preview could not read the draft settings', { error: error?.message });
+    merged = settingsPayload(saved || {});
+  }
   const audience = String(body.role || 'client');
   const roleKey = personaRoleKey(audience);
   const roleCustomization = enabledRoleCustomization(merged, audience);
   const persona = personalityFor(merged.personality);
   const identity = landingBotIdentity(merged);
-  const visitor = { ...PREVIEW_VISITOR[roleKey], name: String(body.visitor_name || '').trim() || PREVIEW_VISITOR[roleKey].name };
+  const visitorDefaults = PREVIEW_VISITOR[roleKey] || PREVIEW_VISITOR.client;
+  const visitor = { ...visitorDefaults, name: String(body.visitor_name || '').trim() || visitorDefaults.name };
   const opening = Boolean(body.opening);
-  const message = String(body.message || '').trim() || persona.sample.visitor[roleKey];
+  const message = String(body.message || '').trim() || persona.sample?.visitor?.[roleKey] || persona.sample?.visitor?.client || '';
+  const conversationHistory = (Array.isArray(body.conversation_history) ? body.conversation_history : [])
+    .slice(-12)
+    .map((turn) => ({
+      role: turn?.speaker === 'assistant' ? 'assistant' : turn?.speaker === 'visitor' ? 'user' : '',
+      content: String(turn?.text || '').trim().slice(0, 1200),
+    }))
+    .filter((turn) => turn.role && turn.content);
+  const lastAssistantMessage = [...conversationHistory].reverse().find((turn) => turn.role === 'assistant')?.content || '';
+  const walkthrough = !opening
+    && agreesToWalkthrough(message)
+    && askedForWalkthrough(lastAssistantMessage);
   const pain = opening ? null : detectPain(audience, message);
 
   const system = nestiLandingFlow.buildSystemPrompt(null, {
@@ -204,7 +237,7 @@ export async function landingChatPreviewService(body = {}, actorUser) {
     pain,
     featuresExplained: [],
     questionsAsked: [],
-    walkthrough: false,
+    walkthrough,
   });
 
   const base = {
@@ -216,12 +249,50 @@ export async function landingChatPreviewService(body = {}, actorUser) {
     bot_persona_title: identity.personaTitle,
     visitor: { name: visitor.name, message: opening ? '' : message },
     system_prompt_excerpt: excerpt(system),
+    plans: landingChatPlanCards(),
   };
+
+  if (!opening) {
+    const savedAnswer = replyFromSavedKnowledge(roleCustomization, message);
+    if (savedAnswer) {
+      return ok({
+        ...base,
+        reply: finishLandingSpokenReply(shortenLandingReply(savedAnswer, {
+          personality: landingBackupTone(roleCustomization, persona.id),
+          communicationStyle: roleCustomization?.communication_style || '',
+        }) || savedAnswer, {
+          opening,
+          visitorName: visitor.name,
+          addressByFirstName: roleCustomization?.address_by_first_name !== false,
+          formality: merged.formality,
+        }),
+        fallback: false,
+        matched_saved: true,
+      });
+    }
+  }
 
   if (!process.env.OPENAI_API_KEY) {
     return ok({
       ...base,
-      reply: applyRegister(persona.sample.reply[roleKey], merged.formality),
+      reply: finishLandingSpokenReply(previewFallbackReply({
+        roleCustomization,
+        message: opening ? '' : message,
+        roleKey,
+        personality: persona.id,
+        formality: merged.formality,
+        previousAssistant: lastAssistantMessage,
+        walkthrough,
+        opening,
+        visitorName: visitor.name,
+        botName: identity.botName,
+        welcomeMessage: merged.welcome_message,
+      }), {
+        opening,
+        visitorName: visitor.name,
+        addressByFirstName: roleCustomization?.address_by_first_name !== false,
+        formality: merged.formality,
+      }),
       fallback: true,
       fallback_reason: 'OpenAI key is not configured.',
     });
@@ -229,6 +300,7 @@ export async function landingChatPreviewService(body = {}, actorUser) {
 
   const openaiMessages = [
     { role: 'system', content: system },
+    ...conversationHistory,
     { role: 'user', content: opening ? `Hi, I'm ${visitor.name}.` : message },
   ];
 
@@ -251,15 +323,41 @@ export async function landingChatPreviewService(body = {}, actorUser) {
     reply = shortenLandingReply(reply, {
       greeting: opening,
       feature: pain?.feature || '',
-      personality: persona.id,
+      personality: landingBackupTone(roleCustomization, persona.id),
       communicationStyle: roleCustomization?.communication_style || '',
     }) || reply;
-    return ok({ ...base, reply: applyRegister(reply, merged.formality), fallback: false });
-  } catch (error) {
-    logger.warn('Landing chat preview fell back to the canned sample', { error: error?.message });
     return ok({
       ...base,
-      reply: applyRegister(persona.sample.reply[roleKey], merged.formality),
+      reply: finishLandingSpokenReply(reply, {
+        opening,
+        visitorName: visitor.name,
+        addressByFirstName: roleCustomization?.address_by_first_name !== false,
+        formality: merged.formality,
+      }),
+      fallback: false,
+    });
+  } catch (error) {
+    logger.warn('Landing chat preview fell back to the canned landing reply', { error: error?.message });
+    return ok({
+      ...base,
+      reply: finishLandingSpokenReply(previewFallbackReply({
+        roleCustomization,
+        message: opening ? '' : message,
+        roleKey,
+        personality: persona.id,
+        formality: merged.formality,
+        previousAssistant: lastAssistantMessage,
+        walkthrough,
+        opening,
+        visitorName: visitor.name,
+        botName: identity.botName,
+        welcomeMessage: merged.welcome_message,
+      }), {
+        opening,
+        visitorName: visitor.name,
+        addressByFirstName: roleCustomization?.address_by_first_name !== false,
+        formality: merged.formality,
+      }),
       fallback: true,
       fallback_reason: error?.message || 'Model unavailable.',
     });
@@ -267,12 +365,18 @@ export async function landingChatPreviewService(body = {}, actorUser) {
 }
 
 export async function publicLandingChatConfigService() {
-  const doc = await loadLandingChatSettings().catch(() => null);
-  let embed = await findLandingEmbed().catch(() => null);
+  const doc = await loadLandingChatSettingsRequired();
+  let embed = await findLandingEmbedRequired();
   const view = landingSettingsView(doc, embed);
   if (view.enabled && !embed) {
-    const created = await ensureLandingEmbed().catch(() => null);
-    embed = created?.ok ? created.embed : embed;
+    const created = await ensureLandingEmbedRequired();
+    if (!created?.ok || !created.embed) {
+      logger.error('Enabled landing chatbot has no available embed', { reason: created?.message || 'Embed not returned' });
+      const unavailable = new Error('The homepage chatbot is temporarily unavailable. Please try again.');
+      unavailable.status = 503;
+      throw unavailable;
+    }
+    embed = created.embed;
   }
   const enabled = view.enabled && Boolean(embed?.token);
   return {
@@ -285,6 +389,12 @@ export async function publicLandingChatConfigService() {
       display_name: view.display_name,
       bot_persona_title: view.bot_persona_title,
       consent_line: view.consent_line,
+      contact_fields: view.role_customizations?.client?.contact_fields || ['name', 'email', 'phone'],
+      chat_style: {
+        personalities: view.role_customizations?.client?.personalities || [],
+        communication_style: view.role_customizations?.client?.communication_style || 'conversational',
+        formality: view.formality,
+      },
       embed_token: enabled ? embed.token : '',
       plans: landingChatPlanCards(),
     },

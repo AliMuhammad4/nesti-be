@@ -74,51 +74,47 @@ export const adminSalesLeadEmailSendSchema = Joi.object({
   body: Joi.string().trim().min(1).max(6000).required(),
 });
 
-const LANDING_PERSONALITIES = ['friendly', 'executive', 'consultative', 'sales'];
-const LANDING_ROLE_TONES = [
-  ...LANDING_PERSONALITIES,
-  'plain_language', 'real_estate_guide', 'detail_focused', 'proactive_next_step',
-];
+const LANDING_PERSONALITIES = ['friendly', 'executive', 'consultative', 'sales', 'luxury', 'caring'];
 const LANDING_FORMALITIES = ['formal', 'professional', 'casual'];
-const LANDING_COMMUNICATION_STYLES = ['quick', 'conversational', 'educational', 'consultative'];
 const landingText = (max) => Joi.string().trim().allow('', null).max(max);
+const landingStringList = (maxItems, maxLength) => Joi.array().items(
+  Joi.string().trim().allow('').max(maxLength),
+).max(maxItems);
 const landingRoleCustomizationSchema = Joi.object({
   enabled: Joi.boolean(),
-  personalities: Joi.array().items(Joi.alternatives().try(
-    Joi.string().valid(...LANDING_ROLE_TONES),
-    Joi.string().pattern(/^custom-[a-f0-9]{32}$/),
-  )).unique().max(2),
+  personalities: landingStringList(8, 80),
   custom_tones: Joi.array().items(Joi.object({
-    id: Joi.string().pattern(/^custom-[a-f0-9]{32}$/).required(),
-    name: Joi.string().trim().min(2).max(40).required(),
-    guidance: Joi.string().trim().min(8).max(200).required(),
-  }).unknown(false).required()).unique('id').max(8),
-  languages: Joi.array().items(Joi.string().trim().min(2).max(60)).unique().max(20),
+    id: Joi.string().trim().max(80).allow(''),
+    name: Joi.string().trim().max(80).allow(''),
+    guidance: Joi.string().trim().max(500).allow(''),
+  }).unknown(true)).max(12),
+  languages: landingStringList(30, 80),
   auto_detect_language: Joi.boolean(),
-  communication_style: Joi.string().valid(...LANDING_COMMUNICATION_STYLES),
+  communication_style: Joi.string().trim().max(40).allow('', null),
   use_emojis: Joi.boolean(),
   address_by_first_name: Joi.boolean(),
-  focus_areas: Joi.array().items(Joi.string().trim().max(120)).unique().max(20),
-  differentiators: Joi.array().items(Joi.string().trim().max(120)).unique().max(15),
-  custom_guidance: landingText(2000),
-  website_reference: landingText(3000),
-  services_pricing: landingText(2000),
-  qualification_questions: Joi.array().items(Joi.string().trim().max(180)).unique().max(12),
-  next_actions: Joi.array().items(Joi.string().valid(
-    'schedule', 'collect_contact', 'callback', 'follow_up',
-  )).unique().max(4),
+  focus_areas: landingStringList(30, 200),
+  differentiators: landingStringList(20, 200),
+  difference_line: landingText(500),
+  custom_guidance: landingText(4000),
+  website_reference: landingText(4000),
+  services_pricing: landingText(4000),
+  qualification_questions: landingStringList(12, 80),
+  contact_fields: landingStringList(8, 40),
+  next_actions: landingStringList(12, 40),
   faqs: Joi.array().items(Joi.object({
-    question: Joi.string().trim().max(240).required(),
-    answer: Joi.string().trim().max(1200).required(),
-  })).max(15),
-}).unknown(false);
+    question: Joi.string().trim().allow('').max(240),
+    answer: Joi.string().trim().allow('').max(1200),
+  }).unknown(true)).max(20),
+}).unknown(true);
 
 const landingRoleCustomizationsSchema = Joi.object({
   client: landingRoleCustomizationSchema,
+  investor: landingRoleCustomizationSchema,
   agent: landingRoleCustomizationSchema,
   broker: landingRoleCustomizationSchema,
   lawyer: landingRoleCustomizationSchema,
-}).unknown(false);
+}).unknown(true);
 
 const landingChatSettingsFields = {
   enabled: Joi.alternatives().try(Joi.boolean(), Joi.string().valid('true', 'false')),
@@ -144,15 +140,19 @@ const landingChatSettingsFields = {
 export const landingChatSettingsSchema = Joi.object(landingChatSettingsFields);
 
 export const landingChatPreviewSchema = Joi.object({
-  role: Joi.string().valid('client', 'agent', 'broker', 'mortgage_broker', 'lawyer').default('client'),
-  message: Joi.string().trim().max(500).allow('', null),
+  role: Joi.string().valid('client', 'investor', 'agent', 'broker', 'mortgage_broker', 'lawyer').default('client'),
+  message: Joi.string().trim().max(2000).allow('', null),
+  conversation_history: Joi.array().items(Joi.object({
+    speaker: Joi.string().valid('visitor', 'assistant').required(),
+    text: Joi.string().trim().max(1200).required(),
+  })).max(12).default([]),
   opening: Joi.boolean().default(false),
   visitor_name: landingText(60),
-  settings: Joi.object(landingChatSettingsFields).default({}),
+  settings: Joi.object().unknown(true).default({}),
 });
 
 export const landingChatFaqGenerateSchema = Joi.object({
-  role: Joi.string().valid('client', 'agent', 'broker', 'lawyer').required(),
+  role: Joi.string().valid('client', 'investor', 'agent', 'broker', 'lawyer').required(),
   role_customization: landingRoleCustomizationSchema.default({}),
 });
 

@@ -196,7 +196,13 @@ export function shouldHydrateLeadRecap({ userMessage, aiReply, interactionCount 
  * @param {string} [opts.intent]
  * @returns {string[]} lines like `- **Label:** value`
  */
-export function buildLeadRecapMarkdownLines({ form = {}, contact = {}, extracted = {}, intent: intentRaw = '' }) {
+export function buildLeadRecapMarkdownLines({
+  form = {},
+  contact = {},
+  extracted = {},
+  intent: intentRaw = '',
+  compact = false,
+} = {}) {
   const intent = String(intentRaw || form.intent || '').toLowerCase();
   const isSell = intent === 'sell';
 
@@ -230,6 +236,13 @@ export function buildLeadRecapMarkdownLines({ form = {}, contact = {}, extracted
   };
 
   add('Name', name);
+  if (compact) {
+    add(isSell ? 'Property address' : 'Location', location);
+    add(isSell ? 'Expected selling price' : 'Budget', budgetOrPrice);
+    add('Timeline', timeline);
+    add('Property type', propertyType);
+    return rows;
+  }
   add('Email', email);
   add('Phone', phone);
   add(isSell ? 'Property address' : 'Location', location);

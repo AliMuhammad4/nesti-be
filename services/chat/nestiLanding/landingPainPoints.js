@@ -28,6 +28,12 @@ const PAINS = {
     { id: 'booking', label: 'consultation booking', feature: 'voice agent', pattern: /consult|appointment|\bbook(ing)?\b/i },
     { id: 'organization', label: 'organization', feature: 'pipeline', pattern: /organiz|files everywhere|can't find the file/i },
   ],
+  investor: [
+    { id: 'investing', label: 'the next investment property', feature: 'match', pattern: /invest|portfolio|rental|cash flow|next property/i },
+    { id: 'finding', label: 'finding professionals', feature: 'match', pattern: /find (an |a )?(agent|broker|lawyer)|compar(e|ing) (professionals|agents)|which professional/i },
+    { id: 'affordability', label: 'the numbers', feature: 'budget tools', pattern: /afford|budget|how much|return|yield/i },
+    { id: 'buying', label: 'buying or selling an investment', feature: 'match', pattern: /\b(buy|buying|sell|selling|purchase)\b/i },
+  ],
   client: [
     { id: 'investing', label: 'investing', feature: 'match', pattern: /invest/i },
     { id: 'finding', label: 'finding professionals', feature: 'match', pattern: /find (an |a )?(agent|broker|lawyer)|compar(e|ing) (professionals|agents)|which professional/i },
@@ -54,6 +60,7 @@ export function roleKey(role) {
     .replace(/[^a-z]+/g, ' ')
     .trim();
 
+  if (raw.includes('investor')) return 'investor';
   if (raw.includes('mortgage') || raw.includes('broker')) return 'broker';
   if (raw.includes('lawyer')) return 'lawyer';
   if (raw.includes('agent') || raw.includes('realtor')) return 'agent';
@@ -85,7 +92,7 @@ export function agreesToWalkthrough(value) {
 }
 
 export function askedForWalkthrough(value) {
-  return /walk (you |me )?through/i.test(text(value));
+  return /\b(?:walk(?:\s+(?:you|me))?\s+through|looking\s+for\s+tips?|(?:would|do)\s+you\s+like(?:\s+me\s+to)?\s+(?:some\s+)?(?:tips?|help|a\s+walkthrough)|tips?\s+(?:on\s+)?how\s+to|how\s+to\s+improve|help\s+you\s+improve|show\s+you\s+how)\b/i.test(text(value));
 }
 
 export function roleFallbackQuestion(role, personality = '', formality = 'professional') {

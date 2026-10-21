@@ -378,6 +378,7 @@ export function queueAdminLeadFollowUp(id) {
   followUpQueue.set(key, 'run');
   const run = async () => {
     try {
+      await EnterpriseInquiry.updateOne({ _id: key }, { $set: { follow_up_pending: true } });
       await prepareAdminLeadFollowUp(key);
     } catch (error) {
       logger.warn('Admin lead follow-up was not prepared', { error: error?.message });
@@ -393,9 +394,21 @@ export function queueAdminLeadFollowUp(id) {
   void run();
 }
 
+export async function resumePendingAdminLeadFollowUps() {
+  const rows = await EnterpriseInquiry.find({ follow_up_pending: true }).select('_id').limit(100).lean();
+  rows.forEach((row) => queueAdminLeadFollowUp(row._id));
+  return rows.length;
+}
+
 export async function prepareAdminLeadFollowUp(id) {
   const row = await loadLead(id);
-  if (!row || !text(row.email)) return null;
+  if (!row || !text(row.email)) {
+    if (row?.follow_up_pending) {
+      row.follow_up_pending = false;
+      await row.save();
+    }
+    return null;
+  }
   const settings = await loadLandingChatSettings().catch(() => null);
   const insight = await readInsights(row, settings);
   row.insights = { ...insight, generated_at: new Date() };
@@ -404,6 +417,7 @@ export async function prepareAdminLeadFollowUp(id) {
     const drafted = await readEmail({ row, insight });
     assignEmailDraft(row, drafted.subject, drafted.body, 'auto');
   }
+  row.follow_up_pending = false;
   await row.save();
   const { emitAdminPlatformLead } = await import('../realtime/workspaceSocket.js');
   emitAdminPlatformLead({

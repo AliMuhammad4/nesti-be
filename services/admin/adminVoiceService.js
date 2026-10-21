@@ -272,7 +272,7 @@ export async function adminSaveSalesSettingsService(body, actorUser) {
       },
       $setOnInsert: { key: 'sales' },
     },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: 'after' },
   ).lean();
   return ok(salesSettingsView(doc));
 }
@@ -321,7 +321,7 @@ export async function adminSaveSalesVoiceSampleService(file, actorUser) {
       },
       $setOnInsert: { key: 'sales', voice: 'marin' },
     },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: 'after' },
   ).lean();
   return ok(salesSettingsView(doc));
 }

@@ -4,6 +4,7 @@ import ChatMessage from '../../models/ChatMessage.js';
 import ChatbotEmbedUrl from '../../models/ChatbotEmbedUrl.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
+import PublicProfile from '../../models/PublicProfile.js';
 import logger from '../../utils/logger.js';
 import {
   normalizeAgentType,
@@ -43,6 +44,10 @@ import {
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
 import { allowLandingChatRate, isLandingEmbed, loadLandingChatSettings } from './nestiLanding/landingChatConfig.js';
+import {
+  assistantAllowsLeadSaving,
+  loadAppliedAssistantSetting,
+} from '../professionalAssistant/professionalAssistantService.js';
 import { nestiLandingFlow } from './nestiLanding/nestiLandingFlow.js';
 import { handleLandingChatTurn } from './nestiLanding/landingChatTurnService.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
@@ -323,6 +328,9 @@ export const handleChatService = async ({
   referer,
   formContact,
   forceNewLead = false,
+  opening = false,
+  preview = false,
+  viewerUserId = null,
 }) => {
   if (!message || typeof message !== 'string' || !message.trim()) {
     return { status: 400, body: { success: false, message: 'message is required' } };
@@ -351,6 +359,7 @@ export const handleChatService = async ({
       visitorId,
       clientIp,
       formContact,
+      opening: Boolean(opening),
     });
   }
   const landingMode = isLandingEmbed(embed);
@@ -363,10 +372,13 @@ export const handleChatService = async ({
   }
   const userId = embed.user_id;
 
-  const [visitor, professionalProfile, subscription] = await Promise.all([
+  const [visitor, professionalProfile, subscription, publicProfile] = await Promise.all([
     resolveVisitor({ visitorUuid: visitorId, embedToken, userAgent, clientIp }),
     ProfessionalProfile.findOne({ user_id: userId }),
     getOrCreateSubscriptionForUser({ _id: userId }),
+    landingMode
+      ? null
+      : PublicProfile.findOne({ user_id: userId }).select('stats.years_experience stats.years_practice').lean(),
   ]);
 
   const flowType = landingMode
@@ -379,7 +391,9 @@ export const handleChatService = async ({
   const effectiveWidgetType = professionalTypeToWidgetAgentType(landingMode ? 'agent' : flowType);
   const flow = landingMode ? nestiLandingFlow : getFlowForRole(flowType);
   const propertyMatchesEnabled = landingMode ? false : propertyMatchesEnabledForPlan(flow, subscription);
-  const canCreateLeads = Boolean(flow?.flowRole);
+  const previewForOwner =
+    preview === true && viewerUserId && String(embed.user_id) === String(viewerUserId);
+  const canCreateLeads = Boolean(flow?.flowRole) && !previewForOwner;
 
   const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow) || Boolean(flow.landingMode);
   const intent = nonAgentBuyerSellerIntent
@@ -521,6 +535,7 @@ export const handleChatService = async ({
     interactionCount
   );
 
+  const savedYears = Number(publicProfile?.stats?.years_experience) || Number(publicProfile?.stats?.years_practice) || 0;
   const systemPromptOptions = await buildFlowSystemPromptOptions({
     flow,
     professionalProfile,
@@ -533,6 +548,15 @@ export const handleChatService = async ({
     calendlyLinkForVisitor,
     propertyMatchesEnabled,
   });
+  if (!landingMode) {
+    systemPromptOptions.assistantSetting = await loadAppliedAssistantSetting(userId);
+    systemPromptOptions.yearsExperience = savedYears;
+  }
+  const appliedAssistantSetting = systemPromptOptions.assistantSetting;
+  const leadSyncEnabled = canCreateLeads && assistantAllowsLeadSaving(appliedAssistantSetting);
+  if (flowType === 'agent') {
+    systemPromptOptions.intakeFormContact = storedForm;
+  }
   if (landingMode) {
     systemPromptOptions.audience = String(storedForm?.audience_role || formContact?.audience_role || 'client');
     systemPromptOptions.landingGuides = landingSettings || {};
@@ -599,7 +623,15 @@ export const handleChatService = async ({
   coerceContactIdentityFields(contactInfo);
   hasContact = hasIdentityContact(contactInfo);
 
-  const refetchPropertyMatches = shouldRefetchPropertyMatchesForMessage(trimmedMessage);
+  const previousAssistantReply = [...history]
+    .reverse()
+    .find((message) => message.role === 'assistant')?.content || '';
+  const refetchPropertyMatches = shouldRefetchPropertyMatchesForMessage(trimmedMessage, {
+    previousAssistantReply,
+  });
+  const appliedAssistant = systemPromptOptions.assistantSetting;
+  const scheduleAllowed = !appliedAssistant?.applied
+    || (appliedAssistant.next_actions || []).includes('schedule');
   const recapLines = refetchPropertyMatches
     ? []
     : buildLeadRecapMarkdownLines({
@@ -607,6 +639,7 @@ export const handleChatService = async ({
         contact: contactInfo,
         extracted: parsedAiDetails,
         intent: aiIntent,
+        compact: Boolean(appliedAssistant?.applied && flow?.flowRole === 'agent'),
       });
   let finalReply = aiReply;
   if (
@@ -627,9 +660,10 @@ export const handleChatService = async ({
     }
   }
 
-  if (isAutomatedBookingEnabled && calendlyLinkForVisitor && hasContact) {
+  if (isAutomatedBookingEnabled && calendlyLinkForVisitor && hasContact && scheduleAllowed) {
     finalReply = appendCalendlyBookingLink(finalReply, calendlyLinkForVisitor, {
       userMessage: trimmedMessage,
+      allowSchedule: scheduleAllowed,
     });
   }
 
@@ -680,7 +714,7 @@ export const handleChatService = async ({
 
   let existingLeadMatchForSync;
   let leadLookupFailed = false;
-  if (canCreateLeads && hasContact && !forceNewLead) {
+  if (leadSyncEnabled && hasContact && !forceNewLead) {
     try {
       const formIntent = String(mergedFormContact?.intent || '').trim().toLowerCase();
       const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
@@ -702,7 +736,7 @@ export const handleChatService = async ({
 
   const awaitLeadSync = await shouldAwaitLeadSync({
     forceNewLead,
-    canCreateLeads,
+    canCreateLeads: leadSyncEnabled,
     hasContact,
     existingLeadMatch: existingLeadMatchForSync,
     leadLookupFailed,
@@ -711,7 +745,7 @@ export const handleChatService = async ({
   const syncLeadTask = syncLeadMatchAfterTurn({
     flow,
     flowType,
-    canCreateLeads,
+    canCreateLeads: leadSyncEnabled,
     conversation,
     userId,
     professionalProfile,

@@ -10,7 +10,7 @@ const landingChatSettingSchema = new mongoose.Schema(
     bot_persona_title: { type: String, default: '24/7 Real Estate Copilot' },
     personality: {
       type: String,
-      enum: ['friendly', 'executive', 'consultative', 'sales'],
+      enum: ['friendly', 'executive', 'luxury', 'sales', 'caring', 'consultative'],
       default: 'friendly',
     },
     formality: {
@@ -28,6 +28,7 @@ const landingChatSettingSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: () => ({}),
     },
+    previous_settings: { type: mongoose.Schema.Types.Mixed, default: null },
     auto_welcome_followup: { type: Boolean, default: false },
     dual_write_inquiry: { type: Boolean, default: false },
   },

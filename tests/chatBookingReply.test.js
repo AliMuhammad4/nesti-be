@@ -13,6 +13,15 @@ test('userSignalsBookingIntent detects availability messages', () => {
   assert.equal(userSignalsBookingIntent('show me available options'), false);
 });
 
+test('appendCalendlyBookingLink does not attach a link when scheduling is off', () => {
+  const out = appendCalendlyBookingLink('Sure, I can help with that.', CALENDLY_URL, {
+    userMessage: 'Can you share available times?',
+    allowSchedule: false,
+  });
+  assert.equal(out.includes(CALENDLY_URL), false);
+  assert.doesNotMatch(out, /Book an appointment/);
+});
+
 test('appendCalendlyBookingLink appends when user asks for available times', () => {
   const out = appendCalendlyBookingLink('Sure, I can help with that.', CALENDLY_URL, {
     userMessage: 'Can you share available times?',

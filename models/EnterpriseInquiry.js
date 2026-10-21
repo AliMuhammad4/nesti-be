@@ -10,6 +10,7 @@ const enterpriseInquirySchema = new mongoose.Schema({
   },
   email: { type: String, default: '', index: true },
   phone: { type: String, default: '' },
+  preferred_contact: { type: String, enum: ['', 'email', 'phone', 'either'], default: '' },
   full_name: { type: String, default: '' },
   interest_role: { type: String, default: '' },
   source: { type: String, enum: ['demo', 'contact', 'landing_chat', 'direct_inquiry', ''], default: '' },
@@ -82,6 +83,7 @@ const enterpriseInquirySchema = new mongoose.Schema({
   closed_at: { type: Date, default: null },
   reopen_count: { type: Number, default: 0 },
   reopened_at: { type: Date, default: null },
+  follow_up_pending: { type: Boolean, default: false },
   email_draft: {
     subject: { type: String, default: '' },
     body: { type: String, default: '' },

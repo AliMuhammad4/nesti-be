@@ -43,6 +43,28 @@ export function isPropertyMatchesRequestMessage(text) {
   return false;
 }
 
+/** Assistant just asked whether the visitor wants to see available options. */
+export function assistantOfferedAvailableOptions(text) {
+  const r = String(text || '').toLowerCase();
+  return (
+    /\bwould you like\b.*\b(options|listings|properties|matches|homes|houses|see)\b/.test(r) ||
+    /\blike to see\b.*\b(options|available|listings|properties|matches|homes|houses)\b/.test(r) ||
+    /\b(show|see)\b.*\bavailable options\b/.test(r) ||
+    /\bavailable options\b[^.?!]*\?/.test(r) ||
+    /\binterested in seeing\b.*\b(options|listings|properties|matches|homes|houses)\b/.test(r) ||
+    /\b(want|shall|should|can)\b.*\b(show|see)\b.*\b(options|listings|properties|matches|homes|houses)\b/.test(r)
+  );
+}
+
+/** Assistant reply points at option cards, including a short sentence followed by a question. */
+export function assistantAnnouncingOptionCards(text) {
+  const r = String(text || '').toLowerCase();
+  return (
+    /\bhere are\b.*\b(your )?(available )?(options|matches|listings|homes|houses|properties)\b/.test(r) ||
+    /\b(your )?(available )?(options|matches|listings|homes|houses|properties)\b.*\bbelow\b/.test(r)
+  );
+}
+
 export function isAvailableOptionsConsentMessage(text, { afterOptionsOffer = false } = {}) {
   if (isAvailableOptionsRequestMessage(text) || isPropertyMatchesRequestMessage(text)) {
     return true;
@@ -83,10 +105,14 @@ export function isAvailableOptionsConsentMessage(text, { afterOptionsOffer = fal
   );
 }
 
-export function shouldRefetchPropertyMatchesForMessage(text, { afterOptionsOffer = false } = {}) {
+export function shouldRefetchPropertyMatchesForMessage(text, {
+  afterOptionsOffer = false,
+  previousAssistantReply = '',
+} = {}) {
+  const offered = afterOptionsOffer || assistantOfferedAvailableOptions(previousAssistantReply);
   return (
     isAvailableOptionsRequestMessage(text) ||
     isPropertyMatchesRequestMessage(text) ||
-    isAvailableOptionsConsentMessage(text, { afterOptionsOffer })
+    isAvailableOptionsConsentMessage(text, { afterOptionsOffer: offered })
   );
 }

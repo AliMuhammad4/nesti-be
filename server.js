@@ -10,6 +10,7 @@ import { startRecordingIngestion } from './services/proChat/recordingIngestionSe
 import { ensureTranscriptionWorkerRunning, ensureRaviWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
+import { resumePendingAdminLeadFollowUps } from './services/admin/adminLeadGuideEmailService.js';
 import './models/index.js'; 
 
 const PORT = process.env.PORT || 5000;
@@ -29,6 +30,9 @@ async function startServer() {
     logger.info(`Server running on port ${PORT} (HTTP + WebSocket)`);
     scheduleMonthlyRewardJob();
     scheduleNurtureFollowupJob();
+    void resumePendingAdminLeadFollowUps().catch((error) => {
+      logger.warn('Pending admin lead follow-ups were not resumed', { message: error?.message });
+    });
     startCallMinutesReconciliation();
     startRecordingIngestion();
     void ensureTranscriptionWorkerRunning().catch((error) => {

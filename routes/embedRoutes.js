@@ -89,10 +89,11 @@ const resolveEmbed = async (req, res, next) => {
       null;
 
     const resolvedWidgetRole =
-      embed.widget_role ||
       (prof?.professional_type && PROFESSIONAL_TYPE_VALUES.includes(prof.professional_type)
         ? prof.professional_type
-        : null);
+        : null)
+      || embed.widget_role
+      || null;
 
     const assistantSetting = await loadAppliedAssistantSetting(embed.user_id);
     const assistantIdentity = assistantSetting

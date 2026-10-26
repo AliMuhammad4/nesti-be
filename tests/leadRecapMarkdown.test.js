@@ -89,6 +89,13 @@ test('shouldHydrateLeadRecap always allows recap hydration pass', () => {
   );
 });
 
+test('injectLeadRecapIntoReply leaves a closing-document question alone', () => {
+  const reply =
+    'I can review the purchase agreement once we confirm the matter. What details can you provide about the agreement?';
+  const out = injectLeadRecapIntoReply(reply, ['- **Name:** selling my']);
+  assert.equal(out, reply);
+});
+
 test('injectLeadRecapIntoReply does not replace generic meeting bullets', () => {
   const reply =
     "That's a great question! In the meeting you can expect to discuss:\n\n- Your financing situation\n- Timeline and next steps";

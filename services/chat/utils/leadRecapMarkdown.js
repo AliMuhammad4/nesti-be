@@ -55,7 +55,7 @@ function aiReplyHasRecapIntent(raw) {
     /\b(here'?s|here is)\b.*\b(so far|gathered|recap|shared)\b/i.test(r) ||
     /\bhere'?s\b.*\bquick\s+recap\b/i.test(r) ||
     /\bwhat\s+i\s+(have|'?ve)\s+so\s+far\b/i.test(r) ||
-    /\b(confirm|correct)\b.*\b(details|information|this)\b/i.test(r) ||
+    /\b(?:please\s+)?(?:confirm|correct)\b[^.\n]{0,48}\b(?:this|these|everything|details|information)\b/i.test(r) ||
     /\b(anything\s+(you'?d\s+)?like\s+to\s+(change|correct)|does\s+this\s+look\s+right|sound\s+right|confirm\s+(these\s+)?details)\b/i.test(
       r,
     )

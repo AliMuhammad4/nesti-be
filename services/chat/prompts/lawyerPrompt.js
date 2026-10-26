@@ -22,7 +22,7 @@ export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
     postBookingChatChecklist = [],
     deferCalendlyLink = false,
   } = options;
-  const blockSchedule = options.assistantSetting?.applied && !(options.assistantSetting.next_actions || []).includes('schedule');
+  const blockSchedule = false;
   const hasBookingLink = !blockSchedule && isAutomatedBookingEnabled && calendlyLink;
   const effectiveHasBookingLink = Boolean(hasBookingLink && !deferCalendlyLink);
 
@@ -32,11 +32,13 @@ export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
     hasBookingLink: effectiveHasBookingLink,
     calendlyLink: deferCalendlyLink ? undefined : calendlyLink,
     name,
+    rewriteInVoice: Boolean(options.assistantSetting?.applied),
   });
   const postBookedBlock = buildLawyerPostBookingBlock({
     name,
     calendlyBooked,
     postBookingChatChecklist,
+    firstPerson: Boolean(options.assistantSetting?.applied),
   });
 
   const prompt = appendAssistantOverlay(buildLawyerPromptMainTemplate({
@@ -47,6 +49,7 @@ export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
     automationBlock,
     postBookedBlock,
     assistantSetting: options.assistantSetting,
-  }).trim(), options.assistantSetting);
+    previewConversation: options.previewConversation === true,
+  }).trim(), options.assistantSetting, { preview: options.previewConversation === true });
   return `${prompt}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
 };

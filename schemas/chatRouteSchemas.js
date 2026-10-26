@@ -15,6 +15,7 @@ export const chatBodySchema = Joi.object({
   forceNewLead: Joi.boolean().optional(),
   opening: Joi.boolean().optional(),
   preview: Joi.boolean().optional(),
+  previewAssistantDraft: Joi.object().unknown(true).optional(),
 });
 
 export const propertyMatchesSchema = Joi.object({

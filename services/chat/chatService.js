@@ -45,8 +45,13 @@ import {
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
 import { allowLandingChatRate, isLandingEmbed, loadLandingChatSettings } from './nestiLanding/landingChatConfig.js';
 import {
+  assistantSettingForPreview,
   assistantAllowsLeadSaving,
+  buildPreviewChatPrompt,
+  finishLawyerReply,
+  lawyerReplyDrifted,
   loadAppliedAssistantSetting,
+  voiceTurnReminder,
 } from '../professionalAssistant/professionalAssistantService.js';
 import { nestiLandingFlow } from './nestiLanding/nestiLandingFlow.js';
 import { handleLandingChatTurn } from './nestiLanding/landingChatTurnService.js';
@@ -330,7 +335,9 @@ export const handleChatService = async ({
   forceNewLead = false,
   opening = false,
   preview = false,
+  previewAssistantDraft = null,
   viewerUserId = null,
+  onReplyDelta = null,
 }) => {
   if (!message || typeof message !== 'string' || !message.trim()) {
     return { status: 400, body: { success: false, message: 'message is required' } };
@@ -381,18 +388,27 @@ export const handleChatService = async ({
       : PublicProfile.findOne({ user_id: userId }).select('stats.years_experience stats.years_practice').lean(),
   ]);
 
+  const previewForOwner =
+    preview === true && viewerUserId && String(embed.user_id) === String(viewerUserId);
+  const draftRole = previewAssistantDraft?.role;
   const flowType = landingMode
     ? 'landing'
-    : resolveChatFlowType({
-      embed,
-      normalizedAgentType,
-      professionalProfile,
-    });
+    : previewForOwner && isValidProfessionalType(draftRole)
+      ? draftRole
+      : resolveChatFlowType({
+        embed,
+        normalizedAgentType,
+        professionalProfile,
+      });
   const effectiveWidgetType = professionalTypeToWidgetAgentType(landingMode ? 'agent' : flowType);
   const flow = landingMode ? nestiLandingFlow : getFlowForRole(flowType);
   const propertyMatchesEnabled = landingMode ? false : propertyMatchesEnabledForPlan(flow, subscription);
-  const previewForOwner =
-    preview === true && viewerUserId && String(embed.user_id) === String(viewerUserId);
+  if (preview === true && !previewForOwner) {
+    return {
+      status: 403,
+      body: { success: false, message: 'Sign in again to preview unsaved changes.' },
+    };
+  }
   const canCreateLeads = Boolean(flow?.flowRole) && !previewForOwner;
 
   const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow) || Boolean(flow.landingMode);
@@ -549,8 +565,11 @@ export const handleChatService = async ({
     propertyMatchesEnabled,
   });
   if (!landingMode) {
-    systemPromptOptions.assistantSetting = await loadAppliedAssistantSetting(userId);
+    systemPromptOptions.assistantSetting = previewForOwner && previewAssistantDraft
+      ? assistantSettingForPreview(previewAssistantDraft, flowType)
+      : await loadAppliedAssistantSetting(userId);
     systemPromptOptions.yearsExperience = savedYears;
+    systemPromptOptions.previewConversation = Boolean(previewForOwner);
   }
   const appliedAssistantSetting = systemPromptOptions.assistantSetting;
   const leadSyncEnabled = canCreateLeads && assistantAllowsLeadSaving(appliedAssistantSetting);
@@ -565,10 +584,16 @@ export const handleChatService = async ({
       || formContact?.email || formContact?.phone || formContact?.name
     );
   }
-  const systemPrompt = flow.buildSystemPrompt(professionalProfile, systemPromptOptions);
+  const systemPrompt = previewForOwner
+    ? buildPreviewChatPrompt(flow?.flowRole, professionalProfile, systemPromptOptions)
+    : flow.buildSystemPrompt(professionalProfile, systemPromptOptions);
+  const recentHistory = previewForOwner ? history.slice(-6) : history;
+  const promptHistory = flow?.flowRole !== 'lawyer'
+    ? recentHistory
+    : recentHistory.filter((message) => message.role !== 'assistant' || !lawyerReplyDrifted(message.content));
   const openaiMessages = [
     { role: 'system', content: systemPrompt },
-    ...history.map((m) => ({ role: m.role, content: m.content })),
+    ...promptHistory.map((m) => ({ role: m.role, content: m.content })),
   ];
 
   const mortgageBrokerSnapshotQual = null;
@@ -581,7 +606,11 @@ export const handleChatService = async ({
   const isOutOfScopeMessage = detectOutOfScopeMessage(trimmedMessage, flow?.flowRole);
 
   if (isOutOfScopeMessage) {
-    aiReply = buildOutOfScopeReply(flow?.flowRole, professionalProfile?.full_name);
+    aiReply = buildOutOfScopeReply(
+      flow?.flowRole,
+      professionalProfile?.full_name,
+      landingMode ? null : appliedAssistantSetting,
+    );
     logger.info('Chat service: out-of-scope message blocked', {
       op: 'chat.message',
       session_id: sessionId,
@@ -601,13 +630,29 @@ export const handleChatService = async ({
         contactInfo,
         interactionCount,
         intent,
+        turnReminder: landingMode
+          ? ''
+          : `${voiceTurnReminder(appliedAssistantSetting, trimmedMessage, { preview: previewForOwner })}${previewForOwner ? '\nVisible reply only. Keep the selected communication style. Do not write ###META### or JSON.' : ''}`,
+        assistantSetting: landingMode ? null : appliedAssistantSetting,
+        maxTokens: previewForOwner ? 120 : 600,
+        onDelta: typeof onReplyDelta === 'function' && previewForOwner
+          ? (text) => onReplyDelta(String(text || '').trim())
+          : null,
       });
       logger.info('Chat service: OpenAI turn completed', {
         op: 'chat.message',
         session_id: sessionId,
         ms: Date.now() - openAiStartedAt,
+        prompt_chars: systemPrompt.length,
+        preview: Boolean(previewForOwner),
       });
-      aiReply = turn.aiReply;
+      aiReply = flow?.flowRole === 'lawyer'
+        ? finishLawyerReply(turn.aiReply, {
+          userMessage: trimmedMessage,
+          previousReply: [...history].reverse().find((message) => message.role === 'assistant')?.content || '',
+          setting: appliedAssistantSetting,
+        })
+        : turn.aiReply;
       aiIntent = turn.aiIntent;
       emotionalState = turn.emotionalState;
       parsedAiDetails = turn.parsedAiDetails;
@@ -630,9 +675,8 @@ export const handleChatService = async ({
     previousAssistantReply,
   });
   const appliedAssistant = systemPromptOptions.assistantSetting;
-  const scheduleAllowed = !appliedAssistant?.applied
-    || (appliedAssistant.next_actions || []).includes('schedule');
-  const recapLines = refetchPropertyMatches
+  const scheduleAllowed = true;
+  const recapLines = refetchPropertyMatches || (previewForOwner && flow?.flowRole === 'lawyer')
     ? []
     : buildLeadRecapMarkdownLines({
         form: storedForm,
@@ -812,7 +856,9 @@ export const handleChatService = async ({
       reply: finalReply,
       session_id: sessionId,
       visitor_id: visitor.uuid,
-      meta: responseMeta,
+      meta: previewForOwner && previewAssistantDraft
+        ? { ...responseMeta, preview_draft_applied: true }
+        : responseMeta,
     },
   };
 };

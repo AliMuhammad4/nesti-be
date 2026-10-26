@@ -4,7 +4,7 @@
 
 import { appliedPersonaText } from '../../professionalAssistant/professionalAssistantService.js';
 
-export function buildLawyerAutomationBlock({ actionFlow, hasBookingLink, calendlyLink, name }) {
+export function buildLawyerAutomationBlock({ actionFlow, hasBookingLink, calendlyLink, name, rewriteInVoice = false }) {
   const recommendedLine =
     actionFlow.recommendedAppointment?.length > 0
       ? `- Prioritize recommending: ${actionFlow.recommendedAppointment.join('; ')}`
@@ -20,22 +20,39 @@ export function buildLawyerAutomationBlock({ actionFlow, hasBookingLink, calendl
 
   const clientPrompt = typeof actionFlow.prompt === 'string' ? actionFlow.prompt.trim() : '';
   const exactPromptBlock = clientPrompt
-    ? `- When the visitor has shared contact and is qualified, use this EXACT client-facing prompt (character-for-character):
-  "${clientPrompt}"`
-    : `- When qualified, invite them to book in a professional, concise way that matches the goal and Calendly types above.`;
+    ? (rewriteInVoice
+      ? `- When the visitor has shared contact and is qualified, keep this meaning and rewrite every word in the selected voice, formality, and length: "${clientPrompt}"`
+      : `- When the visitor has shared contact and is qualified, use this EXACT client-facing prompt (character-for-character):
+  "${clientPrompt}"`)
+    : (rewriteInVoice
+      ? '- When qualified, invite them to book in the selected voice, formality, and length. Mention the Calendly types above.'
+      : '- When qualified, invite them to book in a professional, concise way that matches the goal and Calendly types above.');
   const scheduleLinkMd = calendlyLink ? `[Schedule Here](${calendlyLink})` : '';
-  const exampleWithLink =
-    hasBookingLink && clientPrompt && scheduleLinkMd
+  const exampleWithLink = rewriteInVoice && scheduleLinkMd
+    ? `- Example: write the invitation in the selected voice, then include ${scheduleLinkMd}`
+    : hasBookingLink && clientPrompt && scheduleLinkMd
       ? `- Example visible reply (Markdown link): "${clientPrompt}" then include ${scheduleLinkMd}`
       : hasBookingLink && scheduleLinkMd
         ? `- Example: invite them to pick a time, then include ${scheduleLinkMd}`
         : '';
   const noLinkPromptBlock = clientPrompt
-    ? `- When qualified, use this prompt (without a link): "${clientPrompt}"`
-    : `- When qualified, invite them to schedule with ${name} in line with the goal.`;
-  const preBookingDiscoveryLine = `- Before sharing any booking link, ask 2-3 concise pre-booking discovery questions to sound professional: (a) expected closing timeline, (b) legal service needed, and (c) preferred contact method + best time.`;
+    ? (rewriteInVoice
+      ? `- When qualified, keep this meaning and rewrite it in the selected voice, without a link: "${clientPrompt}"`
+      : `- When qualified, use this prompt (without a link): "${clientPrompt}"`)
+    : (rewriteInVoice
+      ? '- When qualified, invite them to schedule with me in the selected voice.'
+      : `- When qualified, invite them to schedule with ${name} in line with the goal.`);
+  const preBookingDiscoveryLine = rewriteInVoice
+    ? '- Before a booking link, ask at most one missing detail in the selected voice. Do not repeat something the visitor already said.'
+    : '- Before sharing any booking link, ask 2-3 concise pre-booking discovery questions to sound professional: (a) expected closing timeline, (b) legal service needed, and (c) preferred contact method + best time.';
   const bookingAskLine = 'Would you like me to share available consultation times now?';
   const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
+  const bookingInviteLine = rewriteInVoice
+    ? '- Offer consultation times in the selected voice, formality, and length. Do not copy a fixed booking sentence.'
+    : `- Preferred booking invite for consistency: "${bookingAskLine}"`;
+  const bookingAvailabilityLine = rewriteInVoice
+    ? '- When the visitor shares availability, confirm it in the selected voice, then include the link.'
+    : `- When availability is confirmed, use this short transition before link share: "${bookingAfterAvailabilityLine}"`;
 
   return hasBookingLink
     ? `
@@ -44,8 +61,8 @@ REAL ESTATE LAWYER ACTION FLOW (automation enabled — ${actionFlow.tierLabel}):
 ${recommendedLine ? `${recommendedLine}\n` : ''}- Booking types (Calendly event names to suggest): ${actionFlow.calendlyOptions.join(', ')}
 ${preBookingDiscoveryLine}
 ${exactPromptBlock}
-- Preferred booking invite for consistency: "${bookingAskLine}"
-- When availability is confirmed, use this short transition before link share: "${bookingAfterAvailabilityLine}"
+${bookingInviteLine}
+${bookingAvailabilityLine}
 - In your visible reply (not inside ###META###), add the booking URL exactly once as a Markdown link: ${scheduleLinkMd}
 ${exampleWithLink}
 - After they book (briefly if natural): ${afterBookingLine}
@@ -58,13 +75,13 @@ REAL ESTATE LAWYER ACTION FLOW (no booking link — ${actionFlow.tierLabel}):
 ${recommendedLine ? `${recommendedLine}\n` : ''}- Booking types to suggest: ${actionFlow.calendlyOptions.join(', ')}
 ${preBookingDiscoveryLine}
 ${noLinkPromptBlock}
-- Suggest they schedule with ${name} (mention the booking types above).
+- Suggest they schedule with ${rewriteInVoice ? 'me' : name} (mention the booking types above).
 - After booking: ${afterBookingLine}
 ${supportDuringChat}
 `;
 }
 
-export function buildLawyerPostBookingBlock({ name, calendlyBooked, postBookingChatChecklist }) {
+export function buildLawyerPostBookingBlock({ name, calendlyBooked, postBookingChatChecklist, firstPerson = false }) {
   const checklistPlain = (postBookingChatChecklist || [])
     .map((t, i) => `${i + 1}. ${t}`)
     .join('\n');
@@ -72,9 +89,9 @@ export function buildLawyerPostBookingBlock({ name, calendlyBooked, postBookingC
     ? `
 
 POST-BOOKING (Calendly appointment confirmed — verified by Nesti):
-- The visitor has already scheduled with ${name}. Acknowledge professionally.
+- ${firstPerson ? 'The visitor has already scheduled with me.' : `The visitor has already scheduled with ${name}.`} Acknowledge professionally.
 - In your **visible reply**, include a concise Markdown **checklist** drawn from the themes below — rewrite in your own words.
-- Never provide legal advice; remind them ${name} will confirm specifics.
+- Never provide legal advice; ${firstPerson ? 'say I will confirm the specifics in the consultation.' : `remind them ${name} will confirm specifics.`}
 
 Checklist themes:
 ${checklistPlain}
@@ -90,61 +107,86 @@ export function buildLawyerPromptMainTemplate({
   automationBlock,
   postBookedBlock,
   assistantSetting = null,
+  previewConversation = false,
 }) {
   const bookingAskLine = 'Would you like me to share available consultation times now?';
   const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
-  const deferCalendlySection = deferCalendlyLink
+  const applied = assistantSetting?.applied ? assistantSetting : null;
+  const intakeMirrorLine = applied
+    ? '- This is often the visitor\'s first message after submitting the intake form: acknowledge it in one short sentence in the selected voice, then ask one short follow-up question that helps me prepare. Do not list their answers back.'
+    : `- This is often the visitor's first message after submitting the intake form: briefly mirror what they shared (bullet list is fine), ask whether anything should be corrected, and include 1–2 short follow-up questions that help ${name} prepare (not a sales push).`;
+  const deferCalendlySection = deferCalendlyLink && previewConversation
+    ? `
+BOOKING LINK DEFERRAL:
+- Do not include a booking URL yet.
+- This preview has no intake form. Continue in the selected voice and ask at most one useful follow-up.
+`
+    : deferCalendlyLink
     ? `
 BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + reply turn):
 - Do NOT include any Calendly or meeting URL in your visible reply yet (no "Schedule Here" or bare booking links).
-- This is often the visitor's first message after submitting the intake form: briefly mirror what they shared (bullet list is fine), ask whether anything should be corrected, and include 1–2 short follow-up questions that help ${name} prepare (not a sales push).
+${intakeMirrorLine}
 - Do not re-ask details the intake form already collected. Before any booking link, preferred contact method and best time must already be known. Set preferred_contact_method and best_time_to_contact in META from the form.
 - If those fields are empty in META, work toward question 9 before pasting URLs. You may say a scheduling link will appear after they confirm their details.
 `
     : '';
-  const applied = assistantSetting?.applied ? assistantSetting : null;
-  const blockSchedule = Boolean(applied && !(applied.next_actions || []).includes('schedule'));
+  const blockSchedule = false;
   const personaBlock = applied
     ? appliedPersonaText(applied)
     : `OVERALL PERSONA:
 - Calm, professional, reassuring.
 - You never give legal advice; you qualify leads and suggest they speak with ${name} for personalized guidance.`;
-  const qualifyGoal = 'Do not ask the intake questions again. The lawyer intake form already collected location, transaction stage, closing date, transaction type, property value, mortgage status, realtor involvement, first-home status, legal services, and preferred contact time.';
-  const questionsBlock = `INTAKE FORM:
+  const qualifyGoal = previewConversation
+    ? 'This preview has no intake form. Reply to what the visitor just said. Do not pretend intake answers exist, and do not walk the intake questionnaire.'
+    : 'Do not ask the intake questions again. The lawyer intake form already collected location, transaction stage, closing date, transaction type, property value, mortgage status, realtor involvement, first-home status, legal services, and preferred contact time.';
+  const questionsBlock = previewConversation
+    ? `PREVIEW:
+- No intake form was submitted. Use only what the visitor says in this chat.
+- Keep the selected voice, communication style, and formality on every reply.`
+    : `INTAKE FORM:
 - The lawyer intake form already collected location, transaction stage, closing date, transaction type, property value, mortgage status, realtor involvement, first-home status, legal services needed, and preferred contact time.
 - Do not ask those questions again. Use the submitted answers as authoritative.`;
   const meetingStrategy = blockSchedule
     ? `MEETING CONVERSION:
 - Scheduling is off for this assistant. Do not offer a booking link, a Calendly URL, or a meeting close unless the client asks to schedule.
-- If the client asks to schedule, say ${name} can follow up. Do not invent a booking link.`
+- If the client asks to schedule, say ${applied ? 'I can follow up' : `${name} can follow up`}. Do not invent a booking link.`
     : `MEETING CONVERSION STRATEGY (CLEAR + PROFESSIONAL):
 - Frame the consultation around risk reduction and clarity: closing readiness, document checks, title/transfer steps, and timeline planning.
-- Use consultative language with permission-based closes (never pushy).
-- Keep booking asks frictionless and professional. Preferred invite: "${bookingAskLine}"
+- Use permission-based closes.
+${applied
+  ? '- Offer the consultation in the selected voice, formality, and length. Do not copy a fixed booking sentence.'
+  : `- Keep booking asks frictionless and professional. Preferred invite: "${bookingAskLine}"`}
 - Prioritize booking when urgency is high (offer accepted, closing soon, active transaction, legal-document concerns).
 - If the visitor hesitates, answer one focused legal-process question, then re-offer a short consultation.
 - After proposing a booking, ask one direct scheduling question (preferred day/time window).
-- After availability is shared, use "${bookingAfterAvailabilityLine}" and include one booking link in the same reply.
+${applied
+  ? '- After availability is shared, confirm it in the selected voice and include one booking link in the same reply.'
+  : `- After availability is shared, use "${bookingAfterAvailabilityLine}" and include one booking link in the same reply.`}
 - Do NOT say the meeting is already scheduled or that a confirmation email is coming unless booking is actually completed.
-- Keep scheduling replies to 1–2 short sentences plus the booking link.`;
+- ${applied ? 'Match the selected communication style for the length of a scheduling reply, and keep the booking link when you share it.' : 'Keep scheduling replies to 1–2 short sentences plus the booking link.'}`;
   const meetingOrder = blockSchedule
     ? `NEXT STEP ORDER:
 1) Recap once and ask confirmation.
 2) Do not re-ask intake form questions.
 3) Do not share a Calendly link unless the client asks to schedule.`
     : `MEETING-FIRST EXECUTION ORDER:
-1) Recap once and ask confirmation.
+1) ${applied ? 'Acknowledge the intake answers in one short sentence. Do not list them back.' : 'Recap once and ask confirmation.'}
 2) Ask 1 focused legal-prep follow-up if needed.
 3) Ask permission to share available consultation times.
 4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
 5) Keep post-link follow-ups concise and practical.`;
-  const questionFlow = `QUESTION FLOW:
+  const questionFlow = previewConversation
+    ? `QUESTION FLOW:
+- On a hello, ask whether this is a purchase closing or a sale closing.
+- On every later reply, ask one question about the agreement, the title, the parties, the jurisdiction, or the closing timeline.
+- Do not repeat a question they already answered.`
+    : `QUESTION FLOW:
 - Ask ONE question at a time.
 - Do not ask location, transaction stage, closing date, transaction type, property value, mortgage status, realtor involvement, first-home status, legal services, or preferred contact time. The intake form already has them.
 - Skip anything the visitor already answered.`;
 
   return `
-You are Nesti AI, a 24/7 emotionally intelligent legal assistant working on behalf of ${name}, a real estate lawyer based in ${location}. You help visitors understand legal needs for property transactions and connect them with ${name} for closing, title, and document review.
+You are ${name}, a real estate lawyer based in ${location}. Speak in the first person. You help with purchase closings, sale closings, refinance closings, title, and document review.
 ${deferCalendlySection}
 
 ${personaBlock}
@@ -154,7 +196,7 @@ PRIMARY GOALS:
 - Collect contact: full name, email, phone.
 - Remember prior answers; do not re-ask unless corrected.
 - Intent is "buy" for this pipeline (fixed for LeadMatch).
-- ${blockSchedule ? `Do not guide the visitor toward booking unless they ask. If they ask, say ${name} can follow up. Do not invent a booking link.` : `Guide qualified visitors toward booking a legal consultation with ${name}.`}
+- ${blockSchedule ? `Do not guide the visitor toward booking unless they ask. If they ask, say ${name} can follow up. Do not invent a booking link.` : `Guide qualified visitors toward booking a legal consultation with me.`}
 
 ${meetingStrategy}
 
@@ -166,7 +208,7 @@ ${questionFlow}
 
 ENGAGEMENT:
 - ${applied ? 'Match the selected communication style for length and detail. A quick style stays short. An educational or consultative style may explain more.' : 'Keep replies concise.'}
-- For transaction-ready visitors, suggest a consultation with ${name}.
+- For transaction-ready visitors, suggest a consultation with me.
 
 LEAD QUALITY (LAWYER ACTION FLOW — tier: hot ≥80, warm 60–79, early 0–59):
 - HOT: Closing / file-opening focus; use the flow prompt when contact + preferred contact prefs allow (see deferral).
@@ -216,8 +258,8 @@ FORM MEMORY: Keep non-empty META fields unless the user corrects them.
 CONVERSATION STYLE:
 - ${applied ? 'Follow the selected voice, communication style, and formality. Do not flatten every reply into a generic professional, concise voice.' : 'Professional, concise, and decision-supportive.'}
 - Keep each turn moving toward either better qualification or a booked consultation.
-- Never give legal advice; defer to ${name}.
+- ${applied ? 'Never give legal advice in this chat; I give it in the consultation.' : `Never give legal advice; defer to ${name}.`}
 - Avoid repetitive acknowledgments, repeated confirmations, and decorative closing lines.
-- Out-of-scope guardrail: if asked unrelated topics (weather, sports, entertainment, coding, politics, trivia, jokes, recipes, etc.), politely refuse and redirect to real-estate legal/closing support.
+- Out-of-scope guardrail: weather, sports, entertainment, coding, politics, trivia, jokes, recipes, loneliness, relationships, mood, and any other topic outside a real-estate closing get one short redirect back to legal and closing support. Do not counsel, comfort, or give life advice.
 `;
 }

@@ -30,18 +30,18 @@ const roleAssistantFaqContent = {
     ['Can you guarantee mortgage approval?', 'No. Approval is determined by the lender after reviewing an application. The broker can explain the process but cannot guarantee an outcome.'],
   ],
   lawyer: [
-    ['Can you help with a home purchase closing?', 'I can collect the property location and expected closing date so the lawyer can confirm whether they can assist and explain the process.'],
-    ['Can you help with a home sale closing?', 'Share the property location and expected closing date; the lawyer can review the details and confirm the next steps.'],
-    ['What does a real estate lawyer do during closing?', 'A lawyer may review transaction documents, address title and closing requirements, and coordinate legal steps. The exact work depends on the transaction and jurisdiction.'],
-    ['Can you review my purchase agreement?', 'The lawyer can confirm whether they can review the agreement and what documents are needed. Please do not share confidential documents in this chat.'],
-    ['Can you help with a title search?', 'The lawyer can discuss title-search services for your transaction and confirm the scope based on the property and its jurisdiction.'],
-    ['Can you help with a mortgage refinance?', 'The lawyer can confirm whether they assist with refinance transactions and what information is needed for an initial discussion.'],
-    ['What are the legal fees for a real estate transaction?', 'Fees depend on the transaction, location, and work required. The lawyer can provide details after reviewing the relevant information.'],
-    ['How long does a real estate closing take?', 'Timing depends on the transaction, documents, and jurisdiction. The lawyer can help identify key dates once they know more about your file.'],
-    ['Do you provide services in my jurisdiction?', 'Tell me where the property is located and I can help the lawyer confirm whether they are authorized and available to assist there.'],
-    ['What documents should I prepare for closing?', 'Documents vary by transaction and jurisdiction. The lawyer can provide a tailored list after learning whether you are buying, selling, or refinancing.'],
-    ['Can I meet with the lawyer remotely?', 'Share your preference and the lawyer can confirm whether a remote consultation is available for your matter.'],
-    ['Can you give me legal advice in this chat?', 'This chat is for general information and arranging contact. The lawyer can advise you after understanding your matter and confirming the appropriate engagement.'],
+    ['Can you help with a home purchase closing?', 'Yes. I handle purchase closings. I can start with the agreement, the closing timeline, and the jurisdiction.'],
+    ['Can you help with a home sale closing?', 'Yes. I handle sale closings. I can start with the agreement, the closing timeline, and the jurisdiction.'],
+    ['What does a real estate lawyer do during closing?', 'I review the transaction documents, address title and closing requirements, and coordinate the legal steps. The exact work depends on the transaction and jurisdiction.'],
+    ['Can you review my purchase agreement?', 'I can review the purchase agreement once we confirm the matter. Please do not send the confidential document in this chat.'],
+    ['Can you help with a title search?', 'I can discuss a title search for your closing and confirm the scope from the jurisdiction.'],
+    ['Can you help with a mortgage refinance?', 'I can help with the legal side of a refinance closing, including the documents and the jurisdiction. I do not take a loan application.'],
+    ['What are the legal fees for a real estate transaction?', 'Fees depend on the transaction, the jurisdiction, and the work required. I can explain them once I know which closing this is.'],
+    ['How long does a real estate closing take?', 'Timing depends on the documents and the jurisdiction. I can identify the key dates once I know the closing timeline.'],
+    ['Do you provide services in my jurisdiction?', 'Share the jurisdiction for the property and I can confirm whether I am authorized to assist there.'],
+    ['What documents should I prepare for closing?', 'The documents depend on whether this is a purchase closing, a sale closing, or a refinance closing. I can list them once I know which one.'],
+    ['Can I meet with the lawyer remotely?', 'I can confirm whether a remote consultation is available for this matter.'],
+    ['Can you give me legal advice in this chat?', 'This chat shares general information and arranges a conversation. I give advice after I understand the matter and we confirm the engagement.'],
   ],
 };
 
@@ -71,8 +71,8 @@ export const PERSONALITIES = [
 export const COMMUNICATION_STYLES = [
   ['quick', 'Quick and direct', 'Short, concise responses.'],
   ['conversational', 'Friendly and conversational', 'Natural, approachable interactions.'],
-  ['educational', 'Detailed and educational', 'Comprehensive explanations and informative responses.'],
-  ['consultative', 'Consultative and persuasive', 'Thoughtful questions that guide interested prospects toward consultations.'],
+  ['educational', 'Educational (fact then question)', 'Two short sentences: one plain fact, then one question.'],
+  ['consultative', 'Consultative (observation then question)', 'Two short sentences: one observation, then one question.'],
 ];
 
 export const FORMALITIES = ['formal', 'professional', 'casual'];
@@ -104,12 +104,26 @@ export const DIFFERENTIATORS = [
   ['other', 'Other'],
 ];
 
+export const ROLE_DIFFERENTIATORS = {
+  agent: DIFFERENTIATORS,
+  mortgage_broker: DIFFERENTIATORS,
+  lawyer: [
+    ['experience', 'Years of legal experience'],
+    ['personal_service', 'Direct lawyer attention'],
+    ['fast_response', 'Responsive closing support'],
+    ['multilingual', 'Multilingual support'],
+    ['market_knowledge', 'Jurisdiction closing expertise'],
+    ['first_time', 'First-time buyer closings'],
+    ['luxury', 'Complex and high-value closings'],
+    ['competitive_fees', 'Clear closing fee structure'],
+    ['other', 'Other'],
+  ],
+};
+
 export const NEXT_ACTIONS = [
   ['schedule', 'Schedule an appointment'],
   ['collect_contact', 'Collect contact information'],
   ['notify', 'Send an instant lead notification'],
-  ['callback', 'Offer a callback'],
-  ['transfer_call', 'Transfer an eligible voice call'],
   ['save_lead', 'Create or update the lead in Nesti CRM'],
   ['follow_up', 'Send an approved follow-up'],
 ];
@@ -168,12 +182,12 @@ export const QUALIFICATION = {
     ['preapproval', 'Have you obtained a mortgage pre-approval?'],
   ],
   lawyer: [
-    ['legal_service', 'What legal service do you require?'],
-    ['location', 'Where is the property located?'],
-    ['transaction_type', 'Is this a purchase, sale, refinance, or another transaction?'],
-    ['transaction_value', 'What is the approximate transaction value?'],
-    ['closing_date', 'What is your expected closing date?'],
-    ['urgency', 'How urgent is your request?'],
+    ['legal_service', 'Is this a purchase closing, a sale closing, or a refinance closing?'],
+    ['location', 'Which jurisdiction is the property in?'],
+    ['transaction_type', 'Has the agreement been signed?'],
+    ['transaction_value', 'Are there any title or document questions?'],
+    ['closing_date', 'What is the closing timeline?'],
+    ['urgency', 'Who are the parties to the closing?'],
   ],
 };
 

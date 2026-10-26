@@ -85,7 +85,7 @@ function appliedPersonaBlock(setting) {
 - ${voices ? `Speak in this voice: ${voices}.` : 'Speak in a clear, professional real-estate voice.'}
 - ${style ? `Communication style: ${style} This sets reply length and detail.` : 'Keep replies clear and professional.'}
 - ${formality || 'Reply formality: professional. Use clear professional language. Polite and plain, neither stiff nor slangy.'}
-- Acknowledge the visitor's feelings briefly, then give the next practical step.
+- Skip a feelings sentence unless the visitor sounds worried. Then one short line, then the question.
 - Do not fall back to a generic calm, warm, or concise persona when it conflicts with this voice or style.`;
 }
 export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
@@ -101,7 +101,7 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     postBookingChatChecklist = [],
     propertyMatchesEnabled = true,
   } = options;
-  const blockSchedule = options.assistantSetting?.applied && !(options.assistantSetting.next_actions || []).includes('schedule');
+  const blockSchedule = false;
   const hasBookingLink = !blockSchedule && isAutomatedBookingEnabled && calendlyLink;
   const actionFlow = getAgentActionFlow(leadGrade, intent);
   const isBuyer = intent !== 'sell';
@@ -113,11 +113,16 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     actionFlow.aiSupportAfterBooking?.length > 0
       ? actionFlow.aiSupportAfterBooking.join('; ')
       : 'Standard follow-up';
+  const voiceOn = Boolean(options.assistantSetting?.applied);
   const clientPrompt = typeof actionFlow.prompt === 'string' ? actionFlow.prompt.trim() : '';
   const exactPromptBlock = clientPrompt
-    ? `- When the visitor has shared contact and is qualified, use this EXACT client-facing prompt (character-for-character):
-  "${clientPrompt}"`
-    : `- When the visitor has shared contact and is qualified, invite them to book naturally in a warm, concise way that matches the goal (no fixed script for this tier). Mention the booking types above.`;
+    ? (voiceOn
+      ? `- When the visitor has shared contact and is qualified, keep this meaning and rewrite every word in the selected voice, formality, and length: "${clientPrompt}"`
+      : `- When the visitor has shared contact and is qualified, use this EXACT client-facing prompt (character-for-character):
+  "${clientPrompt}"`)
+    : (voiceOn
+      ? '- When the visitor has shared contact and is qualified, invite them to book in the selected voice, formality, and length. Mention the booking types above.'
+      : '- When the visitor has shared contact and is qualified, invite them to book naturally in a warm, concise way that matches the goal (no fixed script for this tier). Mention the booking types above.');
   const scheduleLinkMd = `[Schedule Here](${calendlyLink})`;
   const exampleWithLink = clientPrompt
     ? `- Example visible reply (link must use Markdown so the chat widget renders a button-style link): "${clientPrompt}" then on a new sentence include ${scheduleLinkMd}`
@@ -139,8 +144,12 @@ REALTOR ACTION FLOW (automation enabled — ${actionFlow.tierLabel}):
 - Goal: ${actionFlow.goal}
 ${recommendedLine ? `${recommendedLine}\n` : ''}- Booking types (Calendly): ${actionFlow.calendlyOptions.join(', ')}
 ${exactPromptBlock}
-- Preferred booking invite for consistency: "${bookingAskLine}"
-- When the visitor shares availability (morning/evening/etc.), use this short line then the link: "${bookingAfterAvailabilityLine}"
+${voiceOn
+  ? '- Offer viewing times in the selected voice, formality, and length. Do not copy a fixed booking sentence.'
+  : `- Preferred booking invite for consistency: "${bookingAskLine}"`}
+${voiceOn
+  ? '- When the visitor shares availability, confirm it in the selected voice, then include the link.'
+  : `- When the visitor shares availability (morning/evening/etc.), use this short line then the link: "${bookingAfterAvailabilityLine}"`}
 - In your visible reply (not inside ###META###), add the booking URL exactly once as a Markdown link: ${scheduleLinkMd} (customize the bracket text if it fits better, e.g. [Book a time](url) — keep the URL unchanged).
 ${exampleWithLink}
 - After booking (set expectations briefly if natural): ${afterBookingLine}
@@ -186,7 +195,10 @@ ${checklistPlain}
 - You always acknowledge the visitor's feelings (excited, anxious, stressed, confused) before giving information.
 - You never judge or pressure the user; you reassure them and explain options clearly.
 - You adapt your tone: more upbeat when they are excited, more gentle and supportive when they are worried or frustrated.`;
-  const qualifyGoal = 'Qualify the lead with the unanswered questions below. Do not ask intent, location, budget, timeline, property type, or mortgage status. The intake form already collected them.';
+  const previewChat = options.previewConversation === true;
+  const qualifyGoal = previewChat
+    ? 'This preview has no intake form. Infer buy or sell from the words the visitor uses. Once that is clear, do not ask it again.'
+    : 'Qualify the lead with the unanswered questions below. Do not ask intent, location, budget, timeline, property type, or mortgage status. The intake form already collected them.';
   const defaultQuestions = [
     ['realtor_status', 'Are you currently working with a realtor? (No / Yes but open / Yes exclusively)'],
     ['motivation_reason', 'What is the main reason for your move? (Relocation, family change, divorce, investment, upgrading, downsizing, just exploring)'],
@@ -195,10 +207,15 @@ ${checklistPlain}
     ['urgency_readiness', 'If you found the perfect home tomorrow, would you make an offer? (Yes immediately / Maybe / No)'],
     ['preferred_contact_method', 'What is your preferred way to be contacted, and what is the best time?'],
   ].filter(([id]) => !hasIntakeAnswer(id, options.intakeFormContact));
-  const questionsBlock = defaultQuestions.length
-    ? `LEAD QUALIFICATION QUESTIONS (ask only unanswered questions naturally, one at a time):
+  const questionsBlock = previewChat
+    ? `LEAD QUALIFICATION QUESTIONS:
+- This preview has no intake list. Ask at most one follow-up from what the visitor just said.`
+    : defaultQuestions.length
+      ? `LEAD QUALIFICATION QUESTIONS (${applied
+        ? 'ask only unanswered questions, one at a time, rewritten in the selected voice, formality, and short reply length; do not copy the question text below'
+        : 'ask only unanswered questions naturally, one at a time'}):
 ${defaultQuestions.map(([, question], index) => `${index + 1}. "${question}"`).join('\n')}`
-    : 'LEAD QUALIFICATION QUESTIONS: The submitted intake form already captured these details. Do not repeat any qualification questions.';
+      : 'LEAD QUALIFICATION QUESTIONS: The submitted intake form already captured these details. Do not repeat any qualification questions.';
   const intakeSummary = answeredIntakeSummary(options.intakeFormContact);
   const intakeAnswersBlock = intakeSummary.length
     ? `INTAKE FORM MEMORY (authoritative): The visitor already submitted these details: ${intakeSummary.join(', ')}. Treat them as answered and do not ask for them again. Ask only for genuinely missing details, unless the visitor corrects an answer.`
@@ -209,13 +226,15 @@ ${defaultQuestions.map(([, question], index) => `${index + 1}. "${question}"`).j
 - If the client asks to schedule, say ${name} can follow up. Do not invent a booking link.`
     : `MEETING CONVERSION STRATEGY (CONSULTATIVE, NOT PUSHY):
 - Lead with value: briefly explain what the meeting will help them achieve (clear plan, timing, pricing/offer strategy, next steps).
-- Use a soft-close style: "Would you like me to help you book a quick strategy call with ${name}?"
-- Keep booking asks frictionless and professional. Preferred invite: "${bookingAskLine}"
+${voiceOn
+  ? `- Offer the strategy call in the selected voice, formality, and length. Do not copy "Would you like me to help you book a quick strategy call with ${name}?"`
+  : `- Use a soft-close style: "Would you like me to help you book a quick strategy call with ${name}?"
+- Keep booking asks frictionless and professional. Preferred invite: "${bookingAskLine}"`}
 - Prioritize a meeting recommendation when any high-intent signals appear (urgent timeline, financing ready, active search/listing, explicit request for next steps).
 - If the visitor hesitates, offer a lower-friction option: answer one key question now, then re-offer a short consultation.
 - After they share availability (morning/evening/etc.) or agree to a viewing, include the Calendly Markdown link in the SAME reply — do NOT re-list their contact recap.
 - Do NOT promise you already scheduled them or that a confirmation email is on the way unless they completed Calendly booking. Use the booking link instead.
-- Keep scheduling replies to 1–2 short sentences plus the booking link — no filler motivational closings.`;
+- ${voiceOn ? 'Match the selected communication style for the length of a scheduling reply, and keep the booking link when you share it.' : 'Keep scheduling replies to 1–2 short sentences plus the booking link — no filler motivational closings.'}`;
   const meetingOrder = blockSchedule
     ? `NEXT STEP ORDER:
 1) Recap once and ask confirmation.
@@ -232,7 +251,7 @@ ${defaultQuestions.map(([, question], index) => `${index + 1}. "${question}"`).j
     ? (applied
       ? `PROPERTY MATCHES (buy intent):
 - Matching listings are shown ONLY in the chat UI property cards (not in your visible reply). Never list properties, prices, beds/baths, numbered lists, or bullet listing rows in the visible message.
-- After the visitor confirms their recap/details, do NOT claim options or matches are visible yet. Ask ONE friendly question such as "Would you like to see available options?" and wait for their answer.
+- After the visitor confirms their recap/details, do NOT claim options or matches are visible yet. Ask, in the selected voice, whether they want to see available options, and wait for their answer. Do not copy a stock question.
 - When they say yes or explicitly ask to see options, matches, listings, or homes: reply with one short sentence that points at the cards, such as "Here are options that fit what you shared." Do not repeat details the intake form already collected.
 - An FAQ cannot replace that reply, including any answer about finding a property.
 - Do NOT recap contact/details on that turn.
@@ -269,7 +288,12 @@ ${questionsBlock}
 
 ${intakeAnswersBlock}
 
-${`The intake form already has intent, location, budget, timeline, property type, and mortgage status. Do not ask for any of those again.
+${previewChat
+  ? `No intake form was submitted in this preview. Learn from the chat.
+- "Looking for", "yes am looking for", "need a home", and "searching" mean buy. Ask one missing detail, such as area or home type. Do not ask "buy or sell?".
+- Selling, listing, or "my house" means sell. Ask about that property.
+- Do not claim a form already collected intent, location, budget, timeline, property type, or mortgage status.`
+  : `The intake form already has intent, location, budget, timeline, property type, and mortgage status. Do not ask for any of those again.
 
 For BUYERS (intent="buy"), collect these property preferences only when the form did not already include them:
 - Bedrooms and bathrooms needed
@@ -288,18 +312,28 @@ For SELLERS (intent="sell"), collect these about the property they are listing:
 - Backyard? (yes / no — does the property have a backyard?)
 - NEVER ask sellers "what are you looking for" or "how many bedrooms do you need" — those are buyer questions. Sellers are listing a property; ask about THAT property.`}
 
-${`QUESTION FLOW:
+${previewChat
+  ? `QUESTION FLOW:
+- This preview has no intake list. Ask at most one follow-up from what the visitor just said.
+- Do not ask the realtor, move reason, viewing, living situation, urgency, or preferred contact questions.`
+  : `QUESTION FLOW:
 - Do NOT dump all questions at once. Ask ONE question at a time, naturally woven into conversation.
 - Prioritise the most impactful questions first (timeline, financing, budget, realtor status).
 - Skip questions that the user has already answered in the form or in previous messages.
 - If the user volunteers information, capture it and move to the next unknown field.`}
 
-${`ENGAGEMENT & FREQUENT QUESTIONS:
+${applied
+  ? `ENGAGEMENT:
+- Ask one question, and keep it inside the saved reply length.
+- Do not add extra questions to raise engagement.
+- An educational or consultative reply stays inside its short length.
+- Avoid repetitive acknowledgments, repeated confirmations, and decorative closing lines.`
+  : `ENGAGEMENT & FREQUENT QUESTIONS:
 - Ask frequent, bite-sized questions to keep the conversation active. More back-and-forth = better lead engagement.
 - After each answer, consider a short follow-up before moving on (e.g. "Great! And which area within that neighbourhood appeals to you most?" or "Perfect. Any must-have features like a pool or garage?").
 - When you have multiple things to ask, spread them across replies — one or two questions per message, not a long list.
 - If the user gives a brief answer, gently ask for a bit more detail when it helps qualification (e.g. "Roughly when — this month or in a few months?").
-- ${applied ? 'Match the selected communication style for length and detail. A quick style stays short. An educational or consultative style may explain more.' : 'Keep replies concise so the user is encouraged to respond quickly. Avoid long paragraphs that don\'t invite a reply.'}
+- Keep replies concise so the user is encouraged to respond quickly. Avoid long paragraphs that don't invite a reply.
 - Avoid repetitive acknowledgments, repeated confirmations, and decorative closing lines.`}
 
 LEAD QUALITY BEHAVIOUR (follow the REALTOR ACTION FLOW above — tier matches score: hot ≥80, warm 60–79, early 0–59):
@@ -321,9 +355,12 @@ EMOTIONAL INTELLIGENCE RULES:
 - Read the emotional tone of the user's message (e.g. excited, hopeful, stressed, frustrated, overwhelmed, disappointed, curious, neutral).
 - Reflect this as a short string in "emotional_state".
 - In your reply:
-  - Briefly acknowledge how they feel (one short sentence).
+  ${applied
+    ? `- Let the selected voice decide the wording. Do not add a stock opener such as "Hey there", "How can I assist you today", or "I'm excited to help".
+  - If the visitor is worried, let the next question be gentler. If they are ready, move to the missing detail.`
+    : `- Briefly acknowledge how they feel (one short sentence).
   - Then give clear, practical guidance or the next question.
-  - Avoid overly long sympathy paragraphs; keep it natural and balanced.
+  - Avoid overly long sympathy paragraphs; keep it natural and balanced.`}
 
 META JSON FORMAT (FOR BACKEND, NOT VISIBLE TO USER):
 After EVERY reply, append one JSON block on a NEW line starting with ###META### exactly like this:
@@ -400,8 +437,8 @@ CONVERSATION STYLE:
 - Use plain, human language (no system messages, no JSON in the visible reply).
 - When including a scheduling or listing URL in the web chat, use Markdown link syntax only: [Schedule Here](https://...) so the widget shows a proper clickable link (never paste a bare URL alone when a link label reads more naturally).
 - Never make legal, tax, or financial promises; you can suggest that ${name} will review the details with them.
-- Out-of-scope guardrail: if asked unrelated topics (weather, sports, entertainment, coding, politics, trivia, jokes, recipes, etc.), politely refuse in one short sentence and redirect back to real-estate buy/sell support.
+- Out-of-scope guardrail: weather, sports, entertainment, coding, politics, trivia, jokes, recipes, loneliness, relationships, mood, and any other topic outside buying or selling a property get one short redirect back to real-estate buy/sell support. Do not counsel, comfort, or give life advice.
 `.trim();
-  return `${appendAssistantOverlay(prompt, options.assistantSetting)}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
+  return `${appendAssistantOverlay(prompt, options.assistantSetting, { preview: previewChat })}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
 };
  

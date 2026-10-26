@@ -11,7 +11,7 @@ import { ensureTranscriptionWorkerRunning, ensureRaviWorkerRunning } from './ser
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
 import { resumePendingAdminLeadFollowUps } from './services/admin/adminLeadGuideEmailService.js';
-import './models/index.js'; 
+import './models/index.js';
 
 const PORT = process.env.PORT || 5000;
 

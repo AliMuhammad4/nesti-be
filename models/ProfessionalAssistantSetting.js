@@ -56,6 +56,7 @@ const professionalAssistantSettingSchema = new mongoose.Schema(
     services_pricing: { type: String, default: '' },
     custom_guidance: { type: String, default: '' },
     qualification_questions: { type: [String], default: [] },
+    document_requests: { type: [String], default: [] },
     next_actions: { type: [String], default: [] },
     hot_guidance: { type: String, default: '' },
     warm_guidance: { type: String, default: '' },

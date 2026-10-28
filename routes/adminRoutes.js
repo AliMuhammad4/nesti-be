@@ -60,6 +60,8 @@ import {
   patchAdminLead,
   deleteAdminLead,
   getAdminLeadConversation,
+  getAdminLeadDocuments,
+  deleteAdminLeadDocument,
   getAdminLeadPropertyMatches,
   getAdminLeadInquiredProperty,
   analyzeAdminLeadInsights,
@@ -235,6 +237,8 @@ router.patch(
 
 router.get('/leads', requirePermission(P.LEADS_READ), listAdminLeads);
 router.get('/leads/:id/conversation', requirePermission(P.LEADS_READ), getAdminLeadConversation);
+router.get('/leads/:id/documents', requirePermission(P.LEADS_READ), getAdminLeadDocuments);
+router.delete('/leads/:id/documents/:docId', requirePermission(P.LEADS_WRITE), deleteAdminLeadDocument);
 router.get('/leads/:id/property-matches', requirePermission(P.LEADS_READ), getAdminLeadPropertyMatches);
 router.get('/leads/:id/inquired-property', requirePermission(P.LEADS_READ), getAdminLeadInquiredProperty);
 router.post('/leads/:id/insights/analyze', requirePermission(P.LEADS_WRITE), analyzeAdminLeadInsights);

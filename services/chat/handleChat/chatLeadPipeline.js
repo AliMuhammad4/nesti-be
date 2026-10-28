@@ -14,6 +14,7 @@ import {
 import { buildLeadType, buildLawyerLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
+import { linkConversationDocumentsToLead } from '../documents/chatDocumentService.js';
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
 import { maybeLandingSideEffects, notifyAdminsOfLandingLead } from '../nestiLanding/notifyAdminsOfLandingLead.js';
 
@@ -191,6 +192,12 @@ export async function syncLeadMatchAfterTurn({
       aiDetails: mergedAiDetails,
     });
     if (newLeadMatch?._id) {
+      await linkConversationDocumentsToLead({
+        userId,
+        conversationId: conversation._id,
+        sessionId,
+        leadMatchId: newLeadMatch._id,
+      }).catch((error) => logger.warn('Chat document link failed', { error: error?.message }));
       logger.info('Chat service: new lead match created', {
         op: 'chat.lead',
         flow: flowType,
@@ -262,7 +269,14 @@ export async function syncLeadMatchAfterTurn({
     return;
   }
 
-  if (!canCreateLeads || !existingLeadMatch || !hasContact) return;
+  if (!canCreateLeads || !existingLeadMatch) return;
+  await linkConversationDocumentsToLead({
+    userId,
+    conversationId: conversation._id,
+    sessionId,
+    leadMatchId: existingLeadMatch._id,
+  }).catch((error) => logger.warn('Chat document link failed', { error: error?.message }));
+  if (!hasContact) return;
 
   const prevContact = existingLeadMatch.compatibility_factors?.contact || {};
   const hasNewInfo =

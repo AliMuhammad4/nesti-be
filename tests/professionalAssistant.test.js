@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { replyLanguage } from '../services/professionalAssistant/replyStyle.js';
 import {
   appendAssistantOverlay,
   appliedSettingForRole,
@@ -10,6 +11,8 @@ import {
   draftFaqs,
   introductionLine,
   listingInsideServiceArea,
+  finishAgentReply,
+  finishBrokerReply,
   finishLawyerReply,
   guardLawyerReply,
   lawyerReplyDrifted,
@@ -27,6 +30,20 @@ import { buildEmptyTurnFallbackReply, buildOutOfScopeReply } from '../services/c
 import { professionalExpertiseLabels } from '../services/chat/utils/profileVisitorFacts.js';
 
 const profile = { full_name: 'Sarah Johnson', company_name: 'RE/MAX', location: 'Toronto', languages_spoken: ['english', 'french'], country: 'Canada' };
+
+test('auto detect follows the visitor and keeps that language on a short reply', () => {
+  const setting = { languages: ['english', 'french', 'spanish', 'arabic'], auto_detect_language: true };
+  assert.equal(replyLanguage(setting, 'bonjour'), 'french');
+  assert.equal(replyLanguage(setting, 'how are you', 'bonjour'), 'french');
+  assert.equal(replyLanguage(setting, 'hola'), 'spanish');
+  assert.equal(replyLanguage(setting, 'not yet', 'hola necesito una hipoteca'), 'spanish');
+  assert.equal(replyLanguage(setting, 'salam'), 'arabic');
+  assert.equal(replyLanguage(setting, 'كيف حالك'), 'arabic');
+  assert.equal(replyLanguage(setting, 'I want to apply for a new mortgage', 'salam'), 'english');
+  assert.equal(replyLanguage({ languages: ['english'], auto_detect_language: true }, 'salam'), 'english');
+  assert.equal(replyLanguage({ languages: ['english'], auto_detect_language: true }, 'ola'), 'spanish');
+  assert.equal(replyLanguage({ ...setting, auto_detect_language: false }, 'bonjour'), 'english');
+});
 
 test('professional chat uses profile experience and shows saved expertise', () => {
   const experienced = {
@@ -202,7 +219,8 @@ test('saved lawyer and broker settings replace persona, questions, and booking',
   const broker = buildMortgageBrokerSystemPrompt({ full_name: 'Sam Broker', location: 'Calgary' }, { assistantSetting: brokerSetting });
   assert.match(broker, /Caring and supportive/);
   assert.match(broker, /The mortgage intake form already collected/);
-  assert.doesNotMatch(broker, /What is your preferred financing timeline/);
+  assert.match(broker, /What is your preferred financing timeline/);
+  assert.match(broker, /only when that detail is still missing/);
   assert.doesNotMatch(broker, /calm, kind, and emotionally aware/);
   assert.doesNotMatch(broker, /What is your approximate credit score/);
   assert.doesNotMatch(broker, /Scheduling is off/);
@@ -480,6 +498,7 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
     personalities: ['polished'],
     communication_style: 'educational',
     formality: 'formal',
+    qualification_questions: ['legal_service', 'location', 'transaction_type', 'transaction_value', 'closing_date', 'urgency'],
   }, 'lawyer');
   const lawyer = buildLawyerSystemPrompt(profile, {
     assistantSetting: lawyerPreview,
@@ -505,7 +524,7 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
   assert.match(lawyer, /The greeting words can be fresh/);
   assert.match(lawyer, /yes without naming the closing/);
   assert.doesNotMatch(lawyer, /speak with the lawyer/);
-  assert.match(voiceTurnReminder(lawyerPreview, 'yes'), /purchase closing or a sale closing/);
+  assert.match(voiceTurnReminder(lawyerPreview, 'yes', { preview: true }), /purchase closing or a sale closing/);
   assert.equal(
     guardLawyerReply('Hello! Are you looking to buy or sell a property?'),
     'Hello. Is this a purchase closing, a sale closing, or a refinance closing?',
@@ -524,6 +543,7 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
     personalities: ['persuasive'],
     communication_style: 'consultative',
     formality: 'casual',
+    qualification_questions: ['purpose', 'amount', 'timeline', 'preapproval'],
   }, 'mortgage_broker');
   const broker = buildMortgageBrokerSystemPrompt(profile, {
     assistantSetting: brokerPreview,
@@ -540,11 +560,266 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
   const brokerPreviewPrompt = buildPreviewChatPrompt('mortgage_broker', profile, { assistantSetting: brokerPreview });
   assert.match(brokerPreviewPrompt, /a mortgage broker/);
   assert.match(brokerPreviewPrompt, /a new mortgage or a refinance/);
-  assert.match(brokerPreviewPrompt, /the loan amount, the term, or pre-approval/);
+  assert.match(brokerPreviewPrompt, /the financing amount, the financing timeline, or pre-approval/);
   assert.doesNotMatch(brokerPreviewPrompt, /buy or sell/);
   assert.match(broker, /Persuasive: confident and forward/);
   assert.match(broker, /Length: two short sentences. One observation, then one question/);
   assert.doesNotMatch(broker, /The mortgage intake form already collected/);
+  assert.match(brokerPreviewPrompt, /do not ask it again/);
+  assert.match(voiceTurnReminder(brokerPreview, 'nope'), /Do not ask that question again/);
+  assert.equal(
+    finishBrokerReply('Are you considering a new mortgage or a refinance?', {
+      userMessage: 'nope',
+      previousReply: 'Hello! Are you looking for a new mortgage or a refinance?',
+    }),
+    'What is the mortgage, then? A renewal, or a file you already started?',
+  );
+  assert.equal(
+    finishBrokerReply('Are you considering a new mortgage or a refinance?', {
+      userMessage: 'nope',
+      previousReply: 'Hello. Are you looking for a new mortgage or a refinance?',
+      setting: { personalities: ['friendly'], communication_style: 'conversational', formality: 'casual' },
+    }),
+    'Happy to help! Is it a renewal, or do you already have a pre-approval?',
+  );
+  assert.equal(
+    finishBrokerReply('Are you considering a new mortgage or a refinance?', {
+      userMessage: 'nope',
+      previousReply: 'Hello. Are you looking for a new mortgage or a refinance?',
+      setting: { personalities: ['polished'], communication_style: 'quick', formality: 'formal' },
+    }),
+    'Is this a renewal, or do you already have a pre-approval?',
+  );
+  assert.equal(
+    finishBrokerReply('Are you looking to buy or sell a property?', {
+      userMessage: 'hi',
+      setting: { personalities: ['caring'], communication_style: 'educational', formality: 'professional' },
+    }),
+    'Hello, I am glad you reached out. A new mortgage and a refinance start from different documents. Could you tell me if this is a new mortgage or a refinance?',
+  );
+  const amountOnly = assistantSettingForPreview({
+    qualification_questions: ['amount'],
+    personalities: ['polished'],
+  }, 'mortgage_broker');
+  const amountPrompt = buildPreviewChatPrompt('mortgage_broker', profile, { assistantSetting: amountOnly });
+  assert.match(amountPrompt, /On a hello, the one question is about the financing amount/);
+  assert.doesNotMatch(amountPrompt, /On a hello, the one question is whether this is a new mortgage or a refinance/);
+  assert.equal(
+    finishBrokerReply('Are you considering a new mortgage or a refinance?', {
+      userMessage: 'nope',
+      previousReply: 'Hello. Are you looking for a new mortgage or a refinance?',
+      setting: {
+        personalities: ['friendly'],
+        communication_style: 'conversational',
+        formality: 'casual',
+        qualification_questions: ['purpose'],
+      },
+    }),
+    'Happy to help! Is it a renewal?',
+  );
+  assert.equal(
+    finishBrokerReply('Are you considering a new mortgage or a refinance?', {
+      userMessage: 'nope',
+      previousReply: 'Hello. Are you looking for a new mortgage or a refinance?',
+      setting: {
+        personalities: ['polished'],
+        communication_style: 'quick',
+        formality: 'formal',
+        qualification_questions: ['amount'],
+      },
+    }),
+    'What financing amount should I plan for?',
+  );
+  assert.equal(
+    finishBrokerReply('Are you considering a new mortgage or a refinance?', {
+      userMessage: 'nope',
+      previousReply: 'Hello. Are you looking for a new mortgage or a refinance?',
+      setting: {
+        languages: ['french'],
+        personalities: ['friendly'],
+        communication_style: 'conversational',
+        formality: 'casual',
+      },
+    }),
+    'Avec plaisir! Est-ce un renouvellement, ou avez-vous déjà une préautorisation?',
+  );
+  assert.equal(
+    finishBrokerReply('I can look at the file. Do you already have a mortgage pre-approval?', {
+      previousReply: 'Do you already have a pre-approval?',
+      setting: { personalities: ['polished'], formality: 'formal' },
+    }),
+    'I can look at the file.',
+  );
+  assert.equal(
+    finishBrokerReply('I understand. I can review that renewal.', {
+      setting: { personalities: ['friendly'], communication_style: 'conversational', formality: 'casual' },
+    }),
+    'Happy to help! I can review that renewal.',
+  );
+  assert.equal(
+    finishBrokerReply('Hello! Are you looking for a new mortgage or a refinance?', {
+      setting: { personalities: ['polished'], communication_style: 'quick', formality: 'formal' },
+    }),
+    'Hello. Is this a new mortgage or a refinance?',
+  );
+  assert.equal(
+    finishBrokerReply('Are you looking to buy or sell?', {
+      userMessage: 'bonjour',
+      setting: { languages: ['french'], personalities: ['friendly'], communication_style: 'quick', formality: 'casual' },
+    }),
+    'Bonjour, content de vous voir. Est-ce un nouveau prêt ou un refinancement?',
+  );
+  assert.equal(
+    finishBrokerReply('Are you looking to buy or sell?', {
+      userMessage: 'bonjour',
+      setting: { languages: ['english', 'french'], personalities: ['friendly'], communication_style: 'quick', formality: 'casual' },
+    }),
+    'Bonjour, content de vous voir. Est-ce un nouveau prêt ou un refinancement?',
+  );
+  assert.match(
+    finishBrokerReply('Are you looking to buy or sell?', {
+      userMessage: 'hola',
+      setting: { languages: ['english', 'spanish'], personalities: ['friendly'], communication_style: 'quick', formality: 'casual' },
+    }),
+    /^Hola, me alegra que esté aquí\. ¿Es una hipoteca nueva/,
+  );
+  assert.match(
+    finishBrokerReply("I'm glad you're here. Is this a new mortgage or a refinance?", {
+      userMessage: 'ola',
+      setting: { languages: ['english'], personalities: ['friendly'], communication_style: 'quick', formality: 'casual' },
+    }),
+    /^Hola, me alegra que esté aquí\. ¿Es una hipoteca nueva/,
+  );
+  assert.match(
+    finishBrokerReply('Are you looking to buy or sell?', {
+      userMessage: '你好',
+      setting: { languages: ['english', 'mandarin'], personalities: ['polished'], communication_style: 'quick', formality: 'formal' },
+    }),
+    /您好/,
+  );
+  assert.equal(
+    finishBrokerReply('How much are you hoping to borrow?', {
+      previousReply: 'What financing amount are you considering?',
+      setting: { personalities: ['polished'], formality: 'formal' },
+    }),
+    'I can certainly help',
+  );
+  assert.equal(
+    finishBrokerReply('Are you considering a new mortgage or a refinance?', {
+      userMessage: 'nope',
+      previousReply: 'Hello. Are you looking for a new mortgage or a refinance?',
+      setting: {
+        personalities: ['warm-counsel'],
+        communication_style: 'conversational',
+        formality: 'professional',
+        custom_tones: [{
+          id: 'warm-counsel',
+          name: 'Warm counsel',
+          guidance: 'Use short warm sentences and never sound stiff when you reply to the visitor.',
+        }],
+      },
+    }),
+    'I will keep this warm counsel. Is this a renewal, or do you already have a pre-approval?',
+  );
+  assert.equal(
+    finishBrokerReply('Hello.', {
+      setting: { personalities: ['friendly'], formality: 'casual', use_emojis: true },
+    }),
+    'Hello. 👋',
+  );
+  assert.equal(
+    finishBrokerReply('Hello! Are you looking for a new mortgage or a refinance?', {
+      setting: { personalities: ['friendly'], communication_style: 'quick', formality: 'casual', use_emojis: true },
+    }),
+    'Hello! Is it a new mortgage or a refinance? 👋',
+  );
+  assert.equal(
+    finishBrokerReply('Good day. Is this about a new mortgage or a refinance?', {
+      setting: { personalities: ['polished'], communication_style: 'quick', formality: 'formal', use_emojis: true },
+    }),
+    'Good day. Is this a new mortgage or a refinance? 👋',
+  );
+  assert.equal(
+    finishBrokerReply('Hello! Are you looking for a new mortgage or a refinance?', {
+      userMessage: 'hello',
+      setting: { personalities: ['caring'], communication_style: 'educational', formality: 'casual', use_emojis: true },
+    }),
+    'Hello, I am glad you reached out! A new mortgage and a refinance start from different documents. Could you tell me if this is a new mortgage or a refinance? 👋',
+  );
+  assert.equal(
+    finishBrokerReply('I am doing well, thank you.', {
+      userMessage: 'how are you',
+      previousReply: 'Good day. Is this a new mortgage or a refinance? 👋',
+      setting: { personalities: ['polished'], communication_style: 'quick', formality: 'formal', use_emojis: true },
+    }),
+    'I am doing well, thank you. 🙂',
+  );
+  assert.equal(
+    finishBrokerReply('I can assist with renewals or discuss if you already have a pre-approval. Which one applies to your situation?', {
+      userMessage: 'nope',
+      previousReply: 'A new mortgage and a refinance start from different documents. Could you tell me if this is a new mortgage or a refinance? 👋',
+      setting: { personalities: ['caring'], communication_style: 'educational', formality: 'casual', use_emojis: true },
+    }),
+    'I can assist with renewals or discuss if you already have a pre-approval. Which one applies to your situation? 🙂',
+  );
+  assert.equal(
+    finishBrokerReply('Acquiring a property is an exceptional journey, and a two-month timeline allows for thoughtful planning. What is the approximate value of the property you are considering?', {
+      userMessage: 'yes i want to purchase property and it will take 2 moths',
+      previousReply: 'Renewing a mortgage involves extending your current loan terms. Have you thought about what your goals are for this renewal? 🤝',
+      setting: { personalities: ['luxury'], communication_style: 'educational', formality: 'casual', use_emojis: true },
+    }),
+    'Acquiring a property is an exceptional journey, and a two-month timeline allows for thoughtful planning. What is the approximate value of the property you are considering? 🏡',
+  );
+  assert.equal(
+    finishBrokerReply('A property value of $50,000 is quite manageable and opens up various options. Have you already obtained a mortgage pre-approval for this purchase?', {
+      userMessage: '50000$',
+      previousReply: 'Acquiring a property is an exceptional journey. What is the approximate value of the property you are considering? 🏡',
+      setting: { personalities: ['luxury'], communication_style: 'educational', formality: 'casual', use_emojis: true },
+    }),
+    'A property value of $50,000 is quite manageable and opens up various options. Have you already obtained a mortgage pre-approval for this purchase?',
+  );
+  assert.equal(
+    finishBrokerReply('I can share a time. Would you like to book a call?', {
+      previousReply: 'Hello. 👋',
+      setting: { personalities: ['friendly'], formality: 'casual', use_emojis: true },
+    }),
+    'I can share a time. Would you like to book a call? 📅',
+  );
+  assert.equal(
+    finishBrokerReply('What financing amount are you considering? 😊', {
+      setting: { personalities: ['friendly'], formality: 'casual', use_emojis: true },
+    }),
+    'What financing amount are you considering? 🙂',
+  );
+  const noQuestions = assistantSettingForPreview({
+    qualification_questions: [],
+    personalities: ['polished'],
+  }, 'mortgage_broker');
+  const quietHello = buildPreviewChatPrompt('mortgage_broker', profile, { assistantSetting: noQuestions });
+  assert.match(quietHello, /greet in the selected voice and do not add a question/);
+  assert.doesNotMatch(quietHello, /On a hello, the one question is whether this is a new mortgage or a refinance/);
+  const publicBroker = buildMortgageBrokerSystemPrompt(profile, {
+    assistantSetting: sanitizeAssistant({
+      applied: true,
+      personalities: ['polished'],
+      hot_guidance: 'Pre-approval needed this month.',
+      next_actions: ['schedule'],
+      qualification_questions: ['purpose', 'timeline'],
+    }, 'mortgage_broker'),
+  });
+  assert.match(publicBroker, /Speak in the first person/);
+  assert.match(publicBroker, /consultation with me/);
+  assert.match(publicBroker, /call with me/);
+  assert.doesNotMatch(publicBroker, /with Sarah Johnson/);
+  assert.doesNotMatch(publicBroker, /timeline, pre-approval, credit score/);
+  assert.doesNotMatch(publicBroker, /on behalf of/);
+  assert.doesNotMatch(publicBroker, /Recap once and ask confirmation/);
+  assert.match(publicBroker, /Ready to act: Pre-approval needed this month/);
+  assert.match(publicBroker, /the financing timeline/);
+  const brokerSuggestions = draftFaqs({ role: 'mortgage_broker', services: ['renewal'], faqs: [] }, profile);
+  assert.match(brokerSuggestions[0].answer, /^I help clients with mortgage renewals/);
+  assert.doesNotMatch(buildEmptyTurnFallbackReply('mortgage_broker', { applied: true, personalities: ['caring'] }), /Whenever/);
+  assert.doesNotMatch(buildOutOfScopeReply('mortgage_broker', 'Alex Broker', { applied: true, personalities: ['caring'] }), /Alex Broker/);
 });
 
 test('applied broker and lawyer controls override built-in persona and qualification prompts', () => {
@@ -605,11 +880,12 @@ test('professional catalog does not offer callback, call transfer, or voice impo
   assert.equal('website_import_url' in catalog, false);
 });
 
-test('customization does not turn lead saving off', () => {
+test('an applied assistant can turn lead saving off', () => {
   assert.equal(assistantAllowsLeadSaving(null), true);
   assert.equal(assistantAllowsLeadSaving({ applied: false, next_actions: [] }), true);
-  assert.equal(assistantAllowsLeadSaving({ applied: true, next_actions: ['collect_contact'] }), true);
   assert.equal(assistantAllowsLeadSaving({ applied: true, next_actions: [] }), true);
+  assert.equal(assistantAllowsLeadSaving({ applied: true, next_actions: ['save_lead'] }), true);
+  assert.equal(assistantAllowsLeadSaving({ applied: true, next_actions: ['collect_contact'] }), false);
 });
 
 test('professional identity settings sanitize, persist in prompts, and use profile defaults', () => {
@@ -694,7 +970,8 @@ test('lawyer studio settings reach the lawyer chat', () => {
     hot_guidance: 'Signed agreement and closing this month.',
   }, 'lawyer');
   const preview = buildPreviewChatPrompt('lawyer', profile, { assistantSetting: onlyTitle });
-  assert.match(preview, /ask one question about the title\./);
+  assert.match(preview, /about the title/);
+  assert.match(preview, /Do not write a second reply/);
   assert.doesNotMatch(preview, /ask one question about the agreement/);
   assert.match(preview, /Are there any title or document questions\?/);
   assert.match(preview, /Ready to act: Signed agreement and closing this month\./);
@@ -702,6 +979,7 @@ test('lawyer studio settings reach the lawyer chat', () => {
   const everything = sanitizeAssistant({
     applied: true,
     qualification_questions: ['legal_service', 'location', 'transaction_type', 'transaction_value', 'closing_date', 'urgency'],
+    next_actions: ['schedule', 'save_lead'],
   }, 'lawyer');
   const publicPrompt = buildLawyerSystemPrompt(profile, { assistantSetting: everything });
   assert.match(publicPrompt, /The intake form already has the closing type, the location, the closing date/);
@@ -710,7 +988,28 @@ test('lawyer studio settings reach the lawyer chat', () => {
   assert.doesNotMatch(publicPrompt, /Which jurisdiction is the property in\?/);
   assert.match(publicPrompt, /acknowledge it in one short sentence|Acknowledge the intake answers in one short sentence/);
   assert.doesNotMatch(publicPrompt, /Recap once and ask confirmation/);
-  assert.match(voiceTurnReminder(everything, 'ok next', { preview: true }), /the agreement, the title, the parties, the jurisdiction, or the closing timeline/);
+  assert.match(publicPrompt, /Speak the matter the visitor named/);
+  assert.match(publicPrompt, /never spoken/);
+  assert.doesNotMatch(publicPrompt, /Ask ONE question at a time/);
+  assert.match(publicPrompt, /Preferred next steps from the studio/);
+  assert.equal(
+    finishLawyerReply('I understand. Could you clarify whether this is a purchase closing or a sale closing?', {
+      userMessage: 'no this is not',
+      previousReply: 'Hello. Is this a purchase closing or a sale closing?',
+    }),
+    'I understand. What is the matter, then? A refinance closing, a title transfer, or a document review?',
+  );
+  assert.match(voiceTurnReminder(everything, 'no this is not'), /Do not ask that question again/);
+  assert.equal(
+    finishLawyerReply('Glad to help with this closing!', {
+      setting: {
+        personalities: ['warm-counsel'],
+        formality: 'professional',
+        custom_tones: [{ id: 'warm-counsel', name: 'Warm counsel', guidance: 'Warm and steady.' }],
+      },
+    }),
+    'Glad to help with this closing!',
+  );
 
   const edited = assistantFaqsForRole('lawyer', [{
     id: 'lawyer-assistant-faq-05',
@@ -741,11 +1040,228 @@ test('lawyer studio settings reach the lawyer chat', () => {
     'I can assist with title transfers.',
   );
   assert.equal(
+    finishLawyerReply('Happy to help with this closing!', {
+      setting: { personalities: ['friendly'], communication_style: 'conversational', formality: 'casual' },
+    }),
+    'Happy to help with this closing!',
+  );
+  assert.equal(
+    finishLawyerReply('Happy to help with this closing!! Let us begin!', {
+      preview: true,
+      setting: { personalities: ['friendly'], communication_style: 'conversational' },
+    }),
+    'Happy to help with this closing! Let us begin.',
+  );
+  assert.equal(
+    finishLawyerReply('Sure! I can review that agreement.', {
+      preview: true,
+      setting: { personalities: ['polished'], formality: 'formal' },
+    }),
+    'Sure. I can review that agreement.',
+  );
+  assert.equal(
     finishLawyerReply('Are you looking to buy or sell in these areas?', {
       userMessage: 'in which areas your are seing',
       setting: { jurisdictions: ['Ontario'] },
     }),
     'I am licensed in Ontario.',
+  );
+  assert.equal(
+    finishLawyerReply('I understand. Could you clarify whether this is a purchase closing or a sale closing?', {
+      userMessage: 'no this is not',
+      previousReply: 'Hello. Is this a purchase closing or a sale closing?',
+      setting: { personalities: ['friendly'], communication_style: 'conversational', formality: 'casual' },
+    }),
+    'Happy to help! Is it a refinance closing, a title transfer, or a document review?',
+  );
+  assert.equal(
+    finishLawyerReply('I understand. Could you clarify whether this is a purchase closing or a sale closing?', {
+      userMessage: 'no this is not',
+      previousReply: 'Hello. Is this a purchase closing or a sale closing?',
+      setting: { personalities: ['polished'], communication_style: 'quick', formality: 'formal' },
+    }),
+    'Is this a refinance closing, a title transfer, or a document review?',
+  );
+  assert.equal(
+    finishLawyerReply('I understand. Could you clarify whether this is a purchase closing or a sale closing?', {
+      userMessage: 'no this is not',
+      previousReply: 'Hello. Is this a purchase closing or a sale closing?',
+      setting: { personalities: ['caring'], communication_style: 'educational', formality: 'professional' },
+    }),
+    'A refinance, a title transfer, and a document review each use different papers. Could you tell me if this is a refinance closing, a title transfer, or a document review?',
+  );
+  assert.equal(
+    finishLawyerReply('I understand. Could you clarify whether this is a purchase closing or a sale closing?', {
+      userMessage: 'no this is not',
+      previousReply: 'Hello. Is this a purchase closing or a sale closing?',
+      setting: {
+        personalities: ['warm-counsel'],
+        communication_style: 'conversational',
+        formality: 'professional',
+        custom_tones: [{ id: 'warm-counsel', name: 'Warm counsel', guidance: 'Warm and steady.' }],
+      },
+    }),
+    'I will keep this warm and steady. Is this a refinance closing, a title transfer, or a document review?',
+  );
+  assert.equal(
+    finishLawyerReply('Are you looking to buy or sell in these areas?', {
+      userMessage: 'in which areas your are seing',
+      setting: {
+        jurisdictions: ['Ontario'],
+        personalities: ['friendly'],
+        communication_style: 'conversational',
+        formality: 'casual',
+      },
+    }),
+    "Sure! I'm licensed in Ontario.",
+  );
+  assert.equal(
+    finishLawyerReply('Are you looking to buy or sell in these areas?', {
+      userMessage: 'in which areas your are seing',
+      setting: {
+        jurisdictions: ['Ontario'],
+        personalities: ['polished'],
+        communication_style: 'educational',
+        formality: 'formal',
+      },
+    }),
+    'Licensing follows the jurisdiction. I am licensed in Ontario.',
+  );
+  assert.equal(
+    finishLawyerReply('Are you looking to buy or sell in these areas?', {
+      userMessage: 'in which areas your are seing',
+      setting: {
+        jurisdictions: ['Ontario'],
+        personalities: ['luxury'],
+        communication_style: 'quick',
+        formality: 'formal',
+      },
+    }),
+    'I am licensed privately in Ontario.',
+  );
+  assert.equal(
+    finishLawyerReply('I understand. I can review that agreement.', {
+      setting: { personalities: ['friendly'], communication_style: 'conversational', formality: 'casual' },
+    }),
+    'Happy to help! I can review that agreement.',
+  );
+  assert.equal(
+    finishLawyerReply('Are you looking to buy or sell a property?', {
+      userMessage: 'hi',
+      setting: { personalities: ['friendly'], communication_style: 'conversational', formality: 'casual' },
+    }),
+    'Hi, glad you are here! Happy to help with this closing. Is this a purchase closing, a sale closing, or a refinance closing?',
+  );
+  assert.equal(
+    finishLawyerReply('I understand. Could you clarify whether this is a purchase closing or a sale closing?', {
+      userMessage: 'no this is not',
+      previousReply: 'Hello. Is this a purchase closing or a sale closing?',
+      setting: {
+        languages: ['french'],
+        personalities: ['friendly'],
+        communication_style: 'conversational',
+        formality: 'casual',
+        use_emojis: true,
+      },
+    }),
+    'Avec plaisir! Est-ce un refinancement, un transfert de titre ou une révision de documents? 🙂',
+  );
+  const titleOnly = assistantSettingForPreview({
+    qualification_questions: ['transaction_value'],
+    personalities: ['polished'],
+  }, 'lawyer');
+  const titlePrompt = buildPreviewChatPrompt('lawyer', profile, { assistantSetting: titleOnly });
+  assert.match(titlePrompt, /On a hello, the one question is about the title/);
+  assert.doesNotMatch(titlePrompt, /On a hello, the one question is whether this is a purchase closing/);
+  assert.match(voiceTurnReminder(titleOnly, 'yes', { preview: true }), /about the title/);
+  const emojiVoice = { personalities: ['friendly'], communication_style: 'conversational', formality: 'casual', use_emojis: true };
+  assert.equal(finishLawyerReply('Hello.', { setting: emojiVoice }), 'Hello. 👋');
+  assert.equal(
+    finishLawyerReply('Hello. Is this a purchase closing or a sale closing?', { setting: emojiVoice }),
+    'Hello. Is this a purchase closing or a sale closing? 👋',
+  );
+  assert.equal(
+    finishLawyerReply('Happy to help.', { setting: emojiVoice }),
+    'Happy to help.',
+  );
+  assert.equal(
+    finishLawyerReply('Happy to help! Is this a purchase closing or a sale closing?', { setting: emojiVoice }),
+    'Happy to help! Is this a purchase closing or a sale closing?',
+  );
+  assert.equal(
+    finishLawyerReply('I can review that agreement. 🏡 The closing date is next month.', { setting: emojiVoice }),
+    'I can review that agreement. The closing date is next month. 🏡',
+  );
+  assert.equal(
+    finishLawyerReply('That is wonderful news! 🎉', { setting: emojiVoice }),
+    'That is wonderful news!',
+  );
+  assert.equal(
+    finishLawyerReply('Glad the file is ready. ✨', {
+      previousReply: 'The file is ready. ✨',
+      setting: emojiVoice,
+    }),
+    'Glad the file is ready.',
+  );
+  assert.equal(
+    finishLawyerReply('Hello.', { previousReply: 'Happy to help. 🙂', setting: emojiVoice }),
+    'Hello. 👋',
+  );
+  assert.equal(
+    finishLawyerReply('Hello.', { previousReply: 'Hello. 👋', setting: emojiVoice }),
+    'Hello.',
+  );
+  const agentEmoji = { applied: true, role: 'agent', personalities: ['friendly'], formality: 'casual', use_emojis: true };
+  assert.equal(
+    finishAgentReply('Hello! Are you buying or selling?', { setting: agentEmoji }),
+    'Hello! Are you buying or selling? 👋',
+  );
+  assert.equal(
+    finishAgentReply('Wa alaikum assalam! What are you looking to buy or sell?', {
+      userMessage: 'asslam o alikum',
+      setting: agentEmoji,
+    }),
+    'Wa alaikum assalam! What are you looking to buy or sell? 👋',
+  );
+  assert.equal(
+    finishAgentReply('I can help with that. Could you share some details about your property?', {
+      userMessage: 'yes am looking to sell my home',
+      setting: agentEmoji,
+    }),
+    'I can help with that. Could you share some details about your property? 🏡',
+  );
+  assert.equal(
+    finishAgentReply('I found a home that fits. 🏡', { setting: agentEmoji }),
+    'I found a home that fits. 🏡',
+  );
+  assert.equal(
+    finishAgentReply('Would you like to book a call?', { setting: agentEmoji }),
+    'Would you like to book a call? 📅',
+  );
+  assert.equal(
+    finishAgentReply('What is your budget? 💰', { setting: agentEmoji }),
+    'What is your budget?',
+  );
+  assert.equal(
+    finishAgentReply('Hello! 👋', { setting: { ...agentEmoji, use_emojis: false } }),
+    'Hello!',
+  );
+  assert.equal(
+    finishBrokerReply('This document is a receipt for Cursor Pro Plus.', {
+      userMessage: 'what this document contains?',
+      documentReceived: true,
+      setting: { personalities: ['friendly'], formality: 'casual', use_emojis: true },
+    }),
+    'This document is a receipt for Cursor Pro Plus. 📄',
+  );
+  assert.equal(
+    finishBrokerReply('This document is a receipt for Cursor Pro Plus.', {
+      userMessage: 'what this document contains?',
+      documentReceived: true,
+      previousReply: 'The file is saved. 📄',
+      setting: { personalities: ['friendly'], formality: 'casual', use_emojis: true },
+    }),
+    'This document is a receipt for Cursor Pro Plus. ✅',
   );
 });
 

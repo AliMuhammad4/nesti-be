@@ -25,6 +25,8 @@ export {
   patchAdminLeadService,
   deleteAdminLeadService,
   getAdminLeadConversationService,
+  getAdminLeadDocumentsService,
+  deleteAdminLeadDocumentService,
   getAdminLeadPropertyMatchesService,
   getAdminLeadInquiredPropertyService,
   analyzeAdminLeadInsightsService,

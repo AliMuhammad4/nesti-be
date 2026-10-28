@@ -39,6 +39,7 @@ export const handleChat = async (req, res, next) => {
       opening,
       preview,
       previewAssistantDraft,
+      attachmentIds,
     } = req.body;
 
     logger.info('Chat API: request', {
@@ -73,6 +74,7 @@ export const handleChat = async (req, res, next) => {
       opening: Boolean(opening),
       preview: preview === true,
       previewAssistantDraft,
+      attachmentIds,
       viewerUserId: req.user?._id || null,
       onReplyDelta: preview === true
         ? (text) => {

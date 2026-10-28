@@ -143,11 +143,11 @@ export function buildOutOfScopeReply(flowRole, professionalName, assistantSettin
   const casual = !quiet && (tone === 'friendly' || formality === 'casual');
 
   if (flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
-    if (quiet) return `I cover mortgage and home-financing questions for ${name}. Are you planning a new mortgage, a refinance, or a renewal?`;
-    if (soft) return `No problem, I stay focused on mortgage and home-financing questions for ${name}. Are you looking at pre-approval, a refinance, or a renewal?`;
-    if (forward) return `I handle mortgage and home-financing questions for ${name}. Let's start with whether this is a new mortgage, a refinance, or a renewal.`;
-    if (casual) return `I stick to mortgage and home-financing questions for ${name}. Are you looking at pre-approval, a refinance, or a renewal?`;
-    return `I can only help with mortgage and home-financing questions for ${name}. If you want, I can help with pre-approval, budget range, and next mortgage steps.`;
+    if (quiet) return 'I cover mortgage and home-financing questions. Are you planning a new mortgage, a refinance, or a renewal?';
+    if (soft) return 'I stay with mortgage and home-financing questions. Is this a new mortgage, a refinance, or a renewal?';
+    if (forward) return 'I handle mortgage and home-financing questions. Is this a new mortgage, a refinance, or a renewal?';
+    if (casual) return 'I stick to mortgage and home-financing questions. Is this a new mortgage, a refinance, or a renewal?';
+    return 'I can help with a new mortgage, a refinance, or a renewal. Which one is this?';
   }
   if (flowRole === PROFESSIONAL_TYPE.LAWYER) {
     if (quiet) return 'I cover real-estate closings. Is this a purchase closing, a sale closing, or a refinance closing?';
@@ -180,6 +180,9 @@ export function buildEmptyTurnFallbackReply(flowRole, assistantSetting = null) {
   if (quiet) return `Please share a detail on ${topic}, and I will take it from there.`;
   if (soft && flowRole === PROFESSIONAL_TYPE.LAWYER) {
     return 'I am glad to help with your closing. Is this a purchase closing, a sale closing, or a refinance closing?';
+  }
+  if (soft && flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    return 'I am glad to help with your mortgage. Is this a new mortgage, a refinance, or a renewal?';
   }
   if (soft) return `Whenever you're ready, share one detail on ${topic}.`;
   if (forward) return `Share one detail on ${topic}, and we can take the next step.`;

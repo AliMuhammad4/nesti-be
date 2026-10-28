@@ -33,6 +33,7 @@ export const buildMortgageBrokerSystemPrompt = (professionalProfile, options = {
     name,
     calendlyBooked,
     postBookingChatChecklist,
+    firstPerson: Boolean(options.assistantSetting?.applied),
   });
   const prompt = appendAssistantOverlay(buildMortgageBrokerPromptMainTemplate({
     name,

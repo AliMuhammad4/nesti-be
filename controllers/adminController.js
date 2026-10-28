@@ -21,6 +21,8 @@ import {
   patchAdminLeadService,
   deleteAdminLeadService,
   getAdminLeadConversationService,
+  getAdminLeadDocumentsService,
+  deleteAdminLeadDocumentService,
   getAdminLeadPropertyMatchesService,
   getAdminLeadInquiredPropertyService,
   analyzeAdminLeadInsightsService,
@@ -229,6 +231,10 @@ export const patchAdminLead = handle((req) => patchAdminLeadService(req.params.i
 export const deleteAdminLead = handle((req) => deleteAdminLeadService(req.params.id, req.user));
 export const getAdminLeadConversation = handle((req) =>
   getAdminLeadConversationService(req.params.id, req.query),
+);
+export const getAdminLeadDocuments = handle((req) => getAdminLeadDocumentsService(req.params.id));
+export const deleteAdminLeadDocument = handle((req) =>
+  deleteAdminLeadDocumentService(req.params.id, req.params.docId, req.user),
 );
 export const getAdminLeadPropertyMatches = handle((req) =>
   getAdminLeadPropertyMatchesService(req.params.id, req.query),

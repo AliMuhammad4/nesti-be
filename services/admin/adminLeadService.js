@@ -33,6 +33,7 @@ import {
   excludeAcceptedReferralRecipientMatchesFilter,
 } from '../lead/leadQueryUtils.js';
 import { recordAdminAudit } from './adminAuditService.js';
+import { deleteLeadDocument, listLeadDocuments } from '../chat/documents/chatDocumentService.js';
 
 export const adminLeadServiceDeps = {
   deleteOwnedLeadMatch,
@@ -596,6 +597,29 @@ export async function getAdminLeadConversationService(id, query = {}) {
   const loaded = await loadAdminLeadAndOwner(id);
   if (loaded?.status) return loaded;
   return ok(await buildLeadConversationPayload(id, loaded.lead, query));
+}
+
+export async function getAdminLeadDocumentsService(id) {
+  const loaded = await loadAdminLeadAndOwner(id);
+  if (loaded?.status) return loaded;
+  const documents = await listLeadDocuments(loaded.lead.user_id, loaded.lead._id);
+  return ok({ documents });
+}
+
+export async function deleteAdminLeadDocumentService(id, documentId, actorUser = null) {
+  const loaded = await loadAdminLeadAndOwner(id);
+  if (loaded?.status) return loaded;
+  const removed = await deleteLeadDocument(loaded.lead.user_id, loaded.lead._id, documentId);
+  if (!removed) return fail(404, 'Document not found');
+  await recordAdminAudit({
+    actorUserId: actorUser?._id || actorUser?.id || null,
+    onBehalfOfUserId: loaded.lead.user_id,
+    action: 'lead.document.delete',
+    targetType: 'LeadDocument',
+    targetId: String(documentId),
+    outcome: 'ok',
+  });
+  return ok({ deleted: true });
 }
 
 export async function getAdminLeadPropertyMatchesService(id, query = {}) {

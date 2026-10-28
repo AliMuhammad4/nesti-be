@@ -29,6 +29,7 @@ import ProfessionalCallRecording from './ProfessionalCallRecording.js';
 import VoiceAgentSuggestion from './VoiceAgentSuggestion.js';
 import AdminAuditLog from './AdminAuditLog.js';
 import EmailDelivery from './EmailDelivery.js';
+import LeadDocument from './LeadDocument.js';
 export {
   User,
   ChatConversation,
@@ -61,4 +62,5 @@ export {
   VoiceAgentSuggestion,
   AdminAuditLog,
   EmailDelivery,
+  LeadDocument,
 };

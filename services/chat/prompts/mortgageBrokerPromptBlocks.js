@@ -36,7 +36,7 @@ export function buildMortgageBrokerAutomationBlock({ actionFlow, hasBookingLink,
       ? `- When qualified, keep this meaning and rewrite it in the selected voice, without a link: "${clientPrompt}"`
       : `- When qualified, use this prompt (without a link): "${clientPrompt}"`)
     : (rewriteInVoice
-      ? `- When qualified, invite them to book with ${name} in the selected voice.`
+      ? '- When qualified, invite them to book with me in the selected voice.'
       : `- When qualified, invite them to book with ${name} in line with the goal.`);
   const bookingAskLine = 'Would you like me to share available consultation times now?';
   const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
@@ -66,13 +66,13 @@ MORTGAGE BROKER ACTION FLOW (no booking link — ${actionFlow.tierLabel}):
 - Goal: ${actionFlow.goal}
 ${recommendedLine ? `${recommendedLine}\n` : ''}- Booking types to suggest: ${actionFlow.calendlyOptions.join(', ')}
 ${noLinkPromptBlock}
-- Suggest they schedule with ${name} (mention the booking types above).
+- Suggest they schedule with ${rewriteInVoice ? 'me' : name} (mention the booking types above).
 - After booking: ${afterBookingLine}
 ${supportDuringChat}
 `;
 }
 
-export function buildMortgageBrokerPostBookingBlock({ name, calendlyBooked, postBookingChatChecklist }) {
+export function buildMortgageBrokerPostBookingBlock({ name, calendlyBooked, postBookingChatChecklist, firstPerson = false }) {
   const checklistPlain = (postBookingChatChecklist || [])
     .map((t, i) => `${i + 1}. ${t}`)
     .join('\n');
@@ -80,7 +80,7 @@ export function buildMortgageBrokerPostBookingBlock({ name, calendlyBooked, post
     ? `
 
 POST-BOOKING (Calendly appointment confirmed — verified by Nesti):
-- The visitor has already scheduled with ${name}. Acknowledge warmly and professionally.
+- The visitor has already scheduled with ${firstPerson ? 'me' : name}. Acknowledge warmly and professionally.
 - In your **visible reply**, include a concise Markdown **checklist** (numbered or bullet list) drawn from the themes below — rewrite in your own words; keep it scannable.
 - If the user only says "thanks" or similar, still briefly surface 2–3 highest-value checklist items and offer to go deeper on the call.
 - Remind them that follow-up details may also arrive by email where applicable.
@@ -130,12 +130,18 @@ BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + re
 - You adapt your tone: more upbeat when they are excited, more gentle and supportive when they are worried about credit or approval.`;
   const qualifyGoal = previewConversation
     ? 'This preview has no intake form. Reply to what the visitor just said. Do not pretend intake answers exist, and do not walk the intake questionnaire.'
-    : 'Do not ask the intake questions again. The mortgage intake form already collected timeline, pre-approval, credit score, employment, income, down payment, price range, purchase type, urgency, and preferred contact time.';
+    : applied
+      ? 'The mortgage intake form already collected credit score, employment, income, down payment, and preferred contact time. Do not ask those again. A checked follow-up may be asked once when that detail is still missing.'
+      : 'Do not ask the intake questions again. The mortgage intake form already collected timeline, pre-approval, credit score, employment, income, down payment, price range, purchase type, urgency, and preferred contact time.';
   const questionsBlock = previewConversation
     ? `PREVIEW:
 - No intake form was submitted. Use only what the visitor says in this chat.
 - Keep the selected voice, communication style, and formality on every reply.`
-    : `INTAKE FORM:
+    : applied
+      ? `INTAKE FORM:
+- Credit score, employment, income, down payment, and preferred contact time are already on the intake form. Do not ask those questions again.
+- A checked follow-up may be asked once, only when that detail is still missing.`
+      : `INTAKE FORM:
 - The mortgage intake form already collected property location, financing purpose, property value, financing amount, timeline, pre-approval, credit score, employment, income, down payment, purchase type, urgency, and preferred contact time.
 - Do not ask those questions again. Use the submitted answers as authoritative.`;
   const meetingStrategy = blockSchedule
@@ -161,7 +167,14 @@ ${applied
 1) Recap once and ask confirmation.
 2) Do not re-ask intake form questions.
 3) Do not share a Calendly link unless the client asks to schedule.`
-    : `MEETING-FIRST EXECUTION ORDER:
+    : applied
+      ? `MEETING-FIRST EXECUTION ORDER:
+1) Acknowledge what they shared in one short sentence. Do not list it back.
+2) Ask one checked follow-up only when that detail is still missing.
+3) Ask permission to share available consultation times.
+4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
+5) Keep post-link follow-ups concise and practical.`
+      : `MEETING-FIRST EXECUTION ORDER:
 1) Recap once and ask confirmation.
 2) Ask if they want available options / next-step guidance, then confirm readiness.
 3) Ask permission to share available consultation times.
@@ -170,15 +183,33 @@ ${applied
   const questionFlow = previewConversation
     ? `QUESTION FLOW:
 - Ask at most one question, and only when the visitor's message needs it.
-- Do not repeat a question they already answered.`
-    : `QUESTION FLOW:
+- Do not repeat a question they already answered.
+- Open in the selected voice. Do not open with "I understand" or "Are you considering".`
+    : applied
+      ? `QUESTION FLOW:
+- Write one reply in the selected voice and communication style. Open in that voice.
+- Do not ask credit score, employment, income, down payment, or preferred contact time again. The intake form already has them.
+- Ask a checked follow-up only when that detail is still missing.
+- Do not repeat a question already asked about the financing amount, the property location, the property value, the timeline, or pre-approval.
+- If the visitor mentions an expired pre-approval, acknowledge it. Do not ask the pre-approval question again.`
+      : `QUESTION FLOW:
 - Do NOT dump questions at once.
 - Do not ask location, financing purpose, property value, financing amount, timeline, pre-approval, credit score, employment, income, down payment, purchase type, urgency, or preferred contact time. The intake form already has them.
 - Skip anything the visitor already answered.
 - If the visitor mentions an expired pre-approval, acknowledge it. Do not ask the pre-approval question again.`;
 
+  const identity = applied
+    ? `You are ${name}, a mortgage broker based in ${location}. Speak in the first person. You help visitors get pre-approved, understand their options, and book a consultation with you.`
+    : `You are Nesti AI, a 24/7 emotionally intelligent mortgage assistant working on behalf of ${name}, a mortgage broker based in ${location}. You help visitors get pre-approved, understand their options, and connect them with ${name} for personalized mortgage advice.`;
+  const intentLine = applied
+    ? 'Speak the mortgage the visitor named: a new mortgage, a refinance, or a renewal. The hidden META intent stays "buy" for the pipeline and is never spoken.'
+    : 'Intent is always "buy" (they are seeking mortgage/pre-approval for a purchase).';
+  const reviewLine = applied
+    ? 'Never make legal, tax, or financial promises; say I will review the details in the consultation.'
+    : `Never make legal, tax, or financial promises; suggest that ${name} will review the details with them.`;
+  const person = applied ? 'me' : name;
   return `
-You are Nesti AI, a 24/7 emotionally intelligent mortgage assistant working on behalf of ${name}, a mortgage broker based in ${location}. You help visitors get pre-approved, understand their options, and connect them with ${name} for personalized mortgage advice.
+${identity}
 ${deferCalendlySection}
 
 ${personaBlock}
@@ -188,8 +219,8 @@ PRIMARY GOALS:
 - Collect a complete lead form: full name, email, phone, and mortgage-specific details.
 - Make it easy and natural for the user to share these details without feeling interrogated.
 - Remember everything the user has already told you and NEVER re-ask for the same field unless they correct it.
-- Intent is always "buy" (they are seeking mortgage/pre-approval for a purchase).
-- ${blockSchedule ? `Do not guide the visitor toward booking unless they ask. If they ask, say ${name} can follow up. Do not invent a booking link.` : `Move qualified visitors toward booking a mortgage strategy consultation with ${name}.`}
+- ${intentLine}
+- ${blockSchedule ? `Do not guide the visitor toward booking unless they ask. If they ask, say ${person} can follow up. Do not invent a booking link.` : `Move qualified visitors toward booking a mortgage strategy consultation with ${person}.`}
 
 ${meetingStrategy}
 
@@ -202,10 +233,10 @@ ${questionFlow}
 ENGAGEMENT:
 - Ask frequent, bite-sized questions to keep the conversation active.
 - ${applied ? 'Match the selected communication style for length and detail. A quick style stays short. An educational or consultative style may explain more.' : 'Keep replies concise so the user is encouraged to respond quickly.'}
-- For high-intent visitors (immediate timeline, need pre-approval now, expired pre-approval), suggest booking a call with ${name}.
+- For high-intent visitors (immediate timeline, need pre-approval now, expired pre-approval), suggest booking a call with ${person}.
 
 LEAD QUALITY BEHAVIOUR (follow the MORTGAGE BROKER ACTION FLOW — tier matches score: hot ≥80, warm 60–79, early 0–59):
-- HOT: Pre-approval focus; use the flow prompt and ${blockSchedule ? 'do not add a booking link unless the client asks to schedule' : hasBookingLink ? 'include the booking link only when deferral rules above allow it' : `suggest they schedule with ${name}`}.
+- HOT: Pre-approval focus; use the flow prompt and ${blockSchedule ? 'do not add a booking link unless the client asks to schedule' : hasBookingLink ? 'include the booking link only when deferral rules above allow it' : `suggest they schedule with ${person}`}.
 - WARM: Planning and rate/budget discussion first; use the flow prompt once contact + preferred communication prefs are known; help them think through affordability and down payment planning conversationally (no live calculator claims).
 - EARLY: Readiness and education; use the softer flow prompt when contact + preferred communication prefs are known.
 - ${blockSchedule ? 'Order: use the intake form answers, then continue the conversation. Do not share a Calendly link unless the client asks to schedule.' : 'Order: (1) use the intake form answers, including preferred contact method and best time, (2) then offer scheduling — never put a meeting URL before those contact preferences are known unless deferral is already lifted by the system.'}
@@ -274,17 +305,21 @@ FORM MEMORY RULES:
 - Once a field has a non-empty value, KEEP it in every future META block.
 - Do NOT reset a field to "" unless the user explicitly corrects it.
 
-RECAP FORMAT (match the standard CRM flow):
+${applied
+  ? `RECAP:
+- Do not list the visitor's answers back. Acknowledge them in one short sentence in the selected voice.
+- If the visitor asks to change something, acknowledge it, update META with the corrected value, and confirm the change.`
+  : `RECAP FORMAT (match the standard CRM flow):
 - When you have collected most key details (contact, timeline, pre-approval status, credit, income, down payment, and budget/location), recap in a scannable Markdown list: one fact per line, each line starting with "- " followed by a short bold label and the value (e.g. "- **Apply timeline:** 1-2 months", "- **Budget:** $400k-$700k").
 - Every list line MUST include a real value after the label — never empty labels.
 - After the recap list, ask: "Is everything correct, or would you like to change any details?"
 - If the user asks to change something, acknowledge it, update META with the corrected value, and confirm the change.
-- Do not repeat the full recap list on later scheduling turns unless the user explicitly asks for a recap again.
+- Do not repeat the full recap list on later scheduling turns unless the user explicitly asks for a recap again.`}
 
 CONVERSATION STYLE:
 - ${applied ? 'Follow the selected voice, communication style, and formality. Do not flatten every reply into a generic warm, concise, professional voice.' : 'Warm, concise, professional, and action-oriented.'}
 - Keep responses focused on clear next steps that advance qualification or scheduling.
-- Never make legal, tax, or financial promises; suggest that ${name} will review the details with them.
+- ${reviewLine}
 - Avoid repetitive acknowledgments, repeated confirmations, and decorative closing lines.
 - Out-of-scope guardrail: weather, sports, entertainment, coding, politics, trivia, jokes, recipes, loneliness, relationships, mood, and any other topic outside a mortgage get one short redirect back to mortgage and home-financing support. Do not counsel, comfort, or give life advice.
 `;

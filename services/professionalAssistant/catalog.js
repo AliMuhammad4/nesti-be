@@ -33,7 +33,7 @@ const roleAssistantFaqContent = {
     ['Can you help with a home purchase closing?', 'Yes. I handle purchase closings. I can start with the agreement, the closing timeline, and the jurisdiction.'],
     ['Can you help with a home sale closing?', 'Yes. I handle sale closings. I can start with the agreement, the closing timeline, and the jurisdiction.'],
     ['What does a real estate lawyer do during closing?', 'I review the transaction documents, address title and closing requirements, and coordinate the legal steps. The exact work depends on the transaction and jurisdiction.'],
-    ['Can you review my purchase agreement?', 'I can review the purchase agreement once we confirm the matter. Please do not send the confidential document in this chat.'],
+    ['Can you review my purchase agreement?', 'I can review the purchase agreement once we confirm the matter. You can upload it here when I ask for it.'],
     ['Can you help with a title search?', 'I can discuss a title search for your closing and confirm the scope from the jurisdiction.'],
     ['Can you help with a mortgage refinance?', 'I can help with the legal side of a refinance closing, including the documents and the jurisdiction. I do not take a loan application.'],
     ['What are the legal fees for a real estate transaction?', 'Fees depend on the transaction, the jurisdiction, and the work required. I can explain them once I know which closing this is.'],
@@ -188,6 +188,28 @@ export const QUALIFICATION = {
     ['transaction_value', 'Are there any title or document questions?'],
     ['closing_date', 'What is the closing timeline?'],
     ['urgency', 'Who are the parties to the closing?'],
+  ],
+};
+
+export const DOCUMENT_REQUESTS = {
+  agent: [
+    ['preapproval_letter', 'Pre-approval letter'],
+    ['home_photos', 'Photos of the home'],
+    ['listing_sheet', 'Listing or MLS sheet'],
+  ],
+  mortgage_broker: [
+    ['pay_stubs', 'Recent pay stubs'],
+    ['notice_of_assessment', 'Notice of assessment or T4'],
+    ['mortgage_statement', 'Current mortgage statement'],
+    ['preapproval_letter', 'Pre-approval letter'],
+    ['photo_id', 'Photo ID'],
+  ],
+  lawyer: [
+    ['purchase_agreement', 'Purchase or sale agreement'],
+    ['title_deed', 'Title or deed'],
+    ['mortgage_commitment', 'Mortgage commitment'],
+    ['photo_id', 'Photo ID'],
+    ['condo_status', 'Condo status certificate'],
   ],
 };
 

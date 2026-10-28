@@ -37,4 +37,7 @@ test('buildOutOfScopeReply includes role-aligned redirect', () => {
   const reply = buildOutOfScopeReply(PROFESSIONAL_TYPE.LAWYER, 'Alex Lawyer');
   assert.match(reply, /purchase closing/i);
   assert.doesNotMatch(reply, /Alex Lawyer/);
+  const broker = buildOutOfScopeReply(PROFESSIONAL_TYPE.MORTGAGE_BROKER, 'Alex Broker');
+  assert.match(broker, /new mortgage/i);
+  assert.doesNotMatch(broker, /Alex Broker/);
 });

@@ -175,12 +175,27 @@ ${applied
 3) Ask permission to share available consultation times.
 4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
 5) Keep post-link follow-ups concise and practical.`;
+  const wantsContact = !applied || (applied.next_actions || []).includes('collect_contact');
+  const contactGoal = wantsContact
+    ? 'Collect contact: full name, email, phone.'
+    : 'Contact from the intake form is enough. Do not open a fresh contact questionnaire.';
+  const intentGoal = applied
+    ? 'Speak the matter the visitor named: a purchase closing, a sale closing, or a refinance closing. Do not describe a sale or a refinance as a purchase. The hidden META intent stays "buy" for the pipeline and is never spoken.'
+    : 'Intent is "buy" for this pipeline (fixed for LeadMatch).';
+  const helloQuestion = (assistantSetting?.qualification_questions || []).includes('legal_service');
   const questionFlow = previewConversation
     ? `QUESTION FLOW:
-- On a hello, ask whether this is a purchase closing or a sale closing.
-- On every later reply, ask one question about the agreement, the title, the parties, the jurisdiction, or the closing timeline.
-- Do not repeat a question they already answered.`
-    : `QUESTION FLOW:
+- ${helloQuestion ? 'On a hello, ask whether this is a purchase closing or a sale closing.' : 'On a hello, greet in the selected voice and ask only a checked follow-up.'}
+- On every later reply, ask one unanswered question from the checked follow-ups. Do not repeat a question already asked about the parties, the title, the agreement, the jurisdiction, or the closing timeline.
+- Do not repeat a question they already answered.
+- Open in the selected voice. Do not open with "I understand" or "Could you clarify".`
+    : applied
+      ? `QUESTION FLOW:
+- Write one reply in the selected voice and communication style. Open in that voice. Do not open with "I understand" or "Could you clarify".
+- Do not ask location, transaction stage, closing date, transaction type, property value, mortgage status, realtor involvement, first-home status, legal services, or preferred contact time. The intake form already has them.
+- Skip anything the visitor already answered.
+- Do not repeat a question already asked about the parties, the title, the agreement, the jurisdiction, or the closing timeline.`
+      : `QUESTION FLOW:
 - Ask ONE question at a time.
 - Do not ask location, transaction stage, closing date, transaction type, property value, mortgage status, realtor involvement, first-home status, legal services, or preferred contact time. The intake form already has them.
 - Skip anything the visitor already answered.`;
@@ -193,9 +208,9 @@ ${personaBlock}
 
 PRIMARY GOALS:
 - ${qualifyGoal}
-- Collect contact: full name, email, phone.
+- ${contactGoal}
 - Remember prior answers; do not re-ask unless corrected.
-- Intent is "buy" for this pipeline (fixed for LeadMatch).
+- ${intentGoal}
 - ${blockSchedule ? `Do not guide the visitor toward booking unless they ask. If they ask, say ${name} can follow up. Do not invent a booking link.` : `Guide qualified visitors toward booking a legal consultation with me.`}
 
 ${meetingStrategy}

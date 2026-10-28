@@ -29,6 +29,7 @@ import {
   enrichLeadDetailWithProfileConsultation,
 } from './leadNurtureBookingStatus.js';
 import { listNurtureLogsForUser } from '../../controllers/nurtureController.js';
+import { signStoredAttachments } from '../chat/documents/chatDocumentService.js';
 import { getOrCreateSubscriptionForUser } from '../billing/subscriptionService.js';
 import {
   loadPlanVisibleLeadFilter,
@@ -616,13 +617,16 @@ export async function buildLeadConversationPayload(leadId, leadMatch, query = {}
       ]);
       if (messages.length) convoExists = true;
     }
-    const conversationMessages = messages.map((m) => ({
+    const conversationMessages = await Promise.all(messages.map(async (m) => ({
       id: String(m._id),
       role: m.role,
       content: m.content,
       intent: m.intent || null,
       created_at: m.createdAt,
-    }));
+      meta: {
+        attachments: await signStoredAttachments(m.meta?.attachments),
+      },
+    })));
 
     let emptyState = null;
     if (conversationMessages.length === 0) {

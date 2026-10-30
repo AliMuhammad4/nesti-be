@@ -43,6 +43,7 @@ import {
   buildChatResponseMeta,
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
+import { identityReply } from './utils/profileVisitorFacts.js';
 import { allowLandingChatRate, isLandingEmbed, loadLandingChatSettings } from './nestiLanding/landingChatConfig.js';
 import {
   applyDocumentAsk,
@@ -50,6 +51,8 @@ import {
   buildSharedDocumentsPrompt,
   briefDocumentAnswer,
   documentReadReply,
+  documentReviewReply,
+  followUpSkipIds,
   loadConversationDocuments,
   rereadUndescribedImages,
   nextDocumentRequest,
@@ -73,7 +76,10 @@ import { nestiLandingFlow } from './nestiLanding/nestiLandingFlow.js';
 import { handleLandingChatTurn } from './nestiLanding/landingChatTurnService.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
 import { appendCalendlyBookingLink, holdFurtherQuestions, userSignalsBookingIntent } from './utils/chatBookingReply.js';
-import { replyLanguage } from '../professionalAssistant/replyStyle.js';
+import { chatAnsweredQuestionIds, openQualificationQuestionIds, qualificationStillOpen, quickRepliesForReply } from '../professionalAssistant/qualificationProgress.js';
+import { clientTypeForForm, settingForClientType } from '../professionalAssistant/assistantSettings.js';
+import { buildPreviewLeadSummary, leadClientTypeExtras } from './handleChat/previewLeadSummary.js';
+import { dropRepeatedVisitorName, replyLanguage } from '../professionalAssistant/replyStyle.js';
 import { shouldRefetchPropertyMatchesForMessage } from './utils/propertyMatchesRequestIntent.js';
 import { stripPropertyListingsFromReply } from './utils/stripPropertyListingsFromReply.js';
 import { buildOutOfScopeReply, detectOutOfScopeMessage } from './utils/chatScopeGuard.js';
@@ -354,6 +360,7 @@ export const handleChatService = async ({
   opening = false,
   preview = false,
   previewAssistantDraft = null,
+  testPersona = null,
   viewerUserId = null,
   onReplyDelta = null,
   attachmentIds = [],
@@ -429,13 +436,16 @@ export const handleChatService = async ({
     };
   }
   const canCreateLeads = Boolean(flow?.flowRole) && !previewForOwner;
+  const previewPersona = previewForOwner && ['buyer', 'seller', 'investor'].includes(testPersona) ? testPersona : '';
 
   const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow) || Boolean(flow.landingMode);
   const intent = nonAgentBuyerSellerIntent
     ? 'unspecified'
     : formContact?.intent === 'sell' || formContact?.intent === 'buy'
       ? formContact.intent
-      : classifyIntentFromKeywords(trimmedMessage);
+      : previewPersona
+        ? (previewPersona === 'seller' ? 'sell' : 'buy')
+        : classifyIntentFromKeywords(trimmedMessage);
 
   const embedFlowRole =
     embed.widget_role && isValidProfessionalType(embed.widget_role) ? embed.widget_role : undefined;
@@ -557,8 +567,9 @@ export const handleChatService = async ({
   });
 
   const history = historyRows.reverse();
-  const earlierAssistantReplies = history
-    .filter((message) => message.role === 'assistant')
+  const assistantHistory = history.filter((message) => message.role === 'assistant');
+  const lastAssistantReply = assistantHistory.at(-1)?.content || '';
+  const earlierAssistantReplies = assistantHistory
     .slice(-8)
     .map((message) => message.content)
     .join('\n');
@@ -604,15 +615,27 @@ export const handleChatService = async ({
     calendlyLinkForVisitor,
     propertyMatchesEnabled,
   });
+  const visitorClientType = landingMode ? '' : (previewPersona || clientTypeForForm(storedForm));
+  const typedAssistant = !landingMode && appliedAssistantLoaded
+    ? settingForClientType(appliedAssistantLoaded, visitorClientType)
+    : appliedAssistantLoaded;
+  const appliedAssistantResolved = typedAssistant?.applied && storedForm && !previewForOwner && !landingMode
+    ? { ...typedAssistant, qualification_questions: openQualificationQuestionIds(typedAssistant, storedForm) }
+    : typedAssistant;
   if (!landingMode) {
-    systemPromptOptions.assistantSetting = appliedAssistantLoaded;
+    systemPromptOptions.assistantSetting = appliedAssistantResolved;
     systemPromptOptions.yearsExperience = savedYears;
     systemPromptOptions.previewConversation = Boolean(previewForOwner);
+    systemPromptOptions.clientType = visitorClientType;
   }
   const appliedAssistantSetting = systemPromptOptions.assistantSetting;
   const leadSyncEnabled = canCreateLeads && assistantAllowsLeadSaving(appliedAssistantSetting);
-  if (flowType === 'agent') {
+  if (!landingMode && storedForm && typeof storedForm === 'object') {
     systemPromptOptions.intakeFormContact = storedForm;
+  }
+  if (!landingMode) {
+    systemPromptOptions.openingTurn = assistantHistory.length === 0;
+    systemPromptOptions.chatAnsweredQuestions = chatAnsweredQuestionIds(appliedAssistantResolved, history, trimmedMessage);
   }
   if (landingMode) {
     systemPromptOptions.audience = String(storedForm?.audience_role || formContact?.audience_role || 'client');
@@ -685,11 +708,23 @@ export const handleChatService = async ({
   let parsedAiDetails = {};
   const isOutOfScopeMessage = detectOutOfScopeMessage(trimmedMessage, flow?.flowRole);
   const directDocumentReply = documentReadReply(focusedDocuments);
+  const reviewReply = turnAttachments.length
+    ? documentReviewReply(focusedDocuments, appliedAssistantSetting, {
+      priorDocuments: sharedDocuments.filter((doc) => !focusIds.has(String(doc._id))),
+      userMessage: trimmedMessage,
+      conversationText,
+      intent,
+      text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
+      history,
+      previousReply: lastAssistantReply,
+    })
+    : '';
   const shapeDocumentReply = (text) => {
     const replyContext = {
       userMessage: trimmedMessage,
       documentReceived: true,
-      previousReply: earlierAssistantReplies,
+      previousReply: lastAssistantReply,
+      history,
       setting: appliedAssistantSetting,
       preview: previewForOwner,
       conversationText,
@@ -714,6 +749,12 @@ export const handleChatService = async ({
       session_id: sessionId,
       flow_role: flow?.flowRole || 'agent',
     });
+  } else if (reviewReply) {
+    aiReply = reviewReply;
+    logger.info('Chat service: document reviewed against the request', {
+      op: 'chat.message',
+      session_id: sessionId,
+    });
   } else if (directDocumentReply) {
     aiReply = shapeDocumentReply(directDocumentReply);
     logger.info('Chat service: document reply from saved notes', {
@@ -722,7 +763,7 @@ export const handleChatService = async ({
     });
   } else {
     let briefReply = '';
-    if (focusedDocuments.length) {
+    if (focusedDocuments.length && !turnAttachments.length) {
       try {
         briefReply = await briefDocumentAnswer(focusedDocuments, trimmedMessage);
       } catch (err) {
@@ -747,7 +788,7 @@ export const handleChatService = async ({
         intent,
         turnReminder: landingMode
           ? ''
-          : `${voiceTurnReminder(appliedAssistantSetting, trimmedMessage, { preview: previewForOwner, conversationText })}${turnAttachments.length ? (turnAttachments.some((file) => file.kind === 'image') ? `\nThe visitor just shared a photo${newFileNames ? ` named ${newFileNames}` : ''}. Describe what the photo notes say is visible. Do not say you cannot see the image. Do not invent names or prices.` : `\nThe new file is ${newFileNames || 'the file just uploaded'}. Answer about that file only. Do not repeat the previous document or your previous reply.`) : (documentPrompt ? '\nA file was shared. Describe only what its text says. If the text is missing, say you are still reading it. Do not invent listings, prices, or trends.' : '')}${previewForOwner ? '\nVisible reply only. One reply in the selected voice and communication style. Do not write a second version. Do not write ###META### or JSON.' : ''}`,
+          : `${voiceTurnReminder(appliedAssistantSetting, trimmedMessage, { preview: previewForOwner, conversationText, openingTurn: assistantHistory.length === 0, intakeFormContact: storedForm })}${turnAttachments.length ? `\nThe visitor just shared ${newFileNames || 'a file'}. Say whether it is the requested document or a different file. Do not describe the picture or the file.` : (documentPrompt ? '\nA file was shared earlier. Do not describe it again unless the visitor asks what it says.' : '')}${previewForOwner ? '\nVisible reply only. One reply in the selected voice and communication style. Do not write a second version. Do not write ###META### or JSON.' : ''}`,
         assistantSetting: landingMode ? null : appliedAssistantSetting,
         maxTokens: previewForOwner
           ? (documentPrompt
@@ -770,7 +811,8 @@ export const handleChatService = async ({
       const replyContext = {
         userMessage: trimmedMessage,
         documentReceived: turnAttachments.length > 0,
-        previousReply: earlierAssistantReplies,
+        previousReply: lastAssistantReply,
+        history,
         setting: appliedAssistantSetting,
         preview: previewForOwner,
         conversationText,
@@ -835,35 +877,53 @@ export const handleChatService = async ({
     }
   }
 
+  const namedReply = identityReply({
+    userMessage: trimmedMessage,
+    profile: professionalProfile,
+    setting: appliedAssistantSetting,
+    yearsExperience: systemPromptOptions.yearsExperience,
+  });
+  if (namedReply) finalReply = namedReply;
   finalReply = holdFurtherQuestions(finalReply, trimmedMessage, replyLanguage(appliedAssistantSetting, trimmedMessage, conversationText));
-  if (isAutomatedBookingEnabled && calendlyLinkForVisitor && scheduleAllowed && (hasContact || userSignalsBookingIntent(trimmedMessage))) {
+  const visitorAskedToMeet = userSignalsBookingIntent(trimmedMessage);
+  const stillAsking = /[?？]/.test(finalReply) && !visitorAskedToMeet;
+  const questionsOpen = qualificationStillOpen(appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions);
+  if (!stillAsking && isAutomatedBookingEnabled && calendlyLinkForVisitor && scheduleAllowed && !namedReply && (visitorAskedToMeet || (!questionsOpen && !deferCalendlyLink && hasContact))) {
     finalReply = appendCalendlyBookingLink(finalReply, calendlyLinkForVisitor, {
       userMessage: trimmedMessage,
       allowSchedule: scheduleAllowed,
+      label: appliedAssistantSetting?.cta_label || '',
     });
   }
 
   const stillReadingDocument = /still (reading|looking)/i.test(directDocumentReply || '');
   let requestedDocument = null;
-  if (!landingMode && appliedAssistantSetting?.applied && appliedAssistantSetting.document_requests?.length && !isOutOfScopeMessage && !stillReadingDocument) {
+  if (!namedReply && !landingMode && appliedAssistantSetting?.applied && appliedAssistantSetting.document_requests?.length && !isOutOfScopeMessage && !stillReadingDocument) {
     const asked = applyDocumentAsk(
       finalReply,
       nextDocumentRequest(appliedAssistantSetting, sharedDocuments, {
         intent,
         text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
-      }),
-      { previousReply: previousAssistantReply, userMessage: trimmedMessage, setting: appliedAssistantSetting, conversationText },
+      }, followUpSkipIds(appliedAssistantSetting, sharedDocuments, {
+        intent,
+        text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
+      }, history, lastAssistantReply)),
+      { previousReply: previousAssistantReply, userMessage: trimmedMessage, setting: appliedAssistantSetting, conversationText, qualificationOpen: !turnAttachments.length && qualificationStillOpen(appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions) },
     );
     finalReply = asked.reply;
     requestedDocument = asked.request;
     if (appliedAssistantSetting.use_emojis) {
       finalReply = withOccasionalEmoji(finalReply, appliedAssistantSetting, {
-        previousReply: previousAssistantReply,
+        previousReply: lastAssistantReply,
         userMessage: trimmedMessage,
         documentReceived: Boolean(requestedDocument) || turnAttachments.length > 0,
       });
     }
   }
+  const visitorFirstName = String(storedForm?.name || storedForm?.full_name || '').trim().split(/\s+/)[0] || '';
+  finalReply = dropRepeatedVisitorName(finalReply, visitorFirstName, {
+    keepName: Boolean(appliedAssistantSetting?.address_by_first_name && assistantHistory.length === 0),
+  });
 
   const finalScore = leadScore;
   const finalGradeRaw = flow.bestGrade(leadGrade, conversation.lead_grade || 'unscored');
@@ -904,6 +964,7 @@ export const handleChatService = async ({
   conversation.emotional_state = emotionalState;
   conversation.last_interaction_at = new Date();
   conversation.form_data = mergedFormContact;
+  if (visitorClientType) conversation.client_type = visitorClientType;
   await conversation.save();
   const conversationMetaSnapshot = {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,
@@ -940,10 +1001,23 @@ export const handleChatService = async ({
     leadLookupFailed,
   });
 
+  const clientTypeExtras = leadSyncEnabled && visitorClientType
+    ? leadClientTypeExtras({
+      role: flow?.flowRole,
+      setting: appliedAssistantSetting,
+      clientType: visitorClientType,
+      form: mergedFormContact,
+      history,
+      userMessage: trimmedMessage,
+      leadGrade: finalGrade,
+      intent: aiIntent,
+    })
+    : null;
   const syncLeadTask = syncLeadMatchAfterTurn({
     flow,
     flowType,
     canCreateLeads: leadSyncEnabled,
+    clientTypeExtras,
     conversation,
     userId,
     professionalProfile,
@@ -1003,6 +1077,25 @@ export const handleChatService = async ({
     void syncLeadTask;
   }
 
+  const quickReplies = !landingMode && appliedAssistantSetting?.applied && appliedAssistantSetting.question_overrides
+    ? quickRepliesForReply(appliedAssistantSetting, finalReply, systemPromptOptions.chatAnsweredQuestions || [])
+    : null;
+  const previewLeadSummary = previewForOwner && !landingMode && appliedAssistantSetting?.applied
+    ? buildPreviewLeadSummary({
+      role: flow?.flowRole,
+      setting: appliedAssistantSetting,
+      clientType: visitorClientType,
+      form: mergedFormContact,
+      history,
+      userMessage: trimmedMessage,
+      details: parsedAiDetails,
+      contactInfo,
+      leadGrade: finalGrade,
+      leadScore: finalScore,
+      intent: aiIntent,
+    })
+    : null;
+
   return {
     status: 200,
     body: {
@@ -1013,6 +1106,10 @@ export const handleChatService = async ({
       meta: {
         ...responseMeta,
         ...(previewForOwner && previewAssistantDraft ? { preview_draft_applied: true } : {}),
+        ...(previewLeadSummary ? { preview_lead_summary: previewLeadSummary } : {}),
+        ...(visitorClientType ? { client_type: visitorClientType } : {}),
+        ...(appliedAssistantSetting?.cta_label ? { cta_label: appliedAssistantSetting.cta_label } : {}),
+        ...(quickReplies ? { quick_replies: quickReplies } : {}),
         request_document: requestedDocument,
       },
     },

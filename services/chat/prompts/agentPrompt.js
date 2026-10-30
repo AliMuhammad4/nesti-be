@@ -1,6 +1,8 @@
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 import { getAgentActionFlow } from '../config/agentActionFlow.js';
 import { appendAssistantOverlay } from '../../professionalAssistant/professionalAssistantService.js';
+import { questionLabel, questionOptions } from '../../professionalAssistant/assistantSettings.js';
+import { intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
 import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
 import { communicationInstruction, formalityInstruction, voiceInstruction } from '../../professionalAssistant/professionalAssistantService.js';
 
@@ -23,7 +25,7 @@ function hasIntakeAnswer(settingId, formContact = {}) {
     intent: formContact.intent,
     location: formContact.intent === 'sell'
       ? formContact.address || formContact.location
-      : formContact.buy_property_location || formContact.location,
+      : formContact.buy_property_location || formContact.location || formContact.address,
     budget: formContact.intent === 'sell'
       ? formContact.price || formContact.budget
       : formContact.budget,
@@ -47,7 +49,8 @@ function hasIntakeAnswer(settingId, formContact = {}) {
     backyard_needed: formContact.backyard_needed,
     school_district_important: formContact.school_district_important,
   };
-  return Boolean(String(values[settingId] || '').trim());
+  const value = settingId in values ? values[settingId] : intakeValueFor('agent', settingId, formContact);
+  return Boolean(String(value || '').trim());
 }
 
 function answeredIntakeSummary(formContact = {}) {
@@ -101,7 +104,13 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     postBookingChatChecklist = [],
     propertyMatchesEnabled = true,
   } = options;
-  const blockSchedule = false;
+  const scheduleActions = options.assistantSetting?.next_actions;
+  const blockSchedule = Boolean(
+    options.assistantSetting?.applied
+    && Array.isArray(scheduleActions)
+    && scheduleActions.length
+    && !scheduleActions.includes('schedule'),
+  );
   const hasBookingLink = !blockSchedule && isAutomatedBookingEnabled && calendlyLink;
   const actionFlow = getAgentActionFlow(leadGrade, intent);
   const isBuyer = intent !== 'sell';
@@ -113,7 +122,22 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     actionFlow.aiSupportAfterBooking?.length > 0
       ? actionFlow.aiSupportAfterBooking.join('; ')
       : 'Standard follow-up';
-  const voiceOn = Boolean(options.assistantSetting?.applied);
+  const applied = appliedAssistant(options);
+  const previewChat = options.previewConversation === true;
+  const deferCalendlyLink = options.deferCalendlyLink === true;
+  const answeredInChat = new Set(options.chatAnsweredQuestions || []);
+  const savedQuestions = applied
+    ? (applied.qualification_questions || [])
+      .map((id) => {
+        const label = questionLabel({ ...applied, role: 'agent' }, id);
+        if (!label) return null;
+        const choices = questionOptions(applied, id);
+        return [id, choices.length ? `${label} (${choices.join(' / ')})` : label];
+      })
+      .filter((row) => row && (previewChat || (!hasIntakeAnswer(row[0], options.intakeFormContact) && !answeredInChat.has(row[0]))))
+    : null;
+  const holdBooking = Boolean(applied && !previewChat && savedQuestions?.length);
+  const voiceOn = Boolean(applied);
   const clientPrompt = typeof actionFlow.prompt === 'string' ? actionFlow.prompt.trim() : '';
   const exactPromptBlock = clientPrompt
     ? (voiceOn
@@ -137,6 +161,15 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
 REALTOR ACTION FLOW (scheduling off — ${actionFlow.tierLabel}):
 - Goal: ${actionFlow.goal}
 - Do not suggest a meeting, a booking link, or Calendly unless the client asks to schedule.
+`
+    : holdBooking || deferCalendlyLink
+    ? `
+REALTOR ACTION FLOW (questions first — ${actionFlow.tierLabel}):
+- Goal: ${actionFlow.goal}
+- Do not include a booking URL yet.
+- Ask one missing qualification question. Do not share a meeting link in that reply.
+- When the visitor asks about the rest of the details, ask the next missing qualification question. Do not ask a detail the intake form already has.
+- After those questions are answered and the visitor agrees to meet, the booking link can be shared.
 `
     : hasBookingLink
     ? `
@@ -183,7 +216,6 @@ ${checklistPlain}
 `
       : '';
 
-  const applied = appliedAssistant(options);
   const serviceAreaSaved = Boolean(applied && assistantHasServiceArea(applied));
   const openingReach = serviceAreaSaved
     ? `Assist visitors in this professional's saved service area. If an inquiry is outside that area, say so and still offer to take their details. Do not say you can help in any city.`
@@ -195,10 +227,11 @@ ${checklistPlain}
 - You always acknowledge the visitor's feelings (excited, anxious, stressed, confused) before giving information.
 - You never judge or pressure the user; you reassure them and explain options clearly.
 - You adapt your tone: more upbeat when they are excited, more gentle and supportive when they are worried or frustrated.`;
-  const previewChat = options.previewConversation === true;
   const qualifyGoal = previewChat
     ? 'This preview has no intake form. Infer buy or sell from the words the visitor uses. Once that is clear, do not ask it again.'
-    : 'Qualify the lead with the unanswered questions below. Do not ask intent, location, budget, timeline, property type, or mortgage status. The intake form already collected them.';
+    : applied
+      ? 'Ask the saved qualification questions that are still missing, one at a time. Skip any answer the intake form or the visitor already gave.'
+      : 'Qualify the lead with the unanswered questions below. Do not ask intent, location, budget, timeline, property type, or mortgage status. The intake form already collected them.';
   const defaultQuestions = [
     ['realtor_status', 'Are you currently working with a realtor? (No / Yes but open / Yes exclusively)'],
     ['motivation_reason', 'What is the main reason for your move? (Relocation, family change, divorce, investment, upgrading, downsizing, just exploring)'],
@@ -207,14 +240,15 @@ ${checklistPlain}
     ['urgency_readiness', 'If you found the perfect home tomorrow, would you make an offer? (Yes immediately / Maybe / No)'],
     ['preferred_contact_method', 'What is your preferred way to be contacted, and what is the best time?'],
   ].filter(([id]) => !hasIntakeAnswer(id, options.intakeFormContact));
-  const questionsBlock = previewChat
+  const questions = savedQuestions || defaultQuestions;
+  const questionsBlock = previewChat && !applied
     ? `LEAD QUALIFICATION QUESTIONS:
 - This preview has no intake list. Ask at most one follow-up from what the visitor just said.`
-    : defaultQuestions.length
+    : questions.length
       ? `LEAD QUALIFICATION QUESTIONS (${applied
         ? 'ask only unanswered questions, one at a time, rewritten in the selected voice, formality, and short reply length; do not copy the question text below'
         : 'ask only unanswered questions naturally, one at a time'}):
-${defaultQuestions.map(([, question], index) => `${index + 1}. "${question}"`).join('\n')}`
+${questions.map(([, question], index) => `${index + 1}. "${question}"`).join('\n')}`
       : 'LEAD QUALIFICATION QUESTIONS: The submitted intake form already captured these details. Do not repeat any qualification questions.';
   const intakeSummary = answeredIntakeSummary(options.intakeFormContact);
   const intakeAnswersBlock = intakeSummary.length
@@ -224,6 +258,11 @@ ${defaultQuestions.map(([, question], index) => `${index + 1}. "${question}"`).j
     ? `MEETING CONVERSION:
 - Scheduling is off for this assistant. Do not offer a booking link, a Calendly URL, or a meeting close unless the client asks to schedule.
 - If the client asks to schedule, say ${name} can follow up. Do not invent a booking link.`
+    : holdBooking
+    ? `MEETING CONVERSION:
+- Do not share a meeting link while a checked qualification question is still unanswered.
+- Ask one missing question. When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.
+- After those answers, ask permission, then share one Calendly link.`
     : `MEETING CONVERSION STRATEGY (CONSULTATIVE, NOT PUSHY):
 - Lead with value: briefly explain what the meeting will help them achieve (clear plan, timing, pricing/offer strategy, next steps).
 ${voiceOn
@@ -241,7 +280,14 @@ ${voiceOn
 2) After confirmation, ask if they want available options / property matches.
 3) When options are shown, continue with the next unanswered qualification question.
 4) Do not share a Calendly link unless the client asks to schedule.`
-    : `MEETING-FIRST EXECUTION ORDER:
+    : voiceOn
+      ? `MEETING-FIRST EXECUTION ORDER:
+1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back.
+2) Ask one missing checked qualification question. Do not share a meeting link in that reply.
+3) After every missing question is answered, ask permission to share available times.
+4) After they agree, share one Calendly link clearly and stop repeating booking CTAs unless they ask again.
+5) When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.`
+      : `MEETING-FIRST EXECUTION ORDER:
 1) Recap once and ask confirmation.
 2) After confirmation, ask if they want available options / property matches.
 3) Once options are shown and they show interest, ask to share available times.
@@ -266,8 +312,11 @@ ${voiceOn
 - Do NOT claim property matches or listing cards are available in this chat.
 - If the visitor asks for matches/listings, acknowledge and continue refining their criteria without saying "matches below" or similar phrasing.`;
 
+  const identity = applied
+    ? `You are ${name}, a ${type} based in ${location}. Speak in the first person.`
+    : `You are Nesti AI, a 24/7 emotionally intelligent real estate assistant working on behalf of ${name}, a ${type} based in ${location}.`;
   const prompt = `
-You are Nesti AI, a 24/7 emotionally intelligent real estate assistant working on behalf of ${name}, a ${type} based in ${location}. ${openingReach}
+${identity} ${openingReach}
 
 ${personaBlock}
 
@@ -439,6 +488,6 @@ CONVERSATION STYLE:
 - Never make legal, tax, or financial promises; you can suggest that ${name} will review the details with them.
 - Out-of-scope guardrail: weather, sports, entertainment, coding, politics, trivia, jokes, recipes, loneliness, relationships, mood, and any other topic outside buying or selling a property get one short redirect back to real-estate buy/sell support. Do not counsel, comfort, or give life advice.
 `.trim();
-  return `${appendAssistantOverlay(prompt, options.assistantSetting, { preview: previewChat })}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
+  return `${appendAssistantOverlay(prompt, options.assistantSetting, { preview: previewChat, openingTurn: options.openingTurn, intakeFormContact: options.intakeFormContact, chatAnsweredQuestions: options.chatAnsweredQuestions })}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
 };
  

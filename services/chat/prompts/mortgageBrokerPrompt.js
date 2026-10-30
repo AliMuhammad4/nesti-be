@@ -3,6 +3,7 @@ import {
   buildMortgageBrokerAutomationBlock,
   buildMortgageBrokerPostBookingBlock,
   buildMortgageBrokerPromptMainTemplate,
+  openBrokerFollowUps,
 } from './mortgageBrokerPromptBlocks.js';
 import { appendAssistantOverlay } from '../../professionalAssistant/professionalAssistantService.js';
 import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
@@ -18,9 +19,21 @@ export const buildMortgageBrokerSystemPrompt = (professionalProfile, options = {
     postBookingChatChecklist = [],
     deferCalendlyLink = false,
   } = options;
-  const blockSchedule = false;
+  const scheduleActions = options.assistantSetting?.next_actions;
+  const blockSchedule = Boolean(
+    options.assistantSetting?.applied
+    && Array.isArray(scheduleActions)
+    && scheduleActions.length
+    && !scheduleActions.includes('schedule'),
+  );
   const hasBookingLink = !blockSchedule && isAutomatedBookingEnabled && calendlyLink;
-  const effectiveHasBookingLink = Boolean(hasBookingLink && !deferCalendlyLink);
+  const holdForQuestions = Boolean(
+    options.assistantSetting?.applied
+    && options.previewConversation !== true
+    && !blockSchedule
+    && openBrokerFollowUps(options.assistantSetting, options.intakeFormContact, options.chatAnsweredQuestions).length,
+  );
+  const effectiveHasBookingLink = Boolean(hasBookingLink && !deferCalendlyLink && !holdForQuestions);
   const actionFlow = getMortgageBrokerActionFlow(leadGrade);
   const automationBlock = buildMortgageBrokerAutomationBlock({
     actionFlow,
@@ -28,6 +41,7 @@ export const buildMortgageBrokerSystemPrompt = (professionalProfile, options = {
     calendlyLink: deferCalendlyLink ? undefined : calendlyLink,
     name,
     rewriteInVoice: Boolean(options.assistantSetting?.applied),
+    holdForQuestions,
   });
   const postBookedBlock = buildMortgageBrokerPostBookingBlock({
     name,
@@ -44,6 +58,14 @@ export const buildMortgageBrokerSystemPrompt = (professionalProfile, options = {
     postBookedBlock,
     assistantSetting: options.assistantSetting,
     previewConversation: options.previewConversation === true,
-  }).trim(), options.assistantSetting, { preview: options.previewConversation === true });
+    intakeFormContact: options.intakeFormContact,
+    blockSchedule,
+    chatAnsweredQuestions: options.chatAnsweredQuestions,
+  }).trim(), options.assistantSetting, {
+    preview: options.previewConversation === true,
+    intakeFormContact: options.intakeFormContact,
+    openingTurn: options.openingTurn,
+    chatAnsweredQuestions: options.chatAnsweredQuestions,
+  });
   return `${prompt}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
 };

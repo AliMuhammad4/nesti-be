@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
   buildSharedDocumentsPrompt,
   applyDocumentAsk,
+  documentReviewReply,
   assertChatDocumentLimits,
   countDocumentPages,
   documentReadReply,
+  textFromLegacyDoc,
   documentRequestIds,
   leadDocumentLinkFilter,
   nextDocumentRequest,
@@ -84,6 +86,14 @@ test('an agreement is limited to 10 pages and 10 MB', async () => {
   const heavy = Buffer.alloc(10 * 1024 * 1024 + 1, 0x20);
   heavy.write('%PDF-1.4\n', 0);
   await assert.rejects(assertChatDocumentLimits(heavy, 'pdf'), /10 MB/);
+  const dense = storedZip('word/document.xml', `<w:document><w:t>${'Clause of the purchase agreement. '.repeat(2000)}</w:t></w:document>`);
+  assert.equal(await countDocumentPages(dense, 'word'), 1);
+  const sentence = 'Purchase agreement for the buyer at 12 Main Street';
+  const encoded = Buffer.alloc(sentence.length * 2);
+  for (let index = 0; index < sentence.length; index += 1) encoded.writeUInt16LE(sentence.charCodeAt(index), index * 2);
+  const legacy = Buffer.concat([Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0, 0, 0, 0]), encoded]);
+  assert.equal(await countDocumentPages(legacy, 'word'), 1);
+  assert.match(textFromLegacyDoc(legacy), /Purchase agreement for the buyer at 12 Main Street/);
 });
 
 test('a blank file is not described', () => {
@@ -120,8 +130,8 @@ test('a photo description is given to the reply', () => {
     },
   ], { focusIds: ['pic'], question: 'tell me about this image' });
   assert.match(prompt, /black coat/);
-  assert.match(prompt, /Describe this photo/);
-  assert.match(prompt, /Do not say you cannot see the image/);
+  assert.match(prompt, /Do not describe the picture/);
+  assert.doesNotMatch(prompt, /Describe this photo/);
   assert.doesNotMatch(prompt, /looks blank/);
 });
 
@@ -178,6 +188,18 @@ test('document requests are sanitized and reach the broker prompt', () => {
     setting: { ...setting, languages: ['french'] },
   });
   assert.match(french.reply, /talons de paie/);
+  const arabic = applyDocumentAsk('يمكنني النظر في الملف.', nextDocumentRequest(setting, []), {
+    userMessage: 'أريد قرضًا عقاريًا',
+    setting: { ...setting, languages: ['arabic'] },
+  });
+  assert.match(arabic.reply, /كشوف الرواتب/);
+  const hindi = applyDocumentAsk('मैं फाइल देख सकता हूं.', nextDocumentRequest(setting, []), {
+    userMessage: 'मुझे होम लोन चाहिए',
+    setting: { ...setting, languages: ['hindi'] },
+  });
+  assert.match(hindi.reply, /वेतन पर्चियाँ/);
+  assert.equal(nextDocumentRequest(setting, [{ extracted_text: 'Les talons de paie récents de mars.' }]).id, 'photo_id');
+  assert.equal(nextDocumentRequest(setting, [{ extracted_text: 'هذه كشوف الرواتب الأخيرة للموظف' }]).id, 'photo_id');
   const repeat = applyDocumentAsk('What is the timeline?', asked.request, { previousReply: asked.reply, userMessage: 'next month', setting });
   assert.equal(repeat.reply, 'What is the timeline?');
   assert.equal(repeat.request.id, 'pay_stubs');
@@ -205,6 +227,55 @@ test('document requests are sanitized and reach the broker prompt', () => {
   });
   assert.match(ready.reply, /photos of the home/i);
   assert.equal(ready.request.id, 'home_photos');
+  const duringQuestions = applyDocumentAsk('What is the approximate property value?', nextDocumentRequest(setting, []), {
+    userMessage: 'yeah location will be in lahore',
+    previousReply: 'Where is the property located?',
+    setting,
+    qualificationOpen: true,
+  });
+  assert.equal(duringQuestions.request, null);
+  assert.doesNotMatch(duringQuestions.reply, /pay stubs/i);
+  const settingForReview = sanitizeAssistant({
+    applied: true,
+    document_requests: ['pay_stubs', 'photo_id'],
+  }, 'mortgage_broker');
+  const wrongPhoto = documentReviewReply([{
+    status: 'ready',
+    text_ready: true,
+    kind: 'image',
+    original_filename: 'WP6A4670.JPG',
+    summary: 'The photo captures four individuals engaged in a lively conversation.',
+    extracted_text: 'Four people talking in a bright room.',
+    document_type: 'photo',
+  }], settingForReview, { priorDocuments: [] });
+  assert.match(wrongPhoto, /This is a different file/i);
+  assert.match(wrongPhoto, /photo ID/i);
+  assert.doesNotMatch(wrongPhoto, /send the recent pay stubs/i);
+  assert.doesNotMatch(wrongPhoto, /four individuals|lively conversation/i);
+  const askedAgain = documentReviewReply([{
+    status: 'ready',
+    text_ready: true,
+    kind: 'image',
+    original_filename: 'another.jpg',
+    summary: 'A group of people standing outdoors.',
+    extracted_text: 'People standing outdoors.',
+    document_type: 'photo',
+  }], settingForReview, {
+    priorDocuments: [],
+    previousReply: 'This is a different file. When you are ready, you can send the photo ID.',
+  });
+  assert.match(askedAgain, /continue with the other details/i);
+  assert.doesNotMatch(askedAgain, /photo ID|pay stubs/i);
+  const payStub = documentReviewReply([{
+    status: 'ready',
+    text_ready: true,
+    kind: 'pdf',
+    original_filename: 'paystubs.pdf',
+    summary: 'Recent pay stubs for March.',
+    extracted_text: 'Pay stub for March.',
+  }], settingForReview, { priorDocuments: [] });
+  assert.match(payStub, /This is the recent pay stubs/i);
+  assert.match(payStub, /photo ID/i);
   const paused = applyDocumentAsk('That works. Please upload the recent pay stubs here.', nextDocumentRequest(setting, []), {
     userMessage: 'i will upload documents later',
     setting,

@@ -1,4 +1,5 @@
 import { GREETING_START, isClosingRefusal, isGreetingOnly, isSocialCheck } from './visitorMessage.js';
+import { withWarmGreeting } from './replyStyle.js';
 
 function stripEmojis(reply) {
   return String(reply || '')
@@ -11,7 +12,7 @@ function stripEmojis(reply) {
 
 
 const ALLOWED_EMOJI = ['👋', '🙂', '💛', '🙏', '📅', '🏡', '🤝', '📄', '✅', '✨'];
-const EMOJI_ALIASES = { '🏠': '🏡', '😊': '🙂', '😁': '🙂', '✋': '👋', '👍': '✅', '🤗': '🤝' };
+const EMOJI_ALIASES = { '🏠': '🏡', '😊': '🙂', '😁': '🙂', '😃': '🙂', '😄': '🙂', '✋': '👋', '👍': '✅', '🤗': '🤝' };
 
 function firstAllowedEmoji(reply) {
   const matches = String(reply || '').match(/\p{Extended_Pictographic}/gu) || [];
@@ -45,8 +46,14 @@ function placeEmoji(text, emoji) {
 
 export function withOccasionalEmoji(reply, setting, { previousReply = '', userMessage = '', documentReceived = false } = {}) {
   const text = stripEmojis(reply);
+  const visitor = String(userMessage || '');
   if (/calendly\.com/i.test(reply)) return text;
   if (!setting?.use_emojis) return text;
+  if (isGreetingOnly(visitor)) {
+    const wave = '👋';
+    if (String(previousReply || '').includes(wave)) return text;
+    return placeEmoji(text, wave);
+  }
   const fromModel = firstAllowedEmoji(reply);
   const chosen = fromModel || fallbackEmoji(text, userMessage, documentReceived);
   if (!chosen) return text;
@@ -60,8 +67,9 @@ export function withOccasionalEmoji(reply, setting, { previousReply = '', userMe
   return placeEmoji(text, chosen);
 }
 
-export function finishAgentReply(reply, { userMessage = '', previousReply = '', setting = null, documentReceived = false } = {}) {
-  const text = String(reply || '').trim();
-  if (!setting) return text;
+export function finishAgentReply(reply, { userMessage = '', previousReply = '', setting = null, documentReceived = false, conversationText = '' } = {}) {
+  const original = String(reply || '').trim();
+  if (!setting) return original;
+  const text = withWarmGreeting(original, setting, userMessage, conversationText);
   return withOccasionalEmoji(text, setting, { previousReply, role: 'agent', userMessage, documentReceived });
 }

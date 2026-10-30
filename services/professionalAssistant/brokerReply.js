@@ -223,9 +223,10 @@ function brokerHelloInVoice(reply, setting, userMessage, conversationText = '') 
   const body = brokerDriftReply(setting, userMessage, conversationText);
   const language = replyLanguage(setting, userMessage, conversationText);
   const greeting = String(reply || '').match(GREETING_START);
+  const word = greeting ? greeting[0].replace(/^[\s¡!¿?"'“”‘’]+|[\s,!?.।؟]+$/g, '') : '';
   const style = setting?.communication_style;
-  if (!greeting || language !== 'english' || style === 'educational' || style === 'consultative') return body;
-  const hello = greeting[0].charAt(0).toUpperCase() + greeting[0].slice(1).toLowerCase();
+  if (!word || language !== 'english' || style === 'educational' || style === 'consultative') return body;
+  const hello = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
   const question = body.split(/(?<=[.!?？])\s+/).filter((part) => /[?？]/.test(part)).pop() || body;
   const primary = setting?.personalities?.[0] || '';
   const excited = (primary === 'friendly' || setting?.formality === 'casual') && allowsLawyerExclamation(setting, primary);
@@ -247,8 +248,45 @@ function brokerAskedTopics(text) {
   return BROKER_REPEAT_TOPICS.filter(([, pattern]) => pattern.test(source)).map(([id]) => id);
 }
 
-function dropRepeatedBrokerQuestion(reply, previousReply, setting, userMessage, conversationText = '') {
-  const previousTopics = new Set(brokerAskedTopics(previousReply));
+const BROKER_NUMBER_ANSWER = /(?:[$£€₹]\s*\d|\b\d[\d,.]*)/i;
+const BROKER_TOPIC_ANSWERED = {
+  amount: BROKER_NUMBER_ANSWER,
+  value: BROKER_NUMBER_ANSWER,
+  location: /\b(?:in|at|near|around)\s+(?!the\b|a\b|an\b|my\b|our\b|this\b|that\b)\p{L}[\p{L}'-]{2,}/iu,
+  timeline: /\b(?:today|tomorrow|tonight|week|month|year|soon|asap|january|february|march|april|may|june|july|august|september|october|november|december)\b/i,
+  preapproval: /\b(?:not yet|already|obtained|approved|pre-?approved|don'?t have|do not have|have one|have a letter|no letter|working on it)\b/i,
+  mortgage: /\b(?:new mortgage|refinanc\w*|renewal|renewing|first mortgage)\b/i,
+};
+
+function brokerTopicAnswered(topic, message) {
+  if (BROKER_TOPIC_ANSWERED[topic]?.test(message || '')) return true;
+  return (topic === 'preapproval' || topic === 'mortgage')
+    && /^(yes|yeah|yep|no|nope|not yet|already)\b[.!]?\s*$/i.test(String(message || '').trim());
+}
+
+function closedBrokerTopics(history, userMessage) {
+  const closed = new Set();
+  let pending = [];
+  for (const message of Array.isArray(history) ? history : []) {
+    const content = message?.content || '';
+    if (message?.role === 'assistant') pending = brokerAskedTopics(content);
+    else if (message?.role === 'user') {
+      for (const topic of pending) {
+        if (brokerTopicAnswered(topic, content)) closed.add(topic);
+      }
+    }
+  }
+  for (const topic of pending) {
+    if (brokerTopicAnswered(topic, userMessage)) closed.add(topic);
+  }
+  return closed;
+}
+
+function dropRepeatedBrokerQuestion(reply, previousReply, setting, userMessage, conversationText = '', history = []) {
+  const previousTopics = new Set([
+    ...brokerAskedTopics(previousReply),
+    ...closedBrokerTopics(history, userMessage),
+  ]);
   if (!previousTopics.size) return reply;
   const kept = String(reply || '')
     .split(/(?<=[.!?？])\s+/)
@@ -266,13 +304,15 @@ function dropRepeatedBrokerQuestion(reply, previousReply, setting, userMessage, 
     .join(' ')
     .trim();
   if (kept) return kept;
-  return BROKER_I18N[replyLanguage(setting, userMessage, conversationText)]?.continue
+  const language = replyLanguage(setting, userMessage, conversationText);
+  if (language !== 'english' && !BROKER_I18N[language]) return String(reply || '').trim();
+  return BROKER_I18N[language]?.continue
     || BROKER_LEAD[setting?.personalities?.[0]]
     || 'I can continue from here.';
 }
 
-function shapeBrokerVoice(reply, setting) {
-  if (!hasReplyCustomization(setting) || replyLanguage(setting) !== 'english') return reply;
+function shapeBrokerVoice(reply, setting, language = 'english') {
+  if (!hasReplyCustomization(setting) || language !== 'english') return reply;
   const primary = setting?.personalities?.[0] || '';
   const lead = BROKER_LEAD[primary] || customLeadIn(customToneById(setting, primary));
   if (!lead) return reply;
@@ -285,24 +325,27 @@ function shapeBrokerVoice(reply, setting) {
   return joinLawyerSentences(lead, rest, excited);
 }
 
-export function finishBrokerReply(reply, { userMessage = '', previousReply = '', setting = null, documentReceived = false, conversationText = '' } = {}) {
+export function finishBrokerReply(reply, { userMessage = '', previousReply = '', setting = null, documentReceived = false, conversationText = '', history = [] } = {}) {
   const original = String(reply || '').trim();
   const language = replyLanguage(setting, userMessage, conversationText);
+  const stock = language === 'english' || Boolean(BROKER_I18N[language]);
   const refusedMortgage = isClosingRefusal(userMessage)
     && MORTGAGE_LOOP.test(previousReply)
     && MORTGAGE_LOOP.test(original);
-  let text = isGreetingOnly(userMessage) && BROKER_I18N[language]
-    ? brokerDriftReply(setting, userMessage, conversationText)
-    : refusedMortgage
-      ? brokerMatterFollowUp(setting, userMessage, conversationText)
-      : BROKER_DRIFT.test(original)
-        ? brokerDriftReply(setting, userMessage, conversationText)
-        : (hasReplyCustomization(setting) && isStockMortgageAsk(original)
-          ? brokerHelloInVoice(original, setting, userMessage, conversationText)
-          : original);
-  text = dropRepeatedBrokerQuestion(text, previousReply, setting, userMessage, conversationText);
-  text = shapeBrokerVoice(text, setting);
-  text = hasReplyCustomization(setting) ? polishLawyerRegister(text, setting) : text;
-  text = withWarmGreeting(text, setting, userMessage);
+  let text = !stock
+    ? original
+    : isGreetingOnly(userMessage) && BROKER_I18N[language]
+      ? brokerDriftReply(setting, userMessage, conversationText)
+      : refusedMortgage
+        ? brokerMatterFollowUp(setting, userMessage, conversationText)
+        : BROKER_DRIFT.test(original)
+          ? brokerDriftReply(setting, userMessage, conversationText)
+          : (hasReplyCustomization(setting) && isStockMortgageAsk(original)
+            ? brokerHelloInVoice(original, setting, userMessage, conversationText)
+            : original);
+  text = dropRepeatedBrokerQuestion(text, previousReply, setting, userMessage, conversationText, history);
+  text = shapeBrokerVoice(text, setting, language);
+  text = stock && hasReplyCustomization(setting) ? polishLawyerRegister(text, setting) : text;
+  text = withWarmGreeting(text, setting, userMessage, conversationText);
   return withOccasionalEmoji(text, setting, { previousReply, role: 'mortgage_broker', userMessage, documentReceived });
 }

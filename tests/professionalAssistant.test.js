@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { replyLanguage } from '../services/professionalAssistant/replyStyle.js';
+import { chatAnsweredQuestionIds, intakeHasHelloAnswer, openQualificationQuestionIds, qualificationStillOpen } from '../services/professionalAssistant/qualificationProgress.js';
+import { dropRepeatedVisitorName, replyLanguage } from '../services/professionalAssistant/replyStyle.js';
 import {
   appendAssistantOverlay,
   appliedSettingForRole,
@@ -22,14 +23,77 @@ import {
   voiceTurnReminder,
 } from '../services/professionalAssistant/professionalAssistantService.js';
 import { withTurnReminder } from '../services/chat/handleChat/chatOpenAiTurn.js';
-import { PERSONALITIES } from '../services/professionalAssistant/catalog.js';
+import { PERSONALITIES, QUALIFICATION_TEMPLATES, legacyPersonalityId } from '../services/professionalAssistant/catalog.js';
+import {
+  applyProfileIdentity,
+  clientTypeForForm,
+  questionLabel,
+  questionOptions,
+  sanitizeQualificationTemplates,
+  settingForClientType,
+} from '../services/professionalAssistant/assistantSettings.js';
+import { quickRepliesForReply } from '../services/professionalAssistant/qualificationProgress.js';
 import { buildAgentSystemPrompt } from '../services/chat/prompts/agentPrompt.js';
 import { buildLawyerSystemPrompt } from '../services/chat/prompts/lawyerPrompt.js';
 import { buildMortgageBrokerSystemPrompt } from '../services/chat/prompts/mortgageBrokerPrompt.js';
 import { buildEmptyTurnFallbackReply, buildOutOfScopeReply } from '../services/chat/utils/chatScopeGuard.js';
-import { professionalExpertiseLabels } from '../services/chat/utils/profileVisitorFacts.js';
+import { identityReply, professionalExpertiseLabels } from '../services/chat/utils/profileVisitorFacts.js';
 
 const profile = { full_name: 'Sarah Johnson', company_name: 'RE/MAX', location: 'Toronto', languages_spoken: ['english', 'french'], country: 'Canada' };
+
+test('a later reply drops the visitor name and the first greeting may keep it', () => {
+  assert.equal(
+    dropRepeatedVisitorName('Thank you for that, Facilis. Lahore is a wonderful choice. What is the approximate property value?', 'Facilis'),
+    'Thank you. Lahore is a wonderful choice. What is the approximate property value?',
+  );
+  assert.equal(
+    dropRepeatedVisitorName('Hi Facilis, glad you are here. What area are you considering?', 'Facilis', { keepName: true }),
+    'Hi Facilis, glad you are here. What area are you considering?',
+  );
+  const later = buildMortgageBrokerSystemPrompt(profile, {
+    assistantSetting: sanitizeAssistant({ applied: true, address_by_first_name: true }, 'mortgage_broker'),
+    openingTurn: false,
+    intakeFormContact: { name: 'Facilis', address: 'Lahore' },
+  });
+  assert.match(later, /Do not say the visitor's name/);
+  assert.match(later, /without their name/);
+  assert.equal(
+    dropRepeatedVisitorName('Lahore is a wonderful choice for Facilis today.', 'Facilis'),
+    'Lahore is a wonderful choice for today.',
+  );
+  assert.equal(
+    dropRepeatedVisitorName('My name is Facilis. I help with mortgages.', 'Facilis'),
+    'My name is Facilis. I help with mortgages.',
+  );
+});
+
+test('the first live reply greets, a later hello skips a form answer, and a chat answer closes that question', () => {
+  const broker = sanitizeAssistant({
+    applied: true,
+    qualification_questions: ['location', 'amount'],
+  }, 'mortgage_broker');
+  const opening = voiceTurnReminder(broker, 'Hi! My name is Facilis. Target area: Lahore.', { openingTurn: true });
+  assert.match(opening, /Start with a short greeting/);
+  assert.doesNotMatch(opening, /Do not open with a hello/);
+  const hello = voiceTurnReminder(broker, 'hi', { intakeFormContact: { purchase_purpose: 'investment' } });
+  assert.match(hello, /do not ask it again/);
+  assert.doesNotMatch(hello, /a new mortgage or a refinance/);
+  assert.equal(intakeHasHelloAnswer(broker, { purchase_purpose: 'investment' }), true);
+  const history = [{ role: 'assistant', content: 'Where is the property located?' }];
+  const answered = chatAnsweredQuestionIds(broker, history, 'yeah location will be in lahore');
+  assert.deepEqual(answered, ['location']);
+  assert.equal(qualificationStillOpen(broker, { address: 'Lahore' }, answered), true);
+  assert.equal(qualificationStillOpen(broker, { address: 'Lahore', financing_amount: '400000' }, answered), false);
+  const prompt = buildMortgageBrokerSystemPrompt(profile, {
+    assistantSetting: broker,
+    intakeFormContact: { address: 'Lahore', purchase_purpose: 'investment' },
+    chatAnsweredQuestions: ['location'],
+    isAutomatedBookingEnabled: true,
+    calendlyLink: 'https://calendly.com/broker/intro',
+  });
+  assert.match(prompt, /What financing amount are you considering/);
+  assert.doesNotMatch(prompt, /Where is the property located/);
+});
 
 test('auto detect follows the visitor and keeps that language on a short reply', () => {
   const setting = { languages: ['english', 'french', 'spanish', 'arabic'], auto_detect_language: true };
@@ -40,8 +104,23 @@ test('auto detect follows the visitor and keeps that language on a short reply',
   assert.equal(replyLanguage(setting, 'salam'), 'arabic');
   assert.equal(replyLanguage(setting, 'كيف حالك'), 'arabic');
   assert.equal(replyLanguage(setting, 'I want to apply for a new mortgage', 'salam'), 'english');
-  assert.equal(replyLanguage({ languages: ['english'], auto_detect_language: true }, 'salam'), 'english');
+  assert.equal(replyLanguage({ languages: ['english'], auto_detect_language: true }, 'salam'), 'arabic');
+  assert.equal(replyLanguage({ languages: ['english'], auto_detect_language: false }, 'salam'), 'english');
   assert.equal(replyLanguage({ languages: ['english'], auto_detect_language: true }, 'ola'), 'spanish');
+  assert.equal(
+    finishAgentReply('¡Hola! ¿Estás buscando comprar o vender una propiedad? 🏠', {
+      userMessage: 'hola',
+      setting: { languages: ['english'], auto_detect_language: true, use_emojis: true },
+    }),
+    '¡Hola! ¿Estás buscando comprar o vender una propiedad? 👋',
+  );
+  assert.equal(
+    finishAgentReply('ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਤੁਸੀਂ ਕੀ ਖਰੀਦਣ ਜਾਂ ਵੇਚਣ ਦੀ ਸੋਚ ਰਹੇ ਹੋ? 🏠', {
+      userMessage: 'sat sri akal',
+      setting: { languages: ['english'], auto_detect_language: true, use_emojis: true },
+    }),
+    'ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਤੁਸੀਂ ਕੀ ਖਰੀਦਣ ਜਾਂ ਵੇਚਣ ਦੀ ਸੋਚ ਰਹੇ ਹੋ? 👋',
+  );
   assert.equal(replyLanguage({ ...setting, auto_detect_language: false }, 'bonjour'), 'english');
 });
 
@@ -67,7 +146,8 @@ test('professional chat uses profile experience and shows saved expertise', () =
   assert.match(withYears, /answer in the first person: "I have 12 years\."/);
   assert.match(withYears, /You are speaking as Sarah Johnson, in the first person/);
   assert.doesNotMatch(withYears, /speaking on Sarah Johnson's behalf/);
-  assert.match(withYears, /say "I help with\.\.\." and list only the relevant services/);
+  assert.match(withYears, /If the visitor asks your name, answer "My name is Sarah Johnson\."/);
+  assert.match(withYears, /List every saved service and expertise item/);
   assert.match(withYears, /Do not say "Sarah Johnson has"/);
   assert.doesNotMatch(withYears, /Approved claims only: Years of professional experience/);
 
@@ -83,6 +163,23 @@ test('professional chat uses profile experience and shows saved expertise', () =
     custom_expertise: [],
   });
   assert.deepEqual(profileFallback, ['waterfront homes']);
+  assert.equal(
+    identityReply({
+      userMessage: 'ap ka name kiya ha',
+      profile: experienced,
+      setting,
+    }),
+    'My name is Sarah Johnson. I help with Luxury real estate, Relocation services, Personalized one-on-one service, Condo investors.',
+  );
+  assert.equal(
+    identityReply({
+      userMessage: 'what is your name',
+      profile: experienced,
+      setting,
+      yearsExperience: 12,
+    }),
+    'My name is Sarah Johnson. I help with Luxury real estate, Relocation services, Personalized one-on-one service, Condo investors.',
+  );
 
   const customizedExpertise = professionalExpertiseLabels(experienced, {
     applied: true,
@@ -154,7 +251,7 @@ test('applied settings stay on that role and leave the fallback prompt underneat
   });
   assert.doesNotMatch(prompt, /ANY city or area/);
   assert.doesNotMatch(prompt, /calm, kind, and emotionally aware/);
-  assert.match(prompt, /Professional and polished — Confident, articulate, and business-focused/);
+  assert.match(prompt, /Trusted Expert — Professional, knowledgeable, reassuring/);
   assert.match(prompt, /Quick and direct\. Short, concise responses/);
   assert.match(prompt, /Reply formality: professional\. Use clear professional language/);
   assert.match(prompt, /Do not flatten every reply into a generic warm, concise, professional voice/);
@@ -162,7 +259,9 @@ test('applied settings stay on that role and leave the fallback prompt underneat
   assert.doesNotMatch(prompt, /What is your purchase budget or expected selling price/);
   assert.doesNotMatch(prompt, /Have you been pre-approved for a mortgage/);
   assert.match(prompt, /The intake form already has intent, location, budget, timeline, property type, and mortgage status/);
-  assert.match(prompt, /Are you currently working with a realtor/);
+  assert.match(prompt, /What is your preferred timeline/);
+  assert.match(prompt, /What is your approximate budget/);
+  assert.doesNotMatch(prompt, /Are you currently working with a realtor/);
   assert.match(prompt, /one short sentence that points at the cards/);
   assert.doesNotMatch(prompt, /selected qualification/);
   assert.match(prompt, /An FAQ cannot replace that reply/);
@@ -176,7 +275,7 @@ test('applied settings stay on that role and leave the fallback prompt underneat
   assert.match(prompt, /rewritten in the selected voice, formality, and short reply length/);
   assert.doesNotMatch(prompt, /Blend this voice/);
   assert.doesNotMatch(prompt, /find a property/i);
-  assert.doesNotMatch(prompt, /Scheduling is off/);
+  assert.match(prompt, /Scheduling is off/);
   assert.doesNotMatch(prompt, /Do not ask for or prompt the visitor to provide contact details/);
   assert.match(prompt, /Professional-approved assistant settings/);
   assert.match(prompt, /Sarah Johnson/);
@@ -186,7 +285,7 @@ test('applied settings stay on that role and leave the fallback prompt underneat
   assert.match(prompt, /Buying a home/);
   assert.match(prompt, /Do you cover Toronto/);
   assert.doesNotMatch(prompt, /Hidden/);
-  assert.doesNotMatch(prompt, /Do not offer a booking link/);
+  assert.match(prompt, /Do not offer a booking link/);
   assert.match(prompt, /property matches appear only as chat cards/);
   assert.match(prompt, /For a seller, do not offer property match cards/);
   assert.doesNotMatch(prompt, /LandingChatSetting/);
@@ -201,13 +300,13 @@ test('saved lawyer and broker settings replace persona, questions, and booking',
     next_actions: ['collect_contact', 'save_lead'],
   }, 'lawyer');
   const lawyer = buildLawyerSystemPrompt({ full_name: 'Ada Counsel', location: 'Ottawa' }, { assistantSetting: lawyerSetting });
-  assert.match(lawyer, /Professional and polished/);
+  assert.match(lawyer, /Trusted Expert/);
   assert.match(lawyer, /Educational \(fact then question\)/);
   assert.match(lawyer, /The lawyer intake form already collected/);
   assert.doesNotMatch(lawyer, /What is your expected closing date/);
   assert.doesNotMatch(lawyer, /Calm, professional, reassuring/);
   assert.doesNotMatch(lawyer, /Are you working with a realtor/);
-  assert.doesNotMatch(lawyer, /Scheduling is off/);
+  assert.match(lawyer, /Scheduling is off/);
   assert.doesNotMatch(lawyer, /Hot —/);
 
   const brokerSetting = sanitizeAssistant({
@@ -217,14 +316,55 @@ test('saved lawyer and broker settings replace persona, questions, and booking',
     next_actions: ['collect_contact'],
   }, 'mortgage_broker');
   const broker = buildMortgageBrokerSystemPrompt({ full_name: 'Sam Broker', location: 'Calgary' }, { assistantSetting: brokerSetting });
-  assert.match(broker, /Caring and supportive/);
+  assert.match(broker, /Friendly Advisor/);
   assert.match(broker, /The mortgage intake form already collected/);
   assert.match(broker, /What is your preferred financing timeline/);
   assert.match(broker, /only when that detail is still missing/);
+  const withIntake = buildMortgageBrokerSystemPrompt({ full_name: 'Sam Broker', location: 'Calgary' }, {
+    assistantSetting: sanitizeAssistant({
+      applied: true,
+      personalities: ['caring'],
+      qualification_questions: ['location', 'timeline', 'amount'],
+      next_actions: ['collect_contact', 'schedule'],
+    }, 'mortgage_broker'),
+    intakeFormContact: {
+      address: 'Nesciunt minus sit',
+      mortgage_timeline: 'immediately',
+      pre_approval_status: 'need_now',
+      budget: 'under_400k',
+      purchase_purpose: 'investment',
+    },
+  });
+  assert.match(withIntake, /property location/);
+  assert.match(withIntake, /What financing amount are you considering/);
+  assert.match(withIntake, /Do not share a meeting link in that reply/);
+  assert.doesNotMatch(withIntake, /Where is the property located/);
+  assert.doesNotMatch(withIntake, /What is your preferred financing timeline/);
   assert.doesNotMatch(broker, /calm, kind, and emotionally aware/);
   assert.doesNotMatch(broker, /What is your approximate credit score/);
-  assert.doesNotMatch(broker, /Scheduling is off/);
+  assert.match(broker, /Scheduling is off/);
   assert.doesNotMatch(broker, /Do not ask for or prompt the visitor to provide contact details/);
+
+  const lawyerBeforeMeeting = buildLawyerSystemPrompt({ full_name: 'Ada Counsel', location: 'Ottawa' }, {
+    assistantSetting: sanitizeAssistant({
+      applied: true,
+      qualification_questions: ['location', 'transaction_value'],
+      next_actions: ['collect_contact', 'schedule'],
+    }, 'lawyer'),
+    isAutomatedBookingEnabled: true,
+    calendlyLink: 'https://calendly.com/lawyer/intro',
+    intakeFormContact: {
+      address: '12 Main Street',
+      legal_services_needed: 'purchase_closing',
+      transaction_stage: 'offer_accepted',
+      closing_timeline: 'within_30_days',
+    },
+  });
+  assert.match(lawyerBeforeMeeting, /title or document questions/);
+  assert.match(lawyerBeforeMeeting, /Do not include a booking URL yet/);
+  assert.match(lawyerBeforeMeeting, /rest of the details/);
+  assert.doesNotMatch(lawyerBeforeMeeting, /Which jurisdiction is the property in/);
+  assert.doesNotMatch(lawyerBeforeMeeting, /add the booking URL exactly once/);
 });
 
 test('agent chat does not repeat qualification answers already submitted on the intake form', () => {
@@ -287,6 +427,50 @@ test('agent chat does not repeat qualification answers already submitted on the 
   assert.match(defaultPrompt, /INTAKE FORM MEMORY \(authoritative\)/);
   assert.doesNotMatch(defaultPrompt, /What is your purchase budget or expected selling price/);
   assert.doesNotMatch(defaultPrompt, /Are you currently working with a realtor/);
+
+  const beforeMeeting = buildAgentSystemPrompt(profile, {
+    assistantSetting: sanitizeAssistant({
+      applied: true,
+      qualification_questions: ['location', 'timeline', 'budget'],
+      next_actions: ['collect_contact', 'schedule'],
+    }, 'agent'),
+    isAutomatedBookingEnabled: true,
+    calendlyLink: 'https://calendly.com/agent/intro',
+    intakeFormContact: {
+      intent: 'buy',
+      address: 'North York',
+      timeline: '1-3 months',
+    },
+  });
+  assert.match(beforeMeeting, /What is your approximate budget/);
+  assert.match(beforeMeeting, /Do not share a meeting link in that reply/);
+  assert.match(beforeMeeting, /rest of the details/);
+  assert.match(beforeMeeting, /You are Sarah Johnson/);
+  assert.doesNotMatch(beforeMeeting, /What location are you interested in/);
+  assert.doesNotMatch(beforeMeeting, /What is your preferred timeline/);
+  assert.doesNotMatch(beforeMeeting, /add the booking URL exactly once/);
+  assert.doesNotMatch(beforeMeeting, /working on behalf of/);
+
+  const brokerBeforeMeeting = buildMortgageBrokerSystemPrompt(profile, {
+    assistantSetting: sanitizeAssistant({
+      applied: true,
+      qualification_questions: ['amount'],
+      next_actions: ['collect_contact', 'schedule'],
+    }, 'mortgage_broker'),
+    isAutomatedBookingEnabled: true,
+    calendlyLink: 'https://calendly.com/broker/intro',
+    intakeFormContact: {
+      address: 'North York',
+      purchase_purpose: 'investment',
+      budget: 'under_400k',
+      mortgage_timeline: 'immediately',
+      pre_approval_status: 'need_now',
+    },
+  });
+  assert.match(brokerBeforeMeeting, /What financing amount are you considering/);
+  assert.match(brokerBeforeMeeting, /Do not include a booking URL yet/);
+  assert.doesNotMatch(brokerBeforeMeeting, /add the booking URL exactly once/);
+  assert.doesNotMatch(brokerBeforeMeeting, /Scheduling is off/);
 });
 
 test('each built-in chat tone changes the agent reply voice', () => {
@@ -302,7 +486,7 @@ test('each built-in chat tone changes the agent reply voice', () => {
     assert.match(prompt, new RegExp(description.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(prompt, /calm, kind, and emotionally aware/);
   }
-  assert.equal(PERSONALITIES.length, 6);
+  assert.equal(PERSONALITIES.length, 5);
 });
 
 test('an empty spoken name and a mismatched role do not change the chat', () => {
@@ -388,7 +572,7 @@ test('preview applies current unsaved settings without saving them', () => {
   });
 
   assert.equal(previewSetting.applied, true);
-  assert.match(prompt, /Friendly and approachable/);
+  assert.match(prompt, /Friendly Advisor/);
   assert.match(prompt, /Use an upbeat, welcoming greeting/);
   assert.match(prompt, /This preview has no intake form/);
   assert.match(prompt, /yes am looking for/);
@@ -420,7 +604,7 @@ test('preview chat prompt stays short and skips the scoring block', () => {
 
   assert.ok(preview.length < full.length / 2);
   assert.match(preview, /Speak in the first person/);
-  assert.match(preview, /Caring: patient and reassuring/);
+  assert.match(preview, /Friendly: easy, upbeat, texting rhythm/);
   assert.match(preview, /I have 12 years/);
   assert.doesNotMatch(preview, /###META###/);
   assert.doesNotMatch(preview, /LEAD QUALITY BEHAVIOUR/);
@@ -443,7 +627,7 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
   assert.match(pairedPrompt, /Luxury: refined, private, and unhurried/);
   assert.doesNotMatch(pairedPrompt, /quiet hello/);
   assert.doesNotMatch(pairedPrompt, /discreet/);
-  assert.match(pairedPrompt, /Caring: patient and reassuring/);
+  assert.match(pairedPrompt, /Friendly: easy, upbeat, texting rhythm/);
   assert.doesNotMatch(pairedPrompt, /whenever you're ready/i);
   assert.match(pairedPrompt, /The visitor is already here/);
   assert.doesNotMatch(pairedPrompt, /Sample shape/);
@@ -452,7 +636,7 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
   assert.match(reminder, /The greeting carries the first voice/);
   assert.match(reminder, /The question carries the second voice/);
   assert.match(reminder, /First voice — Luxury/);
-  assert.match(reminder, /Second voice — Caring/);
+  assert.match(reminder, /Second voice — Friendly/);
   assert.match(reminder, /about 18 words, so both voices are clear/);
   assert.match(reminder, /Sound like a person texting/);
   assert.match(reminder, /Reply formality: formal/);
@@ -488,7 +672,7 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
   assert.doesNotMatch(pairedPrompt, /No slang, no contractions/);
   assert.match(pairedPrompt, /The selected voice stays audible/);
   assert.match(pairedPrompt, /Formality only limits slang, contractions, and exclamation marks/);
-  assert.match(pairedPrompt, /The intake form already collects intent/);
+  assert.match(pairedPrompt, /The intake form may already have intent, location, budget, timeline, property type, and mortgage status/);
   assert.match(buildOutOfScopeReply('agent', 'Sarah Johnson', paired), /Are you looking to purchase or to sell a property/);
   assert.match(buildEmptyTurnFallbackReply('agent', paired), /Please share a detail on buying or selling/);
   assert.doesNotMatch(buildEmptyTurnFallbackReply('agent', paired), /I'm here to help!/);
@@ -562,7 +746,7 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
   assert.match(brokerPreviewPrompt, /a new mortgage or a refinance/);
   assert.match(brokerPreviewPrompt, /the financing amount, the financing timeline, or pre-approval/);
   assert.doesNotMatch(brokerPreviewPrompt, /buy or sell/);
-  assert.match(broker, /Persuasive: confident and forward/);
+  assert.match(broker, /Persuasive: confident, direct, and efficient/);
   assert.match(broker, /Length: two short sentences. One observation, then one question/);
   assert.doesNotMatch(broker, /The mortgage intake form already collected/);
   assert.match(brokerPreviewPrompt, /do not ask it again/);
@@ -696,6 +880,49 @@ test('paired tones stay distinct and preview skips the lawyer and broker intake 
       setting: { languages: ['english', 'mandarin'], personalities: ['polished'], communication_style: 'quick', formality: 'formal' },
     }),
     /您好/,
+  );
+  assert.equal(
+    finishBrokerReply('Are you looking to buy or sell a property?', {
+      userMessage: 'أريد شراء منزل',
+      setting: { languages: ['arabic'], personalities: ['caring'], communication_style: 'educational', formality: 'professional' },
+    }),
+    'Are you looking to buy or sell a property?',
+  );
+  assert.match(
+    finishBrokerReply('What is the approximate value of the property?', {
+      previousReply: 'How soon do you need the financing?',
+      history: [
+        { role: 'assistant', content: 'What is the approximate value of the property?' },
+        { role: 'user', content: 'we can talk about that later' },
+        { role: 'assistant', content: 'How soon do you need the financing?' },
+      ],
+      setting: { personalities: ['polished'], formality: 'formal' },
+    }),
+    /approximate value/,
+  );
+  assert.equal(
+    finishBrokerReply('What is the approximate value of the property?', {
+      previousReply: 'How soon do you need the financing?',
+      history: [
+        { role: 'assistant', content: 'What is the approximate value of the property?' },
+        { role: 'user', content: 'about 500000' },
+        { role: 'assistant', content: 'How soon do you need the financing?' },
+      ],
+      setting: { personalities: ['polished'], formality: 'formal' },
+    }),
+    'I can certainly help',
+  );
+  assert.equal(
+    finishBrokerReply('Hello.', {
+      previousReply: 'What financing amount are you considering?',
+      history: [
+        { role: 'assistant', content: 'Hello. 👋' },
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'What financing amount are you considering?' },
+      ],
+      setting: { personalities: ['friendly'], formality: 'casual', use_emojis: true },
+    }),
+    'Hello. 👋',
   );
   assert.equal(
     finishBrokerReply('How much are you hoping to borrow?', {
@@ -848,7 +1075,7 @@ test('applied broker and lawyer controls override built-in persona and qualifica
     const prompt = buildPrompt(profile, { assistantSetting: setting });
 
     assert.match(prompt, /CUSTOMIZATION PRIORITY — assistant style/);
-    assert.match(prompt, /Friendly and approachable/);
+    assert.match(prompt, /Friendly Advisor/);
     assert.match(prompt, /Friendly: easy, upbeat, texting rhythm/);
     assert.match(prompt, /Length: one short sentence, about 12 words/);
     assert.match(prompt, /Reply formality: casual/);
@@ -909,6 +1136,12 @@ test('professional identity settings sanitize, persist in prompts, and use profi
   assert.match(appendAssistantOverlay('Role prompt', setting), /rewritten in the selected voice and length: "Create an account to continue."/);
   assert.match(appendAssistantOverlay('Role prompt', setting), /in the selected voice and length: "May I use your details to follow up\?"/);
   assert.equal(prefillAssistant('agent', profile).display_name, 'Sarah Johnson');
+  const filled = applyProfileIdentity(sanitizeAssistant({ business_name: '', website: '' }, 'agent'), { company_name: 'RE/MAX', website: 'https://remax.example' });
+  assert.equal(filled.business_name, 'RE/MAX');
+  assert.equal(filled.website, 'https://remax.example');
+  const kept = applyProfileIdentity(sanitizeAssistant({ business_name: 'Harbourview', website: 'https://kept.example' }, 'agent'), { company_name: 'RE/MAX', website: 'https://remax.example' });
+  assert.equal(kept.business_name, 'Harbourview');
+  assert.equal(kept.website, 'https://kept.example');
 });
 
 test('saved service area keeps only matching property cards', () => {
@@ -986,7 +1219,7 @@ test('lawyer studio settings reach the lawyer chat', () => {
   assert.match(publicPrompt, /do not ask it again/);
   assert.doesNotMatch(publicPrompt, /On every later reply, ask one question about the title or the parties/);
   assert.doesNotMatch(publicPrompt, /Which jurisdiction is the property in\?/);
-  assert.match(publicPrompt, /acknowledge it in one short sentence|Acknowledge the intake answers in one short sentence/);
+  assert.match(publicPrompt, /On the first reply, greet in one short sentence/);
   assert.doesNotMatch(publicPrompt, /Recap once and ask confirmation/);
   assert.match(publicPrompt, /Speak the matter the visitor named/);
   assert.match(publicPrompt, /never spoken/);
@@ -1300,4 +1533,145 @@ test('manual custom Q&A works like admin while generated suggestions require app
   const suggestions = draftFaqs({ role: 'agent', services: ['buying'], faqs: [] }, profile);
   assert.ok(suggestions.every((faq) => faq.id && faq.source === 'generated' && !faq.approved));
   assert.equal(new Set(suggestions.map((faq) => faq.id)).size, suggestions.length);
+});
+
+test('every role ships buyer, seller, and investor templates with a call to action', () => {
+  for (const role of ['agent', 'mortgage_broker', 'lawyer']) {
+    for (const type of ['buyer', 'seller', 'investor']) {
+      const template = QUALIFICATION_TEMPLATES[role][type];
+      assert.ok(template.cta_label.length > 3, `${role}/${type} needs a CTA`);
+      assert.ok(template.questions.length >= 4, `${role}/${type} needs questions`);
+      assert.ok(template.questions.every((question) => question.id && question.label.endsWith('?')));
+    }
+  }
+  assert.equal(legacyPersonalityId('caring'), 'friendly');
+  assert.equal(legacyPersonalityId('investor_specialist'), 'consultative');
+  assert.equal(legacyPersonalityId('friendly'), 'friendly');
+});
+
+test('qualification templates keep known ids, accept custom questions, and cap the list', () => {
+  const sanitized = sanitizeQualificationTemplates({
+    buyer: {
+      cta_label: ' Book a buyer call ',
+      questions: [
+        { id: 'budget', label: 'What price range feels comfortable?', enabled: true },
+        { id: 'location', enabled: false },
+        { label: 'Are you working with another agent?', options: ['Yes', 'No', 'Yes', 'Not sure'] },
+        { id: 'nonsense', label: '' },
+        ...Array.from({ length: 10 }, (_, index) => ({ label: `Extra question ${index + 1}?` })),
+      ],
+    },
+    seller: { enabled: false },
+    investor: 'not-an-object',
+  }, 'agent');
+
+  const buyer = sanitized.buyer;
+  assert.equal(buyer.cta_label, 'Book a buyer call');
+  assert.equal(buyer.questions.length, 8);
+  assert.equal(buyer.questions[0].id, 'budget');
+  assert.equal(buyer.questions[0].label, 'What price range feels comfortable?');
+  assert.deepEqual(buyer.questions[0].options, QUALIFICATION_TEMPLATES.agent.buyer.questions.find((q) => q.id === 'budget').options);
+  assert.equal(buyer.questions[1].id, 'location');
+  assert.equal(buyer.questions[1].enabled, false);
+  assert.equal(buyer.questions[1].label, QUALIFICATION_TEMPLATES.agent.buyer.questions.find((q) => q.id === 'location').label);
+  const custom = buyer.questions[2];
+  assert.match(custom.id, /^custom_are_you_working/);
+  assert.equal(custom.custom, true);
+  assert.deepEqual(custom.options, ['Yes', 'No', 'Not sure']);
+  assert.equal(sanitized.seller.enabled, false);
+  assert.deepEqual(sanitized.seller.questions.map((q) => q.id), QUALIFICATION_TEMPLATES.agent.seller.questions.map((q) => q.id));
+  assert.ok(sanitized.seller.questions.every((q) => q.enabled === true && q.custom === false));
+  assert.equal(sanitized.investor.enabled, true);
+  assert.equal(sanitized.investor.cta_label, QUALIFICATION_TEMPLATES.agent.investor.cta_label);
+  assert.deepEqual(sanitized.investor.questions.map((q) => q.label), QUALIFICATION_TEMPLATES.agent.investor.questions.map((q) => q.label));
+});
+
+test('client type comes from the form and selects the matching template, wording, and CTA', () => {
+  assert.equal(clientTypeForForm({ client_type: 'investor', intent: 'buy' }), 'investor');
+  assert.equal(clientTypeForForm({ intent: 'sell' }), 'seller');
+  assert.equal(clientTypeForForm({ intent: 'buy' }), 'buyer');
+  assert.equal(clientTypeForForm({ purchase_purpose: 'investment' }), 'investor');
+  assert.equal(clientTypeForForm({ purchase_purpose: 'refinance' }), 'seller');
+  assert.equal(clientTypeForForm({ legal_services_needed: 'sale_closing' }), 'seller');
+  assert.equal(clientTypeForForm({ transaction_type: 'home_purchase' }), 'buyer');
+  assert.equal(clientTypeForForm({}), '');
+
+  const setting = sanitizeAssistant({
+    applied: true,
+    client_types: ['buyer', 'investor'],
+    qualification_templates: {
+      investor: {
+        cta_label: 'Plan my next acquisition',
+        questions: [
+          { id: 'investment_goal', label: 'Is cash flow or appreciation the priority?', options: ['Cash flow', 'Appreciation', 'Both'] },
+          { id: 'timeline', enabled: false },
+          { id: 'budget' },
+        ],
+      },
+    },
+  }, 'agent');
+
+  const investor = settingForClientType(setting, 'investor');
+  assert.equal(investor.client_type, 'investor');
+  assert.equal(investor.cta_label, 'Plan my next acquisition');
+  assert.deepEqual(investor.qualification_questions, ['investment_goal', 'budget']);
+  assert.equal(questionLabel(investor, 'investment_goal'), 'Is cash flow or appreciation the priority?');
+  assert.deepEqual(questionOptions(investor, 'investment_goal'), ['Cash flow', 'Appreciation', 'Both']);
+
+  const seller = settingForClientType(setting, 'seller');
+  assert.equal(seller.client_type, undefined, 'seller is switched off in client_types so no template applies');
+  assert.deepEqual(seller.qualification_questions, setting.qualification_questions);
+
+  const prompt = buildAgentSystemPrompt(profile, { assistantSetting: investor, clientType: 'investor' });
+  assert.match(prompt, /Is cash flow or appreciation the priority\?/);
+  assert.match(prompt, /Plan my next acquisition/);
+  assert.doesNotMatch(prompt, /When are you hoping to complete the purchase\?/);
+
+  const broker = settingForClientType(sanitizeAssistant({ applied: true }, 'mortgage_broker'), 'investor');
+  assert.equal(broker.client_type, 'investor');
+  const brokerOpen = openQualificationQuestionIds(broker, {
+    purchase_purpose: 'investment',
+    budget: '700k_1m',
+    household_income: '100k_150k',
+    down_payment_readiness: '20_plus',
+    mortgage_timeline: '3_6_months',
+    address: 'Toronto',
+  });
+  assert.ok(brokerOpen.includes('investment_type'));
+  assert.ok(brokerOpen.includes('owns_investments'));
+  assert.equal(brokerOpen.includes('down_payment'), false);
+  assert.equal(brokerOpen.includes('household_income'), false);
+  assert.equal(brokerOpen.includes('property_value'), false);
+  assert.equal(brokerOpen.includes('timeline'), false);
+
+  const chips = quickRepliesForReply(investor, 'Great to meet you. Is cash flow or appreciation the priority?');
+  assert.deepEqual(chips, { question_id: 'investment_goal', options: ['Cash flow', 'Appreciation', 'Both'] });
+  assert.equal(quickRepliesForReply(investor, 'Great to meet you. Is cash flow or appreciation the priority?', ['investment_goal']), null);
+});
+
+test('tone level, response length, knowledge files, and lawyer preliminary-only rules reach the prompt', () => {
+  const formal = sanitizeAssistant({
+    applied: true,
+    tone_level: 95,
+    response_length: 'short',
+    business_name: 'Harbourview Realty',
+    website: 'https://harbourview.example',
+    knowledge_files: [{ id: 'k1', name: 'Services.pdf', kind: 'services', text: 'We offer staging consultations and pricing strategy sessions.' }],
+  }, 'agent');
+  const prompt = appendAssistantOverlay('Role prompt', formal);
+  assert.match(prompt, /Harbourview Realty/);
+  assert.match(prompt, /harbourview\.example/);
+  assert.match(prompt, /staging consultations/);
+  assert.match(prompt, /Services\.pdf/);
+  assert.equal(formal.tone_level, 95);
+  assert.equal(formal.response_length, 'short');
+
+  const clamped = sanitizeAssistant({ tone_level: 400, response_length: 'novel' }, 'agent');
+  assert.equal(clamped.tone_level, 100);
+  assert.equal(clamped.response_length, 'balanced');
+
+  const lawyer = sanitizeAssistant({ applied: true }, 'lawyer');
+  const lawyerPrompt = appendAssistantOverlay('Role prompt', settingForClientType(lawyer, 'buyer'));
+  assert.match(lawyerPrompt, /preliminary information only/);
+  assert.match(lawyerPrompt, /Schedule a Legal Consultation/);
 });

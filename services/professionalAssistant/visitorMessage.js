@@ -32,6 +32,8 @@ const GREETING_ONLY_PATTERNS = [
   'que tal',
   'qué tal',
   'namaste',
+  'namaskar',
+  'sat sri akal',
   'vanakkam',
   'marhaba',
   'assalamu alaikum',
@@ -42,6 +44,15 @@ const GREETING_ONLY_PATTERNS = [
   'aslam o alikum',
   'salam alaikum',
   'as-salamu alaykum',
+  'مرحبا',
+  'أهلا',
+  'اهلا',
+  'السلام عليكم',
+  'سلام',
+  'नमस्ते',
+  'नमस्कार',
+  'ਸਤ ਸ੍ਰੀ ਅਕਾਲ',
+  'வணக்கம்',
   '你好',
   '您好',
 ];
@@ -87,4 +98,4 @@ export function isGreetingOnly(message) {
   return GREETING_ONLY_PATTERNS.includes(normalizedVisitorText(message));
 }
 
-export const GREETING_START = /^(?:hello|hi|hey|bonjour|bonsoir|salut|hola|holas|holi|ola|olas|buenos|buenas|namaste|vanakkam|marhaba|wa alaikum|assalam|asalam|asslam|salam|salaam|您好|你好|good morning|good afternoon|good evening|good day|greetings)\b/i;
+export const GREETING_START = /^[\s¡!¿?"'“”‘’]*(?:hello|hi|hey|bonjour|bonsoir|salut|hola|holas|holi|ola|olas|buenos|buenas|namaste|namaskar|sat sri akal|vanakkam|marhaba|wa alaikum|walaikum|assalam|asalam|asslam|salam|salaam|مرحبا|مرحبًا|أهلا|أهلاً|اهلا|وعليكم السلام|السلام عليكم|سلام|नमस्ते|नमस्कार|ਸਤ ਸ੍ਰੀ ਅਕਾਲ|வணக்கம்|您好|你好|good morning|good afternoon|good evening|good day|greetings)(?:[\s,!?.।؟]|$)/iu;

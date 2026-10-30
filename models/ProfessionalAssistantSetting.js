@@ -22,13 +22,62 @@ const customToneSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const templateQuestionSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    label: { type: String, default: '', maxlength: 200 },
+    enabled: { type: Boolean, default: true },
+    options: { type: [String], default: [] },
+    custom: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
+
+const clientTemplateSchema = new mongoose.Schema(
+  {
+    enabled: { type: Boolean, default: true },
+    cta_label: { type: String, default: '', maxlength: 60 },
+    questions: { type: [templateQuestionSchema], default: [] },
+  },
+  { _id: false },
+);
+
+const knowledgeFileSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, default: '' },
+    kind: { type: String, enum: ['bio', 'services', 'faqs', 'marketing', 'other'], default: 'other' },
+    text: { type: String, default: '' },
+    uploaded_at: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const professionalAssistantSettingSchema = new mongoose.Schema(
   {
     user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     role: { type: String, enum: ASSISTANT_ROLES, required: true },
     applied: { type: Boolean, default: false },
+    confirmed_sections: { type: [String], default: [] },
     bot_name: { type: String, default: '', maxlength: 40 },
     display_name: { type: String, default: '', maxlength: 80 },
+    business_name: { type: String, default: '', maxlength: 120 },
+    website: { type: String, default: '', maxlength: 200 },
+    tone_level: { type: Number, default: 50, min: 0, max: 100 },
+    response_length: { type: String, enum: ['short', 'balanced', 'detailed'], default: 'balanced' },
+    brand_colors: {
+      primary: { type: String, default: '#1F6F4A' },
+      accent: { type: String, default: '#2BB673' },
+    },
+    logo_url: { type: String, default: '' },
+    avatar_url: { type: String, default: '' },
+    knowledge_files: { type: [knowledgeFileSchema], default: [] },
+    client_types: { type: [String], default: ['buyer', 'seller', 'investor'] },
+    qualification_templates: {
+      buyer: { type: clientTemplateSchema, default: () => ({}) },
+      seller: { type: clientTemplateSchema, default: () => ({}) },
+      investor: { type: clientTemplateSchema, default: () => ({}) },
+    },
     bot_persona_title: { type: String, default: '', maxlength: 80 },
     welcome_message: { type: String, default: '', maxlength: 2000 },
     signup_cta_copy: { type: String, default: '', maxlength: 400 },

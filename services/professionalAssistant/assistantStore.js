@@ -6,6 +6,7 @@ import { SERVICES, idsOf, labelOf } from './catalog.js';
 import { clip, freeList } from './assistantText.js';
 import {
   assistantCatalog,
+  applyProfileIdentity,
   introductionLine,
   prefillAssistant,
   roleForUser,
@@ -30,12 +31,12 @@ export async function loadAppliedAssistantSetting(userId) {
   const doc = await ProfessionalAssistantSetting.findOne({ user_id: userId, applied: true }).lean();
   if (!doc) return null;
   const [profile, user] = await Promise.all([
-    ProfessionalProfile.findOne({ user_id: userId }).select('full_name company_name professional_type').lean(),
+    ProfessionalProfile.findOne({ user_id: userId }).select('full_name company_name website professional_type').lean(),
     User.findById(userId).select('role').lean(),
   ]);
   const role = roleForUser(user, profile);
   if (!role || !appliedSettingForRole(doc, role)) return null;
-  const sanitized = sanitizeAssistant({ ...doc, applied: true }, role);
+  const sanitized = applyProfileIdentity(sanitizeAssistant({ ...doc, applied: true }, role), profile);
   return { ...sanitized, introduction_line: introductionLine(sanitized, profile) };
 }
 
@@ -79,6 +80,7 @@ export async function readAssistantForUser(user) {
   if (!role) return null;
   const saved = await ProfessionalAssistantSetting.findOne({ user_id: user._id }).lean();
   const draft = saved ? sanitizeAssistant(saved, role) : prefillAssistant(role, profile);
+  applyProfileIdentity(draft, profile);
   draft.display_name = draft.display_name || clip(profile?.full_name, 80);
   draft.applied = Boolean(saved?.applied);
   return {

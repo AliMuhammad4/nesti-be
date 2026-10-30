@@ -105,8 +105,15 @@ const resolveEmbed = async (req, res, next) => {
           welcome_message: assistantSetting.welcome_message,
           personalities: assistantSetting.personalities || [],
           communication_style: assistantSetting.communication_style || '',
+          response_length: assistantSetting.response_length || 'balanced',
           qualification_questions: assistantSetting.qualification_questions || [],
           next_actions: assistantSetting.next_actions || [],
+          business_name: assistantSetting.business_name || '',
+          brand_colors: assistantSetting.brand_colors || null,
+          logo_url: assistantSetting.logo_url || '',
+          avatar_url: assistantSetting.avatar_url || '',
+          client_types: assistantSetting.client_types || [],
+          qualification_templates: assistantSetting.qualification_templates || null,
         }
       : null;
 

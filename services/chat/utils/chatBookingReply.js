@@ -2,14 +2,16 @@
 export function userSignalsBookingIntent(text) {
   const t = String(text || '').trim().toLowerCase();
   if (!t) return false;
-  return (
-    /\b(morning|afternoon|evening|tonight|tomorrow|weekend)\b/.test(t) ||
-    /\b(viewing|appointment|apointment|schedule|scheduling|book|booking|meet|meting|meeting|call)\b/.test(t) ||
-    /\b(share|show|send)\b.*\b(time|times|slot|slots|link)\b/.test(t) ||
-    /\b(time|times|slot|slots|link)\b.*\b(share|show|send)\b/.test(t) ||
-    /\bavailable\b.*\b(time|times|slot|slots|appointment|viewing)\b/.test(t) ||
-    /\b(time|times|slot|slots|appointment|viewing)\b.*\bavailable\b/.test(t)
+  const meeting = /\b(viewing|appointment|apointment|schedule|scheduling|book|booking|meet|meting|meeting|call)\b/.test(t);
+  const slots = (
+    /\b(share|show|send)\b.*\b(time|times|slot|slots|link)\b/.test(t)
+    || /\b(time|times|slot|slots|link)\b.*\b(share|show|send)\b/.test(t)
+    || /\bavailable\b.*\b(time|times|slot|slots|appointment|viewing)\b/.test(t)
+    || /\b(time|times|slot|slots|appointment|viewing)\b.*\bavailable\b/.test(t)
   );
+  const shortAvailability = t.split(/\s+/).filter(Boolean).length <= 12
+    && /\b(morning|afternoon|evening|tonight|tomorrow|weekend)\b/.test(t);
+  return meeting || slots || shortAvailability;
 }
 
 export function replyAlreadyHasBookingLink(reply, calendlyUrl = '') {
@@ -83,7 +85,7 @@ export function holdFurtherQuestions(reply, userMessage = '', language = 'englis
 export function appendCalendlyBookingLink(
   reply,
   calendlyUrl,
-  { userMessage = '', allowSchedule = true } = {},
+  { userMessage = '', allowSchedule = true, label: ctaLabel = '' } = {},
 ) {
   if (!allowSchedule) return String(reply || '').trim();
   const url = String(calendlyUrl || '').trim();
@@ -99,7 +101,7 @@ export function appendCalendlyBookingLink(
     assistantSignalsBookingReady(raw);
   if (!shouldAttach) return raw;
 
-  const label = 'Book an appointment';
+  const label = String(ctaLabel || '').trim().slice(0, 60) || 'Book an appointment';
   const body = raw.replace(/\s*\p{Extended_Pictographic}+\s*$/u, '').replace(/[\uFE0E\uFE0F]/g, '').trim();
   return `${body}\n\n[${label}](${url})`;
 }

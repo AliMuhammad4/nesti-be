@@ -60,12 +60,12 @@ function hanLanguage(selected, text) {
 }
 
 function unmistakableLanguage(id, text) {
-  if (id === 'arabic') return /\p{Script=Arabic}/u.test(text) || /\b(marhaba|assalamu|as-salamu)\b/i.test(text);
+  if (id === 'arabic') return /\p{Script=Arabic}/u.test(text) || /\b(marhaba|assalamu|as-salamu|assalam|asslam|salam|salaam)\b/i.test(text);
   if (id === 'french') return /[àâäçéèêëîïôùûüœ]/i.test(text) || /\b(bonjour|bonsoir)\b/i.test(text);
   if (id === 'spanish') return /[áéíóúñü¿¡]/i.test(text) || /\b(hola|holas|holi|ola|olas)\b/i.test(text);
   if (id === 'hindi') return /\p{Script=Devanagari}/u.test(text) || /\b(namaste|namaskar)\b/i.test(text);
-  if (id === 'punjabi') return /\p{Script=Gurmukhi}/u.test(text);
-  if (id === 'tamil') return /\p{Script=Tamil}/u.test(text);
+  if (id === 'punjabi') return /\p{Script=Gurmukhi}/u.test(text) || /\b(sat sri akal)\b/i.test(text);
+  if (id === 'tamil') return /\p{Script=Tamil}/u.test(text) || /\bvanakkam\b/i.test(text);
   return false;
 }
 
@@ -105,11 +105,11 @@ export function replyLanguage(setting, userMessage = '', earlierText = '') {
   return 'english';
 }
 
-export function withWarmGreeting(reply, setting, userMessage = '') {
+export function withWarmGreeting(reply, setting, userMessage = '', earlierText = '') {
   const text = String(reply || '').trim();
   if (!text || !isGreetingOnly(userMessage)) return text;
   if (GREETING_START.test(text)) return text;
-  const language = replyLanguage(setting, userMessage);
+  const language = replyLanguage(setting, userMessage, earlierText);
   if (!replyLooksLocalized(language, text)) return text;
   const pack = WARM_HELLO[language] || WARM_HELLO.english;
   const primary = setting?.personalities?.[0] || '';
@@ -190,6 +190,31 @@ export function composeStyledLawyerReply(setting, { leads, questions, facts, fal
   }
   if (!lead || lead === question) return question;
   return joinLawyerSentences(lead, question, excited, language);
+}
+
+export function dropRepeatedVisitorName(reply, firstName, { keepName = false } = {}) {
+  const name = String(firstName || '').trim();
+  const text = String(reply || '');
+  if (!name || keepName || name.length < 3) return text;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const keptParts = [];
+  const kept = text.replace(new RegExp(`\\bmy name is\\s+${escaped}\\b`, 'gi'), (match) => {
+    keptParts.push(match);
+    return `___KEEP_NAME_${keptParts.length - 1}___`;
+  });
+  return kept
+    .replace(new RegExp(`\\b(hi|hello|hey|dear)\\s+${escaped}\\b`, 'gi'), '$1')
+    .replace(new RegExp(`\\bthank you(?: for that)?,?\\s+${escaped}\\b`, 'gi'), 'Thank you')
+    .replace(new RegExp(`,\\s*${escaped}\\b`, 'gi'), '')
+    .replace(new RegExp(`\\b${escaped}\\s*,`, 'gi'), '')
+    .replace(new RegExp(`\\b${escaped}\\b`, 'gi'), '')
+    .replace(/___KEEP_NAME_(\d+)___/g, (_, index) => keptParts[Number(index)] || '')
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*,/g, ',')
+    .replace(/,\s*(?=[.!?؟])/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.!?؟])/g, '$1')
+    .trim();
 }
 
 export function polishLawyerRegister(reply, setting) {

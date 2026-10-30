@@ -99,10 +99,24 @@ function hasMeaningfulSellerListingUpdate(previousProfile = {}, mergedQual = {})
   return false;
 }
 
+/** Writes the additive client-type fields on the LeadProfile. Never touches scoring, dedupe, or notifications. */
+export async function applyLeadClientTypeExtras(leadMatch, extras) {
+  if (!leadMatch?.lead_profile_id || !extras?.client_type) return;
+  const set = {
+    client_type: extras.client_type,
+    suggested_next_action: { ...(extras.suggested_next_action || {}), updated_at: new Date() },
+  };
+  Object.entries(extras.template_answers || {}).forEach(([id, value]) => {
+    if (/^[a-z0-9_]+$/.test(id) && String(value || '').trim()) set[`template_answers.${id}`] = String(value).trim().slice(0, 160);
+  });
+  await LeadProfile.updateOne({ _id: leadMatch.lead_profile_id }, { $set: set });
+}
+
 export async function syncLeadMatchAfterTurn({
   flow,
   flowType,
   canCreateLeads,
+  clientTypeExtras = null,
   conversation,
   userId,
   professionalProfile,
@@ -198,6 +212,10 @@ export async function syncLeadMatchAfterTurn({
         sessionId,
         leadMatchId: newLeadMatch._id,
       }).catch((error) => logger.warn('Chat document link failed', { error: error?.message }));
+      if (clientTypeExtras) {
+        await applyLeadClientTypeExtras(newLeadMatch, clientTypeExtras)
+          .catch((error) => logger.warn('Lead client type extras failed', { error: error?.message }));
+      }
       logger.info('Chat service: new lead match created', {
         op: 'chat.lead',
         flow: flowType,
@@ -270,6 +288,10 @@ export async function syncLeadMatchAfterTurn({
   }
 
   if (!canCreateLeads || !existingLeadMatch) return;
+  if (clientTypeExtras) {
+    void applyLeadClientTypeExtras(existingLeadMatch, clientTypeExtras)
+      .catch((error) => logger.warn('Lead client type extras failed', { error: error?.message }));
+  }
   await linkConversationDocumentsToLead({
     userId,
     conversationId: conversation._id,

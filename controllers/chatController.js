@@ -39,6 +39,7 @@ export const handleChat = async (req, res, next) => {
       opening,
       preview,
       previewAssistantDraft,
+      testPersona,
       attachmentIds,
     } = req.body;
 
@@ -74,6 +75,7 @@ export const handleChat = async (req, res, next) => {
       opening: Boolean(opening),
       preview: preview === true,
       previewAssistantDraft,
+      testPersona: preview === true ? testPersona : undefined,
       attachmentIds,
       viewerUserId: req.user?._id || null,
       onReplyDelta: preview === true

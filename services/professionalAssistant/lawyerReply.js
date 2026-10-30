@@ -287,7 +287,8 @@ export function guardLawyerReply(reply, setting = null, userMessage = '') {
     return sentencesWithoutDrift(text) || 'I can help with that matter.';
   }
   const greeting = text.match(GREETING_START);
-  const hello = greeting ? `${greeting[0][0].toUpperCase()}${greeting[0].slice(1)}` : '';
+  const word = greeting ? greeting[0].replace(/^[\s¡!¿?"'“”‘’]+|[\s,!?.।؟]+$/g, '') : '';
+  const hello = word ? `${word[0].toUpperCase()}${word.slice(1)}` : '';
   const [primary = '', secondary = ''] = setting?.personalities || [];
   const question = GUARD_QUESTION_BY_VOICE[secondary] || 'Is this a purchase closing, a sale closing, or a refinance closing?';
   const fact = primary === 'consultative' || secondary === 'consultative'
@@ -334,8 +335,44 @@ function askedTopics(text) {
   return REPEATED_QUESTION_TOPICS.filter(([, pattern]) => pattern.test(source)).map(([id]) => id);
 }
 
-function dropRepeatedLawyerQuestion(reply, previousReply, setting, userMessage) {
-  const previousTopics = new Set(askedTopics(previousReply));
+const LAWYER_TOPIC_ANSWERED = {
+  parties: /\b(?:mr|mrs|ms|buyer|seller|spouse|husband|wife)\b|(?:\b\p{L}{2,}\b.*\band\b.*\b\p{L}{2,}\b)/iu,
+  title: /\b(?:clear title|clean title|title issue|deed|search done|no title)\b/i,
+  agreement: /\b(?:signed|unsigned|not signed|already signed)\b/i,
+  timeline: /\b(?:today|tomorrow|week|month|year|soon|january|february|march|april|may|june|july|august|september|october|november|december)\b/i,
+  jurisdiction: /\b(?:ontario|quebec|british columbia|alberta|toronto|montreal|vancouver|calgary)\b|\b(?:in|at)\s+(?!the\b|a\b|an\b|my\b|this\b)\p{L}[\p{L}'-]{2,}/iu,
+  closing: /\b(?:purchase closing|sale closing|refinanc|title transfer|document review)\b/i,
+};
+
+function lawyerTopicAnswered(topic, message) {
+  if (LAWYER_TOPIC_ANSWERED[topic]?.test(message || '')) return true;
+  return topic === 'closing'
+    && /^(yes|yeah|yep|no|nope|not yet|already)\b[.!]?\s*$/i.test(String(message || '').trim());
+}
+
+function closedLawyerTopics(history, userMessage) {
+  const closed = new Set();
+  let pending = [];
+  for (const message of Array.isArray(history) ? history : []) {
+    const content = message?.content || '';
+    if (message?.role === 'assistant') pending = askedTopics(content);
+    else if (message?.role === 'user') {
+      for (const topic of pending) {
+        if (lawyerTopicAnswered(topic, content)) closed.add(topic);
+      }
+    }
+  }
+  for (const topic of pending) {
+    if (lawyerTopicAnswered(topic, userMessage)) closed.add(topic);
+  }
+  return closed;
+}
+
+function dropRepeatedLawyerQuestion(reply, previousReply, setting, userMessage, conversationText = '', history = []) {
+  const previousTopics = new Set([
+    ...askedTopics(previousReply),
+    ...closedLawyerTopics(history, userMessage),
+  ]);
   if (!previousTopics.size) return reply;
   const kept = String(reply || '')
     .split(/(?<=[.!?？])\s+/)
@@ -356,7 +393,9 @@ function dropRepeatedLawyerQuestion(reply, previousReply, setting, userMessage) 
     .join(' ')
     .trim();
   if (kept) return kept;
-  return LANGUAGE_PACKS[replyLanguage(setting, userMessage)]?.continue
+  const language = replyLanguage(setting, userMessage, conversationText);
+  if (language !== 'english' && !LANGUAGE_PACKS[language]) return String(reply || '').trim();
+  return LANGUAGE_PACKS[language]?.continue
     || {
       friendly: 'Happy to help with the next step.',
       polished: 'I can continue from there.',
@@ -368,8 +407,8 @@ function dropRepeatedLawyerQuestion(reply, previousReply, setting, userMessage) 
     || 'I can continue from here.';
 }
 
-function shapeLawyerVoice(reply, setting) {
-  if (!hasReplyCustomization(setting) || replyLanguage(setting) !== 'english') return reply;
+function shapeLawyerVoice(reply, setting, language = 'english') {
+  if (!hasReplyCustomization(setting) || language !== 'english') return reply;
   const primary = setting?.personalities?.[0] || '';
   const lead = MATTER_LEAD[primary] || customLeadIn(customToneById(setting, primary));
   if (!lead) return reply;
@@ -382,25 +421,29 @@ function shapeLawyerVoice(reply, setting) {
   return joinLawyerSentences(lead, rest, excited);
 }
 
-export function finishLawyerReply(reply, { userMessage = '', previousReply = '', setting = null, documentReceived = false } = {}) {
+export function finishLawyerReply(reply, { userMessage = '', previousReply = '', setting = null, documentReceived = false, conversationText = '', history = [] } = {}) {
   const original = String(reply || '').trim();
+  const language = replyLanguage(setting, userMessage, conversationText);
+  const stock = language === 'english' || Boolean(LANGUAGE_PACKS[language]);
   const closingRefusal = isClosingRefusal(userMessage)
     && CLOSING_LOOP.test(previousReply)
     && (CLOSING_LOOP.test(original) || lawyerReplyDrifted(original));
   let text = original;
-  if (closingRefusal && CLOSING_LOOP.test(original)) text = moveOffClosingLoop(original, userMessage, previousReply, setting);
-  else if (closingRefusal) text = matterFollowUp(setting, userMessage);
-  else if (lawyerReplyDrifted(original)) {
-    text = AREA_ASK.test(userMessage)
-      ? lawyerAreaReply(setting, userMessage)
-      : (sentencesWithoutDrift(original) || guardLawyerReply(original, setting, userMessage));
-  } else {
-    text = moveOffClosingLoop(original, userMessage, previousReply, setting);
+  if (stock) {
+    if (closingRefusal && CLOSING_LOOP.test(original)) text = moveOffClosingLoop(original, userMessage, previousReply, setting);
+    else if (closingRefusal) text = matterFollowUp(setting, userMessage);
+    else if (lawyerReplyDrifted(original)) {
+      text = AREA_ASK.test(userMessage)
+        ? lawyerAreaReply(setting, userMessage)
+        : (sentencesWithoutDrift(original) || guardLawyerReply(original, setting, userMessage));
+    } else {
+      text = moveOffClosingLoop(original, userMessage, previousReply, setting);
+    }
   }
-  text = dropRepeatedLawyerQuestion(text, previousReply, setting, userMessage);
-  text = shapeLawyerVoice(text, setting);
-  text = polishLawyerRegister(text, setting);
-  text = withWarmGreeting(text, setting, userMessage);
+  text = dropRepeatedLawyerQuestion(text, previousReply, setting, userMessage, conversationText, history);
+  text = shapeLawyerVoice(text, setting, language);
+  text = stock ? polishLawyerRegister(text, setting) : text;
+  text = withWarmGreeting(text, setting, userMessage, conversationText);
   return withOccasionalEmoji(text, setting, { previousReply, role: 'lawyer', userMessage, documentReceived });
 }
 

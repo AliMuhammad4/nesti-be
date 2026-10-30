@@ -74,11 +74,11 @@ export const ROLE_CUSTOMIZATION_TONES = {
 const ROLE_CUSTOMIZATION_COMMUNICATION = ['quick', 'conversational', 'educational', 'consultative'];
 const ROLE_CUSTOMIZATION_ACTIONS = LANDING_NEXT_ACTIONS;
 const ROLE_CUSTOMIZATION_LANGUAGES = [
-  'english', 'french', 'spanish', 'cantonese', 'hindi', 'tamil',
+  'english', 'french', 'spanish', 'hindi', 'tamil',
   'punjabi', 'arabic', 'other',
 ];
 const REMOVED_LANDING_LANGUAGES = new Set([
-  'mandarin', 'urdu', 'portuguese', 'tagalog', 'italian', 'german', 'japanese', 'vietnamese',
+  'mandarin', 'cantonese', 'urdu', 'portuguese', 'tagalog', 'italian', 'german', 'japanese', 'vietnamese',
 ]);
 
 const SAMPLE_VISITOR = {

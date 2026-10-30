@@ -14,9 +14,10 @@ import {
 } from './catalog.js';
 import { documentRequestIds } from '../chat/documents/chatDocumentService.js';
 import { clip } from './assistantText.js';
+import { questionLabel, questionOptions } from './assistantSettings.js';
+import { intakeHasHelloAnswer, openQualificationQuestionIds } from './qualificationProgress.js';
 import { replyLanguage } from './replyStyle.js';
 import {
-  LAWYER_INTAKE_TOPICS,
   brokerHelloQuestion,
   brokerPurposeEnabled,
   brokerQuestionTopics,
@@ -37,7 +38,27 @@ const FORMALITY_DIRECTIVES = {
 export function formalityInstruction(setting) {
   const key = setting?.formality;
   const directive = FORMALITY_DIRECTIVES[key];
-  return directive ? `Reply formality: ${key}. ${directive}` : '';
+  if (!directive) return '';
+  const level = Number(setting?.tone_level);
+  const toneLine = Number.isFinite(level) && level !== 50
+    ? level <= 20
+      ? ' Tone dial: very relaxed. Short friendly words, contractions welcome.'
+      : level < 50
+        ? ' Tone dial: relaxed. Plain everyday words.'
+        : level >= 80
+          ? ' Tone dial: very formal. Measured, precise, and courteous.'
+          : ' Tone dial: measured. Polite and composed.'
+    : '';
+  return `Reply formality: ${key}. ${directive}${toneLine}`;
+}
+
+const RESPONSE_LENGTH_CONDUCT = {
+  short: 'Length: one short sentence, about 12 words, plus the single question.',
+  detailed: 'Length: two or three short sentences, about 45 words. Include one helpful fact, then one question.',
+};
+
+export function responseLengthLine(setting) {
+  return RESPONSE_LENGTH_CONDUCT[setting?.response_length] || '';
 }
 
 export function voiceInstruction(setting) {
@@ -57,11 +78,11 @@ export function communicationInstruction(setting) {
 
 const VOICE_CONDUCT = {
   friendly: 'Friendly: easy, upbeat, texting rhythm. Use contractions and everyday words such as "great", "sure", "love that". One light exclamation is fine. Avoid stiff words such as "assist", "regarding", "kindly".',
-  polished: 'Polished: crisp, businesslike, complete sentences. Use words such as "certainly", "I can arrange", "to confirm". No exclamation marks, no "Hey", no slang, and no gushing.',
+  polished: 'Polished: crisp, businesslike, complete sentences. Knowledgeable and reassuring. Use words such as "certainly", "I can arrange", "to confirm". No exclamation marks, no "Hey", no slang, and no gushing.',
   luxury: 'Luxury: refined, private, and unhurried. Use words such as "private", "at your pace", "exceptional". No exclamation marks, no slang, no "Hey", and no hurry words such as "quick" or "ASAP".',
-  persuasive: 'Persuasive: confident and forward. Name one concrete next step and a benefit, using words such as "let\'s", "the next step is", "I can line up". No hedging such as "maybe" or "if you want".',
+  persuasive: 'Persuasive: confident, direct, and efficient. Name one concrete next step and a benefit, using words such as "let\'s", "the next step is", "I can line up". No hedging such as "maybe" or "if you want".',
   caring: 'Caring: patient and reassuring. Warm and direct. On a hello, greet and ask the question. Do not say the visitor can answer later, and do not say there is no rush unless they sound worried.',
-  consultative: 'Consultative: thoughtful advisor. Ask one precise question and give a short reason it matters ("so I can..."). No pitch, no hype, and no stock greeting.',
+  consultative: 'Consultative: analytical, strategic advisor. Ask one precise question and give a short reason it matters ("so I can..."). Numbers and specifics over adjectives. No pitch, no hype, and no stock greeting.',
 };
 
 const ROLE_GREETING_OPENER = {
@@ -163,6 +184,8 @@ function intentConductLines(role) {
 function styleConductLine(setting) {
   const style = setting?.communication_style;
   const twoVoices = selectedVoiceRules(setting).length > 1;
+  const lengthOverride = responseLengthLine(setting);
+  if (lengthOverride) return lengthOverride;
   if (style === 'quick' && twoVoices) {
     return 'Length: two very short clauses or two short sentences, about 18 words, so both voices are clear.';
   }
@@ -192,7 +215,7 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
   const language = replyLanguage(setting, latestMessage, options.conversationText || '');
   const languageName = labelOf(LANGUAGES, language);
   if (language && language !== 'english' && languageName) {
-    lines.push(`The visitor wrote in ${languageName}. Every sentence of this reply is ${languageName}.`);
+    lines.push(`The visitor wrote in ${languageName}. Write the greeting and the question in ${languageName} only. Do not use English.`);
   } else if (setting.auto_detect_language !== false && (setting.languages || []).length > 1) {
     lines.push('Reply in the same language the visitor just used when it is one of the selected chat languages.');
   }
@@ -202,8 +225,15 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
     : setting.role === 'mortgage_broker'
       ? (brokerPurposeEnabled(setting) ? ROLE_GREETING_OPENER.mortgage_broker : (brokerQuestionTopics(setting, { preview: true })[0] || 'the mortgage'))
       : (ROLE_GREETING_OPENER[setting.role] || ROLE_GREETING_OPENER.agent);
-  if (greeting) {
+  if (options.openingTurn) {
+    lines.push('This is the first reply after the intake form. Start with a short greeting in the selected voice, then ask one saved question that is still missing. Do not skip the greeting. Do not open with the question. Do not ask a detail the form already has.');
+  } else if (greeting && intakeHasHelloAnswer(setting, options.intakeFormContact)) {
+    lines.push('The visitor said hello. Greet in the selected voice. The intake form already answered the opening question, so do not ask it again. Ask one saved question that is still missing.');
+  } else if (greeting) {
     lines.push(firstGreetingLine(setting, opener));
+    if (language && language !== 'english' && languageName) {
+      lines.push(`Translate the greeting and the question into ${languageName}. Every word of this reply must be ${languageName}.`);
+    }
   } else if (isSocialCheck(latestMessage)) {
     lines.push(`The visitor asked how you are. Answer that in the selected voice in one short clause. Do not open with another hello. Do not ask again about ${opener}.`);
   } else if (setting.role === 'lawyer' && isVagueYes(latestMessage)) {
@@ -253,7 +283,12 @@ export function replyConductBlock(setting, options = {}) {
       : setting?.role === 'mortgage_broker'
         ? `When a broker visitor says yes, continue that mortgage. When the visitor says no, nope, or neither, do not ask the new-mortgage-or-refinance question again. ${brokerRefusalInstruction(setting)}`
         : '',
-    'Speak as the professional in the first person. Say "I have" and "I help with". Do not use the professional\'s name, and do not sound like a separate person describing them.',
+    'Speak as the professional in the first person. Say "I have" and "I help with". When the visitor asks your name, say "My name is" and the saved name, then list the saved expertise. On every other reply, do not talk about yourself in the third person.',
+    options.openingTurn
+      ? 'The intake form is already submitted. This first reply starts with a short greeting in the selected voice, then asks one missing question. Use the visitor\'s first name in that greeting only when addressing by first name is on.'
+      : options.openingTurn === false
+        ? 'The greeting already happened. Answer what they just said and ask the next missing question. Do not greet again. Do not say the visitor\'s name. Do not open with "Thank you" plus their name.'
+        : 'The intake form is already submitted. The first reply is a short greeting, then the questions. Do not say the visitor\'s name after that greeting.',
     'Never repeat the previous question.',
     `A "how are you" is a social question. Answer it in the selected voice. Do not greet again, and do not repeat the question about ${opener}.`,
   ].filter(Boolean);
@@ -309,14 +344,23 @@ export function appliedPersonaText(setting) {
 
 export function appliedQualificationBlock(setting) {
   const labels = (setting?.qualification_questions || [])
-    .map((id) => labelOf(QUALIFICATION[setting?.role] || [], id))
+    .map((id) => {
+      const label = questionLabel(setting, id);
+      if (!label) return '';
+      const choices = questionOptions(setting, id);
+      return choices.length ? `${label} (choices: ${choices.join(' / ')})` : label;
+    })
     .filter(Boolean);
   if (!labels.length) {
     return `SELECTED QUALIFICATION QUESTIONS:
 - No extra qualification questions are turned on. Do not walk the older default list.`;
   }
-  return `SELECTED QUALIFICATION QUESTIONS (ask only these, one at a time, and skip any the client already answered):
-${labels.map((question, index) => `${index + 1}. "${question}"`).join('\n')}`;
+  const clientLine = setting?.client_type
+    ? ` This visitor is a ${setting.client_type}; these are the ${setting.client_type} questions in the saved order.`
+    : '';
+  return `SELECTED QUALIFICATION QUESTIONS (ask only these, one at a time, in this order, and skip any the client already answered):${clientLine}
+${labels.map((question, index) => `${index + 1}. "${question}"`).join('\n')}
+When a question lists choices, the visitor may also see them as quick-reply buttons. Accept a typed answer or a tapped choice.`;
 }
 
 function hasServiceArea(setting) {
@@ -357,6 +401,13 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
   if (setting.introduction_line) {
     lines.push(`You are ${setting.introduction_line}. Speak as this professional in the first person. Do not talk about them by name.`);
   }
+  if (setting.business_name || setting.website) {
+    const business = [
+      setting.business_name ? `Business name: ${setting.business_name}. When a visitor asks about the business, brokerage, company, or who you work with, answer with this name. Do not invent a different business.` : '',
+      setting.website ? `Website: ${setting.website}. When a visitor asks for the website, portfolio, or more about the business, share this link. Do not invent another site.` : '',
+    ].filter(Boolean).join(' ');
+    lines.push(business);
+  }
   const voice = voiceInstruction(setting);
   if (voice) {
     lines.push((setting.personalities || []).length > 1
@@ -372,15 +423,15 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
   if (setting.languages?.length) {
     const names = setting.languages.map((id) => labelOf(LANGUAGES, id)).filter(Boolean);
     lines.push(setting.auto_detect_language
-      ? `Written chat languages: ${names.join(', ')}. The latest visitor message decides the language. Answer the entire reply in that language when it is one of these. If it is not, use ${names[0]}.`
+      ? `Written chat languages: ${names.join(', ')}. Automatically detect the visitor's language from their latest message and reply in that language.`
       : `Written chat languages: ${names.join(', ')}. Answer every written reply in ${names[0]}.`);
   }
   lines.push(setting.use_emojis
     ? 'Emojis are allowed in chat replies only. Never use emojis in a spoken or voice reply.'
     : 'Do not use emojis.');
   lines.push(setting.address_by_first_name
-    ? 'Address the client by first name after you know it.'
-    : 'Do not address the client by first name.');
+    ? 'Use the visitor\'s first name once, in the first greeting after the form. Later replies ask the next question and do not say their name.'
+    : 'Do not say the visitor\'s name.');
   lines.push(setting.suggest_consultation
     ? 'You may suggest a consultation when the client shows interest.'
     : 'Do not suggest a consultation unless the client asks.');
@@ -419,24 +470,40 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
     lines.push(`Approved answers. ${faqUse}: ${JSON.stringify(faqs.map(({ question, answer }) => ({ question, answer })))}`);
   }
   if (setting.services_pricing) lines.push(`Approved service notes: ${setting.services_pricing}`);
+  const knowledge = (setting.knowledge_files || []).filter((file) => file?.text);
+  if (knowledge.length) {
+    const budget = 4000;
+    const perFile = Math.max(400, Math.floor(budget / knowledge.length));
+    const excerpts = knowledge.map((file) => `[${file.kind || 'material'}: ${file.name}] ${String(file.text).slice(0, perFile)}`);
+    lines.push(`Approved uploaded materials (bio, services, FAQs, marketing). Use facts from these only when they answer the visitor's question, rewritten in the selected voice and length. Do not quote long passages. ${excerpts.join('\n')}`);
+  }
+  if (setting.cta_label) {
+    lines.push(`Consultation call to action for this visitor: "${setting.cta_label}". When the saved questions are answered and a next step fits, offer that consultation by that name, rewritten in the selected voice. Do not offer it before the saved questions are answered unless the visitor asks to book.`);
+  }
+  if (setting.role === 'lawyer' && setting.client_type) {
+    lines.push('This chat collects preliminary information only. Do not ask for confidential details such as purchase price, mortgage amounts, identification numbers, or document contents. Say that confidential details are collected through the secure intake after the consultation is booked.');
+  }
   if (setting.custom_guidance) lines.push(`Professional instructions: ${setting.custom_guidance}. Follow them for emphasis only, inside the selected voice, formality, and short reply length. Do not let them make the reply longer, and do not break safety, consent, or role limits.`);
   const requestedDocs = documentRequestIds(setting)
     .map((id) => labelOf(DOCUMENT_REQUESTS[setting.role] || [], id))
     .filter(Boolean);
   if (requestedDocs.length) {
-    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and on the first closing or mortgage question. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
+    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and while a saved qualification question is still unanswered. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
   }
   lines.push(`CUSTOMIZATION PRIORITY — assistant style: The selected voice, communication style, formality, and language preferences above override conflicting general persona or style instructions elsewhere in this prompt. Keep role-specific safety and accuracy requirements.`);
   if (setting.role === 'agent') {
     lines.push(options.preview
       ? 'This preview has no intake form. Do not claim a form already collected intent, location, budget, timeline, property type, or mortgage status. Learn those from the chat. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.'
-      : 'Buyer and seller handling stays in force. The intake form already collects intent, location, budget, timeline, property type, and mortgage status, so do not treat those as customization questions. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.');
+      : 'Buyer and seller handling stays in force. The intake form may already have intent, location, budget, timeline, property type, and mortgage status. Ask a saved qualification question only when that answer is still missing. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.');
   }
+  const chatAnswered = new Set(options.chatAnsweredQuestions || []);
   if (setting.role === 'lawyer' || setting.role === 'mortgage_broker') {
-    const askIds = setting.role === 'lawyer'
-      ? (setting.qualification_questions || []).filter((id) => options.preview || !new Set(['legal_service', ...LAWYER_INTAKE_TOPICS]).has(id))
-      : (setting.qualification_questions || []).filter((id) => options.preview || id !== 'purpose');
+    const askIds = options.preview
+      ? (setting.qualification_questions || [])
+      : openQualificationQuestionIds(setting, options.intakeFormContact, [...chatAnswered]);
     lines.push(appliedQualificationBlock({ ...setting, qualification_questions: askIds }));
+  }
+  if (setting.role === 'lawyer' || setting.role === 'mortgage_broker' || setting.role === 'agent') {
     const tiers = [
       setting.hot_guidance ? `Ready to act: ${setting.hot_guidance}` : '',
       setting.warm_guidance ? `Interested: ${setting.warm_guidance}` : '',
@@ -445,7 +512,9 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
     if (tiers.length) {
       const emphasis = setting.role === 'lawyer'
         ? 'A ready visitor hears about the consultation sooner, and an early visitor gets the closing explained first.'
-        : 'A ready visitor hears about the consultation sooner, and an early visitor gets the mortgage explained first.';
+        : setting.role === 'agent'
+          ? 'A ready visitor hears about the next step sooner, and an early visitor gets the search explained first.'
+          : 'A ready visitor hears about the consultation sooner, and an early visitor gets the mortgage explained first.';
       lines.push(`How I read visitors, for reply emphasis only. ${emphasis} ${tiers.join(' ')}`);
     }
     if (setting.next_actions?.length) {
@@ -453,9 +522,15 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
       if (steps.length) {
         const savesLead = setting.next_actions.includes('save_lead');
         const notifies = setting.next_actions.includes('notify');
-        lines.push(`Preferred next steps from the studio: ${steps.join(', ')}. Mention one when a next step fits the selected style. ${savesLead ? 'A qualified conversation can be saved as a lead.' : 'Do not tell the visitor a CRM lead was created.'} ${notifies ? 'The professional can receive a lead notification.' : 'Do not promise an instant notification.'} A booking link can still be shared when the visitor asks.`);
+        const booking = setting.next_actions.includes('schedule')
+          ? 'A booking link can be shared when the visitor asks.'
+          : 'Do not offer a booking link unless the visitor asks to schedule.';
+        lines.push(`Preferred next steps from the studio: ${steps.join(', ')}. Mention one when a next step fits the selected style. ${savesLead ? 'A qualified conversation can be saved as a lead.' : 'Do not tell the visitor a CRM lead was created.'} ${notifies ? 'The professional can receive a lead notification.' : 'Do not promise an instant notification.'} ${booking}`);
       }
     }
+  }
+  if (options.preview && setting.client_type) {
+    lines.push(`TEST MODE: this is a test conversation as a ${setting.client_type}. Treat the visitor as a ${setting.client_type} from the first message. Do not ask whether they are buying or selling. Ask the ${setting.client_type} questions above in order, one per reply, then offer the consultation${setting.cta_label ? ` "${setting.cta_label}"` : ''}.`);
   }
   if (options.preview && setting.role === 'lawyer') {
     lines.push('This preview has no intake form. Do not claim those answers were already collected. Continue the closing from what the visitor just said.');
@@ -463,7 +538,7 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
   if (options.preview && setting.role === 'mortgage_broker') {
     lines.push('This preview has no intake form. Do not claim those answers were already collected. Continue the mortgage from what the visitor just said.');
   }
-  lines.push(replyConductBlock(setting, { preview: options.preview === true }));
+  lines.push(replyConductBlock(setting, { preview: options.preview === true, openingTurn: options.openingTurn }));
   return `${prompt}\n\n${lines.join('\n')}`;
 }
 

@@ -16,6 +16,7 @@ export const chatBodySchema = Joi.object({
   opening: Joi.boolean().optional(),
   preview: Joi.boolean().optional(),
   previewAssistantDraft: Joi.object().unknown(true).optional(),
+  testPersona: Joi.string().valid('buyer', 'seller', 'investor').optional(),
   attachmentIds: Joi.array().items(Joi.string().trim()).max(3).optional(),
 });
 

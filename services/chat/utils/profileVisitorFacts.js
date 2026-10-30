@@ -1,4 +1,5 @@
 import { DIFFERENTIATORS, ROLE_DIFFERENTIATORS, SERVICES, labelOf } from '../../professionalAssistant/catalog.js';
+import { normalizedVisitorText } from '../../professionalAssistant/visitorMessage.js';
 
 const EXPERIENCE_LABELS = {
   junior: 'Junior (0-2 years)',
@@ -61,7 +62,26 @@ export function profileVisitorFactsBlock(profile, setting, yearsExperience = 0) 
     ? `- Experience: ${experience}. When the visitor asks about experience, years, or background, answer in the first person: "I have ${experience}." Use this saved profile fact. Do not use ${name}'s name, do not say "${name} has", do not say "years of professional experience" without this fact, and do not invent a different number.`
     : '- Experience is not saved on the profile. Do not invent years of experience. Say you can confirm that directly.';
   const expertiseLine = expertise.length
-    ? `- Your services and expertise: ${expertise.join('; ')}. You are speaking as ${name}, in the first person. If asked what you do or about yourself, say "I help with..." and list only the relevant services. Do not say "${name} has", "${name}'s expertise includes", or that someone else is speaking for ${name}. Do not list every service unless asked.`
-    : '- No expertise list is saved on the profile or assistant. Do not invent specialties.';
+    ? `- Your services and expertise: ${expertise.join('; ')}. You are speaking as ${name}, in the first person. If the visitor asks your name, answer "My name is ${name}." and then "I help with ${expertise.join(', ')}." List every saved service and expertise item. Do not skip the name or the expertise for another question or a document request. Do not say "${name} has", "${name}'s expertise includes", or that someone else is speaking for ${name}.`
+    : `- No expertise list is saved on the profile or assistant. If the visitor asks your name, answer "My name is ${name}." Do not invent specialties.`;
   return `PROFILE FACTS:\n${experienceLine}\n${expertiseLine}`;
+}
+
+export function asksForIdentity(message) {
+  const text = normalizedVisitorText(message);
+  return /\b(what is your name|whats your name|who are you|your name|ap ka name|apka name|aapka naam|naam kya|name kya|name kiya|tumhara naam|what do you do|about yourself|your expertise|your experience|your services|your specialties|your specialities)\b/.test(text);
+}
+
+export function identityReply({ userMessage = '', profile = null, setting = null, yearsExperience = 0 } = {}) {
+  if (!asksForIdentity(userMessage)) return '';
+  const name = String(profile?.full_name || setting?.display_name || '').trim();
+  const expertise = professionalExpertiseLabels(profile, setting);
+  const experience = formatProfessionalExperience(profile, yearsExperience);
+  const parts = [];
+  if (name) parts.push(`My name is ${name}.`);
+  if (expertise.length) parts.push(`I help with ${expertise.join(', ')}.`);
+  if (experience && /\b(experience|years|background|about yourself)\b/i.test(String(userMessage || ''))) {
+    parts.push(`I have ${experience}.`);
+  }
+  return parts.join(' ');
 }

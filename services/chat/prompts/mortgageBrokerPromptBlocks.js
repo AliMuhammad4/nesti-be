@@ -1,6 +1,38 @@
 import { appliedPersonaText } from '../../professionalAssistant/professionalAssistantService.js';
+import { questionLabel } from '../../professionalAssistant/assistantSettings.js';
+import { intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
 
-export function buildMortgageBrokerAutomationBlock({ actionFlow, hasBookingLink, calendlyLink, name, rewriteInVoice = false }) {
+function filled(value) {
+  return String(value || '').trim().length > 0;
+}
+
+function brokerIntakeValue(id, form) {
+  return intakeValueFor('mortgage_broker', id, form || {});
+}
+
+function knownBrokerIntake(form = {}) {
+  const labels = [
+    ['location', 'property location'],
+    ['purpose', 'purchase purpose'],
+    ['property_value', 'property value or budget'],
+    ['timeline', 'application timeline'],
+    ['preapproval', 'pre-approval status'],
+    ['amount', 'financing amount'],
+  ];
+  return labels
+    .filter(([id]) => filled(brokerIntakeValue(id, form)))
+    .map(([, label]) => label);
+}
+
+export function openBrokerFollowUps(setting, form = {}, answeredIds = []) {
+  const answered = new Set(answeredIds);
+  return (setting?.qualification_questions || [])
+    .filter((id) => !answered.has(id) && !filled(brokerIntakeValue(id, form)))
+    .map((id) => questionLabel({ ...setting, role: 'mortgage_broker' }, id))
+    .filter(Boolean);
+}
+
+export function buildMortgageBrokerAutomationBlock({ actionFlow, hasBookingLink, calendlyLink, name, rewriteInVoice = false, holdForQuestions = false }) {
   const recommendedLine =
     actionFlow.recommendedAppointment?.length > 0
       ? `- Prioritize recommending: ${actionFlow.recommendedAppointment.join('; ')}`
@@ -46,6 +78,17 @@ export function buildMortgageBrokerAutomationBlock({ actionFlow, hasBookingLink,
   const bookingAvailabilityLine = rewriteInVoice
     ? '- When the visitor shares availability, confirm it in the selected voice, then include the link.'
     : `- When the visitor shares availability (morning/evening/etc.), use this short line then the link: "${bookingAfterAvailabilityLine}"`;
+
+  if (holdForQuestions) {
+    return `
+MORTGAGE BROKER ACTION FLOW (questions first — ${actionFlow.tierLabel}):
+- Goal: ${actionFlow.goal}
+- Do not include a booking URL yet.
+- Ask one missing qualification question. Do not share a meeting link in that reply.
+- When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.
+- After those questions are answered and the visitor agrees to meet, the booking link can be shared.
+`;
+  }
 
   return hasBookingLink
     ? `
@@ -100,6 +143,9 @@ export function buildMortgageBrokerPromptMainTemplate({
   postBookedBlock,
   assistantSetting = null,
   previewConversation = false,
+  intakeFormContact = null,
+  blockSchedule = false,
+  chatAnsweredQuestions = [],
 }) {
   const bookingAskLine = 'Would you like me to share available consultation times now?';
   const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
@@ -120,7 +166,10 @@ BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + re
 `
     : '';
   const applied = assistantSetting?.applied ? assistantSetting : null;
-  const blockSchedule = false;
+  const openFollowUps = applied && !previewConversation
+    ? openBrokerFollowUps(applied, intakeFormContact, chatAnsweredQuestions)
+    : [];
+  const knownIntake = applied && !previewConversation ? knownBrokerIntake(intakeFormContact) : [];
   const personaBlock = applied
     ? appliedPersonaText(applied)
     : `OVERALL PERSONA:
@@ -140,6 +189,9 @@ BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + re
     : applied
       ? `INTAKE FORM:
 - Credit score, employment, income, down payment, and preferred contact time are already on the intake form. Do not ask those questions again.
+- Already known from the intake form: ${knownIntake.length ? knownIntake.join('; ') : 'the submitted mortgage details'}. Do not ask for any of these again.
+- Still missing, ask these one at a time before any meeting: ${openFollowUps.length ? openFollowUps.join('; ') : 'none. Continue from what they asked.'}
+- When the visitor asks about the rest of the details, ask the next missing question above. Do not ask for a detail this list already has.
 - A checked follow-up may be asked once, only when that detail is still missing.`
       : `INTAKE FORM:
 - The mortgage intake form already collected property location, financing purpose, property value, financing amount, timeline, pre-approval, credit score, employment, income, down payment, purchase type, urgency, and preferred contact time.
@@ -169,9 +221,9 @@ ${applied
 3) Do not share a Calendly link unless the client asks to schedule.`
     : applied
       ? `MEETING-FIRST EXECUTION ORDER:
-1) Acknowledge what they shared in one short sentence. Do not list it back.
-2) Ask one checked follow-up only when that detail is still missing.
-3) Ask permission to share available consultation times.
+1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back.
+2) Ask one missing checked follow-up. Do not share a meeting link in that reply.
+3) After every missing follow-up is answered, ask permission to share available consultation times.
 4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
 5) Keep post-link follow-ups concise and practical.`
       : `MEETING-FIRST EXECUTION ORDER:

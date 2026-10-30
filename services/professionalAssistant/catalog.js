@@ -59,14 +59,143 @@ export const ROLE_ASSISTANT_FAQS = Object.fromEntries(
   ]),
 );
 
+// Storage ids stay stable (they key the voice maps in replyStyle and the prompt blocks);
+// labels and descriptors follow the five client-facing personality cards.
 export const PERSONALITIES = [
-  ['friendly', 'Friendly and approachable', 'Warm, welcoming, and conversational.'],
-  ['polished', 'Professional and polished', 'Confident, articulate, and business-focused.'],
-  ['luxury', 'Luxury and sophisticated', 'Elegant, refined, and exclusive.'],
-  ['persuasive', 'Confident and persuasive', 'Proactive, enthusiastic, and focused on helping clients take the next step.'],
-  ['caring', 'Caring and supportive', 'Patient, reassuring, and empathetic.'],
-  ['consultative', 'Thoughtful and consultative', 'Asks before recommending a next step.'],
+  ['luxury', 'Luxury Concierge', 'Sophisticated, polished, exclusive.'],
+  ['friendly', 'Friendly Advisor', 'Warm, approachable, conversational.'],
+  ['polished', 'Trusted Expert', 'Professional, knowledgeable, reassuring.'],
+  ['persuasive', 'Results-Oriented', 'Confident, direct, efficient.'],
+  ['consultative', 'Investor Specialist', 'Analytical, strategic, detail-focused.'],
 ];
+
+const LEGACY_PERSONALITY_IDS = {
+  caring: 'friendly',
+  luxury_concierge: 'luxury',
+  friendly_advisor: 'friendly',
+  trusted_expert: 'polished',
+  results_oriented: 'persuasive',
+  investor_specialist: 'consultative',
+};
+
+export function legacyPersonalityId(id) {
+  const key = String(id || '').trim();
+  return LEGACY_PERSONALITY_IDS[key] || key;
+}
+
+export const CLIENT_TYPES = [
+  ['buyer', 'Buyer'],
+  ['seller', 'Seller'],
+  ['investor', 'Investor'],
+];
+
+export const RESPONSE_LENGTHS = [
+  ['short', 'Brief', 'One short sentence.'],
+  ['balanced', 'Balanced', 'One or two short sentences.'],
+  ['detailed', 'Detailed', 'Two or three short sentences with one helpful fact.'],
+];
+
+export const DEFAULT_BRAND_COLORS = { primary: '#1F6F4A', accent: '#2BB673' };
+
+const BUDGET_OPTIONS = ['Under $400k', '$400k–$700k', '$700k–$1M', '$1M+'];
+const TIMELINE_OPTIONS = ['As soon as possible', '1–3 months', '3–6 months', '6–12 months', 'Just exploring'];
+const PROPERTY_TYPE_OPTIONS = ['Detached house', 'Townhouse', 'Condo', 'Multi-family', 'Other'];
+const DOWN_PAYMENT_OPTIONS = ['20% or more', '10–19%', '5–9%', 'Under 5%', 'Not yet'];
+const INCOME_OPTIONS = ['Under $70k', '$70k–$100k', '$100k–$150k', '$150k–$200k', '$200k+'];
+const CLOSING_OPTIONS = ['Within 30 days', '30–60 days', '60–90 days', 'Not set yet'];
+
+const template = (ctaLabel, questions) => ({
+  cta_label: ctaLabel,
+  questions: questions.map(([id, label, options = []]) => ({ id, label, options })),
+});
+
+export const QUALIFICATION_TEMPLATES = {
+  agent: {
+    buyer: template('Book a Buyer Consultation', [
+      ['location', 'Which city or neighbourhood are you interested in?'],
+      ['budget', 'What is your budget range?', BUDGET_OPTIONS],
+      ['timeline', 'When are you hoping to buy?', TIMELINE_OPTIONS],
+      ['property_type', 'What type of property are you looking for?', PROPERTY_TYPE_OPTIONS],
+      ['preapproval', 'Are you pre-approved for a mortgage?', ['Yes', 'In progress', 'Not yet', 'Paying cash']],
+    ]),
+    seller: template('Request a Property Evaluation', [
+      ['location', 'Where is your property located?'],
+      ['property_type', 'What type of property are you selling?', PROPERTY_TYPE_OPTIONS],
+      ['timeline', 'When are you planning to sell?', TIMELINE_OPTIONS],
+      ['expected_price', 'What is your estimated price range?', BUDGET_OPTIONS],
+      ['buying_another', 'Are you also buying another property?', ['Yes', 'No', 'Not sure yet']],
+    ]),
+    investor: template('Book an Investment Consultation', [
+      ['investment_type', 'What type of investment are you interested in?', ['Rental property', 'Fix and flip', 'Pre-construction', 'Multi-unit', 'Commercial']],
+      ['location', 'Which markets are you considering?'],
+      ['budget', 'What is your investment budget?', BUDGET_OPTIONS],
+      ['investment_goal', 'Are you focused on rental income or appreciation?', ['Rental income', 'Appreciation', 'Both']],
+      ['timeline', 'When are you planning to invest?', TIMELINE_OPTIONS],
+    ]),
+  },
+  mortgage_broker: {
+    buyer: template('Book a Mortgage Consultation', [
+      ['purpose', 'Is this your first home, your next home, or an investment property?', ['First home', 'Next home', 'Investment property']],
+      ['property_value', 'What price range are you considering?', BUDGET_OPTIONS],
+      ['down_payment', 'Do you have a down payment saved?', DOWN_PAYMENT_OPTIONS],
+      ['household_income', 'What is your approximate household income?', INCOME_OPTIONS],
+      ['timeline', 'When are you planning to buy?', TIMELINE_OPTIONS],
+    ]),
+    seller: template('Explore My Mortgage Options', [
+      ['purpose', 'Are you selling and buying, renewing, or refinancing?', ['Selling and buying', 'Renewing', 'Refinancing']],
+      ['property_value', 'What is your current property value?', BUDGET_OPTIONS],
+      ['mortgage_balance', 'Do you currently have a mortgage on the property?', ['Yes', 'No']],
+      ['term_end', 'When does your current mortgage term end?', ['Within 3 months', '3–6 months', '6–12 months', 'More than a year', 'Not sure']],
+      ['timeline', 'When would you like to review your options?', TIMELINE_OPTIONS],
+    ]),
+    investor: template('Book an Investment Financing Consultation', [
+      ['investment_type', 'What type of investment property are you considering?', ['Rental property', 'Multi-unit', 'Pre-construction', 'Commercial', 'Vacation rental']],
+      ['property_value', 'What is the purchase price range?', BUDGET_OPTIONS],
+      ['down_payment', 'What down payment do you have available?', DOWN_PAYMENT_OPTIONS],
+      ['owns_investments', 'Do you own other investment properties?', ['Yes', 'No']],
+      ['timeline', 'When do you need financing?', TIMELINE_OPTIONS],
+    ]),
+  },
+  lawyer: {
+    buyer: template('Schedule a Legal Consultation', [
+      ['property_type', 'What type of property are you purchasing?', PROPERTY_TYPE_OPTIONS],
+      ['location', 'Where is the property located?'],
+      ['transaction_type', 'Have you signed an accepted agreement of purchase and sale?', ['Yes', 'Not yet', 'In negotiation']],
+      ['closing_date', 'What is your expected closing date?', CLOSING_OPTIONS],
+      ['legal_service', 'What legal services do you need?', ['Purchase closing', 'Agreement review', 'Title search', 'Not sure yet']],
+    ]),
+    seller: template('Schedule a Closing Consultation', [
+      ['property_type', 'What type of property are you selling?', PROPERTY_TYPE_OPTIONS],
+      ['location', 'Where is the property located?'],
+      ['transaction_type', 'Has the sale agreement been signed?', ['Yes', 'Not yet', 'In negotiation']],
+      ['closing_date', 'What is your expected closing date?', CLOSING_OPTIONS],
+      ['legal_service', 'What legal assistance do you need?', ['Sale closing', 'Agreement review', 'Mortgage discharge', 'Not sure yet']],
+    ]),
+    investor: template('Book an Investment Legal Consultation', [
+      ['legal_service', 'Are you purchasing, selling, or refinancing?', ['Purchasing', 'Selling', 'Refinancing']],
+      ['property_type', 'Is the property residential or commercial?', ['Residential', 'Commercial', 'Mixed use']],
+      ['location', 'Where is the property located?'],
+      ['via_company', 'Are you purchasing personally or through a company?', ['Personally', 'Through a company', 'Not sure yet']],
+      ['closing_date', 'When is the transaction date?', CLOSING_OPTIONS],
+    ]),
+  },
+};
+
+/** Question ids the public intake form already collects for this role. Chat skips them when filled. */
+export const INTAKE_QUESTION_IDS = {
+  agent: ['intent', 'location', 'budget', 'timeline', 'property_type', 'preapproval', 'expected_price'],
+  mortgage_broker: ['purpose', 'location', 'property_value', 'timeline', 'preapproval', 'down_payment', 'household_income'],
+  lawyer: ['legal_service', 'location', 'transaction_type', 'closing_date'],
+};
+
+export function templateQuestionLabel(role, id) {
+  const types = QUALIFICATION_TEMPLATES[role] || {};
+  for (const type of Object.values(types)) {
+    const hit = type.questions.find((question) => question.id === id);
+    if (hit) return hit.label;
+  }
+  return '';
+}
 
 export const COMMUNICATION_STYLES = [
   ['quick', 'Quick and direct', 'Short, concise responses.'],
@@ -81,8 +210,6 @@ export const LANGUAGES = [
   ['english', 'English'],
   ['french', 'French'],
   ['spanish', 'Spanish'],
-  ['mandarin', 'Mandarin'],
-  ['cantonese', 'Cantonese'],
   ['hindi', 'Hindi'],
   ['tamil', 'Tamil'],
   ['punjabi', 'Punjabi'],

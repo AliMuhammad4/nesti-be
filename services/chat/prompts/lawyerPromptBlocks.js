@@ -3,8 +3,38 @@
  */
 
 import { appliedPersonaText } from '../../professionalAssistant/professionalAssistantService.js';
+import { questionLabel } from '../../professionalAssistant/assistantSettings.js';
+import { intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
 
-export function buildLawyerAutomationBlock({ actionFlow, hasBookingLink, calendlyLink, name, rewriteInVoice = false }) {
+function filled(value) {
+  return String(value || '').trim().length > 0;
+}
+
+function lawyerIntakeValue(id, form) {
+  return intakeValueFor('lawyer', id, form || {});
+}
+
+export function openLawyerFollowUps(setting, form = {}, answeredIds = []) {
+  const answered = new Set(answeredIds);
+  return (setting?.qualification_questions || [])
+    .filter((id) => !answered.has(id) && !filled(lawyerIntakeValue(id, form)))
+    .map((id) => questionLabel({ ...setting, role: 'lawyer' }, id))
+    .filter(Boolean);
+}
+
+function knownLawyerIntake(form = {}) {
+  const labels = [
+    ['legal_service', 'closing type'],
+    ['location', 'property location'],
+    ['transaction_type', 'agreement stage'],
+    ['closing_date', 'closing timeline'],
+  ];
+  return labels
+    .filter(([id]) => filled(lawyerIntakeValue(id, form)))
+    .map(([, label]) => label);
+}
+
+export function buildLawyerAutomationBlock({ actionFlow, hasBookingLink, calendlyLink, name, rewriteInVoice = false, holdForQuestions = false }) {
   const recommendedLine =
     actionFlow.recommendedAppointment?.length > 0
       ? `- Prioritize recommending: ${actionFlow.recommendedAppointment.join('; ')}`
@@ -53,6 +83,17 @@ export function buildLawyerAutomationBlock({ actionFlow, hasBookingLink, calendl
   const bookingAvailabilityLine = rewriteInVoice
     ? '- When the visitor shares availability, confirm it in the selected voice, then include the link.'
     : `- When availability is confirmed, use this short transition before link share: "${bookingAfterAvailabilityLine}"`;
+
+  if (holdForQuestions) {
+    return `
+REAL ESTATE LAWYER ACTION FLOW (questions first — ${actionFlow.tierLabel}):
+- Goal: ${actionFlow.goal}
+- Do not include a booking URL yet.
+- Ask one missing qualification question. Do not share a meeting link in that reply.
+- When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.
+- After those questions are answered and the visitor agrees to meet, the booking link can be shared.
+`;
+  }
 
   return hasBookingLink
     ? `
@@ -108,6 +149,9 @@ export function buildLawyerPromptMainTemplate({
   postBookedBlock,
   assistantSetting = null,
   previewConversation = false,
+  intakeFormContact = null,
+  blockSchedule = false,
+  chatAnsweredQuestions = [],
 }) {
   const bookingAskLine = 'Would you like me to share available consultation times now?';
   const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
@@ -130,7 +174,13 @@ ${intakeMirrorLine}
 - If those fields are empty in META, work toward question 9 before pasting URLs. You may say a scheduling link will appear after they confirm their details.
 `
     : '';
-  const blockSchedule = false;
+  const formProvided = intakeFormContact && typeof intakeFormContact === 'object';
+  const openFollowUps = applied && !previewConversation && formProvided
+    ? openLawyerFollowUps(applied, intakeFormContact, chatAnsweredQuestions)
+    : [];
+  const knownIntake = applied && !previewConversation && formProvided
+    ? knownLawyerIntake(intakeFormContact)
+    : [];
   const personaBlock = applied
     ? appliedPersonaText(applied)
     : `OVERALL PERSONA:
@@ -143,7 +193,12 @@ ${intakeMirrorLine}
     ? `PREVIEW:
 - No intake form was submitted. Use only what the visitor says in this chat.
 - Keep the selected voice, communication style, and formality on every reply.`
-    : `INTAKE FORM:
+    : applied && formProvided
+      ? `INTAKE FORM:
+- Already known from the intake form: ${knownIntake.length ? knownIntake.join('; ') : 'the submitted closing details'}. Do not ask for any of these again.
+- Still missing, ask these one at a time before any meeting: ${openFollowUps.length ? openFollowUps.join('; ') : 'none. Continue from what they asked.'}
+- When the visitor asks about the rest of the details, ask the next missing question above. Do not ask for a detail this list already has.`
+      : `INTAKE FORM:
 - The lawyer intake form already collected location, transaction stage, closing date, transaction type, property value, mortgage status, realtor involvement, first-home status, legal services needed, and preferred contact time.
 - Do not ask those questions again. Use the submitted answers as authoritative.`;
   const meetingStrategy = blockSchedule
@@ -169,8 +224,15 @@ ${applied
 1) Recap once and ask confirmation.
 2) Do not re-ask intake form questions.
 3) Do not share a Calendly link unless the client asks to schedule.`
-    : `MEETING-FIRST EXECUTION ORDER:
-1) ${applied ? 'Acknowledge the intake answers in one short sentence. Do not list them back.' : 'Recap once and ask confirmation.'}
+    : applied
+      ? `MEETING-FIRST EXECUTION ORDER:
+1) On the first reply, greet in one short sentence. The intake answers stay in the background. Do not list them back and do not say the visitor's name again after the greeting.
+2) Ask one missing checked follow-up. Do not share a meeting link in that reply.
+3) After every missing follow-up is answered, ask permission to share available consultation times.
+4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
+5) When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.`
+      : `MEETING-FIRST EXECUTION ORDER:
+1) Recap once and ask confirmation.
 2) Ask 1 focused legal-prep follow-up if needed.
 3) Ask permission to share available consultation times.
 4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.

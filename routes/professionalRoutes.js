@@ -29,7 +29,36 @@ import {
   draftMyAssistantFaqs,
   getMyAssistant,
   saveMyAssistant,
+  uploadMyAssistantAsset,
+  uploadMyAssistantKnowledge,
 } from '../controllers/professionalAssistantController.js';
+import multer from 'multer';
+import { MAX_CHATBOT_ATTACHMENT_BYTES } from '../middleware/uploadChatbotAttachment.js';
+
+const uploadKnowledgeFile = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_CHATBOT_ATTACHMENT_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const name = String(file?.originalname || '').toLowerCase();
+    if (!/\.(pdf|doc|docx|txt|md|csv|jpe?g|png|webp)$/.test(name)) {
+      cb(new Error('Upload a PDF, Word document, text file, or image.'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+function runKnowledgeUpload(req, res, next) {
+  uploadKnowledgeFile.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ success: false, message: 'File must be under 10MB.' });
+      }
+      return res.status(400).json({ success: false, message: err.message || 'Invalid file upload' });
+    }
+    next();
+  });
+}
 
 function runCredentialUpload(req, res, next) {
   uploadCredentialMulter.single('file')(req, res, (err) => {
@@ -68,6 +97,8 @@ function validateIcpByRole(req, res, next) {
 router.get('/me/assistant', protect, getMyAssistant);
 router.put('/me/assistant', protect, saveMyAssistant);
 router.post('/me/assistant/faq-drafts', protect, draftMyAssistantFaqs);
+router.post('/me/assistant/assets', protect, runProfileUpload, uploadMyAssistantAsset);
+router.post('/me/assistant/knowledge', protect, runKnowledgeUpload, uploadMyAssistantKnowledge);
 
 router.get('/me/credentials', protect, getMyCredentials);
 router.patch('/me/credentials', protect, patchCredentialMeta);

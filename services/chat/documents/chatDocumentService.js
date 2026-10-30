@@ -153,7 +153,7 @@ function describeDocumentForPrompt(doc, { label, question, includeText }) {
     const description = String(doc.extracted_text || doc.summary || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
     return [
       `- ${label} (photo${doc.original_filename ? `, ${doc.original_filename}` : ''}): ${description}`,
-      'Describe this photo to the visitor from those sentences. Do not say you cannot see the image.',
+      'Use this only to decide whether the photo is the requested document. Do not describe the picture to the visitor.',
     ];
   }
   if (doc.kind === 'image') {
@@ -190,7 +190,7 @@ export function buildSharedDocumentsPrompt(documents = [], options = {}) {
   const lines = [
     photo ? 'Photos the visitor shared:' : 'Documents the visitor shared:',
     photo
-      ? 'The visitor shared a photo. Describe what the notes say is visible. Do not say you cannot see the image. Do not invent names, prices, or text that is not written below.'
+      ? 'The visitor shared a photo. Say only whether it is the requested document or a different file. Do not describe the picture. Do not invent names, prices, or text that is not written below.'
       : (focus.size
         ? 'The visitor just uploaded a new file. Answer about that file only. Do not repeat an earlier file or your previous reply. Do not guess.'
         : 'Answer only from the text below. Do not guess the subject, the property, the price, the parties, or market trends.'),
@@ -245,7 +245,7 @@ export async function briefDocumentAnswer(documents = [], question = '') {
     messages: [{
       role: 'user',
       content: `${photo
-        ? 'Describe this photo in two or three short sentences from the notes. Do not say you cannot see it.'
+        ? 'Do not describe the photo. Say only whether it is the requested document or a different file, in one or two short sentences.'
         : 'Answer in two or three short sentences using only the notes. Do not add a topic, property, price, or person that is not written in the notes. Do not give a legal or lending ruling.'}\n\nQuestion: ${String(question || '').slice(0, 400)}\n\nNotes:\n${notes}`,
     }],
   });
@@ -268,8 +268,12 @@ const DOCUMENT_RECEIVED = {
 
 function documentCoversRequest(doc, id) {
   const text = `${doc?.original_filename || ''} ${doc?.document_type || ''} ${doc?.summary || ''} ${(doc?.key_facts || []).join(' ')} ${String(doc?.extracted_text || '').slice(0, 3000)}`;
-  const pattern = DOCUMENT_RECEIVED[id];
-  return pattern ? pattern.test(text) : false;
+  if (DOCUMENT_RECEIVED[id]?.test(text)) return true;
+  const folded = text.toLowerCase();
+  return Object.values(DOCUMENT_NAMES).some((pack) => {
+    const name = String(pack?.[id] || '').toLowerCase().replace(/^(recent|current)\s+/, '').trim();
+    return name.length >= 2 && folded.includes(name);
+  });
 }
 
 function requestContext(intentOrContext) {
@@ -309,11 +313,101 @@ export function documentRequestIds(setting, intentOrContext = '') {
   return orderedRequestIds(setting?.role, selected, requestContext(intentOrContext));
 }
 
-export function nextDocumentRequest(setting, documents = [], intentOrContext = '') {
+export function nextDocumentRequest(setting, documents = [], intentOrContext = '', skipIds = []) {
   const catalog = DOCUMENT_REQUESTS[setting?.role] || [];
-  const missing = documentRequestIds(setting, intentOrContext).find((id) => labelOf(catalog, id) && !(documents || []).some((doc) => documentCoversRequest(doc, id)));
+  const skip = new Set(skipIds);
+  const missing = documentRequestIds(setting, intentOrContext).find((id) => !skip.has(id) && labelOf(catalog, id) && !(documents || []).some((doc) => documentCoversRequest(doc, id)));
   if (!missing) return null;
   return { id: missing, label: labelOf(catalog, missing) };
+}
+
+export function followUpSkipIds(setting, documents = [], intentOrContext = '', history = [], previousReply = '') {
+  const catalog = DOCUMENT_REQUESTS[setting?.role] || [];
+  const ids = documentRequestIds(setting, intentOrContext);
+  const texts = [
+    previousReply,
+    ...(Array.isArray(history) ? history : []).filter((message) => message?.role === 'assistant').map((message) => message.content),
+  ];
+  return ids.filter((id) => {
+    if ((documents || []).some((doc) => documentCoversRequest(doc, id))) return false;
+    const request = { id, label: labelOf(catalog, id) };
+    return texts.some((text) => requestDocumentForReply(request, text));
+  });
+}
+
+function localizedDocumentName(id, language) {
+  const names = DOCUMENT_NAMES[language] || DOCUMENT_NAMES.english;
+  return names[id] || DOCUMENT_NAMES.english[id] || 'document';
+}
+
+const DOCUMENT_REVIEW = {
+  english: {
+    exactNext: (got, next) => `This is the ${got}. When you are ready, you can send the ${next} as well.`,
+    exactDone: (got) => `This is the ${got}. That is all the documents I need for now.`,
+    other: (got, next) => (next ? `This is the ${got}. When you are ready, you can send the ${next}.` : `This is the ${got}. We can continue with the other details.`),
+    different: (next) => (next ? `This is a different file. When you are ready, you can send the ${next}.` : 'This is a different file. We can continue with the other details.'),
+    received: () => 'I have the file.',
+    receivedDone: () => 'I have the file. That is all the documents I need for now.',
+  },
+  french: {
+    exactNext: (got, next) => `C'est bien ${got}. Quand vous êtes prêt, vous pouvez aussi envoyer ${next}.`,
+    exactDone: (got) => `C'est bien ${got}. Ce sont tous les documents dont j'ai besoin pour le moment.`,
+    other: (got, next) => (next ? `C'est bien ${got}. Quand vous êtes prêt, vous pouvez envoyer ${next}.` : `C'est bien ${got}. Nous pouvons continuer avec les autres détails.`),
+    different: (next) => (next ? `C'est un autre fichier. Quand vous êtes prêt, vous pouvez envoyer ${next}.` : `C'est un autre fichier. Nous pouvons continuer avec les autres détails.`),
+    received: () => `J'ai bien le fichier.`,
+    receivedDone: () => `J'ai bien le fichier. Ce sont tous les documents dont j'ai besoin pour le moment.`,
+  },
+  spanish: {
+    exactNext: (got, next) => `Este es ${got}. Cuando pueda, también puede enviar ${next}.`,
+    exactDone: (got) => `Este es ${got}. Con esto tengo los documentos que necesito por ahora.`,
+    other: (got, next) => (next ? `Este es ${got}. Cuando pueda, puede enviar ${next}.` : `Este es ${got}. Podemos seguir con los otros detalles.`),
+    different: (next) => (next ? `Este es otro archivo. Cuando pueda, puede enviar ${next}.` : 'Este es otro archivo. Podemos seguir con los otros detalles.'),
+    received: () => 'Ya tengo el archivo.',
+    receivedDone: () => 'Ya tengo el archivo. Con esto tengo los documentos que necesito por ahora.',
+  },
+  arabic: {
+    exactNext: (got, next) => `هذا هو ${got}. عندما تكون جاهزًا، يمكنك أيضًا إرسال ${next}.`,
+    exactDone: (got) => `هذا هو ${got}. هذه كل المستندات التي أحتاجها الآن.`,
+    other: (got, next) => (next ? `هذا هو ${got}. عندما تكون جاهزًا، يمكنك إرسال ${next}.` : `هذا هو ${got}. يمكننا المتابعة بالتفاصيل الأخرى.`),
+    different: (next) => (next ? `هذا ملف مختلف. عندما تكون جاهزًا، يمكنك إرسال ${next}.` : 'هذا ملف مختلف. يمكننا المتابعة بالتفاصيل الأخرى.'),
+    received: () => 'وصلتني الملف.',
+    receivedDone: () => 'وصلتني الملف. هذه كل المستندات التي أحتاجها الآن.',
+  },
+  hindi: {
+    exactNext: (got, next) => `यह ${got} है। जब आप तैयार हों, ${next} भी भेज सकते हैं।`,
+    exactDone: (got) => `यह ${got} है। अभी के लिए मुझे यही दस्तावेज़ चाहिए थे।`,
+    other: (got, next) => (next ? `यह ${got} है। जब आप तैयार हों, ${next} भेज सकते हैं।` : `यह ${got} है। हम बाकी बातचीत जारी रख सकते हैं।`),
+    different: (next) => (next ? `यह कोई और फ़ाइल है। जब आप तैयार हों, ${next} भेज सकते हैं।` : 'यह कोई और फ़ाइल है। हम बाकी बातचीत जारी रख सकते हैं।'),
+    received: () => 'फ़ाइल मिल गई।',
+    receivedDone: () => 'फ़ाइल मिल गई। अभी के लिए मुझे यही दस्तावेज़ चाहिए थे।',
+  },
+};
+
+export function documentReviewReply(documents = [], setting = null, context = {}) {
+  const fresh = (Array.isArray(documents) ? documents : []).filter(Boolean);
+  const doc = fresh[fresh.length - 1];
+  if (!doc || !setting?.applied || !setting.document_requests?.length) return '';
+  if (!textIsKnown(doc) && doc.status !== 'ready' && doc.status !== 'failed') return '';
+  const prior = Array.isArray(context.priorDocuments) ? context.priorDocuments : [];
+  const requestContextValue = { intent: context.intent, text: context.text || '' };
+  const expected = nextDocumentRequest(setting, prior, requestContextValue);
+  const matched = documentRequestIds(setting, requestContextValue).filter((id) => documentCoversRequest(doc, id));
+  const language = replyLanguage(setting, context.userMessage, context.conversationText);
+  const copy = DOCUMENT_REVIEW[language] || DOCUMENT_REVIEW.english;
+  const name = (id) => localizedDocumentName(id, language);
+  const after = [...prior, doc];
+  const skip = new Set(followUpSkipIds(setting, after, requestContextValue, context.history, context.previousReply));
+  if (expected && !matched.includes(expected.id)) skip.add(expected.id);
+  const next = nextDocumentRequest(setting, after, requestContextValue, [...skip]);
+  if (expected && matched.includes(expected.id)) {
+    return next ? copy.exactNext(name(expected.id), name(next.id)) : copy.exactDone(name(expected.id));
+  }
+  if (matched.length) {
+    const got = matched[0];
+    return next ? copy.other(name(got), name(next.id)) : copy.other(name(got));
+  }
+  if (expected) return copy.different(next ? name(next.id) : '');
+  return next ? copy.received() : copy.receivedDone();
 }
 
 const DOCUMENT_NAMES = {
@@ -369,6 +463,82 @@ const DOCUMENT_NAMES = {
     mortgage_commitment: '贷款承诺函',
     condo_status: '公寓状态证明',
   },
+  cantonese: {
+    pay_stubs: '近期糧單',
+    notice_of_assessment: '評稅通知或T4',
+    mortgage_statement: '現時按揭月結單',
+    preapproval_letter: '預批信',
+    photo_id: '有相身份證明',
+    home_photos: '屋企相',
+    listing_sheet: '放盤資料',
+    purchase_agreement: '買賣合約',
+    title_deed: '業權文件',
+    mortgage_commitment: '按揭承諾書',
+    condo_status: '大廈狀況證明',
+  },
+  arabic: {
+    pay_stubs: 'كشوف الرواتب الأخيرة',
+    notice_of_assessment: 'إشعار التقييم أو T4',
+    mortgage_statement: 'كشف الرهن الحالي',
+    preapproval_letter: 'خطاب الموافقة المبدئية',
+    photo_id: 'هوية بصورة',
+    home_photos: 'صور المنزل',
+    listing_sheet: 'ورقة العرض',
+    purchase_agreement: 'عقد البيع أو الشراء',
+    title_deed: 'سند الملكية',
+    mortgage_commitment: 'التزام الرهن',
+    condo_status: 'شهادة حالة الشقة',
+  },
+  hindi: {
+    pay_stubs: 'हाल की वेतन पर्चियाँ',
+    notice_of_assessment: 'आकलन नोटिस या T4',
+    mortgage_statement: 'मौजूदा गिरवी विवरण',
+    preapproval_letter: 'पूर्व-स्वीकृति पत्र',
+    photo_id: 'फोटो पहचान',
+    home_photos: 'घर की तस्वीरें',
+    listing_sheet: 'लिस्टिंग शीट',
+    purchase_agreement: 'खरीद या बिक्री समझौता',
+    title_deed: 'मालिकाना दस्तावेज़',
+    mortgage_commitment: 'गिरवी प्रतिबद्धता',
+    condo_status: 'कॉन्डो स्थिति प्रमाणपत्र',
+  },
+  punjabi: {
+    pay_stubs: 'ਹਾਲੀਆ ਤਨਖਾਹ ਸਲਿੱਪਾਂ',
+    notice_of_assessment: 'ਮੁਲਾਂਕਣ ਨੋਟਿਸ ਜਾਂ T4',
+    mortgage_statement: 'ਮੌਜੂਦਾ ਰਹਿਨ ਬਿਆਨ',
+    preapproval_letter: 'ਪ੍ਰੀ-ਅਪਰੂਵਲ ਪੱਤਰ',
+    photo_id: 'ਫੋਟੋ ਵਾਲੀ ਪਛਾਣ',
+    home_photos: 'ਘਰ ਦੀਆਂ ਤਸਵੀਰਾਂ',
+    listing_sheet: 'ਲਿਸਟਿੰਗ ਸ਼ੀਟ',
+    purchase_agreement: 'ਖਰੀਦ ਜਾਂ ਵਿਕਰੀ ਇਕਰਾਰ',
+    title_deed: 'ਮਲਕੀਅਤ ਦਸਤਾਵੇਜ਼',
+    mortgage_commitment: 'ਰਹਿਨ ਵਚਨ',
+    condo_status: 'ਕੋਂਡੋ ਸਥਿਤੀ ਸਰਟੀਫਿਕੇਟ',
+  },
+  tamil: {
+    pay_stubs: 'சமீபத்திய சம்பளச் சீட்டுகள்',
+    notice_of_assessment: 'மதிப்பீட்டு அறிவிப்பு அல்லது T4',
+    mortgage_statement: 'தற்போதைய அடமான அறிக்கை',
+    preapproval_letter: 'முன்அனுமதி கடிதம்',
+    photo_id: 'புகைப்பட அடையாளம்',
+    home_photos: 'வீட்டு புகைப்படங்கள்',
+    listing_sheet: 'பட்டியல் தாள்',
+    purchase_agreement: 'வாங்கல் அல்லது விற்பனை ஒப்பந்தம்',
+    title_deed: 'உரிமைப் பத்திரம்',
+    mortgage_commitment: 'அடமான உறுதி',
+    condo_status: 'காண்டோ நிலை சான்றிதழ்',
+  },
+};
+
+const DOCUMENT_ASK = {
+  french: (name, quick) => (quick ? `Envoyez ${name} ici.` : `Vous pouvez envoyer ${name} ici.`),
+  spanish: (name, quick) => (quick ? `Suba ${name} aquí.` : `Puede subir ${name} aquí.`),
+  mandarin: (name) => `请在这里上传${name}。`,
+  cantonese: (name) => `請喺呢度上載${name}。`,
+  arabic: (name) => `يمكنك رفع ${name} من هنا.`,
+  hindi: (name) => `आप ${name} यहाँ भेज सकते हैं।`,
+  punjabi: (name) => `ਤੁਸੀਂ ${name} ਇੱਥੇ ਭੇਜ ਸਕਦੇ ਹੋ।`,
+  tamil: (name) => `நீங்கள் ${name} இங்கே அனுப்பலாம்.`,
 };
 
 function documentAskLine(request, setting, userMessage, conversationText = '') {
@@ -377,9 +547,7 @@ function documentAskLine(request, setting, userMessage, conversationText = '') {
   const name = names[request.id] || DOCUMENT_NAMES.english[request.id] || String(request.label || '').toLowerCase();
   const quick = setting?.communication_style === 'quick';
   const formal = setting?.formality === 'formal' || ['luxury', 'polished'].includes(setting?.personalities?.[0]);
-  if (language === 'french') return quick ? `Envoyez ${name} ici.` : `Vous pouvez envoyer ${name} ici.`;
-  if (language === 'spanish') return quick ? `Suba ${name} aquí.` : `Puede subir ${name} aquí.`;
-  if (language === 'mandarin') return `请在这里上传${name}。`;
+  if (DOCUMENT_ASK[language]) return DOCUMENT_ASK[language](name, quick);
   if (quick) return `Upload your ${name} here.`;
   if (formal) return `Please upload the ${name} here when you are ready.`;
   return `You can upload your ${name} here.`;
@@ -435,9 +603,9 @@ function withoutDocumentSentence(reply, request) {
     .trim();
 }
 
-export function applyDocumentAsk(reply, request, { previousReply = '', userMessage = '', setting = null, conversationText = '' } = {}) {
+export function applyDocumentAsk(reply, request, { previousReply = '', userMessage = '', setting = null, conversationText = '', qualificationOpen = false } = {}) {
   const text = String(reply || '').trim();
-  if (!request?.label || isGreetingOnly(userMessage) || isVagueYes(userMessage) || isIntentOnly(userMessage) || visitorPausesDetails(userMessage)) {
+  if (!request?.label || qualificationOpen || isGreetingOnly(userMessage) || isVagueYes(userMessage) || isIntentOnly(userMessage) || visitorPausesDetails(userMessage)) {
     return { reply: withoutDocumentSentence(text, request), request: null };
   }
   if (isOpeningIntake(text, setting?.role)) return { reply: withoutDocumentSentence(text, request), request: null };
@@ -486,7 +654,7 @@ async function summarizeExtractedText(text) {
         max_tokens: 220,
         messages: [{
           role: 'user',
-          content: `Part ${index + 1} of ${chunks.length} of one document. List the facts stated in this part: names, dates, amounts, addresses, and what the part is about. Use only this text.\n\n${chunk}`,
+          content: `Part ${index + 1} of ${chunks.length} of one document. List the facts stated in this part: names, dates, amounts, addresses, and what the part is about. Use only this text. Write every fact in English, even when the part is in another language.\n\n${chunk}`,
         }],
       });
       return `Part ${index + 1}: ${String(completion.choices?.[0]?.message?.content || '').trim()}`;
@@ -498,7 +666,7 @@ async function summarizeExtractedText(text) {
     response_format: { type: 'json_object' },
     messages: [{
       role: 'user',
-      content: `Summarize only the text below. Do not add a subject, name, price, or place that is not written there. Return JSON with summary (two or three sentences covering the whole document), document_type (a short label taken from the content), and key_facts (up to 6 short strings copied from the text). Do not give legal, tax, or lending approval.\n\n${notes.join('\n\n').slice(0, 14000)}`,
+      content: `Summarize only the text below. Do not add a subject, name, price, or place that is not written there. Return JSON with summary (two or three sentences covering the whole document), document_type (a short label taken from the content), and key_facts (up to 6 short strings from the text). Write summary, document_type, and key_facts in English only, even when the document is in another language. These fields are shown on the lead. Do not give legal, tax, or lending approval.\n\n${notes.join('\n\n').slice(0, 14000)}`,
     }],
   });
   const parsed = JSON.parse(completion.choices?.[0]?.message?.content || '{}');
@@ -588,18 +756,12 @@ export async function readChatDocument(documentId) {
   if (!doc) return;
   await setDocumentReadResult(documentId, { status: 'reading' });
   try {
-    if (doc.kind === 'word' && doc.mime_type === MIME_BY_KIND.doc) {
-      await setDocumentReadResult(documentId, {
-        status: 'ready',
-        text_ready: true,
-        document_type: 'word document',
-        summary: 'This Word file uses an older format. Open it to read the contents.',
-      });
-      return;
-    }
     const object = await getObjectFromR2(doc.r2_key);
     let text = '';
-    if (doc.kind === 'pdf') {
+    const legacyWord = doc.kind === 'word' && (doc.mime_type === MIME_BY_KIND.doc || isLegacyWordDoc(object.buffer));
+    if (legacyWord) {
+      text = textFromLegacyDoc(object.buffer);
+    } else if (doc.kind === 'pdf') {
       const parser = new PDFParse({ data: new Uint8Array(object.buffer) });
       try {
         const parsed = await parser.getText();
@@ -648,6 +810,38 @@ export async function readChatDocument(documentId) {
   }
 }
 
+export async function extractTextFromUpload(buffer, declaredMime = '', filename = '') {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.alloc(0);
+  const name = String(filename || '').toLowerCase();
+  const mime = String(declaredMime || '').toLowerCase();
+  if (mime.startsWith('text/') || /\.(txt|md|csv)$/.test(name)) {
+    return bytes.toString('utf8').replace(/\s+/g, ' ').trim().slice(0, MAX_EXTRACTED_CHARS);
+  }
+  const sniff = sniffChatFile(bytes, declaredMime, filename);
+  if (!sniff.ok) return '';
+  let text = '';
+  if (sniff.kind === 'pdf') {
+    const parser = new PDFParse({ data: new Uint8Array(bytes) });
+    try {
+      const parsed = await parser.getText();
+      text = parsed?.text || '';
+    } finally {
+      await parser.destroy();
+    }
+  } else if (sniff.kind === 'word') {
+    text = sniff.mime === MIME_BY_KIND.doc || isLegacyWordDoc(bytes)
+      ? textFromLegacyDoc(bytes)
+      : (await mammoth.extractRawText({ buffer: bytes }))?.value || '';
+  } else if (sniff.kind === 'image') {
+    try {
+      text = await describeImage(bytes, sniff.mime);
+    } catch {
+      text = '';
+    }
+  }
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, MAX_EXTRACTED_CHARS);
+}
+
 function zipEntry(buffer, wanted) {
   const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.alloc(0);
   let offset = 0;
@@ -679,9 +873,55 @@ function pagesFromWordXml(xml) {
   const explicit = (source.match(/w:type="page"/g) || []).length;
   const breaks = Math.max(rendered, explicit);
   if (breaks > 0) return breaks + 1;
-  const text = source.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!text) return 1;
-  return Math.max(1, Math.ceil(text.length / 3000));
+  return 1;
+}
+
+function isLegacyWordDoc(buffer) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.alloc(0);
+  return bytes.length >= 8 && bytes[0] === 0xD0 && bytes[1] === 0xCF && bytes[2] === 0x11 && bytes[3] === 0xE0;
+}
+
+function legacyTextRun(bytes, start) {
+  const pieces = [];
+  let codes = [];
+  const flush = () => {
+    if (codes.length < 16) {
+      codes = [];
+      return;
+    }
+    const text = String.fromCharCode(...codes).replace(/\s+/g, ' ').trim();
+    const letters = (text.match(/\p{L}/gu) || []).length;
+    if (letters >= 12 && letters / Math.max(text.length, 1) >= 0.5) pieces.push(text);
+    codes = [];
+  };
+  for (let index = start; index + 1 < bytes.length; index += 2) {
+    const code = bytes.readUInt16LE(index);
+    const letter = (code >= 0x30 && code <= 0x39)
+      || (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x00c0 && code <= 0x024f)
+      || (code >= 0x0600 && code <= 0x06ff)
+      || (code >= 0x0900 && code <= 0x097f)
+      || (code >= 0x0a00 && code <= 0x0a7f)
+      || (code >= 0x0b80 && code <= 0x0bff)
+      || (code >= 0x4e00 && code <= 0x9fff);
+    const space = code === 9 || code === 10 || code === 13 || code === 32 || code === 0xa0;
+    const punct = '.,;:!?\'"-()/&%$#@'.includes(String.fromCharCode(code));
+    if (letter || space || punct) codes.push(space ? 32 : code);
+    else flush();
+  }
+  flush();
+  return pieces;
+}
+
+export function textFromLegacyDoc(buffer) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  const pieces = [...legacyTextRun(bytes, 0), ...legacyTextRun(bytes, 1)];
+  const unique = [];
+  for (const piece of pieces) {
+    if (!unique.some((item) => item.includes(piece) || piece.includes(item))) unique.push(piece);
+  }
+  return unique.join(' ').replace(/\s+/g, ' ').trim().slice(0, MAX_EXTRACTED_CHARS);
 }
 
 export async function countDocumentPages(buffer, kind) {
@@ -697,7 +937,9 @@ export async function countDocumentPages(buffer, kind) {
   }
   if (kind === 'word') {
     const xml = zipEntry(buffer, 'word/document.xml');
-    return xml ? pagesFromWordXml(xml.toString('utf8')) : 0;
+    if (xml) return pagesFromWordXml(xml.toString('utf8'));
+    if (isLegacyWordDoc(buffer)) return 1;
+    return 0;
   }
   return 0;
 }

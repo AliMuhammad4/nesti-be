@@ -27,7 +27,21 @@ function hasChatContact(meta) {
 export const handleChat = async (req, res, next) => {
   const startedAt = Date.now();
   try {
-    const { id, message, embedToken, visitorId, agentType, channel, formContact, forceNewLead } = req.body;
+    const {
+      id,
+      message,
+      embedToken,
+      visitorId,
+      agentType,
+      channel,
+      formContact,
+      forceNewLead,
+      opening,
+      preview,
+      previewAssistantDraft,
+      testPersona,
+      attachmentIds,
+    } = req.body;
 
     logger.info('Chat API: request', {
       op:           'chat.message',
@@ -58,6 +72,25 @@ export const handleChat = async (req, res, next) => {
       referer,
       formContact,
       forceNewLead,
+      opening: Boolean(opening),
+      preview: preview === true,
+      previewAssistantDraft,
+      testPersona: preview === true ? testPersona : undefined,
+      attachmentIds,
+      viewerUserId: req.user?._id || null,
+      onReplyDelta: preview === true
+        ? (text) => {
+          if (!res.headersSent) {
+            res.status(200);
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache, no-transform');
+            res.setHeader('X-Accel-Buffering', 'no');
+            if (typeof res.flushHeaders === 'function') res.flushHeaders();
+          }
+          res.write(`data: ${JSON.stringify({ text })}\n\n`);
+          if (typeof res.flush === 'function') res.flush();
+        }
+        : null,
     });
 
     const meta = result.body?.meta;
@@ -80,6 +113,11 @@ export const handleChat = async (req, res, next) => {
       property_matches_avail:  meta?.property_matches_available ?? null,
     });
 
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ done: true, ...result.body })}\n\n`);
+      res.end();
+      return;
+    }
     res.status(result.status).json(result.body);
   } catch (error) {
     logger.error('Chat API: error', {

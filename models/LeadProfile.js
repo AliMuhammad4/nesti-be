@@ -123,6 +123,19 @@ const leadProfileSchema = new mongoose.Schema(
       last_seen_at: { type: Date, default: Date.now },
     },
     lead_refs: [{ type: mongoose.Schema.Types.ObjectId, ref: 'LeadMatch' }],
+    /** Additive: buyer / seller / investor from the assistant's client-type templates. */
+    client_type: { type: String, enum: ['buyer', 'seller', 'investor', ''], default: '' },
+    /** Additive: last suggested next action computed from the role action flow and template CTA. */
+    suggested_next_action: {
+      action: { type: String, default: '' },
+      label: { type: String, default: '' },
+      cta_label: { type: String, default: '' },
+      goal: { type: String, default: '' },
+      tier: { type: String, default: '' },
+      updated_at: { type: Date, default: null },
+    },
+    /** Additive: answers to the professional's custom template questions, keyed by question id. */
+    template_answers: { type: mongoose.Schema.Types.Mixed, default: {} },
     preferences: {
       language_preference: [{ type: String }],
       working_style_preference: { type: String },

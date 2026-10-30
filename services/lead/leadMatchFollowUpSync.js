@@ -11,7 +11,7 @@ import { recordLeadKpiEvent } from '../analytics/leadKpiService.js';
 import { awardReferralPoints, REWARD_RULES } from '../referral/rewardService.js';
 import { awardInviterMilestoneForUser } from '../referral/inviteService.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
-import { assertValidLeadId, findOwnedVisibleLeadMatch } from './leadQueryUtils.js';
+import { assertValidLeadId, findOwnedLeadMatch, findOwnedVisibleLeadMatch } from './leadQueryUtils.js';
 import { evaluateRoleConversionChecklist } from './leadConversionChecklist.js';
 
 /**
@@ -228,7 +228,14 @@ export function isReferralRecipientLead(lead) {
   );
 }
 
-export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
+export async function patchLeadMatchForUser({
+  userId,
+  user,
+  leadId,
+  body,
+  actorUser = user,
+  skipPlanCheck = false,
+}) {
   assertValidLeadId(leadId);
   const { match_status: nextStatus, note } = body || {};
   const trimmedNote = typeof note === 'string' ? note.trim() : '';
@@ -247,10 +254,12 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
     throw err;
   }
 
-  const { getOrCreateSubscriptionForUser } = await import('../billing/subscriptionService.js');
-  const { assertLeadMatchPlanVisible } = await import('../billing/planQuota.js');
-  const subscription = await getOrCreateSubscriptionForUser({ _id: userId });
-  await assertLeadMatchPlanVisible(userId, lead._id, subscription);
+  if (!skipPlanCheck) {
+    const { getOrCreateSubscriptionForUser } = await import('../billing/subscriptionService.js');
+    const { assertLeadMatchPlanVisible } = await import('../billing/planQuota.js');
+    const subscription = await getOrCreateSubscriptionForUser({ _id: userId });
+    await assertLeadMatchPlanVisible(userId, lead._id, subscription);
+  }
 
   const prevStatus = lead.match_status;
   const role = leadProfessionalType(lead, user?.role);
@@ -355,8 +364,11 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
   }
 
   const statusChanged = hasStatus && nextStatus !== prevStatus;
-  const authorLabel = [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || null;
-  const authorUserIdStr = userId != null ? String(userId) : null;
+  const authorLabel =
+    [actorUser?.first_name, actorUser?.last_name].filter(Boolean).join(' ').trim()
+    || actorUser?.email
+    || null;
+  const authorUserIdStr = actorUser?._id != null ? String(actorUser._id) : String(userId || '');
   const now = new Date().toISOString();
   const notesToPush = [];
 
@@ -531,8 +543,10 @@ export async function patchLeadMatchForUser({ userId, user, leadId, body }) {
   return leadMatch;
 }
 
-export async function deleteOwnedLeadMatch(userId, leadId) {
-  const leadMatch = await findOwnedVisibleLeadMatch(userId, leadId, { lean: false });
+export async function deleteOwnedLeadMatch(userId, leadId, { skipPlanCheck = false } = {}) {
+  const leadMatch = skipPlanCheck
+    ? await findOwnedLeadMatch(userId, leadId, { lean: false })
+    : await findOwnedVisibleLeadMatch(userId, leadId, { lean: false });
 
   const { lead_profile_id: profileId, conversation_id: conversationId, _id: leadMatchId } = leadMatch;
   await LeadMatch.deleteOne({ _id: leadMatchId });

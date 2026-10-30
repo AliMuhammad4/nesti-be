@@ -105,6 +105,8 @@ const storefrontTemplatePurchaseSchema = new mongoose.Schema({
   cancel_at_period_end: { type: Boolean, default: false },
   current_period_end: { type: Date, default: null },
   purchased_at: { type: Date, default: Date.now },
+  /** Last successful Stripe reconcile; refreshes skip recently synced rows. */
+  last_synced_at: { type: Date, default: null },
 }, { _id: false });
 
 const publicProfileSchema = new mongoose.Schema({

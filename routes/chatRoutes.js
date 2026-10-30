@@ -2,6 +2,7 @@ import express from 'express';
 const router = express.Router();
 import {
   protect,
+  optionalAuth,
   ensureAgentOrMortgageBroker,
   requireCompleteProfessionalProfile,
 } from '../middleware/authMiddleware.js';
@@ -18,6 +19,8 @@ import {
 } from '../controllers/chatController.js';
 import { postPropertyImagesUpload } from '../controllers/chatPropertyImageController.js';
 import { uploadPropertyImages } from '../middleware/uploadPropertyImages.js';
+import { uploadChatbotAttachment } from '../middleware/uploadChatbotAttachment.js';
+import { postChatAttachment } from '../controllers/chatAttachmentController.js';
 import {
   getChatAnalyticsSummary,
   getChatAnalyticsFunnel,
@@ -59,7 +62,18 @@ import {
 } from '../controllers/nurtureBulkController.js';
 const stub = (req, res) => res.json({ success: true, message: 'Not implemented yet' });
 
-router.post('/', validateBody(chatBodySchema), handleChat);
+router.post('/', optionalAuth, validateBody(chatBodySchema), handleChat);
+router.post('/attachments', optionalAuth, (req, res, next) => {
+  uploadChatbotAttachment.single('file')(req, res, (err) => {
+    if (err) {
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'This file is over 10 MB. Upload an agreement of 10 pages or less.'
+        : (err.message || 'Invalid file upload');
+      return res.status(400).json({ success: false, message });
+    }
+    return postChatAttachment(req, res, next);
+  });
+});
 router.post('/property-images', uploadPropertyImages.array('images', 8), postPropertyImagesUpload);
 router.delete('/clear/:id', clearChatSession);
 router.post('/session-messages', validateBody(sessionMessagesSchema), getSessionMessages);

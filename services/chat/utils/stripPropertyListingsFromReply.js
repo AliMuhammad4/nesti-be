@@ -31,7 +31,6 @@ function isPropertyMatchIntroLine(value) {
   const s = String(value || '').trim().toLowerCase();
   if (!s) return false;
   return (
-    /^here are (some )?(properties|listings|matches|homes|options)/.test(s) ||
     /^i['']?m pulling up property matches/.test(s) ||
     /^please hold on/.test(s) ||
     /^matched options include/.test(s) ||

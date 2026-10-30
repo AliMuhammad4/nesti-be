@@ -59,6 +59,42 @@ router.get('/client/threads/:id', protect, ensureClient, getThreadById);
 router.get('/client/threads/:id/messages', protect, ensureClient, listThreadMessages);
 router.post('/client/threads/:id/messages', protect, ensureClient, postThreadMessage);
 router.post('/client/threads/:id/call-token', protect, callTokenLimiter, ensureClient, createThreadCallToken);
+router.post('/client/ravi-calls/:id/answer', protect, async (req, res, next) => {
+  try {
+    const { answerClientRaviCall } = await import('../services/proChat/twilioVoiceService.js');
+    const result = await answerClientRaviCall({ userId: req.user?._id, callId: req.params.id });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+router.post('/client/ravi-calls/:id/decline', protect, async (req, res, next) => {
+  try {
+    const { declineClientRaviCall } = await import('../services/proChat/twilioVoiceService.js');
+    const result = await declineClientRaviCall({ userId: req.user?._id, callId: req.params.id });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+router.post('/client/ravi-calls/:id/end', protect, async (req, res, next) => {
+  try {
+    const { endClientRaviCall } = await import('../services/proChat/twilioVoiceService.js');
+    const result = await endClientRaviCall({ userId: req.user?._id, callId: req.params.id });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+router.post('/client/maya-calls/:id/turns', protect, async (req, res, next) => {
+  try {
+    const { clientMayaTurn } = await import('../services/proChat/twilioVoiceService.js');
+    const result = await clientMayaTurn({ userId: req.user?._id, callId: req.params.id, text: req.body?.text });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
 router.post('/client/threads/:id/attachments', protect, ensureClient, runProChatUpload, postProChatAttachmentUpload);
 router.post('/client/groups', protect, ensureClient, createGroupThread);
 router.patch('/client/groups/:id', protect, ensureClient, updateGroupThread);

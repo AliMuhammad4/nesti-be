@@ -11,6 +11,7 @@ import {
   hasFeature,
 } from '../services/billing/entitlements.js';
 import { getPlanUsageForUser } from '../services/billing/planQuota.js';
+import { evaluateCredentialAccess } from './authMiddleware.js';
 
 async function loadSubscription(req, { refresh = false } = {}) {
   if (req.subscription && !refresh) return req.subscription;
@@ -40,6 +41,13 @@ function clientRoleDeniedResponse() {
   };
 }
 
+async function denyIfCredentialsLocked(req, res) {
+  const denied = await evaluateCredentialAccess(req);
+  if (!denied) return false;
+  res.status(denied.status).json(denied.body);
+  return true;
+}
+
 export function requireActiveSubscriptionAccess(req, res, next) {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
@@ -50,18 +58,21 @@ export function requireActiveSubscriptionAccess(req, res, next) {
     return res.status(403).json(clientRoleDeniedResponse());
   }
 
-  return loadSubscription(req)
-    .then(() => {
-      if (req.subscriptionAccountStatus === ACCOUNT_STATUS.EXPIRED) {
-        return res.status(403).json({
-          success: false,
-          code: 'SUBSCRIPTION_REQUIRED',
-          message: 'Your subscription is not active. Please choose a plan to continue.',
+  return denyIfCredentialsLocked(req, res)
+    .then((blocked) => {
+      if (blocked) return null;
+      return loadSubscription(req).then(() => {
+        if (req.subscriptionAccountStatus === ACCOUNT_STATUS.EXPIRED) {
+          return res.status(403).json({
+            success: false,
+            code: 'SUBSCRIPTION_REQUIRED',
+            message: 'Your subscription is not active. Please choose a plan to continue.',
+          });
+        }
+        return blockTrialQuotaExhaustedIfNeeded(req, res).then((quotaBlocked) => {
+          if (quotaBlocked) return null;
+          return next();
         });
-      }
-      return blockTrialQuotaExhaustedIfNeeded(req, res).then((blocked) => {
-        if (blocked) return null;
-        return next();
       });
     })
     .catch(next);
@@ -115,6 +126,7 @@ export function requireFeature(featureKey) {
     }
 
     try {
+      if (await denyIfCredentialsLocked(req, res)) return;
       const subscription = await loadSubscription(req);
       if (await blockTrialQuotaExhaustedIfNeeded(req, res)) return;
       if (!hasFeature(subscription, featureKey)) {
@@ -139,6 +151,7 @@ export function requireAnyFeature(...featureKeys) {
     }
 
     try {
+      if (await denyIfCredentialsLocked(req, res)) return;
       const subscription = await loadSubscription(req);
       if (await blockTrialQuotaExhaustedIfNeeded(req, res)) return;
       const allowed = keys.some((key) => hasFeature(subscription, key));

@@ -94,6 +94,12 @@ const chatConversationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    /** Buyer / seller / investor, resolved from the intake form or chosen on the widget. Additive. */
+    client_type: {
+      type: String,
+      enum: ['buyer', 'seller', 'investor', ''],
+      default: '',
+    },
     /** Set by POST /api/webhooks/calendly when invitee books or cancels (see calendlyWebhookService). */
     calendly_booking_status: {
       type: String,

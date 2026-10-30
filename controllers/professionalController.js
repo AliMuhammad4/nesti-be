@@ -182,6 +182,9 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       target_neighborhoods,
       experience,
       license_number,
+      country,
+      jurisdiction,
+      nmls_id,
       social_media,
       company_name,
       transaction_volume,
@@ -269,6 +272,12 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (target_neighborhoods !== undefined) update.target_neighborhoods = target_neighborhoods;
     if (experience !== undefined) update.experience = experience;
     if (license_number !== undefined) update.license_number = license_number;
+    if (country !== undefined) {
+      const normalized = String(country || '').trim().toUpperCase();
+      update.country = normalized === 'CA' || normalized === 'US' ? normalized : null;
+    }
+    if (jurisdiction !== undefined) update.jurisdiction = String(jurisdiction || '').trim().toUpperCase().slice(0, 12);
+    if (nmls_id !== undefined) update.nmls_id = String(nmls_id || '').trim().slice(0, 40);
     if (social_media !== undefined) update.social_media = social_media;
     if (company_name !== undefined) update.company_name = company_name;
     if (transaction_volume !== undefined) update.transaction_volume = transaction_volume;

@@ -30,6 +30,8 @@ import propertyRoutes from './routes/propertyRoutes.js';
 import proChatRoutes from './routes/proChatRoutes.js';
 import publicProfileRoutes from './routes/publicProfileRoutes.js';
 import professionalDashboardRoutes from './routes/professionalDashboardRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
+import twilioWebhookRoutes from './routes/twilioWebhookRoutes.js';
 import { configureR2 } from './services/media/r2Client.js';
 
 configureR2();
@@ -69,6 +71,12 @@ app.use(
   '/api/webhooks/calendly',
   express.raw({ type: 'application/json' }),
   calendlyWebhookRoutes
+);
+
+app.use(
+  '/api/webhooks/twilio',
+  express.urlencoded({ extended: false }),
+  twilioWebhookRoutes,
 );
 
 // We need express.json() for all other routes
@@ -142,6 +150,7 @@ app.use('/api/pro-chat', proChatRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/public', publicProfileRoutes);
 app.use('/api/professional-dashboard', professionalDashboardRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

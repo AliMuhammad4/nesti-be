@@ -56,6 +56,8 @@ export function professionalTypeToWidgetAgentType(flowType) {
 }
 
 export function resolveChatFlowType({ embed, normalizedAgentType, professionalProfile }) {
+  const profileRole = professionalProfile?.professional_type;
+  if (profileRole && isValidProfessionalType(profileRole)) return profileRole;
   if (embed?.widget_role && isValidProfessionalType(embed.widget_role)) {
     return embed.widget_role;
   }

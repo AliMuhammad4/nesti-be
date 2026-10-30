@@ -84,5 +84,6 @@ leadMatchSchema.index({ user_id: 1, lead_profile_id: 1, last_contact_at: -1, upd
 leadMatchSchema.index({ user_id: 1, createdAt: -1 });
 leadMatchSchema.index({ user_id: 1, match_status: 1, createdAt: -1 });
 leadMatchSchema.index({ user_id: 1, conversation_id: 1 });
+leadMatchSchema.index({ match_status: 1, createdAt: -1 });
 
 export default mongoose.model('LeadMatch', leadMatchSchema);

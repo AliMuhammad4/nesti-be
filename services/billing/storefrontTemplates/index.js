@@ -11,12 +11,18 @@ export {
 export {
   assertStorefrontTemplateAccess,
   ensureFreeStorefrontTemplateUnlock,
-  getStorefrontTemplateEntitlementsForUser,
+  serializePaidTemplateSubscriptions,
   serializeStorefrontTemplateEntitlements,
+  templatePurchasePeriodEnd,
   userHasStorefrontTemplateAccess,
 } from './access.js';
 
+export { getStorefrontTemplateEntitlementsForUser } from './entitlements.js';
+export { refreshStorefrontTemplateSubscriptionsForUser } from './refresh.js';
+
 export {
+  isStorefrontTemplateStripeMetadata,
+  stripeSubscriptionBelongsToStorefrontTemplate,
   syncStorefrontTemplateSubscription,
   unlockStorefrontTemplateForUser,
 } from './unlock.js';

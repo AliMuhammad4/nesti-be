@@ -11,6 +11,7 @@ import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.
 import { validateWidgetRoleAgainstProfile } from '../utils/embedWidgetRole.js';
 import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
 import { FEATURES } from '../services/billing/entitlements.js';
+import { loadAppliedAssistantSetting } from '../services/professionalAssistant/professionalAssistantService.js';
 
 const generateEmbedToken = async (req, res, next) => {
   try {
@@ -88,10 +89,33 @@ const resolveEmbed = async (req, res, next) => {
       null;
 
     const resolvedWidgetRole =
-      embed.widget_role ||
       (prof?.professional_type && PROFESSIONAL_TYPE_VALUES.includes(prof.professional_type)
         ? prof.professional_type
-        : null);
+        : null)
+      || embed.widget_role
+      || null;
+
+    const assistantSetting = await loadAppliedAssistantSetting(embed.user_id);
+    const assistantIdentity = assistantSetting
+      ? {
+          applied: true,
+          bot_name: assistantSetting.bot_name,
+          display_name: assistantSetting.display_name,
+          bot_persona_title: assistantSetting.bot_persona_title,
+          welcome_message: assistantSetting.welcome_message,
+          personalities: assistantSetting.personalities || [],
+          communication_style: assistantSetting.communication_style || '',
+          response_length: assistantSetting.response_length || 'balanced',
+          qualification_questions: assistantSetting.qualification_questions || [],
+          next_actions: assistantSetting.next_actions || [],
+          business_name: assistantSetting.business_name || '',
+          brand_colors: assistantSetting.brand_colors || null,
+          logo_url: assistantSetting.logo_url || '',
+          avatar_url: assistantSetting.avatar_url || '',
+          client_types: assistantSetting.client_types || [],
+          qualification_templates: assistantSetting.qualification_templates || null,
+        }
+      : null;
 
     res.json({
       success: true,
@@ -99,6 +123,7 @@ const resolveEmbed = async (req, res, next) => {
       userId: embed.user_id,
       widget_role: resolvedWidgetRole,
       widget_settings: embed.widget_settings || {},
+      assistant_identity: assistantIdentity,
       profile_image: profileImage,
       host_display_name: hostDisplayName,
     });

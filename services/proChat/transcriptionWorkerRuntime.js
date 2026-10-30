@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_TRANSCRIPTION_WORKER_PORT } from './callTranscriptionConstants.js';
+import { DEFAULT_RAVI_WORKER_PORT } from './raviAgentConstants.js';
 
 export { DEFAULT_TRANSCRIPTION_WORKER_PORT };
 export const TRANSCRIPTION_WORKER_READY_TIMEOUT_MS = 45_000;
@@ -12,6 +13,15 @@ export const TRANSCRIPTION_WORKER_HEALTH_TIMEOUT_MS = 4_000;
 
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const workerEntryPath = path.join(backendRoot, 'workers', 'callTranscriberWorker.js');
+const raviWorkerEntryPath = path.join(backendRoot, 'workers', 'raviSalesWorker.js');
+
+function workerChildEnv(env, extra = {}) {
+  const next = { ...env, ...extra, NODE_OPTIONS: '' };
+  delete next.NODE_CHANNEL_FD;
+  delete next.NODE_CHANNEL_SERIALIZATION_MODE;
+  delete next.NODE_UNIQUE_ID;
+  return next;
+}
 
 export function resolveTranscriptionWorkerPort(env = process.env) {
   const parsed = Number(env.CALL_TRANSCRIPTION_WORKER_PORT);
@@ -55,6 +65,29 @@ export async function waitForTranscriptionWorkerHealth(
   return false;
 }
 
+export function resolveRaviWorkerPort(env = process.env) {
+  const parsed = Number(env.RAVI_WORKER_PORT);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_RAVI_WORKER_PORT;
+}
+
+export function spawnRaviWorkerProcess({
+  port = resolveRaviWorkerPort(),
+  env = process.env,
+  stdio = 'inherit',
+} = {}) {
+  return spawn(process.execPath, [raviWorkerEntryPath], {
+    cwd: backendRoot,
+    env: workerChildEnv(env, {
+      RAVI_WORKER_PORT: String(port),
+      DOTENV_CONFIG_QUIET: 'true',
+    }),
+    detached: false,
+    windowsHide: true,
+    shell: false,
+    stdio,
+  });
+}
+
 /**
  * Spawn the LiveKit transcription worker without a detached console on Windows.
  * Caller owns lifecycle (kill on shutdown).
@@ -85,15 +118,11 @@ export function spawnTranscriptionWorkerProcess({
 
   const child = spawn(process.execPath, [workerEntryPath], {
     cwd: backendRoot,
-    env: {
-      ...env,
-      CALL_TRANSCRIPTION_WORKER_PORT: String(port),
-      NODE_OPTIONS: '',
-    },
+    env: workerChildEnv(env, { CALL_TRANSCRIPTION_WORKER_PORT: String(port) }),
     detached: false,
     windowsHide: true,
+    shell: false,
     stdio,
-    execArgv: [],
   });
 
   if (typeof logFd === 'number') {

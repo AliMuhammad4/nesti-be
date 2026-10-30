@@ -176,6 +176,13 @@ function normalizeCachedIntelligence(intelligence) {
   return rest;
 }
 
+/** Cached insights only — does not generate a new analysis. */
+export function getCachedLeadIntelligence(leadMatch) {
+  const payload = leadMatch?.ai_insights?.payload;
+  if (!payload || typeof payload !== 'object') return null;
+  return normalizeCachedIntelligence(payload);
+}
+
 function hasConversionGuidance(intelligence) {
   const guidance = intelligence?.conversion_guidance;
   if (!guidance || typeof guidance !== 'object') return false;

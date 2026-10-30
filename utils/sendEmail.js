@@ -22,10 +22,13 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function withTimeout(promise, timeoutMs) {
+function withTimeout(promise, timeoutMs, onTimeout) {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`Email send timeout after ${timeoutMs}ms`)), timeoutMs);
+    timeoutId = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(`Email send timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
@@ -41,6 +44,7 @@ function isTransientEmailError(error) {
     message.includes('econnreset') ||
     message.includes('socket hang up') ||
     message.includes('network') ||
+    message.includes('abort') ||
     message.includes('temporar') ||
     message.includes('service unavailable') ||
     /\b5\d\d\b/.test(message)
@@ -48,6 +52,7 @@ function isTransientEmailError(error) {
 }
 
 const sendEmail = async (options) => {
+  const idempotencyKey = String(options?.idempotencyKey || '').trim();
   try {
     if (!isResendConfigured()) {
       throw new Error('Missing Resend config: RESEND_API_KEY or RESEND_FROM_EMAIL');
@@ -58,21 +63,37 @@ const sendEmail = async (options) => {
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const timeoutMs = asInt(process.env.RESEND_SEND_TIMEOUT_MS, 20000, { min: 5000, max: 120000 });
-    const maxAttempts = asInt(process.env.RESEND_SEND_MAX_ATTEMPTS, 3, { min: 1, max: 5 });
-
+    const timeoutMs = asInt(
+      options.timeoutMs ?? process.env.RESEND_SEND_TIMEOUT_MS,
+      20000,
+      { min: 3000, max: 120000 },
+    );
+    const maxAttempts = asInt(
+      options.maxAttempts ?? process.env.RESEND_SEND_MAX_ATTEMPTS,
+      3,
+      { min: 1, max: 5 },
+    );
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
+        const controller = idempotencyKey ? new AbortController() : null;
+        const payload = {
+          from: getFromAddress(),
+          to: [options.email],
+          subject: options.subject,
+          text: options.message,
+          html: options.htmlMessage || `<p>${options.message}</p>`,
+        };
+        const request = idempotencyKey
+          ? resend.emails.send(payload, {
+            signal: controller.signal,
+            idempotencyKey,
+          })
+          : resend.emails.send(payload);
         const { data, error } = await withTimeout(
-          resend.emails.send({
-            from: getFromAddress(),
-            to: [options.email],
-            subject: options.subject,
-            text: options.message,
-            html: options.htmlMessage || `<p>${options.message}</p>`,
-          }),
+          request,
           timeoutMs,
+          controller ? () => controller.abort() : undefined,
         );
 
         if (error) {
@@ -100,7 +121,9 @@ const sendEmail = async (options) => {
     throw lastError || new Error('Resend send failed');
   } catch (error) {
     logger.error(`Error sending email: ${error.message}`);
-    return { success: false, error };
+    return idempotencyKey
+      ? { success: false, error, uncertain: isTransientEmailError(error) }
+      : { success: false, error };
   }
 };
 

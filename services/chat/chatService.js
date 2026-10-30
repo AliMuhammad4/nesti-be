@@ -4,6 +4,7 @@ import ChatMessage from '../../models/ChatMessage.js';
 import ChatbotEmbedUrl from '../../models/ChatbotEmbedUrl.js';
 import LeadMatch from '../../models/LeadMatch.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
+import PublicProfile from '../../models/PublicProfile.js';
 import logger from '../../utils/logger.js';
 import {
   normalizeAgentType,
@@ -42,8 +43,43 @@ import {
   buildChatResponseMeta,
 } from './handleChat/index.js';
 import { isAutomatedBookingEnabledForFlow } from './flows/flowRoleMeta.js';
+import { identityReply } from './utils/profileVisitorFacts.js';
+import { allowLandingChatRate, isLandingEmbed, loadLandingChatSettings } from './nestiLanding/landingChatConfig.js';
+import {
+  applyDocumentAsk,
+  attachDocumentsToTurn,
+  buildSharedDocumentsPrompt,
+  briefDocumentAnswer,
+  documentReadReply,
+  documentReviewReply,
+  followUpSkipIds,
+  loadConversationDocuments,
+  rereadUndescribedImages,
+  nextDocumentRequest,
+  signStoredAttachments,
+  waitForDocumentReads,
+  waitForDocumentSummaries,
+} from './documents/chatDocumentService.js';
+import {
+  assistantSettingForPreview,
+  assistantAllowsLeadSaving,
+  buildPreviewChatPrompt,
+  finishAgentReply,
+  finishBrokerReply,
+  finishLawyerReply,
+  lawyerReplyDrifted,
+  loadAppliedAssistantSetting,
+  voiceTurnReminder,
+  withOccasionalEmoji,
+} from '../professionalAssistant/professionalAssistantService.js';
+import { nestiLandingFlow } from './nestiLanding/nestiLandingFlow.js';
+import { handleLandingChatTurn } from './nestiLanding/landingChatTurnService.js';
 import { buildPropertyMatchesPayload } from './handleChat/chatPropertyMatchesPayload.js';
-import { appendCalendlyBookingLink } from './utils/chatBookingReply.js';
+import { appendCalendlyBookingLink, holdFurtherQuestions, userSignalsBookingIntent } from './utils/chatBookingReply.js';
+import { chatAnsweredQuestionIds, openQualificationQuestionIds, qualificationStillOpen, quickRepliesForReply } from '../professionalAssistant/qualificationProgress.js';
+import { clientTypeForForm, settingForClientType } from '../professionalAssistant/assistantSettings.js';
+import { buildPreviewLeadSummary, leadClientTypeExtras } from './handleChat/previewLeadSummary.js';
+import { dropRepeatedVisitorName, replyLanguage } from '../professionalAssistant/replyStyle.js';
 import { shouldRefetchPropertyMatchesForMessage } from './utils/propertyMatchesRequestIntent.js';
 import { stripPropertyListingsFromReply } from './utils/stripPropertyListingsFromReply.js';
 import { buildOutOfScopeReply, detectOutOfScopeMessage } from './utils/chatScopeGuard.js';
@@ -161,13 +197,14 @@ export const getChatSessionMessagesService = async ({ id: sessionId, embedToken 
     .select('role content intent createdAt meta')
     .lean();
 
-  const messages = rows.map((m) => ({
+  const messages = await Promise.all(rows.map(async (m) => ({
     id: String(m._id),
     role: m.role,
     content: m.content,
     intent: m.intent || null,
     created_at: m.createdAt,
-  }));
+    attachments: await signStoredAttachments(m.meta?.attachments),
+  })));
 
   return {
     status: 200,
@@ -320,6 +357,13 @@ export const handleChatService = async ({
   referer,
   formContact,
   forceNewLead = false,
+  opening = false,
+  preview = false,
+  previewAssistantDraft = null,
+  testPersona = null,
+  viewerUserId = null,
+  onReplyDelta = null,
+  attachmentIds = [],
 }) => {
   if (!message || typeof message !== 'string' || !message.trim()) {
     return { status: 400, body: { success: false, message: 'message is required' } };
@@ -340,30 +384,68 @@ export const handleChatService = async ({
   if (!embed) {
     return { status: 403, body: { success: false, message: 'Invalid or inactive embed token' } };
   }
+  if (isLandingEmbed(embed) || normalizedChannel === 'landing') {
+    return handleLandingChatTurn({
+      message: trimmedMessage,
+      embedToken,
+      sessionId,
+      visitorId,
+      clientIp,
+      formContact,
+      opening: Boolean(opening),
+    });
+  }
+  const landingMode = isLandingEmbed(embed);
+  if (landingMode && !allowLandingChatRate(clientIp, visitorId)) {
+    return { status: 429, body: { success: false, message: 'Too many messages. Try again in a minute.' } };
+  }
+  const landingSettings = landingMode ? await loadLandingChatSettings().catch(() => null) : null;
+  if (landingMode && landingSettings && landingSettings.enabled === false) {
+    return { status: 403, body: { success: false, message: 'Landing chat is turned off.' } };
+  }
   const userId = embed.user_id;
 
-  const [visitor, professionalProfile, subscription] = await Promise.all([
+  const [visitor, professionalProfile, subscription, publicProfile] = await Promise.all([
     resolveVisitor({ visitorUuid: visitorId, embedToken, userAgent, clientIp }),
     ProfessionalProfile.findOne({ user_id: userId }),
     getOrCreateSubscriptionForUser({ _id: userId }),
+    landingMode
+      ? null
+      : PublicProfile.findOne({ user_id: userId }).select('stats.years_experience stats.years_practice').lean(),
   ]);
 
-  const flowType = resolveChatFlowType({
-    embed,
-    normalizedAgentType,
-    professionalProfile,
-  });
-  const effectiveWidgetType = professionalTypeToWidgetAgentType(flowType);
-  const flow = getFlowForRole(flowType);
-  const propertyMatchesEnabled = propertyMatchesEnabledForPlan(flow, subscription);
-  const canCreateLeads = Boolean(flow?.flowRole);
+  const previewForOwner =
+    preview === true && viewerUserId && String(embed.user_id) === String(viewerUserId);
+  const draftRole = previewAssistantDraft?.role;
+  const flowType = landingMode
+    ? 'landing'
+    : previewForOwner && isValidProfessionalType(draftRole)
+      ? draftRole
+      : resolveChatFlowType({
+        embed,
+        normalizedAgentType,
+        professionalProfile,
+      });
+  const effectiveWidgetType = professionalTypeToWidgetAgentType(landingMode ? 'agent' : flowType);
+  const flow = landingMode ? nestiLandingFlow : getFlowForRole(flowType);
+  const propertyMatchesEnabled = landingMode ? false : propertyMatchesEnabledForPlan(flow, subscription);
+  if (preview === true && !previewForOwner) {
+    return {
+      status: 403,
+      body: { success: false, message: 'Sign in again to preview unsaved changes.' },
+    };
+  }
+  const canCreateLeads = Boolean(flow?.flowRole) && !previewForOwner;
+  const previewPersona = previewForOwner && ['buyer', 'seller', 'investor'].includes(testPersona) ? testPersona : '';
 
-  const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow);
+  const nonAgentBuyerSellerIntent = usesFixedBuyIntentForLeadMatch(flow) || Boolean(flow.landingMode);
   const intent = nonAgentBuyerSellerIntent
     ? 'unspecified'
     : formContact?.intent === 'sell' || formContact?.intent === 'buy'
       ? formContact.intent
-      : classifyIntentFromKeywords(trimmedMessage);
+      : previewPersona
+        ? (previewPersona === 'seller' ? 'sell' : 'buy')
+        : classifyIntentFromKeywords(trimmedMessage);
 
   const embedFlowRole =
     embed.widget_role && isValidProfessionalType(embed.widget_role) ? embed.widget_role : undefined;
@@ -414,6 +496,14 @@ export const handleChatService = async ({
   const formSignals = flow.getFormSignals(storedForm);
   const formQualification = flow.getFormQualification(storedForm);
 
+  const turnAttachments = landingMode
+    ? []
+    : await attachDocumentsToTurn({
+      userId,
+      conversationId: conversation._id,
+      sessionId,
+      attachmentIds,
+    });
   await ChatMessage.create({
     conversation_id: conversation._id,
     session_id: sessionId,
@@ -427,13 +517,17 @@ export const handleChatService = async ({
       ip: clientIp,
       session: sessionId,
       contact: currentContact,
+      attachments: turnAttachments,
     },
   });
 
-  let contactInfo = await accumulateContactInfo(conversation._id, currentContact);
-  let hasContact = hasIdentityContact(contactInfo);
-
-  const [interactionCount, recentUserMessages] = await Promise.all([
+  const assistantSettingPromise = landingMode
+    ? Promise.resolve(null)
+    : previewForOwner && previewAssistantDraft
+      ? Promise.resolve(assistantSettingForPreview(previewAssistantDraft, flowType))
+      : loadAppliedAssistantSetting(userId);
+  const [contactInfoLoaded, interactionCount, recentUserMessages, historyRows, appliedAssistantLoaded] = await Promise.all([
+    accumulateContactInfo(conversation._id, currentContact),
     ChatMessage.countDocuments({
       conversation_id: conversation._id,
       role: 'user',
@@ -446,7 +540,15 @@ export const handleChatService = async ({
       .limit(MAX_USER_MESSAGES_FOR_SCORING)
       .select('content')
       .lean(),
+    ChatMessage.find({ conversation_id: conversation._id })
+      .sort({ createdAt: -1 })
+      .limit(MAX_MESSAGES_FOR_PROMPT)
+      .select('role content meta')
+      .lean(),
+    assistantSettingPromise,
   ]);
+  let contactInfo = contactInfoLoaded;
+  let hasContact = hasIdentityContact(contactInfo);
   const conversationText = [...recentUserMessages]
     .reverse()
     .map((m) => m.content)
@@ -464,13 +566,13 @@ export const handleChatService = async ({
     formQualification,
   });
 
-  const history = (
-    await ChatMessage.find({ conversation_id: conversation._id })
-      .sort({ createdAt: -1 })
-      .limit(MAX_MESSAGES_FOR_PROMPT)
-      .select('role content meta')
-      .lean()
-  ).reverse();
+  const history = historyRows.reverse();
+  const assistantHistory = history.filter((message) => message.role === 'assistant');
+  const lastAssistantReply = assistantHistory.at(-1)?.content || '';
+  const earlierAssistantReplies = assistantHistory
+    .slice(-8)
+    .map((message) => message.content)
+    .join('\n');
 
   const { calendlyLinkForVisitor } = resolveCalendlyLinksForVisitor(
     flow,
@@ -478,24 +580,29 @@ export const handleChatService = async ({
     leadGrade,
     conversation
   );
-  const isAutomatedBookingEnabled = isAutomatedBookingEnabledForFlow(
-    flow,
-    professionalProfile,
-    conversation
-  );
+  const isAutomatedBookingEnabled = landingMode
+    ? false
+    : isAutomatedBookingEnabledForFlow(
+      flow,
+      professionalProfile,
+      conversation
+    );
   const conversationPromptSnapshot = {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,
     lead_grade: conversation?.lead_grade ?? null,
   };
-  const deferCalendlyLink = shouldDeferCalendlyLink(
-    flow,
-    isAutomatedBookingEnabled,
-    calendlyLinkForVisitor,
-    storedForm,
-    history,
-    interactionCount
-  );
+  const deferCalendlyLink = userSignalsBookingIntent(trimmedMessage)
+    ? false
+    : shouldDeferCalendlyLink(
+      flow,
+      isAutomatedBookingEnabled,
+      calendlyLinkForVisitor,
+      storedForm,
+      history,
+      interactionCount
+    );
 
+  const savedYears = Number(publicProfile?.stats?.years_experience) || Number(publicProfile?.stats?.years_practice) || 0;
   const systemPromptOptions = await buildFlowSystemPromptOptions({
     flow,
     professionalProfile,
@@ -508,10 +615,88 @@ export const handleChatService = async ({
     calendlyLinkForVisitor,
     propertyMatchesEnabled,
   });
-  const systemPrompt = flow.buildSystemPrompt(professionalProfile, systemPromptOptions);
+  const visitorClientType = landingMode ? '' : (previewPersona || clientTypeForForm(storedForm));
+  const typedAssistant = !landingMode && appliedAssistantLoaded
+    ? settingForClientType(appliedAssistantLoaded, visitorClientType)
+    : appliedAssistantLoaded;
+  const appliedAssistantResolved = typedAssistant?.applied && storedForm && !previewForOwner && !landingMode
+    ? { ...typedAssistant, qualification_questions: openQualificationQuestionIds(typedAssistant, storedForm) }
+    : typedAssistant;
+  if (!landingMode) {
+    systemPromptOptions.assistantSetting = appliedAssistantResolved;
+    systemPromptOptions.yearsExperience = savedYears;
+    systemPromptOptions.previewConversation = Boolean(previewForOwner);
+    systemPromptOptions.clientType = visitorClientType;
+  }
+  const appliedAssistantSetting = systemPromptOptions.assistantSetting;
+  const leadSyncEnabled = canCreateLeads && assistantAllowsLeadSaving(appliedAssistantSetting);
+  if (!landingMode && storedForm && typeof storedForm === 'object') {
+    systemPromptOptions.intakeFormContact = storedForm;
+  }
+  if (!landingMode) {
+    systemPromptOptions.openingTurn = assistantHistory.length === 0;
+    systemPromptOptions.chatAnsweredQuestions = chatAnsweredQuestionIds(appliedAssistantResolved, history, trimmedMessage);
+  }
+  if (landingMode) {
+    systemPromptOptions.audience = String(storedForm?.audience_role || formContact?.audience_role || 'client');
+    systemPromptOptions.landingGuides = landingSettings || {};
+    systemPromptOptions.contactKnown = Boolean(
+      storedForm?.email || storedForm?.phone || storedForm?.name
+      || formContact?.email || formContact?.phone || formContact?.name
+    );
+  }
+  if (!landingMode && turnAttachments.length) {
+    await waitForDocumentReads(turnAttachments.map((file) => file.id));
+  }
+  let sharedDocuments = landingMode
+    ? []
+    : await loadConversationDocuments({
+      userId,
+      conversationId: conversation._id,
+      sessionId,
+      includePreview: previewForOwner,
+    });
+  const focusIdsForRead = new Set(turnAttachments.map((file) => String(file.id)));
+  const photosToReread = focusIdsForRead.size
+    ? sharedDocuments.filter((doc) => focusIdsForRead.has(String(doc._id)))
+    : [];
+  if (photosToReread.length && await rereadUndescribedImages(photosToReread)) {
+    sharedDocuments = await loadConversationDocuments({
+      userId,
+      conversationId: conversation._id,
+      sessionId,
+      includePreview: previewForOwner,
+    });
+  }
+  const focusIds = new Set(turnAttachments.map((file) => String(file.id)));
+  let focusedDocuments = focusIds.size
+    ? sharedDocuments.filter((doc) => focusIds.has(String(doc._id)))
+    : [];
+  if (focusedDocuments.some((doc) => doc.text_ready && doc.status !== 'ready' && doc.status !== 'failed')) {
+    await waitForDocumentSummaries(focusedDocuments.map((doc) => doc._id), 8000);
+    sharedDocuments = await loadConversationDocuments({
+      userId,
+      conversationId: conversation._id,
+      sessionId,
+      includePreview: previewForOwner,
+    });
+    focusedDocuments = sharedDocuments.filter((doc) => focusIds.has(String(doc._id)));
+  }
+  const documentPrompt = buildSharedDocumentsPrompt(sharedDocuments, {
+    focusIds: turnAttachments.map((file) => file.id),
+    question: trimmedMessage,
+  });
+  const newFileNames = turnAttachments.map((file) => file.original_filename).filter(Boolean).join(', ');
+  const systemPrompt = `${previewForOwner
+    ? buildPreviewChatPrompt(flow?.flowRole, professionalProfile, systemPromptOptions)
+    : flow.buildSystemPrompt(professionalProfile, systemPromptOptions)}${documentPrompt ? `\n\n${documentPrompt}` : ''}`;
+  const recentHistory = previewForOwner ? history.slice(-6) : history;
+  const promptHistory = flow?.flowRole !== 'lawyer'
+    ? recentHistory
+    : recentHistory.filter((message) => message.role !== 'assistant' || !lawyerReplyDrifted(message.content));
   const openaiMessages = [
     { role: 'system', content: systemPrompt },
-    ...history.map((m) => ({ role: m.role, content: m.content })),
+    ...promptHistory.map((m) => ({ role: m.role, content: m.content })),
   ];
 
   const mortgageBrokerSnapshotQual = null;
@@ -522,16 +707,73 @@ export const handleChatService = async ({
   let emotionalState = 'neutral';
   let parsedAiDetails = {};
   const isOutOfScopeMessage = detectOutOfScopeMessage(trimmedMessage, flow?.flowRole);
+  const directDocumentReply = documentReadReply(focusedDocuments);
+  const reviewReply = turnAttachments.length
+    ? documentReviewReply(focusedDocuments, appliedAssistantSetting, {
+      priorDocuments: sharedDocuments.filter((doc) => !focusIds.has(String(doc._id))),
+      userMessage: trimmedMessage,
+      conversationText,
+      intent,
+      text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
+      history,
+      previousReply: lastAssistantReply,
+    })
+    : '';
+  const shapeDocumentReply = (text) => {
+    const replyContext = {
+      userMessage: trimmedMessage,
+      documentReceived: true,
+      previousReply: lastAssistantReply,
+      history,
+      setting: appliedAssistantSetting,
+      preview: previewForOwner,
+      conversationText,
+    };
+    return flow?.flowRole === 'lawyer'
+      ? finishLawyerReply(text, replyContext)
+      : flow?.flowRole === 'mortgage_broker'
+        ? finishBrokerReply(text, replyContext)
+        : flow?.flowRole === 'agent'
+          ? finishAgentReply(text, replyContext)
+          : text;
+  };
 
   if (isOutOfScopeMessage) {
-    aiReply = buildOutOfScopeReply(flow?.flowRole, professionalProfile?.full_name);
+    aiReply = buildOutOfScopeReply(
+      flow?.flowRole,
+      professionalProfile?.full_name,
+      landingMode ? null : appliedAssistantSetting,
+    );
     logger.info('Chat service: out-of-scope message blocked', {
       op: 'chat.message',
       session_id: sessionId,
       flow_role: flow?.flowRole || 'agent',
     });
+  } else if (reviewReply) {
+    aiReply = reviewReply;
+    logger.info('Chat service: document reviewed against the request', {
+      op: 'chat.message',
+      session_id: sessionId,
+    });
+  } else if (directDocumentReply) {
+    aiReply = shapeDocumentReply(directDocumentReply);
+    logger.info('Chat service: document reply from saved notes', {
+      op: 'chat.message',
+      session_id: sessionId,
+    });
   } else {
-    try {
+    let briefReply = '';
+    if (focusedDocuments.length && !turnAttachments.length) {
+      try {
+        briefReply = await briefDocumentAnswer(focusedDocuments, trimmedMessage);
+      } catch (err) {
+        logger.warn('Chat service: short document answer failed', { session_id: sessionId, error: err?.message });
+      }
+    }
+    if (briefReply) {
+      aiReply = shapeDocumentReply(briefReply);
+      logger.info('Chat service: document reply from short read', { op: 'chat.message', session_id: sessionId });
+    } else try {
       const openAiStartedAt = Date.now();
       const turn = await runChatOpenAiTurn({
         openaiMessages,
@@ -544,13 +786,44 @@ export const handleChatService = async ({
         contactInfo,
         interactionCount,
         intent,
+        turnReminder: landingMode
+          ? ''
+          : `${voiceTurnReminder(appliedAssistantSetting, trimmedMessage, { preview: previewForOwner, conversationText, openingTurn: assistantHistory.length === 0, intakeFormContact: storedForm })}${turnAttachments.length ? `\nThe visitor just shared ${newFileNames || 'a file'}. Say whether it is the requested document or a different file. Do not describe the picture or the file.` : (documentPrompt ? '\nA file was shared earlier. Do not describe it again unless the visitor asks what it says.' : '')}${previewForOwner ? '\nVisible reply only. One reply in the selected voice and communication style. Do not write a second version. Do not write ###META### or JSON.' : ''}`,
+        assistantSetting: landingMode ? null : appliedAssistantSetting,
+        maxTokens: previewForOwner
+          ? (documentPrompt
+            ? 280
+            : (flow?.flowRole === 'lawyer' || flow?.flowRole === 'mortgage_broker'
+              ? (['educational', 'consultative'].includes(appliedAssistantSetting?.communication_style) ? 280 : 180)
+              : 120))
+          : 600,
+        onDelta: typeof onReplyDelta === 'function' && previewForOwner
+          ? (text) => onReplyDelta(String(text || '').trim())
+          : null,
       });
       logger.info('Chat service: OpenAI turn completed', {
         op: 'chat.message',
         session_id: sessionId,
         ms: Date.now() - openAiStartedAt,
+        prompt_chars: systemPrompt.length,
+        preview: Boolean(previewForOwner),
       });
-      aiReply = turn.aiReply;
+      const replyContext = {
+        userMessage: trimmedMessage,
+        documentReceived: turnAttachments.length > 0,
+        previousReply: lastAssistantReply,
+        history,
+        setting: appliedAssistantSetting,
+        preview: previewForOwner,
+        conversationText,
+      };
+      aiReply = flow?.flowRole === 'lawyer'
+        ? finishLawyerReply(turn.aiReply, replyContext)
+        : flow?.flowRole === 'mortgage_broker'
+          ? finishBrokerReply(turn.aiReply, replyContext)
+          : flow?.flowRole === 'agent'
+            ? finishAgentReply(turn.aiReply, replyContext)
+            : turn.aiReply;
       aiIntent = turn.aiIntent;
       emotionalState = turn.emotionalState;
       parsedAiDetails = turn.parsedAiDetails;
@@ -566,14 +839,24 @@ export const handleChatService = async ({
   coerceContactIdentityFields(contactInfo);
   hasContact = hasIdentityContact(contactInfo);
 
-  const refetchPropertyMatches = shouldRefetchPropertyMatchesForMessage(trimmedMessage);
-  const recapLines = refetchPropertyMatches
+  const previousAssistantReply = earlierAssistantReplies;
+  const refetchPropertyMatches = shouldRefetchPropertyMatchesForMessage(trimmedMessage, {
+    previousAssistantReply,
+  });
+  const appliedAssistant = systemPromptOptions.assistantSetting;
+  const scheduleActions = appliedAssistant?.next_actions;
+  const scheduleAllowed = !appliedAssistant?.applied
+    || !Array.isArray(scheduleActions)
+    || !scheduleActions.length
+    || scheduleActions.includes('schedule');
+  const recapLines = refetchPropertyMatches || flow?.flowRole === 'lawyer' || flow?.flowRole === 'mortgage_broker'
     ? []
     : buildLeadRecapMarkdownLines({
         form: storedForm,
         contact: contactInfo,
         extracted: parsedAiDetails,
         intent: aiIntent,
+        compact: Boolean(appliedAssistant?.applied && flow?.flowRole === 'agent'),
       });
   let finalReply = aiReply;
   if (
@@ -594,11 +877,53 @@ export const handleChatService = async ({
     }
   }
 
-  if (isAutomatedBookingEnabled && calendlyLinkForVisitor && hasContact) {
+  const namedReply = identityReply({
+    userMessage: trimmedMessage,
+    profile: professionalProfile,
+    setting: appliedAssistantSetting,
+    yearsExperience: systemPromptOptions.yearsExperience,
+  });
+  if (namedReply) finalReply = namedReply;
+  finalReply = holdFurtherQuestions(finalReply, trimmedMessage, replyLanguage(appliedAssistantSetting, trimmedMessage, conversationText));
+  const visitorAskedToMeet = userSignalsBookingIntent(trimmedMessage);
+  const stillAsking = /[?？]/.test(finalReply) && !visitorAskedToMeet;
+  const questionsOpen = qualificationStillOpen(appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions);
+  if (!stillAsking && isAutomatedBookingEnabled && calendlyLinkForVisitor && scheduleAllowed && !namedReply && (visitorAskedToMeet || (!questionsOpen && !deferCalendlyLink && hasContact))) {
     finalReply = appendCalendlyBookingLink(finalReply, calendlyLinkForVisitor, {
       userMessage: trimmedMessage,
+      allowSchedule: scheduleAllowed,
+      label: appliedAssistantSetting?.cta_label || '',
     });
   }
+
+  const stillReadingDocument = /still (reading|looking)/i.test(directDocumentReply || '');
+  let requestedDocument = null;
+  if (!namedReply && !landingMode && appliedAssistantSetting?.applied && appliedAssistantSetting.document_requests?.length && !isOutOfScopeMessage && !stillReadingDocument) {
+    const asked = applyDocumentAsk(
+      finalReply,
+      nextDocumentRequest(appliedAssistantSetting, sharedDocuments, {
+        intent,
+        text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
+      }, followUpSkipIds(appliedAssistantSetting, sharedDocuments, {
+        intent,
+        text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
+      }, history, lastAssistantReply)),
+      { previousReply: previousAssistantReply, userMessage: trimmedMessage, setting: appliedAssistantSetting, conversationText, qualificationOpen: !turnAttachments.length && qualificationStillOpen(appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions) },
+    );
+    finalReply = asked.reply;
+    requestedDocument = asked.request;
+    if (appliedAssistantSetting.use_emojis) {
+      finalReply = withOccasionalEmoji(finalReply, appliedAssistantSetting, {
+        previousReply: lastAssistantReply,
+        userMessage: trimmedMessage,
+        documentReceived: Boolean(requestedDocument) || turnAttachments.length > 0,
+      });
+    }
+  }
+  const visitorFirstName = String(storedForm?.name || storedForm?.full_name || '').trim().split(/\s+/)[0] || '';
+  finalReply = dropRepeatedVisitorName(finalReply, visitorFirstName, {
+    keepName: Boolean(appliedAssistantSetting?.address_by_first_name && assistantHistory.length === 0),
+  });
 
   const finalScore = leadScore;
   const finalGradeRaw = flow.bestGrade(leadGrade, conversation.lead_grade || 'unscored');
@@ -639,6 +964,7 @@ export const handleChatService = async ({
   conversation.emotional_state = emotionalState;
   conversation.last_interaction_at = new Date();
   conversation.form_data = mergedFormContact;
+  if (visitorClientType) conversation.client_type = visitorClientType;
   await conversation.save();
   const conversationMetaSnapshot = {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,
@@ -647,7 +973,7 @@ export const handleChatService = async ({
 
   let existingLeadMatchForSync;
   let leadLookupFailed = false;
-  if (canCreateLeads && hasContact && !forceNewLead) {
+  if (leadSyncEnabled && hasContact && !forceNewLead) {
     try {
       const formIntent = String(mergedFormContact?.intent || '').trim().toLowerCase();
       const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
@@ -669,16 +995,29 @@ export const handleChatService = async ({
 
   const awaitLeadSync = await shouldAwaitLeadSync({
     forceNewLead,
-    canCreateLeads,
+    canCreateLeads: leadSyncEnabled,
     hasContact,
     existingLeadMatch: existingLeadMatchForSync,
     leadLookupFailed,
   });
 
+  const clientTypeExtras = leadSyncEnabled && visitorClientType
+    ? leadClientTypeExtras({
+      role: flow?.flowRole,
+      setting: appliedAssistantSetting,
+      clientType: visitorClientType,
+      form: mergedFormContact,
+      history,
+      userMessage: trimmedMessage,
+      leadGrade: finalGrade,
+      intent: aiIntent,
+    })
+    : null;
   const syncLeadTask = syncLeadMatchAfterTurn({
     flow,
     flowType,
-    canCreateLeads,
+    canCreateLeads: leadSyncEnabled,
+    clientTypeExtras,
     conversation,
     userId,
     professionalProfile,
@@ -738,6 +1077,25 @@ export const handleChatService = async ({
     void syncLeadTask;
   }
 
+  const quickReplies = !landingMode && appliedAssistantSetting?.applied && appliedAssistantSetting.question_overrides
+    ? quickRepliesForReply(appliedAssistantSetting, finalReply, systemPromptOptions.chatAnsweredQuestions || [])
+    : null;
+  const previewLeadSummary = previewForOwner && !landingMode && appliedAssistantSetting?.applied
+    ? buildPreviewLeadSummary({
+      role: flow?.flowRole,
+      setting: appliedAssistantSetting,
+      clientType: visitorClientType,
+      form: mergedFormContact,
+      history,
+      userMessage: trimmedMessage,
+      details: parsedAiDetails,
+      contactInfo,
+      leadGrade: finalGrade,
+      leadScore: finalScore,
+      intent: aiIntent,
+    })
+    : null;
+
   return {
     status: 200,
     body: {
@@ -745,7 +1103,15 @@ export const handleChatService = async ({
       reply: finalReply,
       session_id: sessionId,
       visitor_id: visitor.uuid,
-      meta: responseMeta,
+      meta: {
+        ...responseMeta,
+        ...(previewForOwner && previewAssistantDraft ? { preview_draft_applied: true } : {}),
+        ...(previewLeadSummary ? { preview_lead_summary: previewLeadSummary } : {}),
+        ...(visitorClientType ? { client_type: visitorClientType } : {}),
+        ...(appliedAssistantSetting?.cta_label ? { cta_label: appliedAssistantSetting.cta_label } : {}),
+        ...(quickReplies ? { quick_replies: quickReplies } : {}),
+        request_document: requestedDocument,
+      },
     },
   };
 };

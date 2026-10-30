@@ -25,6 +25,11 @@ import Subscription from './Subscription.js';
 import ProfessionalCall from './ProfessionalCall.js';
 import ProfessionalCallTranscriptSegment from './ProfessionalCallTranscriptSegment.js';
 import ProfessionalCallMinutes from './ProfessionalCallMinutes.js';
+import ProfessionalCallRecording from './ProfessionalCallRecording.js';
+import VoiceAgentSuggestion from './VoiceAgentSuggestion.js';
+import AdminAuditLog from './AdminAuditLog.js';
+import EmailDelivery from './EmailDelivery.js';
+import LeadDocument from './LeadDocument.js';
 export {
   User,
   ChatConversation,
@@ -53,4 +58,9 @@ export {
   ProfessionalCall,
   ProfessionalCallTranscriptSegment,
   ProfessionalCallMinutes,
+  ProfessionalCallRecording,
+  VoiceAgentSuggestion,
+  AdminAuditLog,
+  EmailDelivery,
+  LeadDocument,
 };

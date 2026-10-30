@@ -13,6 +13,55 @@ const sampleRecap = buildLeadRecapMarkdownLines({
   intent: 'buy',
 });
 
+test('a saved assistant recap keeps only the short lead facts', () => {
+  const lines = buildLeadRecapMarkdownLines({
+    form: {
+      name: 'Jane',
+      email: 'jane@example.com',
+      phone: '555-0100',
+      location: 'Toronto',
+      budget: '400k',
+      timeline: '1-3 months',
+      property_type: 'condo',
+      bedrooms: '2',
+      mortgage_status: 'not_yet',
+      realtor_status: 'no_agent',
+      motivation_reason: 'relocation',
+    },
+    contact: {},
+    extracted: {},
+    intent: 'buy',
+    compact: true,
+  });
+  const text = lines.join('\n');
+  assert.match(text, /\*\*Name:\*\* Jane/);
+  assert.match(text, /\*\*Location:\*\* Toronto/);
+  assert.match(text, /\*\*Budget:\*\* 400k/);
+  assert.match(text, /\*\*Timeline:\*\*/);
+  assert.match(text, /\*\*Property type:\*\* condo/);
+  assert.equal(lines.length, 5);
+  assert.doesNotMatch(text, /Email|Phone|Mortgage|Realtor|Bedrooms|Reason for move/);
+});
+
+test('a lawyer recap keeps legal fields when the short agent recap is off', () => {
+  const lines = buildLeadRecapMarkdownLines({
+    form: {
+      name: 'Ada',
+      professionalType: 'lawyer',
+      transaction_stage: 'offer_accepted',
+      closing_timeline: 'within_30_days',
+      legal_services_needed: 'purchase_closing',
+    },
+    contact: {},
+    extracted: {},
+    intent: 'buy',
+  });
+  const text = lines.join('\n');
+  assert.match(text, /Transaction stage/);
+  assert.match(text, /Closing timeline/);
+  assert.match(text, /Legal services needed/);
+});
+
 test('shouldHydrateLeadRecap always allows recap hydration pass', () => {
   assert.equal(
     shouldHydrateLeadRecap({
@@ -38,6 +87,13 @@ test('shouldHydrateLeadRecap always allows recap hydration pass', () => {
     }),
     true,
   );
+});
+
+test('injectLeadRecapIntoReply leaves a closing-document question alone', () => {
+  const reply =
+    'I can review the purchase agreement once we confirm the matter. What details can you provide about the agreement?';
+  const out = injectLeadRecapIntoReply(reply, ['- **Name:** selling my']);
+  assert.equal(out, reply);
 });
 
 test('injectLeadRecapIntoReply does not replace generic meeting bullets', () => {

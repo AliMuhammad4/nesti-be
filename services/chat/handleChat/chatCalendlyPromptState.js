@@ -30,6 +30,8 @@ export function shouldDeferCalendlyLink(
   const isLawyerOrBroker =
     flow?.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER ||
     flow?.flowRole === PROFESSIONAL_TYPE.LAWYER;
+  const holdsFirstReply =
+    isLawyerOrBroker || flow?.flowRole === PROFESSIONAL_TYPE.AGENT;
 
   /**
    * Preflight often sends every field on the first POST; without this, deferral lifts immediately
@@ -37,7 +39,7 @@ export function shouldDeferCalendlyLink(
    * has sent at least one follow-up (confirm / correct / extra detail) so we recap + Q&A first.
    */
   if (
-    isLawyerOrBroker &&
+    holdsFirstReply &&
     isAutomatedBookingEnabled &&
     Boolean(calendlyLinkForVisitor) &&
     Number(interactionCount) < 2
@@ -110,7 +112,8 @@ export async function buildFlowSystemPromptOptions({
 
   if (
     flow?.flowRole === PROFESSIONAL_TYPE.MORTGAGE_BROKER ||
-    flow?.flowRole === PROFESSIONAL_TYPE.LAWYER
+    flow?.flowRole === PROFESSIONAL_TYPE.LAWYER ||
+    flow?.flowRole === PROFESSIONAL_TYPE.AGENT
   ) {
     return { ...base, deferCalendlyLink };
   }

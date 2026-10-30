@@ -245,6 +245,18 @@ export async function submitPublicLeadService({ slug, payload, requestMeta = {} 
     void notifyClientsOfNewPropertyForSale(leadProfile._id).catch(() => {});
   }
   await afterLeadCapturedNotifyOverQuota(profile.user_id);
+  const { createDirectAdminInquiry } = await import('../admin/directInquiryService.js');
+  await createDirectAdminInquiry({
+    full_name: contactInfo.name,
+    email: contactInfo.email,
+    phone: contactInfo.phone,
+    interest_role: professionalType === 'broker' ? 'mortgage_broker' : professionalType,
+    message: message || `${intent} inquiry from the public form`,
+    city: payload?.city || payload?.location || '',
+    country: payload?.country || '',
+    company_name: payload?.company_name || '',
+    inquiry_topic: 'inquiry',
+  }).catch(() => {});
 
   return {
     status: 201,

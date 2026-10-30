@@ -3,6 +3,7 @@ import logger from '../../../utils/logger.js';
 import { mergeSignals } from '../scoring/index.js';
 import { normalizeAiIntent } from '../utils/normalizationUtils.js';
 import { coerceContactIdentityFields } from '../utils/contactUtils.js';
+import { buildEmptyTurnFallbackReply } from '../utils/chatScopeGuard.js';
 let _openaiClient = null;
 function getOpenAI() {
   if (!_openaiClient) {
@@ -10,6 +11,20 @@ function getOpenAI() {
   }
   return _openaiClient;
 }
+export function withTurnReminder(messages, reminder) {
+  if (!reminder) return messages;
+  let lastUser = -1;
+  messages.forEach((message, index) => {
+    if (message.role === 'user') lastUser = index;
+  });
+  if (lastUser < 0) return [...messages, { role: 'system', content: reminder }];
+  return [
+    ...messages.slice(0, lastUser),
+    { role: 'system', content: reminder },
+    ...messages.slice(lastUser),
+  ];
+}
+
 export async function runChatOpenAiTurn({
   openaiMessages,
   sessionId,
@@ -21,22 +36,52 @@ export async function runChatOpenAiTurn({
   contactInfo,
   interactionCount,
   intent,
+  turnReminder = '',
+  assistantSetting = null,
+  maxTokens = 600,
+  onDelta = null,
 }) {
-  const completion = await getOpenAI().chat.completions.create(
-    {
-      model: 'gpt-4o-mini',
-      messages: openaiMessages,
-      temperature: 0.7,
-      max_tokens: 600,
-    },
-    { timeout: 60_000 },
-  );
-
-  const rawContent = completion.choices[0].message.content || '';
+  const messages = withTurnReminder(openaiMessages, turnReminder);
+  let rawContent = '';
+  if (onDelta) {
+    const stream = await getOpenAI().chat.completions.create(
+      {
+        model: 'gpt-4o-mini',
+        messages,
+        temperature: 0.4,
+        max_tokens: maxTokens,
+        stream: true,
+      },
+      { timeout: 60_000 },
+    );
+    let visible = '';
+    for await (const chunk of stream) {
+      const piece = chunk.choices?.[0]?.delta?.content || '';
+      if (!piece) continue;
+      rawContent += piece;
+      const marker = rawContent.indexOf('###');
+      const nextVisible = marker >= 0 ? rawContent.slice(0, marker) : rawContent;
+      if (nextVisible !== visible) {
+        visible = nextVisible;
+        onDelta(visible);
+      }
+    }
+  } else {
+    const completion = await getOpenAI().chat.completions.create(
+      {
+        model: 'gpt-4o-mini',
+        messages,
+        temperature: 0.7,
+        max_tokens: maxTokens,
+      },
+      { timeout: 60_000 },
+    );
+    rawContent = completion.choices[0].message.content || '';
+  }
   const [replyPart, metaPart] = rawContent.split('###META###');
   let aiReply = replyPart?.trim() || '';
   if (!aiReply) {
-    aiReply = "I'm here to help! Could you tell me a bit more about what you're looking for?";
+    aiReply = buildEmptyTurnFallbackReply(flow?.flowRole, assistantSetting);
   }
 
   let aiMeta = {};

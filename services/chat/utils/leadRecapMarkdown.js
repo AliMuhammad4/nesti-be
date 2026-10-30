@@ -55,7 +55,7 @@ function aiReplyHasRecapIntent(raw) {
     /\b(here'?s|here is)\b.*\b(so far|gathered|recap|shared)\b/i.test(r) ||
     /\bhere'?s\b.*\bquick\s+recap\b/i.test(r) ||
     /\bwhat\s+i\s+(have|'?ve)\s+so\s+far\b/i.test(r) ||
-    /\b(confirm|correct)\b.*\b(details|information|this)\b/i.test(r) ||
+    /\b(?:please\s+)?(?:confirm|correct)\b[^.\n]{0,48}\b(?:this|these|everything|details|information)\b/i.test(r) ||
     /\b(anything\s+(you'?d\s+)?like\s+to\s+(change|correct)|does\s+this\s+look\s+right|sound\s+right|confirm\s+(these\s+)?details)\b/i.test(
       r,
     )
@@ -196,7 +196,13 @@ export function shouldHydrateLeadRecap({ userMessage, aiReply, interactionCount 
  * @param {string} [opts.intent]
  * @returns {string[]} lines like `- **Label:** value`
  */
-export function buildLeadRecapMarkdownLines({ form = {}, contact = {}, extracted = {}, intent: intentRaw = '' }) {
+export function buildLeadRecapMarkdownLines({
+  form = {},
+  contact = {},
+  extracted = {},
+  intent: intentRaw = '',
+  compact = false,
+} = {}) {
   const intent = String(intentRaw || form.intent || '').toLowerCase();
   const isSell = intent === 'sell';
 
@@ -230,6 +236,13 @@ export function buildLeadRecapMarkdownLines({ form = {}, contact = {}, extracted
   };
 
   add('Name', name);
+  if (compact) {
+    add(isSell ? 'Property address' : 'Location', location);
+    add(isSell ? 'Expected selling price' : 'Budget', budgetOrPrice);
+    add('Timeline', timeline);
+    add('Property type', propertyType);
+    return rows;
+  }
   add('Email', email);
   add('Phone', phone);
   add(isSell ? 'Property address' : 'Location', location);

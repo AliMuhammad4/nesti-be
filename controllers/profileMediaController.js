@@ -11,69 +11,72 @@ function clampNumber(value, { min, max, fallback }) {
 }
 
 /**
- * POST multipart: field `file` (image), field `kind` = `profile` | `cover` | `logo` | `gallery`.
- * Optional field `scope` = `storefront`:
- *   - Uploads to a storefront-only R2 key and returns the URL.
- *   - Does NOT update User.profile_image / User.cover_image (page-only assets).
- * Without storefront scope, profile/cover images update the User record (account-wide).
- * Logo / gallery assets are always returned for the Brand Kit or block content to persist.
+ * Core image upload for an explicit target user (account or storefront scope).
+ * @returns {{ status: number, body: object }}
  */
-export async function postProfileImageUpload(req, res, next) {
-  try {
-    if (!isR2Configured()) {
-      return res.status(503).json({
+export async function uploadProfileImageForUser({ userId, file, kind: rawKind, scope: rawScope }) {
+  if (!isR2Configured()) {
+    return {
+      status: 503,
+      body: {
         success: false,
         message: 'Image upload is not configured (missing Cloudflare R2 environment variables).',
-      });
-    }
-    if (!req.file?.buffer) {
-      return res.status(400).json({ success: false, message: 'Missing image file (field name: file).' });
-    }
-    const kind = String(req.body?.kind || '').trim().toLowerCase();
-    if (!KINDS.has(kind)) {
-      return res.status(400).json({
+      },
+    };
+  }
+  if (!file?.buffer) {
+    return { status: 400, body: { success: false, message: 'Missing image file (field name: file).' } };
+  }
+  const kind = String(rawKind || '').trim().toLowerCase();
+  if (!KINDS.has(kind)) {
+    return {
+      status: 400,
+      body: {
         success: false,
         message: 'Invalid kind. Use profile, cover, logo, or gallery.',
-      });
+      },
+    };
+  }
+
+  const scope = String(rawScope || '').trim().toLowerCase();
+  const storefrontOnly = scope === 'storefront';
+  const targetUserId = String(userId);
+  const uploadVersion = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const objectKey = storefrontOnly
+    // Storefront assets must use immutable URLs. Reusing one key causes the
+    // R2 CDN and Next/Image optimizer to keep serving the previous upload.
+    ? `nesti/users/${targetUserId}/storefront/${kind}-${uploadVersion}`
+    : `nesti/users/${targetUserId}/${kind}`;
+  const result = await uploadBufferToR2(file.buffer, {
+    key: objectKey,
+    mimeType: file.mimetype,
+    cacheControl: 'public, max-age=3600',
+  });
+
+  const secureUrl = result.secure_url;
+  if (!secureUrl) {
+    return { status: 502, body: { success: false, message: 'Upload failed: no URL returned.' } };
+  }
+
+  const user = await User.findById(targetUserId);
+  if (!user) {
+    return { status: 404, body: { success: false, message: 'User not found' } };
+  }
+
+  if (!storefrontOnly) {
+    if (kind === 'cover') {
+      user.cover_image = secureUrl;
+      user.cover_image_position = { x: 50, y: 50 };
+      user.cover_image_zoom = 1;
+    } else if (kind === 'profile') {
+      user.profile_image = secureUrl;
     }
+    await user.save();
+  }
 
-    const scope = String(req.body?.scope || '').trim().toLowerCase();
-    const storefrontOnly = scope === 'storefront';
-    const userId = String(req.user._id);
-    const uploadVersion = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const objectKey = storefrontOnly
-      // Storefront assets must use immutable URLs. Reusing one key causes the
-      // R2 CDN and Next/Image optimizer to keep serving the previous upload.
-      ? `nesti/users/${userId}/storefront/${kind}-${uploadVersion}`
-      : `nesti/users/${userId}/${kind}`;
-    const result = await uploadBufferToR2(req.file.buffer, {
-      key: objectKey,
-      mimeType: req.file.mimetype,
-      cacheControl: 'public, max-age=3600',
-    });
-
-    const secureUrl = result.secure_url;
-    if (!secureUrl) {
-      return res.status(502).json({ success: false, message: 'Upload failed: no URL returned.' });
-    }
-
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    if (!storefrontOnly) {
-      if (kind === 'cover') {
-        user.cover_image = secureUrl;
-        user.cover_image_position = { x: 50, y: 50 };
-        user.cover_image_zoom = 1;
-      } else if (kind === 'profile') {
-        user.profile_image = secureUrl;
-      }
-      await user.save();
-    }
-
-    return res.json({
+  return {
+    status: 200,
+    body: {
       success: true,
       message: storefrontOnly ? 'Storefront image uploaded' : 'Image uploaded',
       url: secureUrl,
@@ -83,7 +86,27 @@ export async function postProfileImageUpload(req, res, next) {
       cover_image: user.cover_image || null,
       cover_image_position: user.cover_image_position || { x: 50, y: 50 },
       cover_image_zoom: user.cover_image_zoom || 1,
+    },
+  };
+}
+
+/**
+ * POST multipart: field `file` (image), field `kind` = `profile` | `cover` | `logo` | `gallery`.
+ * Optional field `scope` = `storefront`:
+ *   - Uploads to a storefront-only R2 key and returns the URL.
+ *   - Does NOT update User.profile_image / User.cover_image (page-only assets).
+ * Without storefront scope, profile/cover images update the User record (account-wide).
+ * Logo / gallery assets are always returned for the Brand Kit or block content to persist.
+ */
+export async function postProfileImageUpload(req, res, next) {
+  try {
+    const result = await uploadProfileImageForUser({
+      userId: req.user._id,
+      file: req.file,
+      kind: req.body?.kind,
+      scope: req.body?.scope,
     });
+    return res.status(result.status).json(result.body);
   } catch (err) {
     logger.error('profile image upload', { error: err.message });
     return next(err);

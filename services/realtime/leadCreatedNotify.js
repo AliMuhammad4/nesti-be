@@ -129,6 +129,8 @@ export async function emitLeadLifecycleNotification(ownerUserId, payload) {
 
 export async function sendNewLeadCreatedEmailIfEnabled(ownerUserId, ctx) {
   if (!envTruthy(process.env.NEW_LEAD_EMAIL_NOTIFICATIONS)) return;
+  const { assistantAllowsLeadEmail } = await import('../professionalAssistant/professionalAssistantService.js');
+  if (!(await assistantAllowsLeadEmail(ownerUserId))) return;
   if (!isResendConfigured()) {
     logger.debug('NEW_LEAD_EMAIL_NOTIFICATIONS enabled but Resend is not configured');
     return;

@@ -1,6 +1,7 @@
 export {
   FREE_TRIAL_DAYS,
   createFreeTrialSubscription,
+  startProfessionalTrialFromApproval,
   expireCanceledSubscriptionIfNeeded,
   expireTrialIfNeeded,
   getOrCreateSubscriptionForUser,

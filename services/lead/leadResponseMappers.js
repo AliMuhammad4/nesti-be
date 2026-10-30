@@ -241,6 +241,32 @@ function applyListedPropertyInquiryView(core, leadMatch, profile) {
   };
 }
 
+/** Additive RAVI customization fields (client type + suggested next action); null when the assistant never set them. */
+function formatClientTypeExtras(leadProfile) {
+  const clientType = String(leadProfile?.client_type || '').trim().toLowerCase();
+  const raw = leadProfile?.suggested_next_action;
+  const next = raw && typeof raw === 'object' && (raw.action || raw.label)
+    ? {
+        action: raw.action || null,
+        label: raw.label || null,
+        cta_label: raw.cta_label || null,
+        goal: raw.goal || null,
+        tier: raw.tier || null,
+        updated_at: raw.updated_at || null,
+      }
+    : null;
+  const answers = leadProfile?.template_answers && typeof leadProfile.template_answers === 'object'
+    ? Object.fromEntries(
+        Object.entries(leadProfile.template_answers).filter(([, value]) => value != null && String(value).trim() !== ''),
+      )
+    : null;
+  return {
+    client_type: ['buyer', 'seller', 'investor'].includes(clientType) ? clientType : null,
+    suggested_next_action: next,
+    template_answers: answers && Object.keys(answers).length ? answers : null,
+  };
+}
+
 function leadCore(leadMatch, profileView, convo, opts = {}) {
   const { includeIntentField = true } = opts;
   const grade = leadMatch.lead_type?.split('_')[0] || null;
@@ -286,6 +312,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     close_summary: formatCloseSummary(leadMatch.compatibility_factors),
     conversionChecklist,
     conversion_checklist: conversionChecklist,
+    ...formatClientTypeExtras(opts.leadProfile),
   };
   if (includeIntentField) {
     core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);

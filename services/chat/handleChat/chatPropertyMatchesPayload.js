@@ -6,6 +6,7 @@ import { accumulateContactInfo } from '../utils/contactUtils.js';
 import { mergeFormContactData } from '../utils/mergeFormContactData.js';
 import { recomputeSignalsForPropertyMatches } from './chatFlowResolution.js';
 import { parsePageLimitPagination, buildPaginationMeta, PAGINATION_PRESETS } from '../../../utils/pagination.js';
+import { listingInsideServiceArea, loadAppliedAssistantSetting } from '../../professionalAssistant/professionalAssistantService.js';
 
 export async function buildPropertyMatchesPayload({
   conversation,
@@ -52,11 +53,16 @@ export async function buildPropertyMatchesPayload({
       .lean(),
   ]);
 
+  const assistantSetting = await loadAppliedAssistantSetting(userId);
+  const areaMatches = (Array.isArray(property_matches) ? property_matches : [])
+    .filter((listing) => listingInsideServiceArea(listing, assistantSetting));
+  const propertyMatchesNote = areaMatches.length === 0 && property_matches?.length
+    ? 'No listings are inside the saved service area.'
+    : property_matches_note;
+
   const { page: p, limit: l, offset } = parsePageLimitPagination({ page, limit }, PAGINATION_PRESETS.propertyMatches);
-  const total_matches = Array.isArray(property_matches) ? property_matches.length : 0;
-  const pagedMatches = (
-    Array.isArray(property_matches) ? property_matches.slice(offset, offset + l) : []
-  ).map(enrichPropertyMatch);
+  const total_matches = areaMatches.length;
+  const pagedMatches = areaMatches.slice(offset, offset + l).map(enrichPropertyMatch);
 
   const conversion = leadMatchDoc
     ? buildLeadConversionPack({ leadMatch: leadMatchDoc, conversation, intent: propertyMatchIntent })
@@ -69,7 +75,7 @@ export async function buildPropertyMatchesPayload({
     meta: {
       property_matches: pagedMatches,
       property_matches_context,
-      property_matches_note,
+      property_matches_note: propertyMatchesNote,
       pagination: buildPaginationMeta({ page: p, limit: l, total: total_matches }),
       ...(conversion ? { conversion } : {}),
     },

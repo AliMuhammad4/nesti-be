@@ -46,43 +46,44 @@ export function callRelativeTranscriptTimes(
   return { startTimeMs, endTimeMs };
 }
 
-export async function persistFinalTranscriptSegment({
+export async function ingestFinalTranscriptSegment({
   callId,
   segmentId,
-  participant,
-  publication,
-  alternative,
+  speakerUserId,
+  speakerName,
+  trackSid = '',
+  text: rawText,
+  language = '',
+  startTimeMs,
+  endTimeMs,
+  confidence = null,
+  provider = 'openai',
+  providerEventId = '',
   model,
-  timestampOffsetMs = 0,
-  callStartedAtMs = null,
-  nowMs = Date.now(),
 }) {
-  const finalText = refineTranscriptSegmentText(alternative?.text);
-  if (!finalText) return false;
-  const { startTimeMs, endTimeMs } = callRelativeTranscriptTimes(
-    alternative,
-    timestampOffsetMs,
-    { nowMs, callStartedAtMs },
-  );
+  const finalText = refineTranscriptSegmentText(rawText);
+  if (!finalText || !callId || !segmentId) return false;
   const deleteAt = await resolveSegmentDeleteAt(callId);
+  const eventKey = text(providerEventId);
   const result = await ProfessionalCallTranscriptSegment.updateOne(
-    { call_id: callId, segment_id: segmentId },
+    eventKey
+      ? { call_id: callId, provider_event_id: eventKey }
+      : { call_id: callId, segment_id: segmentId },
     {
       $setOnInsert: {
         call_id: callId,
         segment_id: segmentId,
-        speaker_user_id: participant.identity,
-        speaker_name: text(participant.name) || 'Participant',
-        track_sid: text(publication.sid),
+        speaker_user_id: text(speakerUserId) || 'speaker',
+        speaker_name: text(speakerName) || 'Participant',
+        track_sid: text(trackSid),
         text: finalText,
-        language: resolveSegmentLanguage(alternative),
-        start_time_ms: startTimeMs,
-        end_time_ms: endTimeMs,
-        confidence: Number.isFinite(alternative?.confidence)
-          ? alternative.confidence
-          : null,
-        provider: 'openai',
-        model,
+        language: text(language),
+        start_time_ms: Math.max(0, Number(startTimeMs) || 0),
+        end_time_ms: Math.max(0, Number(endTimeMs) || 0),
+        confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+        provider: text(provider) || 'openai',
+        provider_event_id: eventKey,
+        model: text(model) || 'unknown',
         final: true,
         delete_at: deleteAt,
       },
@@ -115,4 +116,36 @@ export async function persistFinalTranscriptSegment({
     );
   }
   return Boolean(result.upsertedCount || result.matchedCount);
+}
+
+export async function persistFinalTranscriptSegment({
+  callId,
+  segmentId,
+  participant,
+  publication,
+  alternative,
+  model,
+  timestampOffsetMs = 0,
+  callStartedAtMs = null,
+  nowMs = Date.now(),
+}) {
+  const { startTimeMs, endTimeMs } = callRelativeTranscriptTimes(
+    alternative,
+    timestampOffsetMs,
+    { nowMs, callStartedAtMs },
+  );
+  return ingestFinalTranscriptSegment({
+    callId,
+    segmentId,
+    speakerUserId: participant.identity,
+    speakerName: text(participant.name) || 'Participant',
+    trackSid: text(publication.sid),
+    text: alternative?.text,
+    language: resolveSegmentLanguage(alternative),
+    startTimeMs,
+    endTimeMs,
+    confidence: alternative?.confidence,
+    provider: 'openai',
+    model,
+  });
 }

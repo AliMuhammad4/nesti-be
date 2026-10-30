@@ -6,9 +6,12 @@ import { initWorkspaceSocket } from './services/realtime/workspaceSocket.js';
 import { scheduleMonthlyRewardJob } from './jobs/rewardMonthlyJob.js';
 import { scheduleNurtureFollowupJob } from './jobs/nurtureFollowupJob.js';
 import { startCallMinutesReconciliation } from './services/proChat/callMinutesService.js';
-import { ensureTranscriptionWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
+import { startRecordingIngestion } from './services/proChat/recordingIngestionService.js';
+import { ensureTranscriptionWorkerRunning, ensureRaviWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
-import './models/index.js'; // Ensure all models are registered
+import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
+import { resumePendingAdminLeadFollowUps } from './services/admin/adminLeadGuideEmailService.js';
+import './models/index.js';
 
 const PORT = process.env.PORT || 5000;
 
@@ -17,19 +20,34 @@ const httpServer = http.createServer(app);
 async function startServer() {
   assertJwtSecretConfigured();
   await connectDB();
+  try {
+    await grandfatherExistingCredentials();
+  } catch (error) {
+    logger.warn('Credential grandfather skipped', { message: error?.message });
+  }
   await initWorkspaceSocket(httpServer);
   httpServer.listen(PORT, () => {
     logger.info(`Server running on port ${PORT} (HTTP + WebSocket)`);
     scheduleMonthlyRewardJob();
     scheduleNurtureFollowupJob();
+    void resumePendingAdminLeadFollowUps().catch((error) => {
+      logger.warn('Pending admin lead follow-ups were not resumed', { message: error?.message });
+    });
     startCallMinutesReconciliation();
+    startRecordingIngestion();
     void ensureTranscriptionWorkerRunning().catch((error) => {
       logger.warn('Transcription worker did not start with the API server', {
         message: error?.message,
       });
     });
+    void ensureRaviWorkerRunning().catch((error) => {
+      logger.warn('Ravi worker did not start with the API server', {
+        message: error?.message,
+      });
+    });
   });
 }
+
 
 startServer().catch((error) => {
   logger.error('Server startup failed', { message: error?.message });

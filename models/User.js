@@ -41,9 +41,31 @@ const userSchema = new mongoose.Schema({
     enum: USER_ROLE_VALUES,
     default: USER_ROLE.AGENT,
   },
+  /**
+   * Fine-grained admin capabilities. Fail-closed: empty grants nothing;
+   * include '*' (ADMIN_PERMISSION.ALL) for full access.
+   */
+  admin_permissions: {
+    type: [String],
+    default: [],
+  },
   is_verified: {
     type: Boolean,
     default: false,
+  },
+  /** Platform admin can suspend accounts; protect rejects inactive users. */
+  is_active: {
+    type: Boolean,
+    default: true,
+    index: true,
+  },
+  suspended_at: {
+    type: Date,
+    default: null,
+  },
+  suspended_reason: {
+    type: String,
+    default: '',
   },
   otp: {
     type: String,

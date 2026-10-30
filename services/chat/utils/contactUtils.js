@@ -31,7 +31,18 @@ export const resolveVisitor = async ({ visitorUuid, embedToken, userAgent, clien
 const EMAIL_RE   = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/;
 const PHONE_RE   = /(\+?\d[\d\s\-().]{7,}\d)/;
 const ADDRESS_RE = /\b\d{1,5}\s+[A-Za-z0-9\s,.']+(?:street|st|avenue|ave|road|rd|blvd|boulevard|drive|dr|lane|ln|way|court|ct|place|pl)\b/i;
-const NAME_RE    = /(?:i['']?m|my name is|i am|call me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i;
+const NAME_RE    = /(?:i['']?m|my name is|i am|call me)\s+([A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*){0,2})/i;
+const NAME_ACTIVITY_RE = /^(?:selling|buying|looking|trying|going|interested|here|ready|just|not|a|an|the|from|in|with|for|my)$/i;
+
+/** A visitor name, or null when the phrase is a sentence fragment such as "selling my". */
+export function plausibleVisitorName(value) {
+  const name = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!name || name.length < 2 || name.length > 60) return null;
+  if (/[0-9@]/.test(name)) return null;
+  if (!/^[A-Za-z][A-Za-z'’.-]*(?:\s+[A-Za-z][A-Za-z'’.-]*){0,3}$/.test(name)) return null;
+  if (NAME_ACTIVITY_RE.test(name.split(' ')[0])) return null;
+  return name;
+}
 
 /**
  * Extract contact fields from a single message string using regex heuristics.
@@ -39,7 +50,7 @@ const NAME_RE    = /(?:i['']?m|my name is|i am|call me)\s+([A-Z][a-z]+(?:\s+[A-Z
 export const extractContactFromMessage = (message = '') => ({
   email:   (String(message).match(EMAIL_RE)   || [])[0]?.toLowerCase() || null,
   phone:   (String(message).match(PHONE_RE)   || [])[1]?.replace(/\s+/g, '') || null,
-  name:    (String(message).match(NAME_RE)    || [])[1]?.trim() || null,
+  name:    plausibleVisitorName((String(message).match(NAME_RE) || [])[1]),
   address: (String(message).match(ADDRESS_RE) || [])[0]?.trim() || null,
 });
 
@@ -62,7 +73,7 @@ export function contactPatchFromMergedForm(mergedFormContact) {
   const f = mergedFormContact && typeof mergedFormContact === 'object' ? mergedFormContact : {};
   const rawName = f.name || f.full_name || f.fullName;
   return {
-    name: rawName ? String(rawName).trim() : null,
+    name: plausibleVisitorName(rawName),
     email: f.email ? String(f.email).toLowerCase().trim() : null,
     phone: f.phone != null && String(f.phone).trim() ? String(f.phone).replace(/\s+/g, '').trim() : null,
     address: f.address != null && String(f.address).trim() ? String(f.address).trim() : null,
@@ -73,7 +84,7 @@ export function contactPatchFromMergedForm(mergedFormContact) {
 export function coerceContactIdentityFields(contactInfo) {
   if (!contactInfo || typeof contactInfo !== 'object') return contactInfo;
   const rawName = contactInfo.name || contactInfo.full_name || contactInfo.fullName;
-  if (rawName && !contactInfo.name) contactInfo.name = String(rawName).trim();
+  contactInfo.name = plausibleVisitorName(rawName);
   if (contactInfo.email) contactInfo.email = String(contactInfo.email).toLowerCase().trim();
   if (contactInfo.phone) contactInfo.phone = String(contactInfo.phone).replace(/\s+/g, '').trim();
   return contactInfo;

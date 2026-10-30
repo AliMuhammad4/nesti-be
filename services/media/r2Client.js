@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import logger from '../../utils/logger.js';
 
@@ -86,6 +86,67 @@ export function getR2PublicUrl(key) {
   return `${base}/${encodeKeyForUrl(objectKey)}`;
 }
 
+/** Best-effort reverse of getR2PublicUrl for objects we uploaded. */
+export function extractR2KeyFromPublicUrl(fileUrl) {
+  if (!isR2Configured() || !fileUrl) return null;
+  try {
+    const url = new URL(String(fileUrl));
+    const base = resolvePublicBaseUrl(r2Config);
+    if (base) {
+      const baseUrl = new URL(base);
+      if (url.origin === baseUrl.origin) {
+        const basePath = baseUrl.pathname.replace(/\/+$/, '');
+        let path = url.pathname || '';
+        if (basePath && path.startsWith(`${basePath}/`)) {
+          path = path.slice(basePath.length + 1);
+        } else {
+          path = path.replace(/^\/+/, '');
+        }
+        const key = path
+          .split('/')
+          .filter(Boolean)
+          .map((segment) => decodeURIComponent(segment))
+          .join('/');
+        return key || null;
+      }
+    }
+    const match = String(url.pathname || '').match(/(nesti\/users\/.+)$/i);
+    if (match?.[1]) {
+      return match[1]
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => decodeURIComponent(segment))
+        .join('/');
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function getObjectFromR2(key) {
+  if (!isR2Configured()) {
+    throw new Error('R2 is not configured');
+  }
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) {
+    throw new Error('Missing object key');
+  }
+  const response = await r2Client.send(
+    new GetObjectCommand({
+      Bucket: r2Config.bucket,
+      Key: objectKey,
+    }),
+  );
+  const bytes = await response.Body.transformToByteArray();
+  return {
+    buffer: Buffer.from(bytes),
+    contentType: response.ContentType || 'application/octet-stream',
+    contentLength: response.ContentLength ?? bytes.length,
+    key: objectKey,
+  };
+}
+
 export async function uploadBufferToR2(
   buffer,
   {
@@ -127,6 +188,91 @@ export async function uploadBufferToR2(
     public_id: objectKey,
     bytes: typeof buffer.length === 'number' ? Number(buffer.length) : null,
   };
+}
+
+/** Best-effort delete. Never throws — credential replace/delete must still succeed. */
+export async function deleteObjectFromR2(key) {
+  if (!isR2Configured()) {
+    return { deleted: false, reason: 'not_configured' };
+  }
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) {
+    return { deleted: false, reason: 'missing_key' };
+  }
+  try {
+    await r2Client.send(
+      new DeleteObjectCommand({
+        Bucket: r2Config.bucket,
+        Key: objectKey,
+      }),
+    );
+    return { deleted: true, key: objectKey };
+  } catch (error) {
+    logger.warn('Failed to delete R2 object', { key: objectKey, error: error?.message });
+    return { deleted: false, reason: error?.message || 'delete_failed' };
+  }
+}
+
+function privateRecordingsBucket() {
+  return String(process.env.R2_BUCKET_PUBLIC || '').trim();
+}
+
+export function isPrivateRecordingsConfigured() {
+  return isR2Configured() && Boolean(privateRecordingsBucket());
+}
+
+export function buildRecordingObjectKey({ callId, recordingSid, extension = 'mp3', now = new Date() }) {
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  return sanitizeKey(
+    `voice-recordings/${year}/${month}/${callId}/${recordingSid}.${extension}`,
+  );
+}
+
+export async function uploadPrivateRecordingBuffer(buffer, { key, mimeType, metadata } = {}) {
+  if (!isPrivateRecordingsConfigured()) {
+    throw new Error('Private recording bucket is not configured');
+  }
+  const objectKey = sanitizeKey(key);
+  if (!objectKey || !buffer) throw new Error('Missing private recording upload');
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: privateRecordingsBucket(),
+      Key: objectKey,
+      Body: buffer,
+      ContentType: mimeType || 'audio/mpeg',
+      CacheControl: 'private, no-store',
+      Metadata: metadata || undefined,
+    }),
+  );
+  return { key: objectKey, bytes: buffer.length };
+}
+
+export async function deletePrivateRecording(key) {
+  if (!isPrivateRecordingsConfigured()) return { deleted: false, reason: 'not_configured' };
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) return { deleted: false, reason: 'missing_key' };
+  try {
+    await r2Client.send(new DeleteObjectCommand({ Bucket: privateRecordingsBucket(), Key: objectKey }));
+    return { deleted: true, key: objectKey };
+  } catch (error) {
+    logger.warn('Failed to delete private recording', { key: objectKey, error: error?.message });
+    return { deleted: false, reason: error?.message || 'delete_failed' };
+  }
+}
+
+export async function createPrivateRecordingReadUrl(key, { expiresIn = 10 * 60, contentType = 'audio/mpeg' } = {}) {
+  if (!isPrivateRecordingsConfigured()) return null;
+  const objectKey = sanitizeKey(key);
+  if (!objectKey) return null;
+  const safeExpires = Math.max(60, Math.min(Number(expiresIn) || 600, 15 * 60));
+  const command = new GetObjectCommand({
+    Bucket: privateRecordingsBucket(),
+    Key: objectKey,
+    ResponseContentDisposition: 'inline',
+    ResponseContentType: contentType || 'audio/mpeg',
+  });
+  return getSignedUrl(r2Client, command, { expiresIn: safeExpires });
 }
 
 export async function createSignedReadUrl(

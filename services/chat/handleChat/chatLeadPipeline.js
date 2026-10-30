@@ -14,9 +14,14 @@ import {
 import { buildLeadType, buildLawyerLeadType, buildMortgageBrokerLeadType } from '../scoring/common.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
+import { linkConversationDocumentsToLead } from '../documents/chatDocumentService.js';
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
+import { maybeLandingSideEffects, notifyAdminsOfLandingLead } from '../nestiLanding/notifyAdminsOfLandingLead.js';
 
 function computeLeadTypeForMatch(flow, persistedGrade, aiIntent) {
+  if (typeof flow?.computeLeadType === 'function') {
+    return flow.computeLeadType(persistedGrade, aiIntent);
+  }
   const role = flow?.flowRole;
   if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return buildMortgageBrokerLeadType(persistedGrade);
@@ -94,10 +99,24 @@ function hasMeaningfulSellerListingUpdate(previousProfile = {}, mergedQual = {})
   return false;
 }
 
+/** Writes the additive client-type fields on the LeadProfile. Never touches scoring, dedupe, or notifications. */
+export async function applyLeadClientTypeExtras(leadMatch, extras) {
+  if (!leadMatch?.lead_profile_id || !extras?.client_type) return;
+  const set = {
+    client_type: extras.client_type,
+    suggested_next_action: { ...(extras.suggested_next_action || {}), updated_at: new Date() },
+  };
+  Object.entries(extras.template_answers || {}).forEach(([id, value]) => {
+    if (/^[a-z0-9_]+$/.test(id) && String(value || '').trim()) set[`template_answers.${id}`] = String(value).trim().slice(0, 160);
+  });
+  await LeadProfile.updateOne({ _id: leadMatch.lead_profile_id }, { $set: set });
+}
+
 export async function syncLeadMatchAfterTurn({
   flow,
   flowType,
   canCreateLeads,
+  clientTypeExtras = null,
   conversation,
   userId,
   professionalProfile,
@@ -187,6 +206,16 @@ export async function syncLeadMatchAfterTurn({
       aiDetails: mergedAiDetails,
     });
     if (newLeadMatch?._id) {
+      await linkConversationDocumentsToLead({
+        userId,
+        conversationId: conversation._id,
+        sessionId,
+        leadMatchId: newLeadMatch._id,
+      }).catch((error) => logger.warn('Chat document link failed', { error: error?.message }));
+      if (clientTypeExtras) {
+        await applyLeadClientTypeExtras(newLeadMatch, clientTypeExtras)
+          .catch((error) => logger.warn('Lead client type extras failed', { error: error?.message }));
+      }
       logger.info('Chat service: new lead match created', {
         op: 'chat.lead',
         flow: flowType,
@@ -238,6 +267,18 @@ export async function syncLeadMatchAfterTurn({
           persistedGrade,
           conversion_preview,
         });
+        if (flow.landingMode) {
+          void notifyAdminsOfLandingLead({
+            leadMatch: newLeadMatch,
+            persistedGrade,
+            finalScore,
+            conversationId: conversation._id,
+            sessionId,
+          }).catch((error) => logger.warn('Landing lead admin notify failed', { error: error?.message }));
+          void maybeLandingSideEffects({ leadMatch: newLeadMatch, contactInfo }).catch((error) => {
+            logger.warn('Landing lead follow-up failed', { error: error?.message });
+          });
+        }
         await afterLeadCapturedNotifyOverQuota(userId);
       } catch (e) {
         logger.warn('Workspace lead event (create) failed', { error: e.message });
@@ -246,7 +287,18 @@ export async function syncLeadMatchAfterTurn({
     return;
   }
 
-  if (!canCreateLeads || !existingLeadMatch || !hasContact) return;
+  if (!canCreateLeads || !existingLeadMatch) return;
+  if (clientTypeExtras) {
+    void applyLeadClientTypeExtras(existingLeadMatch, clientTypeExtras)
+      .catch((error) => logger.warn('Lead client type extras failed', { error: error?.message }));
+  }
+  await linkConversationDocumentsToLead({
+    userId,
+    conversationId: conversation._id,
+    sessionId,
+    leadMatchId: existingLeadMatch._id,
+  }).catch((error) => logger.warn('Chat document link failed', { error: error?.message }));
+  if (!hasContact) return;
 
   const prevContact = existingLeadMatch.compatibility_factors?.contact || {};
   const hasNewInfo =
@@ -264,6 +316,11 @@ export async function syncLeadMatchAfterTurn({
   }
   nextFactors.lead_grade = persistedGrade;
   nextFactors.message_snippet = trimmedMessage.slice(0, 200);
+  if (flow.landingMode) {
+    nextFactors.source = 'landing_chat';
+    nextFactors.page_path = '/';
+    if (formContact?.audience_role) nextFactors.audience_role = String(formContact.audience_role);
+  }
   existingLeadMatch.compatibility_factors = nextFactors;
 
   existingLeadMatch.match_score = finalScore;

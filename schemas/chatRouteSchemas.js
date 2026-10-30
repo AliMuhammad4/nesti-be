@@ -11,7 +11,13 @@ export const chatBodySchema = Joi.object({
   clientIp: Joi.string().optional(),
   userAgent: Joi.string().optional(),
   referer: Joi.string().optional(),
-  formContact: Joi.object().optional(),
+  formContact: Joi.object().unknown(true).optional(),
+  forceNewLead: Joi.boolean().optional(),
+  opening: Joi.boolean().optional(),
+  preview: Joi.boolean().optional(),
+  previewAssistantDraft: Joi.object().unknown(true).optional(),
+  testPersona: Joi.string().valid('buyer', 'seller', 'investor').optional(),
+  attachmentIds: Joi.array().items(Joi.string().trim()).max(3).optional(),
 });
 
 export const propertyMatchesSchema = Joi.object({

@@ -18,6 +18,7 @@ const professionalCallTranscriptSegmentSchema = new mongoose.Schema(
     end_time_ms: { type: Number, required: true, min: 0 },
     confidence: { type: Number, default: null },
     provider: { type: String, required: true, default: 'openai' },
+    provider_event_id: { type: String, default: '' },
     model: { type: String, required: true },
     final: { type: Boolean, required: true, default: true },
     // Matches call/minutes retention so raw speech text does not outlive the call record.

@@ -50,5 +50,6 @@ referralSchema.index({ target_user_id: 1, createdAt: -1 });
 referralSchema.index({ user_id: 1, status: 1, createdAt: -1 });
 referralSchema.index({ target_user_id: 1, status: 1, createdAt: -1 });
 referralSchema.index({ lead_match_id: 1, status: 1 });
+referralSchema.index({ status: 1, createdAt: -1 });
 
 export default mongoose.model('Referral', referralSchema);

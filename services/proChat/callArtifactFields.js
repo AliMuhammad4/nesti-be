@@ -19,6 +19,8 @@ export function serializeCallArtifacts(call = {}) {
         )
       : '',
     minutes_status: text(call.minutes_status) || 'not_ready',
+    recording_status: text(call.recording_status) || 'not_requested',
+    recording_count: Number(call.recording_count || 0),
   };
 }
 

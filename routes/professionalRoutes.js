@@ -1,6 +1,6 @@
 import express from 'express';
 const router = express.Router();
-import { protect, requireCompleteProfessionalProfile } from '../middleware/authMiddleware.js';
+import { protect, requireCompleteProfessionalProfile, ensureCredentialApproved } from '../middleware/authMiddleware.js';
 import { requireActiveSubscriptionAccess } from '../middleware/subscriptionAccess.js';
 import { validateBody } from '../middleware/validate.js';
 import { professionalUpsertBodySchema } from '../schemas/userProfileSchemas.js';
@@ -14,16 +14,59 @@ import {
   getProfessionalById,
 } from '../controllers/professionalController.js';
 import { postCoverImageAdjustments, postProfileImageUpload } from '../controllers/profileMediaController.js';
-import { uploadProfileImage } from '../middleware/uploadProfileImage.js';
+import {
+  deleteCredentialDocument,
+  getCredentialDocument,
+  getMyCredentials,
+  patchCredentialMeta,
+  submitCredentials,
+  uploadCredentialDocument,
+} from '../controllers/credentialController.js';
+import { runProfileUpload } from '../middleware/uploadProfileImage.js';
+import { uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
 import { MAX_IMAGE_UPLOAD_MB } from '../constants/mediaLimits.js';
+import {
+  draftMyAssistantFaqs,
+  getMyAssistant,
+  saveMyAssistant,
+  uploadMyAssistantAsset,
+  uploadMyAssistantKnowledge,
+} from '../controllers/professionalAssistantController.js';
+import multer from 'multer';
+import { MAX_CHATBOT_ATTACHMENT_BYTES } from '../middleware/uploadChatbotAttachment.js';
 
-function runProfileUpload(req, res, next) {
-  uploadProfileImage.single('file')(req, res, (err) => {
+const uploadKnowledgeFile = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_CHATBOT_ATTACHMENT_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const name = String(file?.originalname || '').toLowerCase();
+    if (!/\.(pdf|doc|docx|txt|md|csv|jpe?g|png|webp)$/.test(name)) {
+      cb(new Error('Upload a PDF, Word document, text file, or image.'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+function runKnowledgeUpload(req, res, next) {
+  uploadKnowledgeFile.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ success: false, message: 'File must be under 10MB.' });
+      }
+      return res.status(400).json({ success: false, message: err.message || 'Invalid file upload' });
+    }
+    next();
+  });
+}
+
+function runCredentialUpload(req, res, next) {
+  uploadCredentialMulter.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({
           success: false,
-          message: `Image must be under ${MAX_IMAGE_UPLOAD_MB}MB.`,
+          message: `File must be under ${MAX_IMAGE_UPLOAD_MB}MB.`,
         });
       }
       return res.status(400).json({ success: false, message: err.message || 'Invalid file upload' });
@@ -50,17 +93,31 @@ function validateIcpByRole(req, res, next) {
   next();
 }
 
-router.get('/me', protect, requireActiveSubscriptionAccess, getMyProfessionalProfile);
-router.get('/list', protect, requireActiveSubscriptionAccess, listProfessionalsByRole);
-router.post('/upload-image', protect, requireActiveSubscriptionAccess, runProfileUpload, postProfileImageUpload);
-router.post('/cover-adjustments', protect, requireActiveSubscriptionAccess, postCoverImageAdjustments);
-router.get('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, getIdealClientProfile);
-router.post('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
-router.put('/icp', protect, requireActiveSubscriptionAccess, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
+// Credential verification — available without active subscription / before approval
+router.get('/me/assistant', protect, getMyAssistant);
+router.put('/me/assistant', protect, saveMyAssistant);
+router.post('/me/assistant/faq-drafts', protect, draftMyAssistantFaqs);
+router.post('/me/assistant/assets', protect, runProfileUpload, uploadMyAssistantAsset);
+router.post('/me/assistant/knowledge', protect, runKnowledgeUpload, uploadMyAssistantKnowledge);
 
-router.get('/:id', protect, requireActiveSubscriptionAccess, getProfessionalById);
-router.post('/', protect, requireActiveSubscriptionAccess, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.put('/', protect, requireActiveSubscriptionAccess, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.patch('/', protect, requireActiveSubscriptionAccess, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.get('/me/credentials', protect, getMyCredentials);
+router.patch('/me/credentials', protect, patchCredentialMeta);
+router.post('/me/credentials/documents', protect, runCredentialUpload, uploadCredentialDocument);
+router.get('/me/credentials/documents/:docId', protect, getCredentialDocument);
+router.delete('/me/credentials/documents/:docId', protect, deleteCredentialDocument);
+router.post('/me/credentials/submit', protect, submitCredentials);
+
+router.get('/me', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, getMyProfessionalProfile);
+router.get('/list', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, listProfessionalsByRole);
+router.post('/upload-image', protect, runProfileUpload, postProfileImageUpload);
+router.post('/cover-adjustments', protect, postCoverImageAdjustments);
+router.get('/icp', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, requireCompleteProfessionalProfile, getIdealClientProfile);
+router.post('/icp', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
+router.put('/icp', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
+
+router.get('/:id', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, getProfessionalById);
+router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+router.patch('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
 
 export default router;

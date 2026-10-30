@@ -176,10 +176,11 @@ export async function handleLandingChatTurn({
     return { status: 403, body: { success: false, message: 'Landing chat is turned off.' } };
   }
 
-  const sid = text(sessionId) || crypto.randomBytes(32).toString('hex');
-  if (!isSecureLandingSessionId(sid)) {
-    return { status: 400, body: { success: false, message: 'session_id must be a secure session capability.' } };
-  }
+  const providedSessionId = text(sessionId);
+  // Never look up a chat by a guessable id. Start a fresh secure session instead.
+  const sid = isSecureLandingSessionId(providedSessionId)
+    ? providedSessionId
+    : crypto.randomBytes(32).toString('hex');
   const contact = readContact(formContact);
   const rawAudience = text(formContact.audience_role);
   if (rawAudience && !isLandingAudience(rawAudience)) {

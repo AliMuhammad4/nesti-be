@@ -50,7 +50,7 @@ router.post('/landing-chat/message', async (req, res, next) => {
     const result = await handleLandingChatTurn({
       message: body.message,
       embedToken: body.embedToken || body.embed_token,
-      sessionId: body.id || body.session_id,
+      sessionId: body.session_id || body.id,
       visitorId: body.visitorId || body.visitor_id,
       clientIp: req.ip,
       opening: Boolean(body.opening),

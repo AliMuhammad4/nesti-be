@@ -26,6 +26,7 @@ import { runProfileUpload } from '../middleware/uploadProfileImage.js';
 import { uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
 import { MAX_IMAGE_UPLOAD_MB } from '../constants/mediaLimits.js';
 import {
+  deleteMyAssistant,
   draftMyAssistantFaqs,
   getMyAssistant,
   saveMyAssistant,
@@ -96,6 +97,7 @@ function validateIcpByRole(req, res, next) {
 // Credential verification — available without active subscription / before approval
 router.get('/me/assistant', protect, getMyAssistant);
 router.put('/me/assistant', protect, saveMyAssistant);
+router.delete('/me/assistant', protect, deleteMyAssistant);
 router.post('/me/assistant/faq-drafts', protect, draftMyAssistantFaqs);
 router.post('/me/assistant/assets', protect, runProfileUpload, uploadMyAssistantAsset);
 router.post('/me/assistant/knowledge', protect, runKnowledgeUpload, uploadMyAssistantKnowledge);

@@ -32,6 +32,7 @@ export {
   assistantAllowsLeadSaving,
   draftFaqs,
   loadAppliedAssistantSetting,
+  clearAssistantForUser,
   readAssistantForUser,
   saveAssistantForUser,
 } from './assistantStore.js';

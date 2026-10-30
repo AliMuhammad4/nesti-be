@@ -93,6 +93,12 @@ export async function readAssistantForUser(user) {
   };
 }
 
+export async function clearAssistantForUser(user) {
+  if (!user?._id) return false;
+  await ProfessionalAssistantSetting.deleteOne({ user_id: user._id });
+  return true;
+}
+
 export async function saveAssistantForUser(user, body) {
   const profile = await ProfessionalProfile.findOne({ user_id: user._id }).lean();
   const role = roleForUser(user, profile);

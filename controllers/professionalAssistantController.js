@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import {
+  clearAssistantForUser,
   draftFaqs,
   readAssistantForUser,
   saveAssistantForUser,
@@ -37,6 +38,16 @@ export async function saveMyAssistant(req, res, next) {
     const draft = await saveAssistantForUser(req.user, req.body || {});
     if (!draft) return res.status(403).json({ success: false, message: 'Only professionals can customize this assistant.' });
     return res.json({ success: true, applied: draft.applied, draft });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function deleteMyAssistant(req, res, next) {
+  try {
+    if (!requireProfessional(req, res)) return;
+    await clearAssistantForUser(req.user);
+    return res.json({ success: true });
   } catch (error) {
     return next(error);
   }

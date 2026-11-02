@@ -11,6 +11,7 @@ import { ensureTranscriptionWorkerRunning, ensureRaviWorkerRunning } from './ser
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
 import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
 import { resumePendingAdminLeadFollowUps } from './services/admin/adminLeadGuideEmailService.js';
+import { ensureDefaultAdmin } from './scripts/ensureDefaultAdmin.js';
 import './models/index.js';
 
 const PORT = process.env.PORT || 5000;
@@ -20,6 +21,14 @@ const httpServer = http.createServer(app);
 async function startServer() {
   assertJwtSecretConfigured();
   await connectDB();
+  try {
+    const admin = await ensureDefaultAdmin();
+    logger.info(admin.created ? 'Default admin account created' : 'Default admin account is ready', {
+      email: admin.email,
+    });
+  } catch (error) {
+    logger.warn('Default admin account was not created', { message: error?.message });
+  }
   try {
     await grandfatherExistingCredentials();
   } catch (error) {

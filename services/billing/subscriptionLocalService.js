@@ -50,8 +50,22 @@ export function serializeSubscription(subscription) {
     id: String(subscription._id),
     accountStatus: accountStatusFromSubscription(subscription),
     subscriptionPlan: subscription.plan_key || '',
+    billingPeriod: subscription.billing_period || '',
     subscriptionStatus: subscription.status || '',
     trialEndsAt: toIsoDate(subscription.trial_end),
+    lastPurchase: subscription.last_purchase?.confirmed_at
+      ? {
+          planKey: subscription.last_purchase.plan_key || subscription.plan_key || '',
+          billingPeriod: subscription.last_purchase.billing_period || subscription.billing_period || '',
+          amount: Number(subscription.last_purchase.amount || 0),
+          currency: subscription.last_purchase.currency || 'usd',
+          confirmedAt: toIsoDate(subscription.last_purchase.confirmed_at),
+        }
+      : null,
+    canPublishWebsite: ['standard', 'enterprise'].includes(String(subscription.plan_key || ''))
+      && ['active', 'past_due'].includes(String(subscription.status || '')),
+    canRunVoiceAgent: String(subscription.plan_key || '') === 'enterprise'
+      && ['active', 'past_due'].includes(String(subscription.status || '')),
     subscriptionEndsAt: toIsoDate(subscription.current_period_end),
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
     pendingPlanKey: subscription.pending_plan_key || '',
@@ -172,6 +186,8 @@ export async function startProfessionalTrialFromApproval(userId) {
 }
 
 export async function getOrCreateSubscriptionForUser(user) {
+  if (String(user?.role || '') === USER_ROLE.ADMIN) return null;
+
   if (String(user?.role || '') === USER_ROLE.CLIENT) {
     const existing = await Subscription.findOne({ user_id: user._id });
     if (!existing) return null;

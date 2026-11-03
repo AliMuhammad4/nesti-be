@@ -1,7 +1,8 @@
 import express from 'express';
 const router = express.Router();
 import { protect, requireCompleteProfessionalProfile, ensureCredentialApproved } from '../middleware/authMiddleware.js';
-import { requireActiveSubscriptionAccess } from '../middleware/subscriptionAccess.js';
+import { requireActiveSubscriptionAccess, requireFeature } from '../middleware/subscriptionAccess.js';
+import { FEATURES } from '../services/billing/entitlements.js';
 import { validateBody } from '../middleware/validate.js';
 import { professionalUpsertBodySchema } from '../schemas/userProfileSchemas.js';
 import { ICP_SCHEMA_BY_ROLE } from '../schemas/icpSchemas.js';
@@ -94,13 +95,13 @@ function validateIcpByRole(req, res, next) {
   next();
 }
 
-// Credential verification — available without active subscription / before approval
-router.get('/me/assistant', protect, getMyAssistant);
-router.put('/me/assistant', protect, saveMyAssistant);
-router.delete('/me/assistant', protect, deleteMyAssistant);
-router.post('/me/assistant/faq-drafts', protect, draftMyAssistantFaqs);
-router.post('/me/assistant/assets', protect, runProfileUpload, uploadMyAssistantAsset);
-router.post('/me/assistant/knowledge', protect, runKnowledgeUpload, uploadMyAssistantKnowledge);
+// RAVI studio (Standard+). Credential verification stays available without this gate.
+router.get('/me/assistant', protect, requireFeature(FEATURES.ASSISTANT_PROFESSIONAL), getMyAssistant);
+router.put('/me/assistant', protect, requireFeature(FEATURES.ASSISTANT_PROFESSIONAL), saveMyAssistant);
+router.delete('/me/assistant', protect, requireFeature(FEATURES.ASSISTANT_PROFESSIONAL), deleteMyAssistant);
+router.post('/me/assistant/faq-drafts', protect, requireFeature(FEATURES.ASSISTANT_PROFESSIONAL), draftMyAssistantFaqs);
+router.post('/me/assistant/assets', protect, requireFeature(FEATURES.ASSISTANT_PROFESSIONAL), runProfileUpload, uploadMyAssistantAsset);
+router.post('/me/assistant/knowledge', protect, requireFeature(FEATURES.ASSISTANT_PROFESSIONAL), runKnowledgeUpload, uploadMyAssistantKnowledge);
 
 router.get('/me/credentials', protect, getMyCredentials);
 router.patch('/me/credentials', protect, patchCredentialMeta);

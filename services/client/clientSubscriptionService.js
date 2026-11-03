@@ -1,15 +1,16 @@
 import ClientSubscription from '../../models/ClientSubscription.js';
 import User from '../../models/User.js';
-import { getClientPlan } from './plans.js';
+import { canonicalClientTier, getClientPlan } from './plans.js';
 import { getStripeClient } from '../billing/stripeClient.js';
-
-// Cache for dynamically created prices
-const priceCache = new Map();
+import { chargeForPlan, createRecurringPrice, normalizeBillingPeriod, recurringPriceData } from '../billing/planPrices.js';
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const CLIENT_TIER_ORDER = {
   basic: 1,
+  essential: 1,
   standard: 2,
+  plus: 2,
   pro: 3,
+  premium: 3,
 };
 
 function toSafeDate(value) {
@@ -184,72 +185,28 @@ async function getOrCreateClientSubscriptionSchedule(stripe, stripeSubscription,
   });
 }
 
-async function getOrCreateStripePrice(stripe, plan) {
-  const cacheKey = `client_${plan.tier}`;
-  
-  if (priceCache.has(cacheKey)) {
-    return priceCache.get(cacheKey);
-  }
-
-  try {
-    const productName = `Nesti Client ${plan.name}`;
-    
-    const products = await stripe.products.search({
-      query: `name:'${productName}'`,
-      limit: 1,
-    });
-
-    let product;
-    if (products.data.length > 0) {
-      product = products.data[0];
-    } else {
-      product = await stripe.products.create({
-        name: productName,
-        description: `${plan.name} tier client subscription`,
-        metadata: {
-          subscription_type: 'client',
-          tier: plan.tier,
-        },
-      });
-    }
-
-    const prices = await stripe.prices.list({
-      product: product.id,
-      active: true,
-      limit: 1,
-    });
-
-    let price;
-    if (prices.data.length > 0) {
-      price = prices.data[0];
-    } else {
-      price = await stripe.prices.create({
-        product: product.id,
-        unit_amount: plan.amount,
-        currency: plan.currency,
-        recurring: {
-          interval: plan.interval,
-        },
-        metadata: {
-          subscription_type: 'client',
-          tier: plan.tier,
-        },
-      });
-    }
-
-    priceCache.set(cacheKey, price.id);
-    return price.id;
-  } catch (error) {
-    console.error('Error creating/fetching Stripe price:', error);
-    throw new Error('Failed to prepare subscription price');
-  }
+async function priceForClientPlan(stripe, plan, billingPeriod) {
+  const charge = chargeForPlan(plan, billingPeriod);
+  const price = await createRecurringPrice(stripe, {
+    name: `Nesti ${plan.name}`,
+    amount: charge.amount,
+    currency: charge.currency,
+    interval: charge.interval,
+    metadata: {
+      subscription_type: 'client',
+      tier: plan.tier,
+      billing_period: charge.billingPeriod,
+    },
+  });
+  return { price, charge };
 }
 
-export async function createClientCheckoutSession(userId, tier) {
+export async function createClientCheckoutSession(userId, tier, billingPeriod) {
   const plan = getClientPlan(tier);
   if (!plan) {
     throw new Error(`Invalid client tier: ${tier}`);
   }
+  const period = normalizeBillingPeriod(billingPeriod);
 
   const user = await User.findById(userId);
   if (!user) {
@@ -262,9 +219,8 @@ export async function createClientCheckoutSession(userId, tier) {
   }
 
   const stripe = getStripeClient();
-  
-  const priceId = await getOrCreateStripePrice(stripe, plan);
-  
+  const charge = chargeForPlan(plan, period);
+
   let customerId = existingSubscription?.stripe_customer_id;
 
   if (!customerId) {
@@ -285,7 +241,13 @@ export async function createClientCheckoutSession(userId, tier) {
     payment_method_types: ['card'],
     line_items: [
       {
-        price: priceId,
+        price_data: recurringPriceData({
+          name: `Nesti ${plan.name}`,
+          amount: charge.amount,
+          currency: charge.currency,
+          interval: charge.interval,
+          description: charge.billingPeriod === 'year' ? 'Billed once a year' : 'Billed monthly',
+        }),
         quantity: 1,
       },
     ],
@@ -294,13 +256,19 @@ export async function createClientCheckoutSession(userId, tier) {
     metadata: {
       user_id: String(userId),
       subscription_type: 'client',
-      tier,
+      tier: plan.tier,
+      plan_key: plan.tier,
+      billing_period: charge.billingPeriod,
+      amount: String(charge.amount),
     },
     subscription_data: {
       metadata: {
         user_id: String(userId),
         subscription_type: 'client',
-        tier,
+        tier: plan.tier,
+        plan_key: plan.tier,
+        billing_period: charge.billingPeriod,
+        amount: String(charge.amount),
       },
     },
   });
@@ -502,7 +470,12 @@ export async function changeClientSubscriptionPlan(userId, tier) {
   }
 
   const stripe = getStripeClient();
-  const priceId = await getOrCreateStripePrice(stripe, plan);
+  const { price } = await priceForClientPlan(
+    stripe,
+    plan,
+    subscription.billing_period || 'month',
+  );
+  const priceId = price.id;
   const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id, {
     expand: ['latest_invoice'],
   });
@@ -696,9 +669,14 @@ export async function syncClientStripeSubscription(stripeSubscription) {
   }
 
   const tier =
-    stripeSubscription.metadata?.tier ||
-    existingByStripeId?.tier ||
-    '';
+    canonicalClientTier(stripeSubscription.metadata?.tier)
+    || canonicalClientTier(existingByStripeId?.tier)
+    || stripeSubscription.metadata?.tier
+    || existingByStripeId?.tier
+    || '';
+  const billingPeriod = normalizeBillingPeriod(
+    stripeSubscription.metadata?.billing_period || existingByStripeId?.billing_period,
+  );
   if (!tier) {
     console.error('No tier in stripe subscription metadata');
     return null;
@@ -724,6 +702,7 @@ export async function syncClientStripeSubscription(stripeSubscription) {
   const updateData = {
     user_id: userId,
     tier,
+    billing_period: billingPeriod,
     stripe_subscription_id: stripeSubscription.id,
     stripe_customer_id:
       typeof stripeSubscription.customer === 'string'

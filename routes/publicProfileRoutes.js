@@ -18,7 +18,7 @@ import { submitPublicFeedbackSchema, submitPublicLeadSchema } from '../schemas/p
 import { publicLandingChatConfigService } from '../services/admin/adminLandingChatService.js';
 import { handleLandingChatTurn, loadLandingChatSession } from '../services/chat/nestiLanding/landingChatTurnService.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
-import { createDirectAdminInquiry } from '../services/admin/directInquiryService.js';
+import { createDirectAdminInquiry, unsubscribeNewsletterAddress } from '../services/admin/directInquiryService.js';
 import { publicChatSessionLimiter } from '../middleware/rateLimit.js';
 
 const router = express.Router();
@@ -72,16 +72,37 @@ router.post('/direct-inquiry', validateBody(enterpriseInquiryCreateSchema), asyn
     const body = req.body || {};
     const email = String(body.email || '').trim().toLowerCase();
     const message = String(body.message || '').trim();
+    const newsletter = String(body.inquiry_topic || body.source || '').toLowerCase() === 'newsletter';
     if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
-    if (!message) return res.status(400).json({ success: false, message: 'A message is required' });
+    if (!newsletter && !message) {
+      return res.status(400).json({ success: false, message: 'A message is required' });
+    }
     const inquiry = await createDirectAdminInquiry({
       ...body,
       email,
       full_name: body.full_name,
       interest_role: body.interest_role || '',
+      message: message || (newsletter ? 'Newsletter signup' : ''),
     });
     if (!inquiry) return res.status(400).json({ success: false, message: 'Could not save that request' });
-    res.json({ success: true, message: 'Inquiry received', id: String(inquiry._id) });
+    res.json({
+      success: true,
+      message: newsletter ? 'You are on the list' : 'Inquiry received',
+      id: String(inquiry._id),
+      ...(newsletter && inquiry.unsubscribe_url
+        ? { unsubscribe_url: inquiry.unsubscribe_url }
+        : {}),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/newsletter/unsubscribe', async (req, res, next) => {
+  try {
+    const removed = await unsubscribeNewsletterAddress(req.query.token);
+    if (!removed) return res.status(404).json({ success: false, message: 'That unsubscribe link is not valid' });
+    res.json({ success: true, message: 'You have been removed from The Ravinna Report' });
   } catch (error) {
     next(error);
   }

@@ -389,7 +389,7 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       auth_provider: 'local',
     });
     // Professionals start free trial only after admin credential approval.
-    if (!isProfessionalRole(user.role)) {
+    if (!isProfessionalRole(user.role) && user.role !== USER_ROLE.ADMIN) {
       await createFreeTrialSubscription(user._id, trialEndsAt);
     }
   } catch (error) {
@@ -562,7 +562,7 @@ export const googleSignupService = async ({ token, token_type, role, invite_toke
       auth_provider: 'google',
       google_id: googleProfile.google_id,
     });
-    if (!isProfessionalRole(user.role)) {
+    if (!isProfessionalRole(user.role) && user.role !== USER_ROLE.ADMIN) {
       await createFreeTrialSubscription(user._id, trialEndsAt);
     }
   } catch (error) {

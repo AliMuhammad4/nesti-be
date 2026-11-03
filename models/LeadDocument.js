@@ -7,6 +7,7 @@ const leadDocumentSchema = new mongoose.Schema(
     session_id: { type: String, default: '', index: true },
     lead_match_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LeadMatch', default: null },
     original_filename: { type: String, default: 'document' },
+    content_hash: { type: String, default: '', index: true },
     mime_type: { type: String, default: '' },
     bytes: { type: Number, default: 0 },
     kind: { type: String, enum: ['image', 'pdf', 'word'], required: true },

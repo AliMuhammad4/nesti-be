@@ -103,6 +103,7 @@ const resolveEmbed = async (req, res, next) => {
           display_name: assistantSetting.display_name,
           bot_persona_title: assistantSetting.bot_persona_title,
           welcome_message: assistantSetting.welcome_message,
+          consent_line: assistantSetting.consent_line || '',
           personalities: assistantSetting.personalities || [],
           communication_style: assistantSetting.communication_style || '',
           response_length: assistantSetting.response_length || 'balanced',
@@ -114,6 +115,7 @@ const resolveEmbed = async (req, res, next) => {
           avatar_url: assistantSetting.avatar_url || '',
           client_types: assistantSetting.client_types || [],
           qualification_templates: assistantSetting.qualification_templates || null,
+          offer_property_matches: assistantSetting.offer_property_matches !== false,
         }
       : null;
 

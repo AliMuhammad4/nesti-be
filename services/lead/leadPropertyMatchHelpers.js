@@ -71,9 +71,19 @@ export function enrichPropertyMatch(match = {}) {
       : [];
   const mc = match.matched_contact && typeof match.matched_contact === 'object' ? match.matched_contact : null;
   const mergedLead = mergeRowIntoMatchedLead(match);
+  const imageUrl = String(match?.image_url || match?.imageUrl || '').trim();
   return {
     id: match?.id || null,
     title: match?.title || null,
+    address: match?.address || null,
+    location: match?.location || null,
+    price: match?.price ?? null,
+    bedrooms: match?.bedrooms ?? null,
+    bathrooms: match?.bathrooms ?? null,
+    property_type: match?.property_type || null,
+    image_url: imageUrl || null,
+    listing_url: match?.listing_url || match?.listingUrl || null,
+    summary: match?.summary || null,
     match_score: match?.match_score ?? null,
     match_headline: match?.match_headline || null,
     source: match?.source || null,

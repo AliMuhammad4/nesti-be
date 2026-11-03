@@ -85,7 +85,7 @@ export function holdFurtherQuestions(reply, userMessage = '', language = 'englis
 export function appendCalendlyBookingLink(
   reply,
   calendlyUrl,
-  { userMessage = '', allowSchedule = true, label: ctaLabel = '' } = {},
+  { userMessage = '', allowSchedule = true, label: ctaLabel = '', force = false } = {},
 ) {
   if (!allowSchedule) return String(reply || '').trim();
   const url = String(calendlyUrl || '').trim();
@@ -93,15 +93,24 @@ export function appendCalendlyBookingLink(
   const raw = String(reply || '').trim();
   if (!raw || replyAlreadyHasBookingLink(raw, url)) return raw;
 
-  if (replyStillCollectingContactPrefs(raw)) return raw;
+  if (!force && replyStillCollectingContactPrefs(raw)) return raw;
 
-  const shouldAttach =
-    userProvidedAvailabilityOrAskedSlots(userMessage) ||
-    userSignalsBookingIntent(userMessage) ||
-    assistantSignalsBookingReady(raw);
+  const shouldAttach = force
+    || userProvidedAvailabilityOrAskedSlots(userMessage)
+    || userSignalsBookingIntent(userMessage)
+    || assistantSignalsBookingReady(raw);
   if (!shouldAttach) return raw;
 
   const label = String(ctaLabel || '').trim().slice(0, 60) || 'Book an appointment';
   const body = raw.replace(/\s*\p{Extended_Pictographic}+\s*$/u, '').replace(/[\uFE0E\uFE0F]/g, '').trim();
   return `${body}\n\n[${label}](${url})`;
+}
+
+/** After a document was requested, a reply with no file can end with the consultation link. */
+export function offerConsultationAfterSkippedUpload(reply, calendlyUrl, { allowSchedule = true, label = '' } = {}) {
+  const text = String(reply || '').trim();
+  const note = /\b(consultation|meeting|appointment|book)\b/i.test(text)
+    ? text
+    : `${text} You can send the documents whenever they are ready. We can also pick a time to go through this.`.trim();
+  return appendCalendlyBookingLink(note, calendlyUrl, { allowSchedule, label, force: true });
 }

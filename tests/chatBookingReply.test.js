@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   appendCalendlyBookingLink,
   holdFurtherQuestions,
+  offerConsultationAfterSkippedUpload,
   userSignalsBookingIntent,
 } from '../services/chat/utils/chatBookingReply.js';
 
@@ -30,6 +31,16 @@ test('a meeting request drops the next question and can carry the booking link',
     'i will upload documents later',
   );
   assert.equal(later, 'That works.');
+});
+
+test('a skipped upload ends with the consultation link', () => {
+  const linked = offerConsultationAfterSkippedUpload('I can keep going with what you shared.', CALENDLY_URL, {
+    label: 'Book a consultation',
+  });
+  assert.match(linked, /documents whenever they are ready/i);
+  assert.match(linked, /\[Book a consultation\]\(https:\/\/calendly\.com\/demo\/consult\)/);
+  const blocked = offerConsultationAfterSkippedUpload('I can keep going.', CALENDLY_URL, { allowSchedule: false });
+  assert.equal(blocked.includes(CALENDLY_URL), false);
 });
 
 test('appendCalendlyBookingLink does not attach a link when scheduling is off', () => {

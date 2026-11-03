@@ -91,6 +91,7 @@ const professionalAssistantSettingSchema = new mongoose.Schema(
     use_emojis: { type: Boolean, default: false },
     address_by_first_name: { type: Boolean, default: true },
     suggest_consultation: { type: Boolean, default: true },
+    offer_property_matches: { type: Boolean, default: true },
     services: { type: [String], default: [] },
     country: { type: String, default: '' },
     region: { type: String, default: '' },

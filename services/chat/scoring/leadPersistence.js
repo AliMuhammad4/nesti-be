@@ -389,13 +389,22 @@ export async function createOrReuseLeadProfile({
   return { leadProfile: await LeadProfile.findById(leadProfile._id), reusedExisting: true };
 }
 
+function leadSlotFor(conversationId, leadType) {
+  const suffix = ['buyer', 'seller', 'client'].find((name) => String(leadType || '').endsWith(`_${name}`));
+  if (!conversationId || !suffix) return undefined;
+  return `${conversationId}:${suffix}`.slice(0, 80);
+}
+
 export async function createValidatedLeadMatch(payload) {
+  const conversationId = toIdString(payload.conversation_id);
+  const leadSlot = payload.lead_slot || leadSlotFor(conversationId, payload.lead_type);
   const candidate = {
     ...payload,
     user_id: toIdString(payload.user_id),
     professional_profile_id: toIdString(payload.professional_profile_id),
     lead_profile_id: toIdString(payload.lead_profile_id),
-    conversation_id: toIdString(payload.conversation_id),
+    conversation_id: conversationId,
+    ...(leadSlot ? { lead_slot: leadSlot } : {}),
   };
   const validated = validateOrThrow(leadMatchCreateSchema, candidate, 'LeadMatch');
   const leadMatch = await LeadMatch.create(validated);

@@ -1,5 +1,3 @@
-import CalendarIntegration from '../../../models/CalendarIntegration.js';
-import { calendlyWebhookAlignmentMeta } from '../../calendly/calendlyAlignmentService.js';
 import {
   getPostBookingChecklistForMeta,
   supportsPropertyMatches,
@@ -12,8 +10,6 @@ export async function buildChatResponseMeta({
   flow,
   conversation,
   conversationSnapshot = null,
-  userId,
-  professionalProfile,
   hasContact,
   propertyMatchesEnabled = true,
   deferCalendlyLink,
@@ -31,19 +27,15 @@ export async function buildChatResponseMeta({
   extractedData,
   refetchPropertyMatches = false,
 }) {
+  const sellIntent = String(aiIntent || '').toLowerCase() === 'sell';
   const property_matches_available = Boolean(
-    supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact,
+    supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact && !sellIntent,
   );
 
   const calendlyBookingSnap = conversationSnapshot || {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,
     calendly_booking_at: conversation?.calendly_booking_at ?? null,
   };
-
-  const calInt = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' })
-    .select('access_token calendly_slug calendly_slug_mismatch')
-    .lean();
-  const calendlyAlign = calendlyWebhookAlignmentMeta(calInt, professionalProfile);
 
   const mortgage_affordability_snapshot =
     usesMortgageAffordabilitySnapshot(flow) && mortgageBrokerSnapshotQual
@@ -79,7 +71,6 @@ export async function buildChatResponseMeta({
       calendlyBookingSnap?.calendly_booking_status === 'booked'
         ? getPostBookingChecklistForMeta(flow, finalGrade, aiIntent)
         : null,
-    ...calendlyAlign,
     ...(mortgage_affordability_snapshot ? { mortgage_affordability_snapshot } : {}),
   };
 }

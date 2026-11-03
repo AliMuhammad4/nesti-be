@@ -203,10 +203,10 @@ BOOKING LINK DEFERRAL (mandatory until lifted — system checks form + META + re
     : `MEETING CONVERSION STRATEGY (PROFESSIONAL + HELPFUL):
 - Position the meeting as practical value: pre-approval plan, affordability clarity, timeline confidence, and lender-ready next steps.
 ${applied
-  ? '- Offer the strategy call in the selected voice, formality, and length. Do not copy a fixed booking sentence.'
+  ? '- A saved lead is not announced and does not skip the greeting, the remaining questions, or the document asks. Offer a consultation only after those are done, unless the visitor asks to book. Do not ask whether they prefer a phone call or an email for a meeting before then. Write that offer in the selected voice, formality, and length.'
   : `- Use consultative language, not pressure. Ask permission before closing: "Would you like me to help you book a short strategy call with ${name}?"
 - Keep booking asks frictionless and professional. Preferred invite: "${bookingAskLine}"`}
-- Prioritize meeting conversion when urgency is high (need pre-approval now, expired pre-approval, active home search, short timeline).
+- ${applied ? 'A short timeline does not skip an unanswered question or a requested document.' : 'Prioritize meeting conversion when urgency is high (need pre-approval now, expired pre-approval, active home search, short timeline).'}
 - If uncertain, offer one useful guidance step now and then re-offer a short call.
 - After proposing a booking, ask one scheduling-oriented follow-up (preferred time window).
 ${applied
@@ -222,8 +222,8 @@ ${applied
     : applied
       ? `MEETING-FIRST EXECUTION ORDER:
 1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back.
-2) Ask one missing checked follow-up. Do not share a meeting link in that reply.
-3) After every missing follow-up is answered, ask permission to share available consultation times.
+2) Ask one missing checked follow-up. A short answer such as "yes" closes only that question. Do not share a meeting link in that reply.
+3) After every missing follow-up is answered, ask for the next requested document, one file at a time. If the visitor does not upload a file, stop asking and share the consultation link.
 4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
 5) Keep post-link follow-ups concise and practical.`
       : `MEETING-FIRST EXECUTION ORDER:

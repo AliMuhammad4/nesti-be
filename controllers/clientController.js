@@ -438,16 +438,16 @@ export async function submitClientMortgageBrokerInquiryFromProfile(req, res) {
 export async function createClientSubscriptionCheckout(req, res) {
   try {
     const userId = req.user._id;
-    const { tier } = req.body;
-
-    if (!tier || !['basic', 'standard', 'pro'].includes(tier)) {
+    const { tier, billing_period: billingPeriod } = req.body;
+    const { canonicalClientTier } = await import('../services/client/plans.js');
+    if (!canonicalClientTier(tier)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid tier. Must be basic, standard, or pro',
+        message: 'Invalid tier. Must be essential, plus, or premium',
       });
     }
 
-    const result = await createClientCheckoutSession(userId, tier);
+    const result = await createClientCheckoutSession(userId, tier, billingPeriod);
 
     return res.json({
       success: true,

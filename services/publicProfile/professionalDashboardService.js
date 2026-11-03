@@ -497,6 +497,18 @@ export const saveStorefrontDraftService = async (userId, draft, expected = {}) =
 };
 
 export const publishStorefrontService = async (userId, draft = null, expected = {}) => {
+  const { canPublishWebsite } = await import('../billing/entitlements.js');
+  const { getSubscriptionForRead } = await import('../billing/subscriptionReadService.js');
+  const subscription = await getSubscriptionForRead({ _id: userId }, { refresh: false });
+  if (!canPublishWebsite(subscription)) {
+    return {
+      status: 403,
+      body: {
+        success: false,
+        message: 'Publishing a Nesti website is included with an active Standard or Enterprise plan.',
+      },
+    };
+  }
   const [profile, professionalProfile] = await Promise.all([
     PublicProfile.findOne({ user_id: userId })
       .select('user_id professional_type slug storefront'),

@@ -1,7 +1,7 @@
 import Subscription from '../../models/Subscription.js';
 import ClientSubscription from '../../models/ClientSubscription.js';
 import PublicProfile from '../../models/PublicProfile.js';
-import { getPlan, getPlanByPriceId, getPlanTier, getStripePriceId } from './plans.js';
+import { getPlan, getPlanByPriceId, getPlanTier } from './plans.js';
 import { getStripeClient } from './stripeClient.js';
 import {
   expireCanceledSubscriptionIfNeeded,
@@ -47,9 +47,18 @@ export async function findBlockingStripeSubscription(customerId) {
 }
 
 function planFromInvoice(invoice = {}) {
+  const match = paidPlanFromInvoice(invoice);
+  return match?.plan || null;
+}
+
+function paidPlanFromInvoice(invoice = {}) {
   for (const line of invoice.lines?.data || []) {
-    const plan = getPlanByPriceId(invoiceLinePriceId(line));
-    if (plan) return plan;
+    const priceId = invoiceLinePriceId(line);
+    const metaPlan = String(
+      line?.metadata?.plan_key || line?.price?.metadata?.plan_key || '',
+    ).trim();
+    const plan = (metaPlan && getPlan(metaPlan)) || getPlanByPriceId(priceId);
+    if (plan && priceId) return { plan, priceId };
   }
   return null;
 }
@@ -74,11 +83,11 @@ async function findLatestPaidPlanForSubscription(stripe, customerId, subscriptio
     if (invoiceSubscriptionId && subscriptionId && invoiceSubscriptionId !== subscriptionId) {
       continue;
     }
-    const plan = planFromInvoice(invoice);
-    if (plan) {
+    const paid = paidPlanFromInvoice(invoice);
+    if (paid) {
       return {
-        plan,
-        priceId: getStripePriceId(plan.plan_key),
+        plan: paid.plan,
+        priceId: paid.priceId,
         invoice,
       };
     }
@@ -297,8 +306,11 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
     stripeSubscription?.metadata?.user_id || extra.user_id || '',
   ).trim();
   const planKey = String(
-    plan?.plan_key || stripeSubscription?.metadata?.plan_key || extra.plan_key || '',
+    extra.plan_key || stripeSubscription?.metadata?.plan_key || plan?.plan_key || '',
   ).trim();
+  const billingPeriod = String(
+    extra.billing_period || stripeSubscription?.metadata?.billing_period || '',
+  ).trim().toLowerCase();
   const filter = userId
     ? { user_id: userId }
     : { stripe_subscription_id: subscriptionId };
@@ -317,6 +329,7 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
     metadata: { ...(stripeSubscription.metadata || {}) },
   };
   if (planKey && getPlan(planKey)) update.plan_key = planKey;
+  if (billingPeriod === 'year' || billingPeriod === 'month') update.billing_period = billingPeriod;
   if (extra.last_stripe_event_id) update.last_stripe_event_id = extra.last_stripe_event_id;
 
   const existing = await Subscription.findOne(filter).select('pending_plan_key').lean();
@@ -400,14 +413,45 @@ export async function syncCheckoutSession(session, eventId = '') {
   const subscriptionType = String(
     session?.metadata?.subscription_type || stripeSubscription?.metadata?.subscription_type || '',
   ).trim().toLowerCase();
+  const billingPeriod = String(
+    session?.metadata?.billing_period || stripeSubscription?.metadata?.billing_period || '',
+  ).trim().toLowerCase();
+  const amountPaid = Number(session?.amount_total ?? session?.amount_subtotal ?? 0);
+  let synced;
   if (subscriptionType === 'client') {
-    return syncClientStripeSubscription(stripeSubscription);
+    synced = await syncClientStripeSubscription(stripeSubscription);
+  } else {
+    synced = await syncStripeSubscription(stripeSubscription, {
+      user_id: session?.metadata?.user_id,
+      plan_key: session?.metadata?.plan_key,
+      billing_period: billingPeriod,
+      last_stripe_event_id: eventId,
+    });
   }
-  return syncStripeSubscription(stripeSubscription, {
-    user_id: session?.metadata?.user_id,
-    plan_key: session?.metadata?.plan_key,
-    last_stripe_event_id: eventId,
-  });
+  if (amountPaid > 0 && synced) {
+    const purchase = {
+      plan_key: String(session?.metadata?.plan_key || synced.plan_key || synced.tier || ''),
+      billing_period: billingPeriod === 'year' ? 'year' : (synced.billing_period || 'month'),
+      amount: amountPaid,
+      currency: String(session?.currency || 'usd'),
+      stripe_invoice_id: normalizeStripeId(session?.invoice) || '',
+      confirmed_at: new Date(),
+    };
+    if (subscriptionType === 'client' || synced.tier) {
+      synced = await ClientSubscription.findOneAndUpdate(
+        { stripe_subscription_id: subscriptionId },
+        { $set: { last_purchase: purchase, billing_period: purchase.billing_period } },
+        { returnDocument: 'after' },
+      ) || synced;
+    } else if (synced.user_id || synced.plan_key) {
+      synced = await Subscription.findOneAndUpdate(
+        { stripe_subscription_id: subscriptionId },
+        { $set: { last_purchase: purchase, billing_period: purchase.billing_period } },
+        { returnDocument: 'after' },
+      ) || synced;
+    }
+  }
+  return synced;
 }
 
 export async function updateInvoicePaymentState(invoice, paymentStatus, eventId = '') {
@@ -486,6 +530,44 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
   );
   if (paymentSynced) synced = paymentSynced;
 
+  const amountPaid = Number(invoice?.amount_paid ?? invoice?.total ?? 0);
+  if (paymentStatus === 'paid' && amountPaid > 0 && synced?.user_id) {
+    const confirmed = await Subscription.findOneAndUpdate(
+      { stripe_subscription_id: subscriptionId },
+      {
+        $set: {
+          last_purchase: {
+            plan_key: synced.plan_key || '',
+            billing_period: synced.billing_period || '',
+            amount: amountPaid,
+            currency: String(invoice?.currency || 'usd'),
+            stripe_invoice_id: normalizeStripeId(invoice?.id),
+            confirmed_at: new Date(),
+          },
+        },
+      },
+      { returnDocument: 'after' },
+    );
+    if (confirmed) synced = confirmed;
+  } else if (paymentStatus === 'paid' && amountPaid > 0 && synced?.tier) {
+    const confirmed = await ClientSubscription.findOneAndUpdate(
+      { stripe_subscription_id: subscriptionId },
+      {
+        $set: {
+          last_purchase: {
+            plan_key: synced.tier || '',
+            billing_period: synced.billing_period || '',
+            amount: amountPaid,
+            currency: String(invoice?.currency || 'usd'),
+            stripe_invoice_id: normalizeStripeId(invoice?.id),
+            confirmed_at: new Date(),
+          },
+        },
+      },
+      { returnDocument: 'after' },
+    );
+    if (confirmed) synced = confirmed;
+  }
   if (paymentStatus === 'paid' && synced?.user_id) {
     try {
       await processPaidSubscriptionReferralCredit(synced.user_id, {

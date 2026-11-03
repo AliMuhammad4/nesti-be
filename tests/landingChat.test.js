@@ -24,8 +24,8 @@ test('landing settings keep empty guides on the built-in copy', () => {
   assert.equal(settingsPayload({ enabled: false, display_name: 'Guide' }).enabled, false);
   assert.equal(planFacts().includes('$'), false);
   assert.equal(planFacts('agent').includes('9.99'), false);
-  assert.match(planFacts('agent'), /150/);
-  assert.match(planFacts('client'), /9\.99/);
+  assert.match(planFacts('agent'), /200/);
+  assert.match(planFacts('client'), /29\.99/);
 });
 
 test('role-specific landing FAQs are seeded, isolated, and answered from their saved Q&A', () => {
@@ -247,8 +247,8 @@ test('landing score rises when contact and a signup ask are present', () => {
   assert.match(prompt, /\[\[plans\]\]/);
   assert.equal(prompt.includes('Say them in words'), false);
   const cards = landingChatPlanCards();
-  assert.equal(cards.client.some((plan) => plan.price === '$9.99'), true);
-  assert.equal(cards.professional.some((plan) => plan.price === '$150'), true);
+  assert.equal(cards.client.some((plan) => plan.price === '$29.99'), true);
+  assert.equal(cards.professional.some((plan) => plan.price === '$200'), true);
   assert.equal(cards.client.some((plan) => String(plan.price).includes('150')), false);
   assert.equal(nestiLandingFlow.computeLeadType('warm'), 'warm_client');
   assert.equal(nestiLandingFlow.getIntentSuffix(), 'client');

@@ -4,11 +4,18 @@ import { notifyAdminsOfAdminLead, sendLandingThanksEmail } from '../chat/nestiLa
 import { queueAdminLeadFollowUp } from './adminLeadGuideEmailService.js';
 import { emitAdminPlatformLead } from '../realtime/workspaceSocket.js';
 import { reopenNurtureLead } from './adminPipelineStage.js';
+import {
+  ensureNewsletterSubscriber,
+  newsletterUnsubscribeUrl,
+  sendNewsletterWelcomeEmail,
+} from './newsletterMail.js';
+import NewsletterSubscriber from '../../models/NewsletterSubscriber.js';
 
 export const directInquiryDeps = {
   notifyAdminsOfAdminLead,
   sendLandingThanksEmail,
   queueAdminLeadFollowUp,
+  sendNewsletterWelcomeEmail,
 };
 
 function text(value) {
@@ -19,13 +26,41 @@ const inflight = new Map();
 
 function topicOf(input) {
   const raw = text(input.inquiry_topic || input.source).toLowerCase();
-  if (raw === 'demo' || raw === 'support' || raw === 'inquiry') return raw;
+  if (raw === 'demo' || raw === 'support' || raw === 'inquiry' || raw === 'newsletter') return raw;
   if (raw === 'contact') return 'inquiry';
   return 'inquiry';
 }
 
+export async function subscribeNewsletterAddress({ email, listName = 'The Ravinna Report' }) {
+  const row = await ensureNewsletterSubscriber(email, listName);
+  if (!row) return null;
+  void directInquiryDeps.sendNewsletterWelcomeEmail(row).catch((error) => {
+    logger.warn('Newsletter welcome email was not sent', { error: error?.message });
+  });
+  row.unsubscribe_url = newsletterUnsubscribeUrl(row.unsubscribe_token);
+  return row;
+}
+
+export async function unsubscribeNewsletterAddress(token) {
+  const key = text(token);
+  if (!key) return null;
+  const row = await NewsletterSubscriber.findOne({ unsubscribe_token: key });
+  if (!row) return null;
+  row.unsubscribed_at = new Date();
+  row.consent = false;
+  await row.save();
+  return row;
+}
+
 export async function createDirectAdminInquiry(input = {}) {
   const email = text(input.email).toLowerCase();
+  if (topicOf(input) === 'newsletter') {
+    if (!email) return null;
+    return subscribeNewsletterAddress({
+      email,
+      listName: /ravinna report/i.test(text(input.message)) ? 'The Ravinna Report' : 'The Ravinna Report',
+    });
+  }
   const phone = text(input.phone);
   const fullName = text(input.full_name || input.name);
   const message = text(input.message).slice(0, 4000);

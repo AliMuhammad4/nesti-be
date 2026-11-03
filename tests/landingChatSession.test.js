@@ -116,6 +116,7 @@ test('a returning lead adopts the current chat session capability', async () => 
     }),
     stub(landingChatLeadDeps, 'notifyAdminsOfAdminLead', async () => {}),
     stub(landingChatLeadDeps, 'queueAdminLeadFollowUp', () => {}),
+    stub(landingChatLeadDeps, 'queueLandingThanksEmail', () => {}),
   ];
   try {
     const saved = await saveAdminLead({

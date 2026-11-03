@@ -5,6 +5,7 @@ export const checkoutSessionSchema = Joi.object({
   plan_key: Joi.string()
     .valid(...SUBSCRIPTION_PLAN_KEYS)
     .required(),
+  billing_period: Joi.string().valid('month', 'year', 'annual', 'yearly').optional(),
 });
 
 export const storefrontTemplateCheckoutSessionSchema = Joi.object({
@@ -25,6 +26,7 @@ export const changePlanSchema = Joi.object({
   plan_key: Joi.string()
     .valid(...SUBSCRIPTION_PLAN_KEYS)
     .required(),
+  billing_period: Joi.string().valid('month', 'year', 'annual', 'yearly').optional(),
 });
 
 export const cancelSubscriptionSchema = Joi.object({

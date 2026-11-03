@@ -1,5 +1,6 @@
 import Subscription from '../../models/Subscription.js';
-import { getPlan, getPlanTier, getStripePriceId } from './plans.js';
+import { getPlan, getPlanTier } from './plans.js';
+import { chargeForPlan, createRecurringPrice, normalizeBillingPeriod } from './planPrices.js';
 import { getStripeClient } from './stripeClient.js';
 import { ensureStripeCustomerForUser } from './subscriptionCustomerService.js';
 import { markSubscriptionStripeStateExpired } from './subscriptionLocalService.js';
@@ -30,6 +31,12 @@ export async function cancelSubscriptionForUser(user, cancellationReason = '') {
   const reason = String(cancellationReason || '').trim();
   const subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription?.stripe_subscription_id) {
+    if (String(subscription?.status || '') === 'free_trial') {
+      subscription.status = 'expired';
+      subscription.cancel_at_period_end = false;
+      await subscription.save();
+      return { ok: true, subscription };
+    }
     return { ok: false, code: 404, message: 'No active Stripe subscription found.' };
   }
   const stripe = getStripeClient();
@@ -51,6 +58,14 @@ export async function cancelSubscriptionForUser(user, cancellationReason = '') {
   const attachedScheduleId = normalizeStripeId(stripeSubscription.schedule);
   if (subscription.stripe_subscription_schedule_id || attachedScheduleId) {
     await clearPendingScheduleIfAny(stripe, subscription, attachedScheduleId);
+  }
+  if (String(stripeSubscription.status || '').toLowerCase() === 'trialing') {
+    const canceled = await stripe.subscriptions.cancel(subscription.stripe_subscription_id);
+    const synced = await syncStripeSubscription(canceled, {
+      user_id: String(user._id),
+      clearPendingPlan: true,
+    });
+    return { ok: true, subscription: synced };
   }
   const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
     cancel_at_period_end: true,
@@ -130,14 +145,9 @@ export async function resumeSubscriptionForUser(user) {
   return { ok: true, subscription: await syncStripeSubscription(updated) };
 }
 
-export async function changeSubscriptionPlanForUser(user, planKey) {
+export async function changeSubscriptionPlanForUser(user, planKey, billingPeriod) {
   const plan = getPlan(planKey);
   if (!plan) return { ok: false, code: 400, message: 'Invalid subscription plan.' };
-  const priceId = getStripePriceId(plan.plan_key);
-  if (!priceId) {
-    return { ok: false, code: 503, message: `${plan.name} Stripe price is not configured.` };
-  }
-
   const subscription = await getFreshSubscriptionForUser(user);
   if (!userHasActiveSubscriptionAccess(subscription)) {
     return {
@@ -177,6 +187,18 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
     }
     throw error;
   }
+  const period = normalizeBillingPeriod(
+    billingPeriod || subscription.billing_period || stripeSubscription.metadata?.billing_period,
+  );
+  const charge = chargeForPlan(plan, period);
+  const createdPrice = await createRecurringPrice(stripe, {
+    name: `Nesti ${plan.name}`,
+    amount: charge.amount,
+    currency: charge.currency,
+    interval: charge.interval,
+    metadata: { plan_key: plan.plan_key, billing_period: charge.billingPeriod },
+  });
+  const priceId = createdPrice.id;
   const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
   if (!subscriptionItemId) {
     return { ok: false, code: 500, message: 'Unable to read subscription items from Stripe.' };
@@ -197,6 +219,8 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
       metadata: {
         user_id: String(user._id),
         plan_key: plan.plan_key,
+        billing_period: charge.billingPeriod,
+        amount: String(charge.amount),
       },
     });
     const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object'
@@ -205,6 +229,7 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
     const synced = await syncStripeSubscription(updated, {
       user_id: String(user._id),
       plan_key: plan.plan_key,
+      billing_period: charge.billingPeriod,
       clearPendingPlan: true,
     });
     return {

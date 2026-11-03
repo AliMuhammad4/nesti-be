@@ -9,6 +9,7 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
 import User from '../models/User.js';
+import Subscription from '../models/Subscription.js';
 import { USER_ROLE } from '../constants/roles.js';
 import { ADMIN_PERMISSION } from '../constants/adminPermissions.js';
 
@@ -47,10 +48,11 @@ export async function ensureDefaultAdmin() {
       changed = true;
     }
     if (changed) await existing.save();
+    await Subscription.deleteMany({ user_id: existing._id });
     return { created: false, updated: changed, email: ADMIN_EMAIL };
   }
 
-  await User.create({
+  const created = await User.create({
     email: ADMIN_EMAIL,
     password: ADMIN_PASSWORD,
     first_name: 'Platform',
@@ -61,6 +63,7 @@ export async function ensureDefaultAdmin() {
     is_active: true,
     auth_provider: 'local',
   });
+  await Subscription.deleteMany({ user_id: created._id });
   return { created: true, updated: false, email: ADMIN_EMAIL };
 }
 

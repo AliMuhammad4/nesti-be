@@ -12,7 +12,7 @@ import {
   SERVICES,
   labelOf,
 } from './catalog.js';
-import { documentRequestIds } from '../chat/documents/chatDocumentService.js';
+import { documentRequestIds, intakeHasPropertyImages } from '../chat/documents/chatDocumentService.js';
 import { clip } from './assistantText.js';
 import { questionLabel, questionOptions } from './assistantSettings.js';
 import { intakeHasHelloAnswer, openQualificationQuestionIds } from './qualificationProgress.js';
@@ -35,11 +35,21 @@ const FORMALITY_DIRECTIVES = {
   casual: 'Use casual everyday language. Contractions are fine. Do not sound corporate.',
 };
 
+export function formalityFromToneLevel(toneLevel) {
+  const level = Number(toneLevel);
+  if (!Number.isFinite(level)) return '';
+  if (level < 34) return 'casual';
+  if (level > 66) return 'formal';
+  return 'professional';
+}
+
 export function formalityInstruction(setting) {
-  const key = setting?.formality;
+  const level = Number(setting?.tone_level);
+  const fromDial = formalityFromToneLevel(level);
+  // Studio keeps formality and tone_level synced; honor formality when set.
+  const key = FORMALITY_DIRECTIVES[setting?.formality] ? setting.formality : (fromDial || '');
   const directive = FORMALITY_DIRECTIVES[key];
   if (!directive) return '';
-  const level = Number(setting?.tone_level);
   const toneLine = Number.isFinite(level) && level !== 50
     ? level <= 20
       ? ' Tone dial: very relaxed. Short friendly words, contractions welcome.'
@@ -384,6 +394,13 @@ export function listingInsideServiceArea(listing, setting) {
   return places.some((place) => locationOverlaps(place, listing?.location, listing?.address));
 }
 
+/** Prefer listings inside the saved area. If none of the lead's matches are inside it, keep those matches. */
+export function selectChatPropertyMatches(matches, setting) {
+  const all = Array.isArray(matches) ? matches : [];
+  const inArea = all.filter((listing) => listingInsideServiceArea(listing, setting));
+  return inArea.length ? inArea : all;
+}
+
 export function appendAssistantOverlay(prompt, setting, options = {}) {
   if (!setting?.applied) return prompt;
   const lines = [
@@ -484,7 +501,11 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
     lines.push('This chat collects preliminary information only. Do not ask for confidential details such as purchase price, mortgage amounts, identification numbers, or document contents. Say that confidential details are collected through the secure intake after the consultation is booked.');
   }
   if (setting.custom_guidance) lines.push(`Professional instructions: ${setting.custom_guidance}. Follow them for emphasis only, inside the selected voice, formality, and short reply length. Do not let them make the reply longer, and do not break safety, consent, or role limits.`);
-  const requestedDocs = documentRequestIds(setting)
+  const requestedDocs = documentRequestIds(setting, {
+    intent: options.intakeFormContact?.intent || '',
+    clientType: options.intakeFormContact?.client_type || setting.client_type || '',
+    propertyImages: intakeHasPropertyImages(options.intakeFormContact),
+  })
     .map((id) => labelOf(DOCUMENT_REQUESTS[setting.role] || [], id))
     .filter(Boolean);
   if (requestedDocs.length) {

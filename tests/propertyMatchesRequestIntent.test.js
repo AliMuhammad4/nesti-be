@@ -9,6 +9,12 @@ import {
   shouldRefetchPropertyMatchesForMessage,
 } from '../services/chat/utils/propertyMatchesRequestIntent.js';
 
+test('a typed request for options still loads listings', () => {
+  assert.equal(isAvailableOptionsRequestMessage('i want to see avaialable ptions you ar ehaving'), true);
+  assert.equal(shouldRefetchPropertyMatchesForMessage('i want to see avaialable ptions you ar ehaving'), true);
+  assert.equal(isAvailableOptionsRequestMessage('i can upload documents later'), false);
+});
+
 test('detects available options phrasing separately from property matches', () => {
   assert.equal(isAvailableOptionsRequestMessage('show me the avaialable options avaialable'), true);
   assert.equal(isAvailableOptionsRequestMessage('show me the available options'), true);
@@ -29,6 +35,15 @@ test('yes after an options offer loads the lead matches', () => {
   assert.equal(shouldRefetchPropertyMatchesForMessage('yes', { previousAssistantReply: offer }), true);
   assert.equal(shouldRefetchPropertyMatchesForMessage('yes'), false);
   assert.equal(shouldRefetchPropertyMatchesForMessage('what is my budget?'), false);
+});
+
+test('yes after a later non-offer reply does not reload matches', () => {
+  const lastReply = 'Can you upload your ID when you are ready?';
+  assert.equal(assistantOfferedAvailableOptions(lastReply), false);
+  assert.equal(
+    shouldRefetchPropertyMatchesForMessage('yes', { previousAssistantReply: lastReply }),
+    false,
+  );
 });
 
 test('a short options sentence plus a question still announces cards', () => {

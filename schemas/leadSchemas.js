@@ -33,6 +33,7 @@ export const leadMatchCreateSchema = Joi.object({
   lead_type: leadType.default('unknown'),
   lead_profile_id: objectId.allow(null),
   conversation_id: objectId,
+  lead_slot: Joi.string().trim().max(80),
   match_score: Joi.number().default(0),
   match_status: Joi.string().valid(...MATCH_STATUSES).default('new'),
   icp_fit: icpFitSchema.optional(),

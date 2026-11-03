@@ -9,7 +9,11 @@ import LeadMatch from '../../../models/LeadMatch.js';
 import { DOCUMENT_REQUESTS, idsOf, labelOf } from '../../professionalAssistant/catalog.js';
 import { isGreetingOnly, isVagueYes, normalizedVisitorText } from '../../professionalAssistant/visitorMessage.js';
 import { replyLanguage } from '../../professionalAssistant/replyStyle.js';
-import { visitorPausesDetails } from '../utils/chatBookingReply.js';
+import { userSignalsBookingIntent, visitorPausesDetails } from '../utils/chatBookingReply.js';
+import {
+  assistantAnnouncingOptionCards,
+  assistantOfferedAvailableOptions,
+} from '../utils/propertyMatchesRequestIntent.js';
 import { createSignedReadUrl, deleteObjectFromR2, getObjectFromR2, uploadBufferToR2 } from '../../media/r2Client.js';
 import logger from '../../../utils/logger.js';
 import { MAX_CHATBOT_ATTACHMENT_BYTES } from '../../../middleware/uploadChatbotAttachment.js';
@@ -71,7 +75,7 @@ export function hasReadableDocumentText(doc) {
 }
 
 function textIsKnown(doc) {
-  return doc?.text_ready === true || doc?.status === 'ready' || doc?.status === 'failed';
+  return doc?.status === 'ready' || doc?.status === 'failed';
 }
 
 function contentWords(value) {
@@ -257,6 +261,7 @@ const DOCUMENT_RECEIVED = {
   notice_of_assessment: /notice of assessment|\bt4\b|\bnoa\b/i,
   mortgage_statement: /mortgage statement/i,
   preapproval_letter: /pre-?approval/i,
+  proof_of_funds: /proof of funds|bank statement|down payment|funds available/i,
   photo_id: /photo id|passport|driver'?s licen[cs]e|government id|photo identification/i,
   home_photos: /photos? of the home|home photos|property photos/i,
   listing_sheet: /listing sheet|\bmls\b/i,
@@ -266,8 +271,13 @@ const DOCUMENT_RECEIVED = {
   condo_status: /status certificate|condo status/i,
 };
 
+const GENERIC_DOCUMENT_TYPES = new Set(['document', 'photo', 'file', 'image', 'pdf', 'word', 'attachment', 'upload']);
+
 function documentCoversRequest(doc, id) {
-  const text = `${doc?.original_filename || ''} ${doc?.document_type || ''} ${doc?.summary || ''} ${(doc?.key_facts || []).join(' ')} ${String(doc?.extracted_text || '').slice(0, 3000)}`;
+  if (doc?.status && doc.status !== 'ready') return false;
+  const type = String(doc?.document_type || '').trim().toLowerCase();
+  const typeText = GENERIC_DOCUMENT_TYPES.has(type) ? '' : type;
+  const text = `${doc?.original_filename || ''} ${typeText} ${doc?.summary || ''} ${(doc?.key_facts || []).join(' ')} ${String(doc?.extracted_text || '').slice(0, 3000)}`;
   if (DOCUMENT_RECEIVED[id]?.test(text)) return true;
   const folded = text.toLowerCase();
   return Object.values(DOCUMENT_NAMES).some((pack) => {
@@ -277,19 +287,43 @@ function documentCoversRequest(doc, id) {
 }
 
 function requestContext(intentOrContext) {
-  if (typeof intentOrContext === 'string') return { intent: intentOrContext, text: '' };
-  return { intent: String(intentOrContext?.intent || ''), text: String(intentOrContext?.text || '') };
+  if (typeof intentOrContext === 'string') return { intent: intentOrContext, text: '', propertyImages: false };
+  return {
+    intent: String(intentOrContext?.intent || ''),
+    text: String(intentOrContext?.text || ''),
+    propertyImages: Boolean(intentOrContext?.propertyImages),
+    clientType: String(intentOrContext?.clientType || '').trim().toLowerCase(),
+  };
+}
+
+function agentAudience(context) {
+  const explicit = String(context.clientType || '').trim().toLowerCase();
+  if (explicit === 'buyer' || explicit === 'seller' || explicit === 'investor') return explicit;
+  const text = `${context.intent} ${context.text}`;
+  if (context.intent === 'sell' || /\b(sell|selling|list my|listing my home)\b/i.test(text)) return 'seller';
+  if (/\b(investor|investment|rental income|fix and flip)\b/i.test(text)) return 'investor';
+  return 'buyer';
+}
+
+export function intakeHasPropertyImages(form) {
+  const images = form?.property_images || form?.property?.images || form?.images;
+  if (!Array.isArray(images)) return false;
+  return images.some((image) => {
+    if (typeof image === 'string') return image.trim().length > 0;
+    return Boolean(String(image?.secure_url || image?.url || '').trim());
+  });
 }
 
 function orderedRequestIds(role, wanted, context) {
   const text = `${context.intent} ${context.text}`;
   const condo = /\b(condo|condominium|strata)\b/i.test(text);
-  const selling = context.intent === 'sell' || /\b(sell|selling|list my|listing my home)\b/i.test(text);
   let order = wanted;
   if (role === 'agent') {
-    order = selling
-      ? ['home_photos', 'listing_sheet', 'preapproval_letter']
-      : ['preapproval_letter', 'home_photos', 'listing_sheet'];
+    const audience = agentAudience(context);
+    const forVisitor = audience === 'seller'
+      ? ['home_photos', 'listing_sheet', 'photo_id']
+      : ['preapproval_letter', 'proof_of_funds', 'photo_id'];
+    return forVisitor.filter((id) => wanted.includes(id) && !(id === 'home_photos' && context.propertyImages));
   } else if (role === 'mortgage_broker') {
     if (/\brenew/i.test(text)) order = ['mortgage_statement', 'photo_id', 'notice_of_assessment', 'pay_stubs', 'preapproval_letter'];
     else if (/\brefinanc/i.test(text)) order = ['mortgage_statement', 'pay_stubs', 'notice_of_assessment', 'photo_id', 'preapproval_letter'];
@@ -346,6 +380,7 @@ const DOCUMENT_REVIEW = {
     exactDone: (got) => `This is the ${got}. That is all the documents I need for now.`,
     other: (got, next) => (next ? `This is the ${got}. When you are ready, you can send the ${next}.` : `This is the ${got}. We can continue with the other details.`),
     different: (next) => (next ? `This is a different file. When you are ready, you can send the ${next}.` : 'This is a different file. We can continue with the other details.'),
+    duplicate: (next) => (next ? `You already sent this file. When you are ready, you can send the ${next}.` : 'You already sent this file. We can continue with the other details.'),
     received: () => 'I have the file.',
     receivedDone: () => 'I have the file. That is all the documents I need for now.',
   },
@@ -354,6 +389,7 @@ const DOCUMENT_REVIEW = {
     exactDone: (got) => `C'est bien ${got}. Ce sont tous les documents dont j'ai besoin pour le moment.`,
     other: (got, next) => (next ? `C'est bien ${got}. Quand vous êtes prêt, vous pouvez envoyer ${next}.` : `C'est bien ${got}. Nous pouvons continuer avec les autres détails.`),
     different: (next) => (next ? `C'est un autre fichier. Quand vous êtes prêt, vous pouvez envoyer ${next}.` : `C'est un autre fichier. Nous pouvons continuer avec les autres détails.`),
+    duplicate: (next) => (next ? `Vous avez déjà envoyé ce fichier. Quand vous êtes prêt, vous pouvez envoyer ${next}.` : 'Vous avez déjà envoyé ce fichier. Nous pouvons continuer avec les autres détails.'),
     received: () => `J'ai bien le fichier.`,
     receivedDone: () => `J'ai bien le fichier. Ce sont tous les documents dont j'ai besoin pour le moment.`,
   },
@@ -362,6 +398,7 @@ const DOCUMENT_REVIEW = {
     exactDone: (got) => `Este es ${got}. Con esto tengo los documentos que necesito por ahora.`,
     other: (got, next) => (next ? `Este es ${got}. Cuando pueda, puede enviar ${next}.` : `Este es ${got}. Podemos seguir con los otros detalles.`),
     different: (next) => (next ? `Este es otro archivo. Cuando pueda, puede enviar ${next}.` : 'Este es otro archivo. Podemos seguir con los otros detalles.'),
+    duplicate: (next) => (next ? `Ya envió este archivo. Cuando pueda, puede enviar ${next}.` : 'Ya envió este archivo. Podemos seguir con los otros detalles.'),
     received: () => 'Ya tengo el archivo.',
     receivedDone: () => 'Ya tengo el archivo. Con esto tengo los documentos que necesito por ahora.',
   },
@@ -370,6 +407,7 @@ const DOCUMENT_REVIEW = {
     exactDone: (got) => `هذا هو ${got}. هذه كل المستندات التي أحتاجها الآن.`,
     other: (got, next) => (next ? `هذا هو ${got}. عندما تكون جاهزًا، يمكنك إرسال ${next}.` : `هذا هو ${got}. يمكننا المتابعة بالتفاصيل الأخرى.`),
     different: (next) => (next ? `هذا ملف مختلف. عندما تكون جاهزًا، يمكنك إرسال ${next}.` : 'هذا ملف مختلف. يمكننا المتابعة بالتفاصيل الأخرى.'),
+    duplicate: (next) => (next ? `لقد أرسلت هذا الملف من قبل. عندما تكون جاهزًا، يمكنك إرسال ${next}.` : 'لقد أرسلت هذا الملف من قبل. يمكننا المتابعة بالتفاصيل الأخرى.'),
     received: () => 'وصلتني الملف.',
     receivedDone: () => 'وصلتني الملف. هذه كل المستندات التي أحتاجها الآن.',
   },
@@ -378,18 +416,45 @@ const DOCUMENT_REVIEW = {
     exactDone: (got) => `यह ${got} है। अभी के लिए मुझे यही दस्तावेज़ चाहिए थे।`,
     other: (got, next) => (next ? `यह ${got} है। जब आप तैयार हों, ${next} भेज सकते हैं।` : `यह ${got} है। हम बाकी बातचीत जारी रख सकते हैं।`),
     different: (next) => (next ? `यह कोई और फ़ाइल है। जब आप तैयार हों, ${next} भेज सकते हैं।` : 'यह कोई और फ़ाइल है। हम बाकी बातचीत जारी रख सकते हैं।'),
+    duplicate: (next) => (next ? `आप यह फ़ाइल पहले ही भेज चुके हैं। जब आप तैयार हों, ${next} भेज सकते हैं।` : 'आप यह फ़ाइल पहले ही भेज चुके हैं। हम बाकी बातचीत जारी रख सकते हैं।'),
     received: () => 'फ़ाइल मिल गई।',
     receivedDone: () => 'फ़ाइल मिल गई। अभी के लिए मुझे यही दस्तावेज़ चाहिए थे।',
   },
 };
 
+export function isSameChatDocument(existing, incoming) {
+  if (!existing || !incoming) return false;
+  if (existing === incoming) return false;
+  const existingId = String(existing._id || existing.id || '');
+  const incomingId = String(incoming._id || incoming.id || '');
+  if (existingId && incomingId && existingId === incomingId) return true;
+  const existingHash = String(existing.content_hash || '');
+  const incomingHash = String(incoming.content_hash || '');
+  if (existingHash && incomingHash && existingHash === incomingHash) return true;
+  if (existingHash || incomingHash) return false;
+  const storedName = String(existing.original_filename || '').trim().toLowerCase();
+  const incomingName = String(incoming.original_filename || incoming.filename || '').trim().toLowerCase();
+  const storedBytes = Number(existing.bytes) || 0;
+  const incomingBytes = Number(incoming.bytes) || 0;
+  return Boolean(storedName && storedName === incomingName && storedBytes > 0 && storedBytes === incomingBytes);
+}
+
 export function documentReviewReply(documents = [], setting = null, context = {}) {
   const fresh = (Array.isArray(documents) ? documents : []).filter(Boolean);
   const doc = fresh[fresh.length - 1];
   if (!doc || !setting?.applied || !setting.document_requests?.length) return '';
-  if (!textIsKnown(doc) && doc.status !== 'ready' && doc.status !== 'failed') return '';
   const prior = Array.isArray(context.priorDocuments) ? context.priorDocuments : [];
-  const requestContextValue = { intent: context.intent, text: context.text || '' };
+  const repeated = prior.some((item) => isSameChatDocument(item, doc));
+  if (repeated) {
+    const language = replyLanguage(setting, context.userMessage, context.conversationText);
+    const copy = DOCUMENT_REVIEW[language] || DOCUMENT_REVIEW.english;
+    const requestContextValue = requestContext(context);
+    const next = nextDocumentRequest(setting, prior, requestContextValue);
+    const say = copy.duplicate || DOCUMENT_REVIEW.english.duplicate;
+    return say(next ? localizedDocumentName(next.id, language) : '');
+  }
+  if (!textIsKnown(doc)) return '';
+  const requestContextValue = requestContext(context);
   const expected = nextDocumentRequest(setting, prior, requestContextValue);
   const matched = documentRequestIds(setting, requestContextValue).filter((id) => documentCoversRequest(doc, id));
   const language = replyLanguage(setting, context.userMessage, context.conversationText);
@@ -416,6 +481,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: 'notice of assessment or T4',
     mortgage_statement: 'current mortgage statement',
     preapproval_letter: 'pre-approval letter',
+    proof_of_funds: 'proof of funds',
     photo_id: 'photo ID',
     home_photos: 'photos of the home',
     listing_sheet: 'listing or MLS sheet',
@@ -429,6 +495,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: 'avis de cotisation ou T4',
     mortgage_statement: 'relevé hypothécaire actuel',
     preapproval_letter: 'lettre de préapprobation',
+    proof_of_funds: 'preuve de fonds',
     photo_id: 'pièce d\'identité',
     home_photos: 'photos du logement',
     listing_sheet: 'fiche d\'inscription',
@@ -442,6 +509,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: 'aviso de evaluación o T4',
     mortgage_statement: 'estado de cuenta hipotecario',
     preapproval_letter: 'carta de preaprobación',
+    proof_of_funds: 'comprobante de fondos',
     photo_id: 'identificación con foto',
     home_photos: 'fotos de la vivienda',
     listing_sheet: 'ficha del listado',
@@ -455,6 +523,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: '评估通知或T4',
     mortgage_statement: '当前房贷对账单',
     preapproval_letter: '预批信',
+    proof_of_funds: '资金证明',
     photo_id: '带照片的身份证件',
     home_photos: '房屋照片',
     listing_sheet: '挂牌资料',
@@ -468,6 +537,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: '評稅通知或T4',
     mortgage_statement: '現時按揭月結單',
     preapproval_letter: '預批信',
+    proof_of_funds: '資金證明',
     photo_id: '有相身份證明',
     home_photos: '屋企相',
     listing_sheet: '放盤資料',
@@ -481,6 +551,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: 'إشعار التقييم أو T4',
     mortgage_statement: 'كشف الرهن الحالي',
     preapproval_letter: 'خطاب الموافقة المبدئية',
+    proof_of_funds: 'إثبات الأموال',
     photo_id: 'هوية بصورة',
     home_photos: 'صور المنزل',
     listing_sheet: 'ورقة العرض',
@@ -494,6 +565,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: 'आकलन नोटिस या T4',
     mortgage_statement: 'मौजूदा गिरवी विवरण',
     preapproval_letter: 'पूर्व-स्वीकृति पत्र',
+    proof_of_funds: 'धन का प्रमाण',
     photo_id: 'फोटो पहचान',
     home_photos: 'घर की तस्वीरें',
     listing_sheet: 'लिस्टिंग शीट',
@@ -507,6 +579,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: 'ਮੁਲਾਂਕਣ ਨੋਟਿਸ ਜਾਂ T4',
     mortgage_statement: 'ਮੌਜੂਦਾ ਰਹਿਨ ਬਿਆਨ',
     preapproval_letter: 'ਪ੍ਰੀ-ਅਪਰੂਵਲ ਪੱਤਰ',
+    proof_of_funds: 'ਫੰਡਾਂ ਦਾ ਸਬੂਤ',
     photo_id: 'ਫੋਟੋ ਵਾਲੀ ਪਛਾਣ',
     home_photos: 'ਘਰ ਦੀਆਂ ਤਸਵੀਰਾਂ',
     listing_sheet: 'ਲਿਸਟਿੰਗ ਸ਼ੀਟ',
@@ -520,6 +593,7 @@ const DOCUMENT_NAMES = {
     notice_of_assessment: 'மதிப்பீட்டு அறிவிப்பு அல்லது T4',
     mortgage_statement: 'தற்போதைய அடமான அறிக்கை',
     preapproval_letter: 'முன்அனுமதி கடிதம்',
+    proof_of_funds: 'நிதி சான்று',
     photo_id: 'புகைப்பட அடையாளம்',
     home_photos: 'வீட்டு புகைப்படங்கள்',
     listing_sheet: 'பட்டியல் தாள்',
@@ -575,7 +649,7 @@ export function requestDocumentForReply(request, reply) {
 
 const OPENING_INTAKE = {
   lawyer: /\b(purchase closing|sale closing|refinance closing)\b/i,
-  mortgage_broker: /\b(new mortgage|refinance|renewal|pre-approval)\b/i,
+  mortgage_broker: /\b(new mortgage|refinance|renewal)\b/i,
   agent: /\b(buy or sell|buying or selling|looking to buy|looking to sell)\b/i,
 };
 
@@ -603,17 +677,35 @@ function withoutDocumentSentence(reply, request) {
     .trim();
 }
 
+function replyPushesMeeting(reply) {
+  return /\b(consultation|strategy call|our meeting|phone call or email|available times|calendly)\b/i.test(String(reply || ''));
+}
+
+function withoutMeetingPush(reply) {
+  return String(reply || '')
+    .split(/(?<=[.!?？])\s+/)
+    .filter((sentence) => sentence && !replyPushesMeeting(sentence))
+    .join(' ')
+    .trim();
+}
+
 export function applyDocumentAsk(reply, request, { previousReply = '', userMessage = '', setting = null, conversationText = '', qualificationOpen = false } = {}) {
   const text = String(reply || '').trim();
-  if (!request?.label || qualificationOpen || isGreetingOnly(userMessage) || isVagueYes(userMessage) || isIntentOnly(userMessage) || visitorPausesDetails(userMessage)) {
+  const previousWasDetail = replyAsks(previousReply) && !isOpeningIntake(previousReply, setting?.role);
+  const shortAnswer = isVagueYes(userMessage) || isIntentOnly(userMessage);
+  if (!request?.label || qualificationOpen || isGreetingOnly(userMessage) || visitorPausesDetails(userMessage) || (shortAnswer && !previousWasDetail)) {
     return { reply: withoutDocumentSentence(text, request), request: null };
   }
-  if (isOpeningIntake(text, setting?.role)) return { reply: withoutDocumentSentence(text, request), request: null };
+  // Options offer / card announce must wait for the visitor — do not stack a document ask.
+  if (assistantOfferedAvailableOptions(text) || assistantAnnouncingOptionCards(text)) {
+    return { reply: withoutDocumentSentence(text, request), request: null };
+  }
+  if (isOpeningIntake(text, setting?.role) && !replyPushesMeeting(text)) return { reply: withoutDocumentSentence(text, request), request: null };
   if (requestDocumentForReply(request, previousReply) || requestDocumentForReply(request, text)) return { reply: text, request };
-  const previousWasDetail = replyAsks(previousReply) && !isOpeningIntake(previousReply, setting?.role);
   if (replyAsks(text) && !previousWasDetail) return { reply: withoutDocumentSentence(text, request), request: null };
+  const body = replyPushesMeeting(text) && !userSignalsBookingIntent(userMessage) ? withoutMeetingPush(text) : text;
   const line = documentAskLine(request, setting, userMessage, conversationText);
-  return { reply: `${text} ${line}`.trim(), request };
+  return { reply: `${body} ${line}`.trim(), request };
 }
 
 function clipFacts(value) {
@@ -747,13 +839,46 @@ export async function rereadUndescribedImages(documents = []) {
   return true;
 }
 
+const readsInFlight = new Set();
+
 async function setDocumentReadResult(documentId, fields) {
   await LeadDocument.updateOne({ _id: documentId }, { $set: fields });
 }
 
+/** A restart drops the in-process read. Start it again before the reply decides the file matches. */
+export async function resumeDocumentReads(documentsOrIds = []) {
+  const rows = Array.isArray(documentsOrIds) ? documentsOrIds : [];
+  const ids = rows
+    .map((item) => item?._id || item?.id || item)
+    .map((id) => String(id || ''))
+    .filter((id) => mongoose.Types.ObjectId.isValid(id));
+  if (!ids.length) return;
+  const known = rows.every((item) => item && typeof item === 'object' && item.status)
+    ? rows
+    : await LeadDocument.find({ _id: { $in: ids } }).select('status').lean();
+  known.forEach((doc) => {
+    const id = doc?._id;
+    if (!id || doc.status === 'ready' || doc.status === 'failed') return;
+    const key = String(id);
+    if (readsInFlight.has(key)) return;
+    void readChatDocument(id);
+  });
+}
+
 export async function readChatDocument(documentId) {
-  const doc = await LeadDocument.findById(documentId).select('kind mime_type r2_key original_filename').lean();
-  if (!doc) return;
+  const key = String(documentId || '');
+  if (!key || readsInFlight.has(key)) return;
+  readsInFlight.add(key);
+  try {
+    await readChatDocumentBody(documentId);
+  } finally {
+    readsInFlight.delete(key);
+  }
+}
+
+async function readChatDocumentBody(documentId) {
+  const doc = await LeadDocument.findById(documentId).select('kind mime_type r2_key original_filename status').lean();
+  if (!doc || doc.status === 'ready') return;
   await setDocumentReadResult(documentId, { status: 'reading' });
   try {
     const object = await getObjectFromR2(doc.r2_key);
@@ -980,6 +1105,34 @@ export async function countConversationDocuments({ userId, sessionId, conversati
   });
 }
 
+async function findSameChatDocument({ userId, sessionId, conversationId, preview, filename, bytes, contentHash }) {
+  const scope = [
+    conversationId ? { conversation_id: conversationId } : null,
+    sessionId ? { session_id: sessionId } : null,
+  ].filter(Boolean);
+  if (!scope.length || !contentHash) return null;
+  const previewFilter = preview === true ? true : { $ne: true };
+  const hashed = await LeadDocument.findOne({
+    user_id: userId,
+    preview: previewFilter,
+    content_hash: contentHash,
+    $or: scope,
+  }).select('_id').lean();
+  if (hashed) return hashed;
+  const name = String(filename || 'document').slice(0, 180);
+  if (!name || !bytes) return null;
+  return LeadDocument.findOne({
+    user_id: userId,
+    preview: previewFilter,
+    original_filename: name,
+    bytes,
+    $and: [
+      { $or: scope },
+      { $or: [{ content_hash: '' }, { content_hash: null }, { content_hash: { $exists: false } }] },
+    ],
+  }).select('_id').lean();
+}
+
 export async function saveChatDocument({
   userId,
   sessionId,
@@ -1001,6 +1154,21 @@ export async function saveChatDocument({
     error.status = 400;
     throw error;
   }
+  const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+  const already = await findSameChatDocument({
+    userId,
+    sessionId,
+    conversationId,
+    preview,
+    filename,
+    bytes: buffer.length,
+    contentHash: hash,
+  });
+  if (already) {
+    const error = new Error('You already uploaded this file.');
+    error.status = 409;
+    throw error;
+  }
   await assertChatDocumentLimits(buffer, sniffed.kind);
   const ext = sniffed.kind === 'pdf' ? '.pdf' : sniffed.kind === 'word' ? (sniffed.mime === MIME_BY_KIND.doc ? '.doc' : '.docx') : sniffed.mime === MIME_BY_KIND.png ? '.png' : sniffed.mime === MIME_BY_KIND.webp ? '.webp' : sniffed.mime === MIME_BY_KIND.heic ? '.heic' : '.jpg';
   const key = `nesti/chatbot/${userId}/${sessionId || 'session'}/${crypto.randomBytes(8).toString('hex')}${ext}`;
@@ -1017,6 +1185,7 @@ export async function saveChatDocument({
     original_filename: String(filename || 'document').slice(0, 180),
     mime_type: sniffed.mime,
     bytes: buffer.length,
+    content_hash: hash,
     kind: sniffed.kind,
     r2_key: key,
     status: 'uploaded',

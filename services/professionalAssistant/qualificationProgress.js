@@ -1,4 +1,6 @@
+import { questionLabel } from './assistantSettings.js';
 import { isGreetingOnly } from './visitorMessage.js';
+import { userSignalsBookingIntent } from '../chat/utils/chatBookingReply.js';
 
 const QUESTION_CUES = {
   intent: /\b(buying or selling|buy or sell|looking to buy|looking to sell|exploring)\b/i,
@@ -99,10 +101,66 @@ function labelAsked(text, label) {
   return hits >= Math.min(2, words.length);
 }
 
+function cuePosition(sentence, id, overrides = {}) {
+  const source = String(sentence || '');
+  const cueAt = QUESTION_CUES[id] ? source.search(QUESTION_CUES[id]) : -1;
+  const lower = source.toLowerCase();
+  const labelAt = labelCue(overrides?.[id]?.label).reduce((latest, word) => {
+    const at = lower.indexOf(word);
+    return at > latest ? at : latest;
+  }, -1);
+  return Math.max(cueAt, labelAt);
+}
+
+function latestAsked(sentence, allowed, overrides = {}) {
+  let chosen = '';
+  let at = -1;
+  for (const id of allowed) {
+    if (!QUESTION_CUES[id]?.test(sentence) && !labelAsked(sentence, overrides?.[id]?.label)) continue;
+    const position = cuePosition(sentence, id, overrides);
+    if (position >= at) {
+      chosen = id;
+      at = position;
+    }
+  }
+  return chosen ? [chosen] : [];
+}
+
 function askedIds(text, allowed, overrides = {}) {
   const source = String(text || '');
   if (!source.includes('?') && !source.includes('？')) return [];
-  return [...allowed].filter((id) => QUESTION_CUES[id]?.test(source) || labelAsked(source, overrides?.[id]?.label));
+  const sentences = source.split(/(?<=[?？])\s+/).filter((sentence) => /[?？]/.test(sentence));
+  for (let index = sentences.length - 1; index >= 0; index -= 1) {
+    const asked = latestAsked(sentences[index], allowed, overrides);
+    if (asked.length) return asked;
+  }
+  return latestAsked(source, allowed, overrides);
+}
+
+const MEETING_PUSH = /\b(consultation|strategy call|our meeting|phone call or email|available times|calendly)\b/i;
+
+/** A saved lead does not replace the next open question with a meeting ask. */
+export function keepOpenQuestion(reply, setting, form, answeredIds = [], userMessage = '') {
+  let text = String(reply || '').trim();
+  if (!text || !qualificationStillOpen(setting, form, answeredIds) || userSignalsBookingIntent(userMessage)) return text;
+  const sentences = text.split(/(?<=[.!?？])\s+/).filter(Boolean);
+  const questionSentences = sentences.filter((sentence) => /[?？]/.test(sentence));
+  if (questionSentences.length > 1) {
+    const firstQuestion = questionSentences[0];
+    const statements = sentences.filter((sentence) => !/[?？]/.test(sentence)).slice(0, 1);
+    text = [...statements, firstQuestion].join(' ').replace(/\s+/g, ' ').trim();
+  }
+  if (!MEETING_PUSH.test(text) || !/[?？]/.test(text)) return text;
+  const nextId = openQualificationQuestionIds(setting, form, answeredIds)[0];
+  const label = questionLabel(setting, nextId);
+  if (!label) return text;
+  const kept = text
+    .split(/(?<=[.!?？])\s+/)
+    .filter((sentence) => sentence && !MEETING_PUSH.test(sentence))
+    .join(' ')
+    .trim();
+  const ask = /[?？]\s*$/.test(label) ? label : `${label.replace(/[.!\s]+$/, '')}?`;
+  return `${kept} ${ask}`.replace(/\s+/g, ' ').trim();
 }
 
 export function chatAnsweredQuestionIds(setting, history, userMessage) {

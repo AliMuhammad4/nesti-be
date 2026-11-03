@@ -1,5 +1,6 @@
 import Subscription from '../../models/Subscription.js';
-import { getPlan, getStripePriceId } from './plans.js';
+import { getPlan } from './plans.js';
+import { chargeForPlan, recurringPriceData, trialEndUnix } from './planPrices.js';
 import { getStripeClient } from './stripeClient.js';
 import { ensureStripeCustomerForUser } from './subscriptionCustomerService.js';
 import { expireTrialIfNeeded } from './subscriptionLocalService.js';
@@ -31,15 +32,12 @@ async function assertUserCanPurchasePlan(user, subscription) {
   };
 }
 
-export async function createCheckoutSessionForUser(user, planKey) {
+export async function createCheckoutSessionForUser(user, planKey, billingPeriod) {
   const plan = getPlan(planKey);
   if (!plan) {
     return { ok: false, code: 400, message: 'Invalid subscription plan.' };
   }
-  const priceId = getStripePriceId(plan.plan_key);
-  if (!priceId) {
-    return { ok: false, code: 503, message: `${plan.name} Stripe price is not configured.` };
-  }
+  const charge = chargeForPlan(plan, billingPeriod);
 
   const subscription = await getFreshSubscriptionForUser(user);
   await ensureStripeCustomerForUser(user, subscription, { planKey: plan.plan_key });
@@ -54,21 +52,33 @@ export async function createCheckoutSessionForUser(user, planKey) {
   if (!frontendUrl) {
     return { ok: false, code: 503, message: 'FRONTEND_URL is not configured.' };
   }
+  const metadata = {
+    user_id: String(user._id),
+    plan_key: plan.plan_key,
+    billing_period: charge.billingPeriod,
+    amount: String(charge.amount),
+    subscription_type: 'professional',
+  };
+  const trialEnd = trialEndUnix(freshSubscription?.trial_end);
   const session = await getStripeClient().checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,
-    line_items: [{ price: priceId, quantity: 1 }],
+    line_items: [{
+      price_data: recurringPriceData({
+        name: `Nesti ${plan.name}`,
+        amount: charge.amount,
+        currency: charge.currency,
+        interval: charge.interval,
+        description: charge.billingPeriod === 'year' ? 'Billed once a year' : 'Billed monthly',
+      }),
+      quantity: 1,
+    }],
     success_url: `${frontendUrl}/settings?billing=success`,
     cancel_url: `${frontendUrl}/settings?billing=cancelled`,
-    metadata: {
-      user_id: String(user._id),
-      plan_key: plan.plan_key,
-    },
+    metadata,
     subscription_data: {
-      metadata: {
-        user_id: String(user._id),
-        plan_key: plan.plan_key,
-      },
+      metadata,
+      ...(trialEnd ? { trial_end: trialEnd } : {}),
     },
   });
   return { ok: true, session };

@@ -81,8 +81,8 @@ test('sales phones come from inquiry, professional profile, then user', () => {
   assert.equal(normalizeE164('(416) 555-0199'), '+14165550199');
   assert.equal(normalizeE164('not-a-phone'), '');
   assert.equal(pickSalesPhone({ inquiryPhone: '', profilePhone: '4165550100', userPhone: '+14165550101' }), '+14165550100');
-  assert.match(subscriptionPitchFacts('client'), /\$9\.99/);
-  assert.match(subscriptionPitchFacts('agent'), /\$150/);
+  assert.match(subscriptionPitchFacts('client'), /\$29\.99/);
+  assert.match(subscriptionPitchFacts('agent'), /\$200/);
 });
 
 test('admin and webhook entry points are wired', async () => {

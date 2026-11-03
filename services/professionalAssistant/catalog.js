@@ -320,9 +320,11 @@ export const QUALIFICATION = {
 
 export const DOCUMENT_REQUESTS = {
   agent: [
-    ['preapproval_letter', 'Pre-approval letter'],
-    ['home_photos', 'Photos of the home'],
-    ['listing_sheet', 'Listing or MLS sheet'],
+    ['preapproval_letter', 'Pre-approval letter', 'Buyer and investor'],
+    ['proof_of_funds', 'Proof of funds', 'Buyer and investor'],
+    ['photo_id', 'Photo ID', 'Buyer, seller, and investor'],
+    ['home_photos', 'Photos of the home', 'Seller'],
+    ['listing_sheet', 'Listing or MLS sheet', 'Seller'],
   ],
   mortgage_broker: [
     ['pay_stubs', 'Recent pay stubs'],

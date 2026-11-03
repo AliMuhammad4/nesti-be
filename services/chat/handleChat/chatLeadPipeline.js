@@ -17,6 +17,11 @@ import { usesFixedBuyIntentForLeadMatch } from '../flows/flowRoleMeta.js';
 import { linkConversationDocumentsToLead } from '../documents/chatDocumentService.js';
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
 import { maybeLandingSideEffects, notifyAdminsOfLandingLead } from '../nestiLanding/notifyAdminsOfLandingLead.js';
+import { withExclusiveKey } from '../../../utils/exclusiveKey.js';
+
+function duplicateLeadSlot(error) {
+  return error?.code === 11000 || error?.cause?.code === 11000;
+}
 
 function computeLeadTypeForMatch(flow, persistedGrade, aiIntent) {
   if (typeof flow?.computeLeadType === 'function') {
@@ -112,7 +117,19 @@ export async function applyLeadClientTypeExtras(leadMatch, extras) {
   await LeadProfile.updateOne({ _id: leadMatch.lead_profile_id }, { $set: set });
 }
 
-export async function syncLeadMatchAfterTurn({
+export async function syncLeadMatchAfterTurn(args) {
+  const conversationId = args?.conversation?._id ? String(args.conversation._id) : '';
+  const formIntent = args?.formContact?.intent === 'sell' || args?.formContact?.intent === 'buy'
+    ? args.formContact.intent
+    : null;
+  const leadIntent = usesFixedBuyIntentForLeadMatch(args?.flow) ? 'unspecified' : (formIntent || args?.aiIntent);
+  const intentSuffix = args?.flow?.getIntentSuffix ? args.flow.getIntentSuffix(leadIntent) : 'lead';
+  const key = conversationId ? `lead:${args.userId}:${conversationId}:${intentSuffix}` : '';
+  if (!key) return syncLeadMatchBody(args);
+  return withExclusiveKey(key, () => syncLeadMatchBody(args));
+}
+
+async function syncLeadMatchBody({
   flow,
   flowType,
   canCreateLeads,
@@ -144,16 +161,16 @@ export async function syncLeadMatchAfterTurn({
       : null;
   const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
   const intentSuffix = flow.getIntentSuffix(leadIntent);
-  const existingLeadMatch =
-    canCreateLeads && !forceCreateLead
-      ? (existingLeadMatchPrefetched !== undefined
-          ? existingLeadMatchPrefetched
-          : await LeadMatch.findOne({
-              conversation_id: conversation._id,
-              user_id: userId,
-              lead_type: new RegExp(`${intentSuffix}$`),
-            }))
-      : null;
+  let existingLeadMatch = canCreateLeads && !forceCreateLead && existingLeadMatchPrefetched?._id
+    ? existingLeadMatchPrefetched
+    : null;
+  if (canCreateLeads && !forceCreateLead && !existingLeadMatch) {
+    existingLeadMatch = await LeadMatch.findOne({
+      conversation_id: conversation._id,
+      user_id: userId,
+      lead_type: new RegExp(`${intentSuffix}$`),
+    });
+  }
   const creatingNewLead = forceCreateLead || !existingLeadMatch;
 
   /**
@@ -186,7 +203,9 @@ export async function syncLeadMatchAfterTurn({
     const derivedQual = flow.deriveQualificationFromText(conversationText);
     const mergedAiDetails = flow.getMergedAiDetails(parsedAiDetails, derivedQual);
 
-    const newLeadMatch = await flow.createNewLead({
+    let newLeadMatch = null;
+    try {
+      newLeadMatch = await flow.createNewLead({
       conversation,
       intent: leadIntent,
       professionalProfileId: professionalProfile?._id || null,
@@ -205,6 +224,19 @@ export async function syncLeadMatchAfterTurn({
       formContact: formContact && typeof formContact === 'object' ? formContact : {},
       aiDetails: mergedAiDetails,
     });
+    } catch (error) {
+      if (!duplicateLeadSlot(error)) throw error;
+      existingLeadMatch = await LeadMatch.findOne({
+        conversation_id: conversation._id,
+        user_id: userId,
+        lead_type: new RegExp(`${intentSuffix}$`),
+      });
+      logger.warn('Chat service: lead already exists for this conversation', {
+        op: 'chat.lead',
+        session_id: sessionId,
+        conversation_id: String(conversation._id),
+      });
+    }
     if (newLeadMatch?._id) {
       await linkConversationDocumentsToLead({
         userId,
@@ -283,8 +315,8 @@ export async function syncLeadMatchAfterTurn({
       } catch (e) {
         logger.warn('Workspace lead event (create) failed', { error: e.message });
       }
+      return;
     }
-    return;
   }
 
   if (!canCreateLeads || !existingLeadMatch) return;

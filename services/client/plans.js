@@ -1,77 +1,92 @@
-export const CLIENT_PLANS = {
-  basic: {
-    plan_key: 'client_basic',
-    tier: 'basic',
-    name: 'Basic',
-    amount: 999,
-    display_amount: '$9.99',
+const CLIENT_PLAN_LIST = {
+  essential: {
+    plan_key: 'client_essential',
+    tier: 'essential',
+    name: 'Essential',
+    amount: 2999,
+    annual_amount: 28790,
+    display_amount: '$29.99',
+    annual_display_amount: '$287.90',
     currency: 'usd',
     interval: 'month',
-    stripe_price_id_env: 'STRIPE_PRICE_CLIENT_BASIC',
     features: [
-      'Basic homeownership progress tracking',
-      'Simple budget calculator',
-      'Match with 5 professionals per month',
-      'Email support',
+      '24/7 RAVI AI Real Estate Assistant',
+      'Real estate questions and guidance',
+      'Personalized client dashboard',
+      'Property goal tracking',
+      'Professional discovery and matching',
     ],
   },
-  standard: {
-    plan_key: 'client_standard',
-    tier: 'standard',
-    name: 'Standard',
-    amount: 2499,
-    display_amount: '$24.99',
-    currency: 'usd',
-    interval: 'month',
-    stripe_price_id_env: 'STRIPE_PRICE_CLIENT_STANDARD',
-    features: [
-      'Advanced progress tracking',
-      'Detailed financial planning tools',
-      'Match with 15 professionals per month',
-      'Priority matching',
-      'Chat support',
-    ],
-  },
-  pro: {
-    plan_key: 'client_pro',
-    tier: 'pro',
-    name: 'Pro',
+  plus: {
+    plan_key: 'client_plus',
+    tier: 'plus',
+    name: 'Plus',
     amount: 4999,
+    annual_amount: 47990,
     display_amount: '$49.99',
+    annual_display_amount: '$479.90',
     currency: 'usd',
     interval: 'month',
-    stripe_price_id_env: 'STRIPE_PRICE_CLIENT_PRO',
     features: [
-      'All Standard features',
-      'Unlimited professional matching',
-      'Premium priority matching',
-      'Personalized recommendations',
-      'Dedicated support',
-      'Exclusive market insights',
+      'Everything in Essential',
+      'Personalized AI real estate planning',
+      'Budget and affordability tools',
+      'Savings goal tracking',
+      'Buyer, seller, and investor planning tools',
+    ],
+  },
+  premium: {
+    plan_key: 'client_premium',
+    tier: 'premium',
+    name: 'Premium',
+    amount: 12900,
+    annual_amount: 123840,
+    display_amount: '$129',
+    annual_display_amount: '$1,238.40',
+    currency: 'usd',
+    interval: 'month',
+    features: [
+      'Everything in Plus',
+      'Property comparison assistance',
+      'Investment scenario calculators',
+      'Priority AI assistance',
+      'Closing milestone tracking',
     ],
   },
 };
 
-export function getClientPlan(tier) {
-  return CLIENT_PLANS[String(tier || '').trim().toLowerCase()] || null;
+const TIER_ALIAS = {
+  essential: 'essential',
+  basic: 'essential',
+  plus: 'plus',
+  standard: 'plus',
+  premium: 'premium',
+  pro: 'premium',
+};
+
+export const CLIENT_PLANS = CLIENT_PLAN_LIST;
+
+export function canonicalClientTier(tier) {
+  return TIER_ALIAS[String(tier || '').trim().toLowerCase()] || '';
 }
 
-export function getClientStripePriceId(tier) {
-  const plan = getClientPlan(tier);
-  if (!plan) return '';
-  return String(process.env[plan.stripe_price_id_env] || '').trim();
+export function getClientPlan(tier) {
+  const key = canonicalClientTier(tier);
+  return key ? CLIENT_PLAN_LIST[key] : null;
 }
 
 export function publicClientPlans() {
-  return Object.values(CLIENT_PLANS).map(plan => ({
+  return Object.values(CLIENT_PLAN_LIST).map((plan) => ({
     plan_key: plan.plan_key,
     tier: plan.tier,
     name: plan.name,
     amount: plan.amount,
+    annual_amount: plan.annual_amount,
     display_amount: plan.display_amount,
+    annual_display_amount: plan.annual_display_amount,
     currency: plan.currency,
     interval: plan.interval,
     features: plan.features,
-    stripe_price_configured: Boolean(getClientStripePriceId(plan.tier)),
+    stripe_price_configured: true,
   }));
 }

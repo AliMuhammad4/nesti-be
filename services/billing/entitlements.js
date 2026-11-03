@@ -40,6 +40,8 @@ export const FEATURES = Object.freeze({
   PROFILE_ANALYTICS: 'profile.analytics',
   PRO_CHAT: 'prochat.messaging',
   PRO_CHAT_DM: 'prochat.dm',
+  VOICE_AGENT: 'voice.agent',
+  CALL_HISTORY: 'voice.call_history',
 });
 
 const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
@@ -81,6 +83,8 @@ export const STANDARD_FEATURES = new Set([
 
 export const ENTERPRISE_FEATURES = new Set([
   ...STANDARD_FEATURES,
+  FEATURES.VOICE_AGENT,
+  FEATURES.CALL_HISTORY,
 ]);
 
 const PLAN_FEATURES = Object.freeze({
@@ -92,16 +96,16 @@ const PLAN_FEATURES = Object.freeze({
 export const PLAN_LIMITS = Object.freeze({
   [SUBSCRIPTION_PLAN.BASIC]: Object.freeze({
     chatbot_conversations: 200,
-    captured_leads: 50,
-    ai_actions: 50,
-    followup_actions: 50,
+    captured_leads: 150,
+    ai_actions: null,
+    followup_actions: null,
     referral_analytics: 0,
   }),
   [SUBSCRIPTION_PLAN.STANDARD]: Object.freeze({
     chatbot_conversations: 1000,
-    captured_leads: 150,
-    ai_actions: 300,
-    followup_actions: 500,
+    captured_leads: null,
+    ai_actions: null,
+    followup_actions: null,
     referral_analytics: 100,
   }),
   [SUBSCRIPTION_PLAN.ENTERPRISE]: Object.freeze({
@@ -113,10 +117,7 @@ export const PLAN_LIMITS = Object.freeze({
   }),
 });
 
-const FREE_TRIAL_LIMIT_OVERRIDES = Object.freeze({
-  captured_leads: 5,
-  followup_actions: 5,
-});
+const FREE_TRIAL_LIMIT_OVERRIDES = Object.freeze({});
 
 function isSubscriptionPeriodEnded(subscription) {
   if (!subscription?.current_period_end) return false;
@@ -154,13 +155,22 @@ export function accountStatusFromSubscription(subscription) {
 }
 
 export function getEffectivePlan(subscription) {
-  const accountStatus = accountStatusFromSubscription(subscription);
-  // During the 3-day trial, users can evaluate the complete product within trial quotas.
-  if (accountStatus === ACCOUNT_STATUS.FREE_TRIAL) return SUBSCRIPTION_PLAN.ENTERPRISE;
-
   const planKey = String(subscription?.plan_key || '').trim().toLowerCase();
   if (PLAN_FEATURES[planKey]) return planKey;
   return SUBSCRIPTION_PLAN.BASIC;
+}
+
+export function canPublishWebsite(subscription) {
+  const status = String(subscription?.status || '').trim().toLowerCase();
+  if (!['active', 'past_due'].includes(status)) return false;
+  const plan = getEffectivePlan(subscription);
+  return plan === SUBSCRIPTION_PLAN.STANDARD || plan === SUBSCRIPTION_PLAN.ENTERPRISE;
+}
+
+export function canRunVoiceAgent(subscription) {
+  const status = String(subscription?.status || '').trim().toLowerCase();
+  if (!['active', 'past_due'].includes(status)) return false;
+  return getEffectivePlan(subscription) === SUBSCRIPTION_PLAN.ENTERPRISE;
 }
 
 export function hasFeature(subscription, featureKey) {
@@ -172,6 +182,13 @@ export function hasFeature(subscription, featureKey) {
   if (accountStatus === ACCOUNT_STATUS.EXPIRED) return false;
 
   const planKey = getEffectivePlan(subscription);
+  if (
+    accountStatus === ACCOUNT_STATUS.FREE_TRIAL
+    && feature === FEATURES.PUBLIC_PROFILE
+    && planKey === SUBSCRIPTION_PLAN.BASIC
+  ) {
+    return true;
+  }
   return Boolean(PLAN_FEATURES[planKey]?.has(feature));
 }
 

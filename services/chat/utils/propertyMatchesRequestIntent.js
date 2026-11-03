@@ -1,7 +1,21 @@
+function nearOptionsToken(word) {
+  if (word.length < 5) return false;
+  return word.includes('ption') || word.includes('opti') || word.includes('avail');
+}
+
+/** "ptions" / "avaialable" still count when the visitor is asking to see listings. */
+function asksToSeeOptionsDespiteTypos(text) {
+  const t = String(text || '').toLowerCase();
+  const tokens = t.split(/[^a-z]+/).filter(Boolean);
+  if (!tokens.some(nearOptionsToken)) return false;
+  return /\b(show|see|view|want|need|give|list|find)\b/.test(t);
+}
+
 /** Visitor asked to see available options (relaxed inventory) in chat. */
 export function isAvailableOptionsRequestMessage(text) {
   const t = String(text || '').trim().toLowerCase();
   if (!t) return false;
+  if (asksToSeeOptionsDespiteTypos(t)) return true;
   if (/\bavailable\s+(property\s+)?options?\b/.test(t)) return true;
   if (/\bproperty\s+options?\b/.test(t)) return true;
   if (/\b(show|see|view|get|give|list|find|fetch|display|bring)\b.*\boptions?\b/.test(t)) {

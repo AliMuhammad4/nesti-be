@@ -6,7 +6,7 @@ import { accumulateContactInfo } from '../utils/contactUtils.js';
 import { mergeFormContactData } from '../utils/mergeFormContactData.js';
 import { recomputeSignalsForPropertyMatches } from './chatFlowResolution.js';
 import { parsePageLimitPagination, buildPaginationMeta, PAGINATION_PRESETS } from '../../../utils/pagination.js';
-import { listingInsideServiceArea, loadAppliedAssistantSetting } from '../../professionalAssistant/professionalAssistantService.js';
+import { selectChatPropertyMatches, loadAppliedAssistantSetting } from '../../professionalAssistant/professionalAssistantService.js';
 
 export async function buildPropertyMatchesPayload({
   conversation,
@@ -36,7 +36,7 @@ export async function buildPropertyMatchesPayload({
   }
 
   const [
-    { property_matches, property_matches_context, property_matches_note },
+    { property_matches, property_matches_context, property_matches_note, property_matches_status },
     leadMatchDoc,
   ] = await Promise.all([
     resolveAgentPropertyMatchesForChat({
@@ -54,15 +54,17 @@ export async function buildPropertyMatchesPayload({
   ]);
 
   const assistantSetting = await loadAppliedAssistantSetting(userId);
-  const areaMatches = (Array.isArray(property_matches) ? property_matches : [])
-    .filter((listing) => listingInsideServiceArea(listing, assistantSetting));
-  const propertyMatchesNote = areaMatches.length === 0 && property_matches?.length
-    ? 'No listings are inside the saved service area.'
-    : property_matches_note;
+  const shownMatches = selectChatPropertyMatches(property_matches, assistantSetting);
+  const matchStatus = property_matches_status || (shownMatches.length ? 'ready' : 'pending');
+  const propertyMatchesNote = matchStatus !== 'ready'
+    ? null
+    : shownMatches.length
+      ? property_matches_note
+      : 'I don’t have listings to show right now. Your agent can share options that fit what you’re looking for.';
 
   const { page: p, limit: l, offset } = parsePageLimitPagination({ page, limit }, PAGINATION_PRESETS.propertyMatches);
-  const total_matches = areaMatches.length;
-  const pagedMatches = areaMatches.slice(offset, offset + l).map(enrichPropertyMatch);
+  const total_matches = shownMatches.length;
+  const pagedMatches = shownMatches.slice(offset, offset + l).map(enrichPropertyMatch);
 
   const conversion = leadMatchDoc
     ? buildLeadConversionPack({ leadMatch: leadMatchDoc, conversation, intent: propertyMatchIntent })
@@ -76,6 +78,7 @@ export async function buildPropertyMatchesPayload({
       property_matches: pagedMatches,
       property_matches_context,
       property_matches_note: propertyMatchesNote,
+      property_matches_status: matchStatus,
       pagination: buildPaginationMeta({ page: p, limit: l, total: total_matches }),
       ...(conversion ? { conversion } : {}),
     },

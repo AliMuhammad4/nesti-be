@@ -66,7 +66,7 @@ const listPlans = async (req, res) => {
 const createCheckoutSession = async (req, res) => {
   try {
     if (!(await requireCredentialApproved(req, res))) return;
-    const result = await createCheckoutSessionForUser(req.user, req.body.plan_key);
+    const result = await createCheckoutSessionForUser(req.user, req.body.plan_key, req.body.billing_period);
     if (!result.ok) {
       return res.status(result.code || 400).json({ success: false, message: result.message });
     }
@@ -237,7 +237,7 @@ const resumeCurrentSubscription = async (req, res) => {
 
 const changeCurrentSubscriptionPlan = async (req, res) => {
   try {
-    const result = await changeSubscriptionPlanForUser(req.user, req.body.plan_key);
+    const result = await changeSubscriptionPlanForUser(req.user, req.body.plan_key, req.body.billing_period);
     if (!result.ok) {
       if (result.subscription) {
         return res.json({

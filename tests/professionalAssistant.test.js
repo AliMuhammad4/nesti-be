@@ -12,6 +12,7 @@ import {
   draftFaqs,
   introductionLine,
   listingInsideServiceArea,
+  selectChatPropertyMatches,
   finishAgentReply,
   finishBrokerReply,
   finishLawyerReply,
@@ -268,7 +269,8 @@ test('applied settings stay on that role and leave the fallback prompt underneat
   assert.match(prompt, /keep it short/);
   assert.match(prompt, /Do not repeat this recap on later turns/);
   assert.match(prompt, /Prioritise the most impactful questions first/);
-  assert.match(prompt, /Bedrooms and bathrooms needed/);
+  assert.match(prompt, /Do not invent extra preference questions/);
+  assert.doesNotMatch(prompt, /Bedrooms and bathrooms needed/);
   assert.match(prompt, /Ask one question, and keep it inside the saved reply length/);
   assert.match(prompt, /rewrite the wording in the selected voice/);
   assert.match(prompt, /Keep every fact, number, area, and condition from the saved answer/);
@@ -1155,6 +1157,21 @@ test('saved service area keeps only matching property cards', () => {
   assert.equal(listingInsideServiceArea({ location: 'Vancouver' }, { applied: false, cities: ['Toronto'] }), true);
 });
 
+test('chat keeps the lead matches when none sit inside the saved service area', () => {
+  const setting = sanitizeAssistant({ applied: true, cities: ['Toronto'] }, 'agent');
+  const outside = [
+    { location: 'Labore Quis Ea Dolor', title: 'Condo' },
+    { location: 'Veniam Quis Accusan', title: 'Single Family' },
+  ];
+  assert.deepEqual(selectChatPropertyMatches(outside, setting), outside);
+  const mixed = [...outside, { location: 'Leslieville, Toronto', title: 'In area' }];
+  assert.deepEqual(
+    selectChatPropertyMatches(mixed, setting).map((row) => row.title),
+    ['In area'],
+  );
+  assert.deepEqual(selectChatPropertyMatches([], setting), []);
+});
+
 test('each professional role receives 12 default FAQs and can save at most 8 custom FAQs', () => {
   for (const role of ['agent', 'mortgage_broker', 'lawyer']) {
     const defaults = assistantFaqsForRole(role);
@@ -1619,8 +1636,9 @@ test('client type comes from the form and selects the matching template, wording
   assert.deepEqual(questionOptions(investor, 'investment_goal'), ['Cash flow', 'Appreciation', 'Both']);
 
   const seller = settingForClientType(setting, 'seller');
-  assert.equal(seller.client_type, undefined, 'seller is switched off in client_types so no template applies');
-  assert.deepEqual(seller.qualification_questions, setting.qualification_questions);
+  assert.equal(seller.client_type, 'seller');
+  assert.equal(seller.client_type_blocked, true, 'seller is switched off in client_types');
+  assert.deepEqual(seller.qualification_questions, []);
 
   const prompt = buildAgentSystemPrompt(profile, { assistantSetting: investor, clientType: 'investor' });
   assert.match(prompt, /Is cash flow or appreciation the priority\?/);

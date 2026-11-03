@@ -40,6 +40,19 @@ const subscriptionSchema = new mongoose.Schema(
       default: 'basic',
       index: true,
     },
+    billing_period: {
+      type: String,
+      enum: ['month', 'year', ''],
+      default: '',
+    },
+    last_purchase: {
+      plan_key: { type: String, default: '' },
+      billing_period: { type: String, default: '' },
+      amount: { type: Number, default: 0 },
+      currency: { type: String, default: 'usd' },
+      stripe_invoice_id: { type: String, default: '' },
+      confirmed_at: { type: Date, default: null },
+    },
     status: {
       type: String,
       enum: SUBSCRIPTION_STATUSES,

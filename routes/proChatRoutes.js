@@ -109,9 +109,10 @@ router.post('/client/groups/:id/rejoin-requests/:userId/:action', protect, ensur
 router.get('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), listMyThreads);
 router.get('/calls', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), listCallRecords);
 router.get('/calls/:callId', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), getCallRecord);
-router.get('/calls/:callId/artifacts', protect, callArtifactReadLimiter, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), getCallArtifactStatus);
-router.get('/calls/:callId/transcript', protect, callArtifactReadLimiter, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), getCallTranscript);
-router.get('/calls/:callId/minutes', protect, callArtifactReadLimiter, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), getCallMinutes);
+// Transcription artifacts stay Enterprise (CALL_HISTORY); call list/detail stay Basic pro-chat.
+router.get('/calls/:callId/artifacts', protect, callArtifactReadLimiter, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALL_HISTORY), getCallArtifactStatus);
+router.get('/calls/:callId/transcript', protect, callArtifactReadLimiter, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALL_HISTORY), getCallTranscript);
+router.get('/calls/:callId/minutes', protect, callArtifactReadLimiter, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALL_HISTORY), getCallMinutes);
 router.post('/threads', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT_DM), createOrGetThread);
 router.post('/groups', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), createGroupThread);
 router.patch('/groups/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.PRO_CHAT), updateGroupThread);

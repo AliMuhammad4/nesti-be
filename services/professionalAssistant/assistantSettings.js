@@ -195,6 +195,7 @@ export function emptyAssistant(role) {
     use_emojis: false,
     address_by_first_name: true,
     suggest_consultation: true,
+    offer_property_matches: true,
     brand_colors: { ...DEFAULT_BRAND_COLORS },
     logo_url: '',
     avatar_url: '',
@@ -216,7 +217,9 @@ export function emptyAssistant(role) {
     qualification_templates: defaultQualificationTemplates(role),
     qualification_questions: idsOf(QUALIFICATION[role] || []),
     document_requests: idsOf(DOCUMENT_REQUESTS[role] || []),
-    next_actions: ['schedule', 'collect_contact', 'notify', 'save_lead'],
+    next_actions: role === 'agent'
+      ? ['schedule', 'notify', 'save_lead']
+      : ['schedule', 'collect_contact', 'notify', 'save_lead'],
     hot_guidance: 'Prospects who show strong intent, urgency, and readiness to take action.',
     warm_guidance: 'Prospects who are interested but need more guidance or time.',
     cold_guidance: 'Prospects who are researching or working on a longer timeline.',
@@ -255,7 +258,13 @@ export function sanitizeAssistant(input, role) {
   const style = idsOf(COMMUNICATION_STYLES).includes(source.communication_style)
     ? source.communication_style
     : base.communication_style;
-  const formality = FORMALITIES.includes(source.formality) ? source.formality : base.formality;
+  const toneLevelRaw = Number(source.tone_level);
+  const formalityFromDial = Number.isFinite(toneLevelRaw)
+    ? (toneLevelRaw < 34 ? 'casual' : toneLevelRaw > 66 ? 'formal' : 'professional')
+    : '';
+  const formality = FORMALITIES.includes(formalityFromDial)
+    ? formalityFromDial
+    : (FORMALITIES.includes(source.formality) ? source.formality : base.formality);
   const faqs = assistantFaqsForRole(role, source.faqs);
   const customToneIds = new Set();
   const customTones = (Array.isArray(source.custom_tones) ? source.custom_tones : [])
@@ -276,7 +285,7 @@ export function sanitizeAssistant(input, role) {
     validPersonalities,
     2,
   );
-  const toneLevel = Number(source.tone_level);
+  const toneLevel = toneLevelRaw;
   const responseLength = idsOf(RESPONSE_LENGTHS).includes(source.response_length)
     ? source.response_length
     : base.response_length;
@@ -311,6 +320,7 @@ export function sanitizeAssistant(input, role) {
     use_emojis: source.use_emojis === true,
     address_by_first_name: source.address_by_first_name !== false,
     suggest_consultation: source.suggest_consultation !== false,
+    offer_property_matches: source.offer_property_matches !== false,
     brand_colors: {
       primary: brandColor(sourceColors.primary, DEFAULT_BRAND_COLORS.primary),
       accent: brandColor(sourceColors.accent, DEFAULT_BRAND_COLORS.accent),
@@ -338,7 +348,13 @@ export function sanitizeAssistant(input, role) {
       ? list(source.document_requests, idsOf(DOCUMENT_REQUESTS[role] || []), 8)
       : base.document_requests,
     next_actions: Array.isArray(source.next_actions)
-      ? list(source.next_actions, idsOf(NEXT_ACTIONS), 8)
+      ? list(
+        source.next_actions,
+        role === 'agent'
+          ? ['schedule', 'notify', 'save_lead']
+          : idsOf(NEXT_ACTIONS),
+        8,
+      )
       : base.next_actions,
     hot_guidance: clip(source.hot_guidance, 300) || base.hot_guidance,
     warm_guidance: clip(source.warm_guidance, 300) || base.warm_guidance,
@@ -362,7 +378,9 @@ export function assistantCatalog(role) {
     languages: LANGUAGES,
     voice_languages: VOICE_LANGUAGES,
     differentiators: ROLE_DIFFERENTIATORS[role] || DIFFERENTIATORS,
-    next_actions: NEXT_ACTIONS,
+    next_actions: role === 'agent'
+      ? NEXT_ACTIONS.filter(([id]) => ['schedule', 'notify', 'save_lead'].includes(id))
+      : NEXT_ACTIONS,
     services: SERVICES[role] || [],
     qualification: QUALIFICATION[role] || [],
     client_types: CLIENT_TYPES,
@@ -407,11 +425,29 @@ export function activeQualificationTemplate(setting, clientType) {
  * Everything downstream that reads `qualification_questions` keeps working unchanged.
  */
 export function settingForClientType(setting, clientType) {
+  if (!setting?.applied) return setting;
+  const type = idsOf(CLIENT_TYPES).includes(clientType) ? clientType : '';
+  if (
+    type
+    && Array.isArray(setting.client_types)
+    && setting.client_types.length
+    && !setting.client_types.includes(type)
+  ) {
+    return {
+      ...setting,
+      client_type: type,
+      client_type_blocked: true,
+      cta_label: '',
+      qualification_questions: [],
+      question_overrides: {},
+    };
+  }
   const template = activeQualificationTemplate(setting, clientType);
   if (!template) return setting;
   return {
     ...setting,
     client_type: template.client_type,
+    client_type_blocked: false,
     cta_label: template.cta_label,
     qualification_questions: template.questions.map((question) => question.id),
     question_overrides: Object.fromEntries(template.questions.map((question) => [

@@ -215,6 +215,25 @@ export async function syncLandingChatsOntoDesk(force = false) {
   }
 }
 
+export function queueLandingThanksEmail(inquiry) {
+  const email = text(inquiry?.email).toLowerCase();
+  if (!email || !inquiry?._id) return;
+  const inquiryId = String(inquiry._id);
+  void sendLandingThanksEmail({
+    email,
+    name: text(inquiry.full_name),
+    idempotencyKey: `landing_welcome:${inquiryId}`,
+  }).then(async (sent) => {
+    if (!sent?.sent || sent.duplicate) return;
+    await recordLandingWelcomeOnAdminLead({ leadMatchId: inquiry._id, email, sent });
+  }).catch((error) => {
+    logger.warn('Landing welcome email was not sent', {
+      error: error?.message,
+      inquiry_id: inquiryId,
+    });
+  });
+}
+
 export async function sendLandingThanksEmail({ email, name, idempotencyKey }) {
   const to = text(email).toLowerCase();
   if (!to) return { sent: false };

@@ -12,8 +12,11 @@ import { createCheckoutSessionForUser } from '../billing/subscriptionCheckoutSer
 const SPOKEN_AMOUNTS = {
   '$9.99': 'nine dollars and ninety-nine cents',
   '$24.99': 'twenty-four dollars and ninety-nine cents',
+  '$29.99': 'twenty-nine dollars and ninety-nine cents',
   '$49.99': 'forty-nine dollars and ninety-nine cents',
+  '$129': 'one hundred twenty-nine dollars',
   '$150': 'one hundred fifty dollars',
+  '$200': 'two hundred dollars',
   '$300': 'three hundred dollars',
   '$600': 'six hundred dollars',
 };

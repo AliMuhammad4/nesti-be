@@ -26,6 +26,20 @@ function envAgentAreaFallbackEnabled() {
   return ['1', 'true', 'yes', 'on'].includes(String(process.env.PROPERTY_MATCH_AGENT_AREA_FALLBACK ?? '').trim().toLowerCase());
 }
 
+function firstPropertyImage(profile) {
+  const images = Array.isArray(profile?.property?.images) ? profile.property.images : [];
+  for (const image of images) {
+    if (typeof image === 'string') {
+      const plain = image.trim();
+      if (plain) return plain;
+      continue;
+    }
+    const url = String(image?.secure_url || image?.url || '').trim();
+    if (url) return url;
+  }
+  return '';
+}
+
 function sellerLeadProfileToRow(profile) {
   const rawPrice = profile.property?.expected_price || profile.property?.budget || '';
   const fromParse = parseInventoryPrice(rawPrice);
@@ -54,7 +68,7 @@ function sellerLeadProfileToRow(profile) {
     bedrooms: Number.isFinite(beds) ? beds : 0,
     bathrooms: Number.isFinite(baths) ? baths : 0,
     property_type: profile.property?.property_type || '',
-    image_url: '',
+    image_url: firstPropertyImage(profile),
     listing_url: '',
     summary: '',
     matched_contact: {
@@ -236,10 +250,11 @@ export function propertyMatchesFooterNote(context, matchCount) {
   return null;
 }
 
-const emptyPropertyMatchesMeta = () => ({
+const emptyPropertyMatchesMeta = (status = 'unavailable') => ({
   property_matches: [],
   property_matches_context: null,
   property_matches_note: null,
+  property_matches_status: status,
 });
 
 async function leadProfileForAgentIntent({ conversationId, userId, intent }) {
@@ -294,7 +309,7 @@ export async function resolveAgentPropertyMatchesForChat({
   });
 
   if (!leadProfileDoc) {
-    return emptyPropertyMatchesMeta();
+    return emptyPropertyMatchesMeta('pending');
   }
 
   if (matchIntent === 'buy') {
@@ -314,6 +329,7 @@ export async function resolveAgentPropertyMatchesForChat({
       property_matches,
       property_matches_context: 'buy',
       property_matches_note: propertyMatchesFooterNote('buy', property_matches.length),
+      property_matches_status: 'ready',
     };
   }
 
@@ -326,6 +342,7 @@ export async function resolveAgentPropertyMatchesForChat({
     property_matches,
     property_matches_context: 'sell',
     property_matches_note:    propertyMatchesFooterNote('sell', property_matches.length),
+    property_matches_status: 'ready',
   };
 }
 

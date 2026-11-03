@@ -10,6 +10,9 @@ const MORTGAGE_STORED_QUALIFICATION_KEYS = [
   'purchase_purpose',
   'urgency_signal',
   'budget',
+  'client_type',
+  'investment_type',
+  'owns_investments',
 ];
 export function pickStoredFormQualification(storedForm) {
   if (!storedForm) return {};
@@ -17,6 +20,8 @@ export function pickStoredFormQualification(storedForm) {
   for (const k of MORTGAGE_STORED_QUALIFICATION_KEYS) {
     o[k] = storedForm[k] || null;
   }
+  const purpose = String(o.purchase_purpose || '').toLowerCase();
+  if (!o.client_type && purpose === 'investment') o.client_type = 'investor';
   return o;
 }
 export function pickStoredFormSignals(storedForm) {
@@ -100,6 +105,9 @@ export function mergeMortgageAiDetailsForMeta(parsedAiDetails, derivedQual) {
     purchase_purpose: p.purchase_purpose || d.purchase_purpose || '',
     urgency_signal: p.urgency_signal || d.urgency_signal || '',
     property_budget: p.property_budget || d.property_budget || '',
+    client_type: p.client_type || d.client_type || '',
+    investment_type: p.investment_type || d.investment_type || '',
+    owns_investments: p.owns_investments || d.owns_investments || '',
   };
 }
 
@@ -118,5 +126,7 @@ export function buildMortgageLeadProfileUpdate(parsedAiDetails, derivedQual, for
     urgency_signal: p.urgency_signal || d.urgency_signal || f.urgency_signal,
     budget: p.budget || d.budget || f.budget,
     mortgage_property_budget: p.property_budget || d.property_budget || f.property_budget,
+    mortgage_investment_type: p.investment_type || d.investment_type || f.investment_type,
+    owns_investments: p.owns_investments || d.owns_investments || f.owns_investments,
   };
 }

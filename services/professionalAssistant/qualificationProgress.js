@@ -21,11 +21,14 @@ const QUESTION_CUES = {
   buying_another: /\b(also buying|buying another|another property)\b/i,
   investment_type: /\b(type of investment|investment property|rental|flip|pre-construction|multi-unit)\b/i,
   investment_goal: /\b(rental income|appreciation|cash ?flow)\b/i,
-  down_payment: /\b(down ?payment)\b/i,
+  realtor_status: /\b(working with (a )?(realtor|agent)|have (a )?(realtor|agent)|no (realtor|agent))\b/i,
+  owns_investments: /\b(other investment|own other|already own|portfolio)\b/i,
+  down_payment: /\b(down ?payment|proof of funds|capital ready|funds ready)\b/i,
+  viewing_readiness: /\b(tour|viewing|see properties|see options)\b/i,
+  urgency_readiness: /\b(make an offer|ready to (buy|offer|close)|right deal)\b/i,
   household_income: /\b(household income|annual income|income)\b/i,
   mortgage_balance: /\b(currently have a mortgage|existing mortgage|mortgage on the property)\b/i,
   term_end: /\b(term end|term ends|renewal date|maturity)\b/i,
-  owns_investments: /\b(other investment|own other|portfolio)\b/i,
   via_company: /\b(personally|through a company|corporation|holding company)\b/i,
 };
 
@@ -34,11 +37,14 @@ const SHARED_FORM_VALUE = {
   buying_another: (form) => (form.living_situation === 'own_need_to_sell' ? 'yes' : ''),
   investment_type: (form) => form.investment_type,
   investment_goal: (form) => form.investment_goal,
+  realtor_status: (form) => form.realtor_status,
+  owns_investments: (form) => form.owns_investments,
   down_payment: (form) => form.down_payment_readiness || form.down_payment,
+  viewing_readiness: (form) => form.viewing_readiness,
+  urgency_readiness: (form) => form.urgency_readiness,
   household_income: (form) => form.household_income,
   mortgage_balance: (form) => form.mortgage_status || form.mortgage_balance,
   term_end: (form) => form.term_end,
-  owns_investments: (form) => form.owns_investments,
   via_company: (form) => form.via_company,
 };
 
@@ -51,6 +57,18 @@ const FORM_VALUE = {
     timeline: (form) => form.timeline,
     property_type: (form) => form.property_type,
     preapproval: (form) => form.mortgage_status,
+    realtor_status: (form) => form.realtor_status,
+    owns_investments: (form) => form.owns_investments,
+    down_payment: (form) => form.down_payment_readiness || form.down_payment,
+    viewing_readiness: (form) => form.viewing_readiness,
+    urgency_readiness: (form) => form.urgency_readiness,
+    preferred_contact_method: (form) => (
+      form.preferred_contact_method && form.best_time_to_contact
+        ? `${form.preferred_contact_method}|${form.best_time_to_contact}`
+        : form.preferred_contact_method || ''
+    ),
+    motivation_reason: (form) => form.motivation_reason,
+    living_situation: (form) => form.living_situation,
   },
   mortgage_broker: {
     ...SHARED_FORM_VALUE,

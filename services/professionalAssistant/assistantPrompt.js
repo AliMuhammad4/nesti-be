@@ -505,17 +505,23 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
     intent: options.intakeFormContact?.intent || '',
     clientType: options.intakeFormContact?.client_type || setting.client_type || '',
     propertyImages: intakeHasPropertyImages(options.intakeFormContact),
+    mortgageStatus: options.intakeFormContact?.mortgage_status || '',
+    text: `${options.intakeFormContact?.mortgage_status || ''} ${options.intakeFormContact?.motivation_reason || ''}`,
   })
     .map((id) => labelOf(DOCUMENT_REQUESTS[setting.role] || [], id))
     .filter(Boolean);
   if (requestedDocs.length) {
-    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and while a saved qualification question is still unanswered. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
+    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects for this visitor, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. Do not ask for a pre-approval letter when the visitor is paying cash. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and while a saved qualification question is still unanswered. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
   }
   lines.push(`CUSTOMIZATION PRIORITY — assistant style: The selected voice, communication style, formality, and language preferences above override conflicting general persona or style instructions elsewhere in this prompt. Keep role-specific safety and accuracy requirements.`);
   if (setting.role === 'agent') {
+    const investorVisitor = String(options.intakeFormContact?.client_type || setting.client_type || '').toLowerCase() === 'investor'
+      || String(options.intakeFormContact?.motivation_reason || '').toLowerCase() === 'investment';
     lines.push(options.preview
-      ? 'This preview has no intake form. Do not claim a form already collected intent, location, budget, timeline, property type, or mortgage status. Learn those from the chat. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.'
-      : 'Buyer and seller handling stays in force. The intake form may already have intent, location, budget, timeline, property type, and mortgage status. Ask a saved qualification question only when that answer is still missing. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.');
+      ? 'This preview has no intake form. Do not claim a form already collected intent, location, budget, timeline, property type, or mortgage status. Learn those from the chat. For a buyer or investor, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For investors, talk markets, budget, and investment goals — not bedrooms or living situation. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.'
+      : investorVisitor
+        ? 'This visitor is an investor (buy intent). The intake form may already have markets, budget, investment type/goal, financing, and capital readiness. Ask a saved qualification question only when that answer is still missing. Never re-ask buyer-only fields such as bedrooms, bathrooms, living situation, or school district. Property matches appear only as chat cards; when they ask to see options, reply with one short sentence that points at the cards.'
+        : 'Buyer and seller handling stays in force. The intake form may already have intent, location, budget, timeline, property type, and mortgage status. Ask a saved qualification question only when that answer is still missing. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.');
   }
   const chatAnswered = new Set(options.chatAnsweredQuestions || []);
   if (setting.role === 'lawyer' || setting.role === 'mortgage_broker') {

@@ -46,7 +46,13 @@ export const mortgageBrokerFlow = {
   mergeSignalsForMeta: (leadMetaSignals, parsedAiDetails) =>
     mergeMortgageLeadMetaSignals(leadMetaSignals, parsedAiDetails),
   getPersistedGrade: identityPersistedGrade,
-  getLeadClassification: (finalGrade) => tieredProfessionalLabel(finalGrade, 'Mortgage Lead'),
+  getLeadClassification: (finalGrade, extras = {}) => {
+    const clientType = extras?.clientType || extras?.client_type || '';
+    if (String(clientType).toLowerCase() === 'investor') {
+      return tieredProfessionalLabel(finalGrade, 'Investor');
+    }
+    return tieredProfessionalLabel(finalGrade, 'Mortgage Lead');
+  },
   getMergedAiDetails: (parsedAiDetails, derivedQual) =>
     mergeMortgageAiDetailsForMeta(parsedAiDetails, derivedQual),
   getLeadProfileUpdate: (parsedAiDetails, derivedQual, formContact) =>

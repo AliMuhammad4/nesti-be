@@ -90,6 +90,10 @@ test('buildLeadsListMatchFilter applies intent regex', async () => {
   assert.match(String(buyFilter.lead_type), /buyer|client/);
   const sellFilter = buildLeadsListMatchFilter('uid', { intent: 'sell' });
   assert.match(String(sellFilter.lead_type), /seller/);
+  const investorFilter = buildLeadsListMatchFilter('uid', { intent: 'investor' });
+  assert.ok(Array.isArray(investorFilter.$or));
+  assert.match(String(investorFilter.$or[0].lead_type), /investor/);
+  assert.equal(investorFilter.$or[1]['compatibility_factors.client_type'], 'investor');
   const defaultFilter = buildLeadsListMatchFilter('uid', {});
   assert.deepEqual(defaultFilter.match_status, { $nin: ['converted', 'closed_lost'] });
   const convertedFilter = buildLeadsListMatchFilter('uid', { status: 'converted' });

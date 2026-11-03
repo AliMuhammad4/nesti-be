@@ -317,6 +317,9 @@ After EVERY reply, append one JSON block on a NEW line starting with ###META### 
     "down_payment_readiness": "",
     "property_budget": "",
     "purchase_purpose": "",
+    "client_type": "",
+    "investment_type": "",
+    "owns_investments": "",
     "urgency_signal": "",
     "preferred_contact_method": "",
     "best_time_to_contact": "",
@@ -339,6 +342,10 @@ FIELD VALUES GUIDE FOR META (use these exact values):
 - down_payment_readiness: "20_plus" | "10_19" | "5_9" | "under_5" | "no_savings" | ""
 - property_budget: "clearly_defined" | "approximate" | "not_sure" | ""
 - purchase_purpose: "primary_residence" | "investment" | "vacation_home" | "refinance" | ""
+- For INVESTMENT purchases: set purchase_purpose "investment", client_type "investor", and fill investment_type / owns_investments from intake or chat. Do not re-ask those once known.
+- client_type: "investor" | "" (set "investor" when purpose is investment)
+- investment_type: "rental_property" | "multi_unit" | "pre_construction" | "commercial" | "vacation_rental" | ""
+- owns_investments: "yes" | "no" | ""
 - urgency_signal: "yes" | "maybe" | "no" | ""
 - preferred_contact_method: "phone" | "text" | "email" | "whatsapp" | "video_call" | "in_person" | ""
 - best_time_to_contact: "morning" | "afternoon" | "evening" | "anytime" | ""

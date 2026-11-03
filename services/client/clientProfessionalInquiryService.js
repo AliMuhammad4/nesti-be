@@ -1253,9 +1253,15 @@ export async function submitClientMortgageBrokerInquiry({
         property_budget: qualification.property_budget || '',
         purchase_purpose: qualification.purchase_purpose || '',
         urgency_signal: qualification.urgency_signal || '',
+        investment_type: qualification.investment_type || '',
+        owns_investments: qualification.owns_investments || '',
       },
       lawyer: {},
     },
+    ...(String(qualification.purchase_purpose || '').toLowerCase() === 'investment'
+      || String(qualification.client_type || '').toLowerCase() === 'investor'
+      ? { client_type: 'investor' }
+      : {}),
     source: 'client_professional_inquiry',
     scoring: {
       current_score: leadScore,
@@ -1312,10 +1318,14 @@ export async function submitClientMortgageBrokerInquiry({
   }
 
   const mortgageServiceLabel = brokerInquiryTitle(qualification);
+  const inquiryClientType = String(
+    qualification.client_type
+      || (String(qualification.purchase_purpose || '').toLowerCase() === 'investment' ? 'investor' : ''),
+  ).toLowerCase();
   const leadMatchPayload = {
     user_id: professionalUserId,
     professional_profile_id: professionalProfile?._id || undefined,
-    lead_type: buildMortgageBrokerLeadType(leadGrade),
+    lead_type: buildMortgageBrokerLeadType(leadGrade, inquiryClientType),
     lead_profile_id: leadProfile._id,
     match_score: leadScore,
     match_status: 'new',
@@ -1340,6 +1350,9 @@ export async function submitClientMortgageBrokerInquiry({
       client_profile: clientProfileSnapshot,
       contact_preference: qualification.preferred_contact_method || '',
       best_time_to_contact: qualification.best_time_to_contact || '',
+      ...(inquiryClientType ? { client_type: inquiryClientType } : {}),
+      ...(qualification.investment_type ? { investment_type: qualification.investment_type } : {}),
+      ...(qualification.owns_investments ? { owns_investments: qualification.owns_investments } : {}),
     },
     icp_fit: icpFit
       ? {

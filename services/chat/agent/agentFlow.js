@@ -16,14 +16,30 @@ import logger from '../../../utils/logger.js';
 export const agentFlow = {
   flowRole: PROFESSIONAL_TYPE.AGENT,
 
-  getFormQualification: (storedForm) => storedForm ? {
-    mortgage_status:    storedForm.mortgage_status || null,
-    realtor_status:     storedForm.realtor_status || null,
-    motivation_reason:  storedForm.motivation_reason || null,
-    viewing_readiness:  storedForm.viewing_readiness || null,
-    living_situation:   storedForm.living_situation || null,
-    urgency_readiness:  storedForm.urgency_readiness || null,
-  } : {},
+  getFormQualification: (storedForm) => {
+    if (!storedForm) return {};
+    const motivation = storedForm.motivation_reason || null;
+    const clientType = String(
+      storedForm.client_type
+      || (motivation === 'investment' || storedForm.investment_type || storedForm.investment_goal
+        ? 'investor'
+        : ''),
+    ).toLowerCase();
+    return {
+      mortgage_status: storedForm.mortgage_status || null,
+      realtor_status: storedForm.realtor_status || null,
+      motivation_reason: motivation || (clientType === 'investor' ? 'investment' : null),
+      viewing_readiness: storedForm.viewing_readiness || null,
+      living_situation: clientType === 'investor' ? null : (storedForm.living_situation || null),
+      urgency_readiness: storedForm.urgency_readiness || null,
+      client_type: clientType || null,
+      investment_type: storedForm.investment_type || null,
+      investment_goal: storedForm.investment_goal || null,
+      owns_investments: storedForm.owns_investments || null,
+      down_payment_readiness:
+        storedForm.down_payment_readiness || storedForm.down_payment || null,
+    };
+  },
 
   getFormSignals: (storedForm) => {
     if (!storedForm) return {};
@@ -119,7 +135,8 @@ export const agentFlow = {
 
   getPersistedGrade: (finalGrade) => finalGrade,
 
-  getLeadClassification: (finalGrade, aiIntent) => buildLeadClass(finalGrade, aiIntent),
+  getLeadClassification: (finalGrade, aiIntent, extras = {}) =>
+    buildLeadClass(finalGrade, aiIntent, extras.clientType || extras.client_type || ''),
 
   getMergedAiDetails: (parsedAiDetails, derivedQual) => ({
     ...parsedAiDetails,
@@ -128,6 +145,11 @@ export const agentFlow = {
     viewing_readiness:  parsedAiDetails?.viewing_readiness  || derivedQual.viewing_readiness || '',
     living_situation:   parsedAiDetails?.living_situation   || derivedQual.living_situation || '',
     urgency_readiness:  parsedAiDetails?.urgency_readiness  || derivedQual.urgency_readiness || '',
+    client_type:        parsedAiDetails?.client_type        || derivedQual.client_type || '',
+    investment_type:    parsedAiDetails?.investment_type    || derivedQual.investment_type || '',
+    investment_goal:    parsedAiDetails?.investment_goal    || derivedQual.investment_goal || '',
+    owns_investments:   parsedAiDetails?.owns_investments   || '',
+    down_payment_readiness: parsedAiDetails?.down_payment_readiness || '',
   }),
 
   getLeadProfileUpdate: (parsedAiDetails, derivedQual, formContact) => {
@@ -177,6 +199,11 @@ export const agentFlow = {
       school_district_important: ai.school_district_important || fc.school_district_important,
       preferred_contact_method:  ai.preferred_contact_method  || fc.preferred_contact_method,
       best_time_to_contact:     ai.best_time_to_contact     || fc.best_time_to_contact,
+      investment_type: ai.investment_type || derivedQual.investment_type || fc.investment_type,
+      investment_goal: ai.investment_goal || derivedQual.investment_goal || fc.investment_goal,
+      owns_investments: ai.owns_investments || fc.owns_investments,
+      down_payment_readiness:
+        ai.down_payment_readiness || fc.down_payment_readiness || fc.down_payment,
     };
   },
 };

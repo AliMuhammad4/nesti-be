@@ -251,6 +251,8 @@ export const scorePreview = async (req, res, next) => {
         mortgage_status:     formContact.mortgage_status || null,
         realtor_involved:     formContact.realtor_involved || null,
         first_time_buyer:     formContact.first_time_buyer || null,
+        client_type:          formContact.client_type || null,
+        via_company:          formContact.via_company || null,
         legal_services_needed: formContact.legal_services_needed || null,
       };
       const result = scoreLawyerLead({
@@ -274,6 +276,9 @@ export const scorePreview = async (req, res, next) => {
         down_payment_readiness: formContact.down_payment_readiness || null,
         property_budget:        formContact.property_budget || null,
         purchase_purpose:       formContact.purchase_purpose || null,
+        client_type:            formContact.client_type || null,
+        investment_type:        formContact.investment_type || null,
+        owns_investments:       formContact.owns_investments || null,
         urgency_signal:         formContact.urgency_signal || null,
         budget:                 formContact.budget || null,
       };
@@ -297,12 +302,21 @@ export const scorePreview = async (req, res, next) => {
         viewing_readiness:  formContact.viewing_readiness || null,
         living_situation:   formContact.living_situation || null,
         urgency_readiness:  formContact.urgency_readiness || null,
+        client_type:        formContact.client_type || null,
+        investment_type:    formContact.investment_type || null,
+        investment_goal:    formContact.investment_goal || null,
+        owns_investments:   formContact.owns_investments || null,
+        down_payment_readiness:
+          formContact.down_payment_readiness || formContact.down_payment || null,
       };
       const parts = [];
       if (formContact.location) parts.push(`interested in ${formContact.location}`);
-      if (formContact.buy_property_location) {
+      if (formContact.client_type !== 'investor' && formContact.buy_property_location) {
         parts.push(`looking to buy in ${formContact.buy_property_location}`);
       }
+      if (formContact.client_type === 'investor') parts.push('investment property investor');
+      if (formContact.investment_type) parts.push(String(formContact.investment_type).replace(/_/g, ' '));
+      if (formContact.investment_goal) parts.push(String(formContact.investment_goal).replace(/_/g, ' '));
       if (formContact.budget)  parts.push(`budget ${formContact.budget}`);
       if (formContact.timeline) parts.push(`timeline ${formContact.timeline}`);
       if (formContact.mortgage_status) parts.push(`mortgage ${formContact.mortgage_status.replace(/_/g, ' ')}`);
@@ -335,11 +349,19 @@ export const scorePreview = async (req, res, next) => {
       leadMeta = result.leadMeta;
     }
 
-    const leadClassification = isMortgageBroker
-      ? `${leadGrade.charAt(0).toUpperCase() + leadGrade.slice(1)} Mortgage Lead`
-      : isLawyer
-      ? `${leadGrade.charAt(0).toUpperCase() + leadGrade.slice(1)} Lawyer Lead`
-      : `${leadGrade.charAt(0).toUpperCase() + leadGrade.slice(1)} ${intent === 'sell' ? 'Seller' : 'Buyer'}`;
+    const previewClientType = String(
+      formContact.client_type
+        || (String(formContact.purchase_purpose || '').toLowerCase() === 'investment' ? 'investor' : '')
+        || (String(formContact.motivation_reason || '').toLowerCase() === 'investment' ? 'investor' : ''),
+    ).toLowerCase();
+    const gradeLabel = `${leadGrade.charAt(0).toUpperCase() + leadGrade.slice(1)}`;
+    const leadClassification = previewClientType === 'investor'
+      ? `${gradeLabel} Investor`
+      : isMortgageBroker
+        ? `${gradeLabel} Mortgage Lead`
+        : isLawyer
+          ? `${gradeLabel} Lawyer Lead`
+          : `${gradeLabel} ${intent === 'sell' ? 'Seller' : 'Buyer'}`;
 
     res.json({
       success: true,

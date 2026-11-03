@@ -63,11 +63,11 @@ export function getPostBookingChecklistForMeta(flow, leadGrade, aiIntent) {
   return postBookingChecklistItemsForFlow(flow, leadGrade, aiIntent);
 }
 
-export function classifyLeadForFlow(flow, finalGrade, aiIntent) {
+export function classifyLeadForFlow(flow, finalGrade, aiIntent, extras = {}) {
   if (leadClassificationUsesIntent(flow)) {
-    return flow.getLeadClassification(finalGrade, aiIntent);
+    return flow.getLeadClassification(finalGrade, aiIntent, extras);
   }
-  return flow.getLeadClassification(finalGrade);
+  return flow.getLeadClassification(finalGrade, extras);
 }
 
 // Mortgage broker + lawyer flow wiring (shared implementations)

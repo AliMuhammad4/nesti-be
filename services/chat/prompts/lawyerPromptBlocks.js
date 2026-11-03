@@ -308,6 +308,8 @@ After EVERY reply, append one JSON block on a NEW line starting with ###META###:
     "mortgage_status": "",
     "realtor_involved": "",
     "first_time_buyer": "",
+    "client_type": "",
+    "via_company": "",
     "legal_services_needed": "",
     "preferred_contact_method": "",
     "best_time_to_contact": "",
@@ -326,6 +328,9 @@ FIELD VALUES (exact enums):
 - mortgage_status: "fully_approved" | "conditional_approval" | "still_applying" | ""
 - realtor_involved: "yes" | "no" | ""
 - first_time_buyer: "yes" | "no" | ""
+- For INVESTMENT closings: set client_type "investor" and fill via_company from intake or chat. Do not re-ask once known. Prefer via_company over first_time_buyer for investors.
+- client_type: "investor" | "personal" | ""
+- via_company: "personally" | "company" | "not_sure" | ""
 - legal_services_needed: "full_closing" | "purchase_closing" | "sale_closing" | "refinance_legal_work" | "agreement_review" | "title_transfer" | "document_review" | "mortgage_document_review" | "property_dispute_advice" | "other" | ""
 - preferred_contact_method: "phone" | "email" | "video_call" | ""
 - best_time_to_contact: "morning" | "afternoon" | "evening" | "anytime" | ""

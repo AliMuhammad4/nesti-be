@@ -11,6 +11,7 @@ export function buildMatchedLeadSnapshot(profile) {
   const q = profile.qualification?.agent || {};
   return {
     intent: profile.intent || null,
+    client_type: profile.client_type || null,
     preferred_contact_method: profile.contact_preferences?.preferred_contact_method || null,
     best_time_to_contact: profile.contact_preferences?.best_time_to_contact || null,
     property_location: profile.property?.location || null,
@@ -25,6 +26,10 @@ export function buildMatchedLeadSnapshot(profile) {
     viewing_readiness: q.viewing_readiness || null,
     living_situation: q.living_situation || null,
     urgency_readiness: q.urgency_readiness || null,
+    investment_type: q.investment_type || null,
+    investment_goal: q.investment_goal || null,
+    owns_investments: q.owns_investments || null,
+    down_payment_readiness: q.down_payment_readiness || null,
   };
 }
 
@@ -35,6 +40,16 @@ export const parseBedrooms = (profile, signals) => {
   return Number.isFinite(n) ? n : null;
 };
 
+function isInvestorLeadProfile(leadProfile) {
+  const clientType = String(leadProfile?.client_type || '').trim().toLowerCase();
+  const invType = String(leadProfile?.qualification?.agent?.investment_type || '').trim();
+  const invGoal = String(leadProfile?.qualification?.agent?.investment_goal || '').trim();
+  const motivation = String(leadProfile?.qualification?.agent?.motivation_reason || '')
+    .trim()
+    .toLowerCase();
+  return clientType === 'investor' || motivation === 'investment' || Boolean(invType || invGoal);
+}
+
 /** Shared context for buyer scoring + preference filter (single source of truth). */
 export function buildBuyerScoringContext(leadProfile, signals = {}) {
   const budgetStr = leadProfile?.budget || signals?.budget;
@@ -43,13 +58,15 @@ export function buildBuyerScoringContext(leadProfile, signals = {}) {
     ((profileBudget || budgetStr) && parseInventoryPrice(profileBudget || budgetStr)) ||
     parseMaxBudget(profileBudget || budgetStr) ||
     null;
-  const minBeds = parseBedrooms(leadProfile, signals);
+  const investor = isInvestorLeadProfile(leadProfile);
+  // Investors rarely specify beds — don't under-rank listings for missing bedroom prefs.
+  const minBeds = investor ? null : parseBedrooms(leadProfile, signals);
   const leadLocation =
     leadProfile?.property?.location ||
     leadProfile?.property?.address ||
     signals?.location ||
     '';
-  return { leadProfile, maxBudget, minBeds, leadLocation };
+  return { leadProfile, maxBudget, minBeds, leadLocation, isInvestor: investor };
 }
 
 export function buyerSpecifiedAnyPreference(ctx) {
@@ -287,8 +304,25 @@ export function scoreRowsForBuyer(rows, ctx, b) {
     }
 
     if (st.typeMatch) {
-      score += b.typePoints;
-      reasons.push('Property type match');
+      score += b.typePoints + (ctx.isInvestor ? Math.max(2, Math.round(b.typePoints * 0.35)) : 0);
+      reasons.push(ctx.isInvestor ? 'Investment property type match' : 'Property type match');
+    }
+
+    if (ctx.isInvestor) {
+      const invType = String(ctx.leadProfile?.qualification?.agent?.investment_type || '')
+        .toLowerCase()
+        .replace(/\s+/g, '_');
+      const rowType = norm(row.property_type || '');
+      if (invType.includes('multi') && /multi|duplex|triplex|fourplex|apartment/.test(rowType)) {
+        score += 4;
+        reasons.push('Fits multi-unit investment');
+      } else if (invType.includes('commercial') && /commercial|retail|office|industrial/.test(rowType)) {
+        score += 4;
+        reasons.push('Fits commercial investment');
+      } else if ((invType.includes('rental') || invType.includes('flip')) && rowType) {
+        score += 2;
+        reasons.push('Fits investment search');
+      }
     }
 
     return { row, score, reasons };

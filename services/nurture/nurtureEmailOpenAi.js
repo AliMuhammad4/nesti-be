@@ -65,6 +65,10 @@ function qualificationSlice(profile, profType) {
     urgency_readiness: q.urgency_readiness || null,
     motivation_reason: q.motivation_reason || null,
     living_situation: q.living_situation || null,
+    investment_type: q.investment_type || null,
+    investment_goal: q.investment_goal || null,
+    owns_investments: q.owns_investments || null,
+    down_payment_readiness: q.down_payment_readiness || q.down_payment || null,
   };
 }
 
@@ -231,6 +235,20 @@ export function buildLeadContext(leadMatch, profile, conversation, extras = {}) 
         : null,
     },
     intent: profile?.intent || conversation?.intent || null,
+    client_type: (() => {
+      const explicit = String(profile?.client_type || leadMatch?.compatibility_factors?.client_type || '')
+        .trim()
+        .toLowerCase();
+      if (explicit === 'buyer' || explicit === 'seller' || explicit === 'investor') return explicit;
+      const lt = String(leadMatch?.lead_type || '').toLowerCase();
+      if (/investor/.test(lt)) return 'investor';
+      const motivation = String(profile?.qualification?.agent?.motivation_reason || '').toLowerCase();
+      if (motivation === 'investment') return 'investor';
+      if (profile?.qualification?.agent?.investment_type || profile?.qualification?.agent?.investment_goal) {
+        return 'investor';
+      }
+      return null;
+    })(),
     intent_summary: profile?.intent_summary
       ? {
           primary_intent: profile.intent_summary.primary_intent || null,
@@ -539,20 +557,33 @@ function buildFallbackDraft(leadContext) {
     });
   }
 
+  const isInvestorFollowUp = String(leadContext?.client_type || '').toLowerCase() === 'investor'
+    || Boolean(qualification.investment_type || qualification.investment_goal);
   const subject = compactSubjectPart(
-    intent && location !== 'your transaction'
-      ? `${location}: next steps for your ${intent} plans`
-      : `Next steps for ${location}`,
+    isInvestorFollowUp && location !== 'your transaction'
+      ? `${location}: next steps for your investment search`
+      : intent && location !== 'your transaction'
+        ? `${location}: next steps for your ${intent} plans`
+        : `Next steps for ${location}`,
   );
 
-  const contextParts = [`Following up on your search in ${location}`];
+  const contextParts = [
+    isInvestorFollowUp
+      ? `Following up on your investment search in ${location}`
+      : `Following up on your search in ${location}`,
+  ];
+  if (qualification.investment_type) {
+    contextParts.push(`focused on ${String(qualification.investment_type).replace(/_/g, ' ')}`);
+  }
   if (budget) contextParts.push(`within the budget range you shared (${budget})`);
   if (timeline) contextParts.push(`on your ${timeline} timeline`);
 
   const bodyCore = [
     `Hi ${firstName},`,
     `${contextParts.join(' ')}.`,
-    'I would like to confirm your current priorities and align the next properties we review.',
+    isInvestorFollowUp
+      ? 'I would like to confirm your investment priorities and align the next opportunities we review.'
+      : 'I would like to confirm your current priorities and align the next properties we review.',
     'Reply with any updates to your criteria, or let me know a convenient time to connect.',
   ].join('\n\n');
   const body_text = appendMeetingPrepSection(bodyCore, profType, leadContext);
@@ -572,7 +603,7 @@ GLOBAL VOICE:
 - Open with purpose after the greeting: reference their stated goal, timeline, or situation — not generic pleasantries.
 
 DATA DISCIPLINE:
-- Use only facts from lead_context (intent, location, property type, beds/baths, budget, qualification, timeline, ICP, conversation signals, must-haves).
+- Use only facts from lead_context (intent, client_type, location, property type, beds/baths, budget, qualification, timeline, ICP, conversation signals, must-haves).
 - Weave 2–4 relevant facts into natural prose — never dump JSON or label lists.
 - Financing/pre-approval: state once, factually — not celebratory.
 - If calendly_booking_status is "booked", acknowledge briefly; do not push scheduling.
@@ -584,7 +615,8 @@ ROLE-SPECIFIC STYLE (use professional_type, or referral_context.action_professio
 
 AGENT (professional_type = agent):
 - Executive brokerage tone: market-aware, action-oriented, focused on search fit and next showing steps.
-- Reference search criteria (location, budget, beds/baths, must-haves) and readiness to view.
+- If lead_context.client_type is "investor" (or qualification has investment_type / investment_goal): write as an investment-property follow-up. Focus on markets, investment type/goal, capital readiness, and deal timing — not homebuyer bedrooms, school districts, or living-situation language unless those facts are present.
+- Otherwise reference search criteria (location, budget, beds/baths, must-haves) and readiness to view.
 - If lead_context.intent is "sell" or property_matches_email.context is "sell": write as a seller follow-up. Do NOT say the seller has "search criteria", "matched listings", "property matches", "showings", or a property "within your budget". If property_matches_email.listings has items, write ONE concise transition sentence about reviewing buyer interest or market comparables below to support the sale strategy.
 - If lead_context.intent is not "sell" and property_matches_email.listings has items: the send template appends a formatted HTML listings section. In body_text write ONE concise transition sentence directing them to review the matched listings below — no property listing bullets, no numbered listing lists (e.g. "1. Name - $700,000, 3 beds..."), no markdown tables (never use | pipe characters), and no property rows in the main message.
 - Budget consistency when referencing matches in prose: distinguish "within budget" vs "above budget/stretch" clearly; never contradict.
@@ -631,7 +663,7 @@ const SYSTEM_REFINE = `You refine nurture emails to the same professional standa
 Keep main message only — no scheduling links, no closings, no contact block. The platform appends scheduling and signature.
 
 Refinement rules:
-- AGENT: executive brokerage tone. For seller leads, remove buyer-search wording such as "matched listings", "property matches", "within your budget", and "showings"; reference buyer interest or market comparables only. For buyer leads, one transition sentence for listings if property_matches_email has items — no property listing bullets, no numbered listing lists, no markdown tables (never use | pipe characters), and no property rows in the main message.
+- AGENT: executive brokerage tone. For seller leads, remove buyer-search wording such as "matched listings", "property matches", "within your budget", and "showings"; reference buyer interest or market comparables only. For investor leads (client_type investor or investment_type/goal present), use investment-property language (markets, capital, deal timing) — not homebuyer bedrooms/school language. For buyer leads, one transition sentence for listings if property_matches_email has items — no property listing bullets, no numbered listing lists, no markdown tables (never use | pipe characters), and no property rows in the main message.
 - LAWYER: formal attorney-office tone; transaction/closing focus only — remove any property search, listing, or sales language.
 - MORTGAGE BROKER: financing-focused tone — remove property pitch or listing language.
 - Preserve or improve the meeting preparation checklist (3–5 role-appropriate items with • lines). Use "Before our meeting" or "To make the most of our scheduled meeting" based on calendly_booking_status.

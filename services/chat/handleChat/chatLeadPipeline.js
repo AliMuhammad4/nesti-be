@@ -23,19 +23,31 @@ function duplicateLeadSlot(error) {
   return error?.code === 11000 || error?.cause?.code === 11000;
 }
 
-function computeLeadTypeForMatch(flow, persistedGrade, aiIntent) {
+function resolveMatchClientType(formContact, aiIntent) {
+  const fromForm = String(formContact?.client_type || '').trim().toLowerCase();
+  if (fromForm) return fromForm;
+  if (String(formContact?.purchase_purpose || '').toLowerCase() === 'investment') return 'investor';
+  if (String(formContact?.motivation_reason || '').toLowerCase() === 'investment') return 'investor';
+  if (String(formContact?.investment_type || '').trim() || String(formContact?.investment_goal || '').trim()) {
+    return 'investor';
+  }
+  return '';
+}
+
+function computeLeadTypeForMatch(flow, persistedGrade, aiIntent, formContact = null) {
+  const clientType = resolveMatchClientType(formContact, aiIntent);
   if (typeof flow?.computeLeadType === 'function') {
-    return flow.computeLeadType(persistedGrade, aiIntent);
+    return flow.computeLeadType(persistedGrade, aiIntent, clientType);
   }
   const role = flow?.flowRole;
   if (role === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
-    return buildMortgageBrokerLeadType(persistedGrade);
+    return buildMortgageBrokerLeadType(persistedGrade, clientType);
   }
   if (role === PROFESSIONAL_TYPE.LAWYER) {
-    return buildLawyerLeadType(persistedGrade);
+    return buildLawyerLeadType(persistedGrade, clientType);
   }
   const intent = aiIntent === 'sell' ? 'sell' : 'buy';
-  return buildLeadType(persistedGrade, intent);
+  return buildLeadType(persistedGrade, intent, clientType);
 }
 
 const LEAD_PROFILE_UPDATE_PATHS = {
@@ -58,11 +70,16 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   preferred_contact_method: 'contact_preferences.preferred_contact_method',
   best_time_to_contact: 'contact_preferences.best_time_to_contact',
   realtor_status: 'qualification.agent.realtor_status',
+  mortgage_status: 'qualification.agent.mortgage_status',
   motivation_reason: 'qualification.agent.motivation_reason',
   viewing_readiness: 'qualification.agent.viewing_readiness',
   living_situation: 'qualification.agent.living_situation',
   urgency_readiness: 'qualification.agent.urgency_readiness',
   buy_property_location: 'qualification.agent.buy_property_location',
+  investment_type: 'qualification.agent.investment_type',
+  investment_goal: 'qualification.agent.investment_goal',
+  owns_investments: 'qualification.agent.owns_investments',
+  down_payment_readiness: 'qualification.agent.down_payment_readiness',
   mortgage_timeline: 'qualification.mortgage_broker.mortgage_timeline',
   pre_approval_status: 'qualification.mortgage_broker.pre_approval_status',
   credit_score_range: 'qualification.mortgage_broker.credit_score_range',
@@ -72,6 +89,8 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   purchase_purpose: 'qualification.mortgage_broker.purchase_purpose',
   urgency_signal: 'qualification.mortgage_broker.urgency_signal',
   mortgage_property_budget: 'qualification.mortgage_broker.property_budget',
+  mortgage_investment_type: 'qualification.mortgage_broker.investment_type',
+  owns_investments: 'qualification.mortgage_broker.owns_investments',
   transaction_stage: 'qualification.lawyer.transaction_stage',
   closing_timeline: 'qualification.lawyer.closing_timeline',
   transaction_type: 'qualification.lawyer.transaction_type',
@@ -79,6 +98,7 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   realtor_involved: 'qualification.lawyer.realtor_involved',
   first_time_buyer: 'qualification.lawyer.first_time_buyer',
   legal_services_needed: 'qualification.lawyer.legal_services_needed',
+  via_company: 'qualification.lawyer.via_company',
 };
 
 function hasMeaningfulSellerListingUpdate(previousProfile = {}, mergedQual = {}) {
@@ -356,7 +376,7 @@ async function syncLeadMatchBody({
   existingLeadMatch.compatibility_factors = nextFactors;
 
   existingLeadMatch.match_score = finalScore;
-  existingLeadMatch.lead_type = computeLeadTypeForMatch(flow, persistedGrade, leadIntent);
+  existingLeadMatch.lead_type = computeLeadTypeForMatch(flow, persistedGrade, leadIntent, formContact);
 
   await existingLeadMatch.save();
 

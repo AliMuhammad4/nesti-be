@@ -191,7 +191,15 @@ test('document requests are sanitized and reach the broker prompt', () => {
   );
   const agentDocs = ['preapproval_letter', 'proof_of_funds', 'photo_id', 'home_photos', 'listing_sheet'];
   assert.deepEqual(documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'buyer' }), ['preapproval_letter', 'proof_of_funds', 'photo_id']);
-  assert.deepEqual(documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'investor' }), ['preapproval_letter', 'proof_of_funds', 'photo_id']);
+  assert.deepEqual(documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'investor' }), ['proof_of_funds', 'photo_id', 'preapproval_letter']);
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'investor', mortgageStatus: 'paying_cash' }),
+    ['proof_of_funds', 'photo_id'],
+  );
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'buyer', mortgageStatus: 'paying_cash' }),
+    ['proof_of_funds', 'photo_id'],
+  );
   assert.deepEqual(documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'seller', propertyImages: true }), ['listing_sheet', 'photo_id']);
   assert.equal(nextDocumentRequest({ role: 'mortgage_broker', document_requests: ['pay_stubs', 'mortgage_statement'] }, [], { text: 'this is a renewal' }).id, 'mortgage_statement');
   assert.equal(documentRequestIds({ role: 'lawyer', document_requests: ['purchase_agreement', 'condo_status'] }, { text: 'detached house' }).includes('condo_status'), false);

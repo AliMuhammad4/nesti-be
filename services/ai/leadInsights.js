@@ -65,16 +65,27 @@ function resolveLeadType(profile, leadMatch, conversation, professionalType = PR
   if (professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return 'mortgage_client';
   }
+  const clientType = norm(profile?.client_type || leadMatch?.compatibility_factors?.client_type);
+  const lt = norm(leadMatch?.lead_type || '');
+  const motivation = norm(profile?.qualification?.agent?.motivation_reason);
+  const invType = norm(profile?.qualification?.agent?.investment_type);
+  const invGoal = norm(profile?.qualification?.agent?.investment_goal);
+  // Investors keep intent "buy" — detect them before falling through to buyer.
+  if (
+    clientType === 'investor'
+    || /investor/.test(lt)
+    || motivation === 'investment'
+    || invType
+    || invGoal
+  ) {
+    return 'investor';
+  }
   const intent = profile?.intent || conversation?.intent;
   if (intent === 'sell') return 'seller';
   if (intent === 'buy') return 'buyer';
-  const lt = norm(leadMatch?.lead_type || '');
   if (/seller/.test(lt)) return 'seller';
   if (/buyer|client/.test(lt)) return 'buyer';
   if (/renter|rent/.test(lt)) return 'renter';
-  if (/invest/.test(lt)) return 'investor';
-  const motivation = norm(profile?.qualification?.agent?.motivation_reason);
-  if (motivation === 'investment') return 'investor';
   return 'lead';
 }
 

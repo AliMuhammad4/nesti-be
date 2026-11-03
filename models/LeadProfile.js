@@ -81,6 +81,10 @@ const leadProfileSchema = new mongoose.Schema(
         living_situation: { type: String },
         urgency_readiness: { type: String },
         buy_property_location: { type: String },
+        investment_type: { type: String },
+        investment_goal: { type: String },
+        owns_investments: { type: String },
+        down_payment_readiness: { type: String },
       },
       mortgage_broker: {
         mortgage_timeline: { type: String },
@@ -92,6 +96,8 @@ const leadProfileSchema = new mongoose.Schema(
         purchase_purpose: { type: String },
         urgency_signal: { type: String },
         property_budget: { type: String },
+        investment_type: { type: String },
+        owns_investments: { type: String },
       },
       lawyer: {
         transaction_stage: { type: String },
@@ -102,6 +108,7 @@ const leadProfileSchema = new mongoose.Schema(
         realtor_involved: { type: String },
         first_time_buyer: { type: String },
         legal_services_needed: { type: String },
+        via_company: { type: String },
       },
     },
     scoring: {

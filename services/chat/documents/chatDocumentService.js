@@ -286,13 +286,23 @@ function documentCoversRequest(doc, id) {
   });
 }
 
+function payingCashFromContext(context = {}) {
+  const status = String(context.mortgageStatus || context.mortgage_status || '').trim().toLowerCase();
+  if (status === 'paying_cash' || status === 'cash') return true;
+  const text = `${context.text || ''}`;
+  return /\b(paying cash|pay(ing)? (all )?cash|all[- ]cash|cash purchase|cash buyer)\b/i.test(text);
+}
+
 function requestContext(intentOrContext) {
-  if (typeof intentOrContext === 'string') return { intent: intentOrContext, text: '', propertyImages: false };
+  if (typeof intentOrContext === 'string') {
+    return { intent: intentOrContext, text: '', propertyImages: false, clientType: '', mortgageStatus: '' };
+  }
   return {
     intent: String(intentOrContext?.intent || ''),
     text: String(intentOrContext?.text || ''),
     propertyImages: Boolean(intentOrContext?.propertyImages),
     clientType: String(intentOrContext?.clientType || '').trim().toLowerCase(),
+    mortgageStatus: String(intentOrContext?.mortgageStatus || intentOrContext?.mortgage_status || '').trim().toLowerCase(),
   };
 }
 
@@ -317,12 +327,23 @@ export function intakeHasPropertyImages(form) {
 function orderedRequestIds(role, wanted, context) {
   const text = `${context.intent} ${context.text}`;
   const condo = /\b(condo|condominium|strata)\b/i.test(text);
+  const cashPurchase = payingCashFromContext(context);
   let order = wanted;
   if (role === 'agent') {
     const audience = agentAudience(context);
-    const forVisitor = audience === 'seller'
-      ? ['home_photos', 'listing_sheet', 'photo_id']
-      : ['preapproval_letter', 'proof_of_funds', 'photo_id'];
+    let forVisitor;
+    if (audience === 'seller') {
+      forVisitor = ['home_photos', 'listing_sheet', 'photo_id'];
+    } else if (audience === 'investor') {
+      // Investors: capital proof first; skip pre-approval when they are paying cash.
+      forVisitor = cashPurchase
+        ? ['proof_of_funds', 'photo_id']
+        : ['proof_of_funds', 'photo_id', 'preapproval_letter'];
+    } else {
+      forVisitor = cashPurchase
+        ? ['proof_of_funds', 'photo_id']
+        : ['preapproval_letter', 'proof_of_funds', 'photo_id'];
+    }
     return forVisitor.filter((id) => wanted.includes(id) && !(id === 'home_photos' && context.propertyImages));
   } else if (role === 'mortgage_broker') {
     if (/\brenew/i.test(text)) order = ['mortgage_statement', 'photo_id', 'notice_of_assessment', 'pay_stubs', 'preapproval_letter'];

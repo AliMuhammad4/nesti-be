@@ -147,9 +147,10 @@ export async function finishProfessionalChatTurn(state, patch) {
   const questionsOpen = qualificationStillOpen(appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions);
   const documentContext = {
     intent,
-    text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
+    text: `${storedForm?.intent || ''} ${storedForm?.mortgage_status || ''} ${conversationText || ''} ${trimmedMessage}`,
     propertyImages: intakeHasPropertyImages(storedForm),
     clientType: storedForm?.client_type || appliedAssistantSetting?.client_type || '',
+    mortgageStatus: storedForm?.mortgage_status || '',
   };
   const documentsAlreadyAsked = followUpSkipIds(appliedAssistantSetting, sharedDocuments, documentContext, history, lastAssistantReply);
   const visitorSkippedUpload = !turnAttachments.length && !questionsOpen && documentsAlreadyAsked.length > 0;
@@ -205,8 +206,9 @@ export async function finishProfessionalChatTurn(state, patch) {
   const finalGrade = normalizePersistedGradeByScore(finalGradeRaw, finalScore);
   const persistedGradeRaw = flow.getPersistedGrade(finalGrade);
   const persistedGrade = normalizePersistedGradeByScore(persistedGradeRaw, finalScore);
-  const finalClass = classifyLeadForFlow(flow, finalGrade, aiIntent);
-  const persistedClass = classifyLeadForFlow(flow, persistedGrade, aiIntent);
+  const classExtras = { clientType: visitorClientType || '', client_type: visitorClientType || '' };
+  const finalClass = classifyLeadForFlow(flow, finalGrade, aiIntent, classExtras);
+  const persistedClass = classifyLeadForFlow(flow, persistedGrade, aiIntent, classExtras);
 
   await ChatMessage.create({
     conversation_id: conversation._id,

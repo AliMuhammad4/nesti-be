@@ -169,6 +169,8 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
     profType === PROFESSIONAL_TYPE.LAWYER || profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
       ? 'unspecified'
       : 'buy';
+  const normalizedClientType = normalizeProfileClientType(payload.client_type);
+  const templateAnswers = normalizeTemplateAnswers(payload.template_answers);
 
   return {
     intent: payload.intent || defaultIntent,
@@ -237,6 +239,10 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         living_situation: payload.qualification?.agent?.living_situation || '',
         urgency_readiness: payload.qualification?.agent?.urgency_readiness || '',
         buy_property_location: payload.qualification?.agent?.buy_property_location || '',
+        investment_type: payload.qualification?.agent?.investment_type || '',
+        investment_goal: payload.qualification?.agent?.investment_goal || '',
+        owns_investments: payload.qualification?.agent?.owns_investments || '',
+        down_payment_readiness: payload.qualification?.agent?.down_payment_readiness || '',
       },
       mortgage_broker: {
         mortgage_timeline: payload.qualification?.mortgage_broker?.mortgage_timeline || '',
@@ -248,6 +254,8 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         purchase_purpose: payload.qualification?.mortgage_broker?.purchase_purpose || '',
         urgency_signal: payload.qualification?.mortgage_broker?.urgency_signal || '',
         property_budget: payload.qualification?.mortgage_broker?.property_budget || '',
+        investment_type: payload.qualification?.mortgage_broker?.investment_type || '',
+        owns_investments: payload.qualification?.mortgage_broker?.owns_investments || '',
       },
       lawyer: {
         transaction_stage: payload.qualification?.lawyer?.transaction_stage || '',
@@ -258,6 +266,7 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         realtor_involved: payload.qualification?.lawyer?.realtor_involved || '',
         first_time_buyer: payload.qualification?.lawyer?.first_time_buyer || '',
         legal_services_needed: payload.qualification?.lawyer?.legal_services_needed || '',
+        via_company: payload.qualification?.lawyer?.via_company || '',
       },
     },
     scoring: {
@@ -278,7 +287,29 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
     },
     source: payload.source || 'chatbot',
     total_score: Number(payload.total_score || 0),
+    ...(normalizedClientType ? { client_type: normalizedClientType } : {}),
+    ...(templateAnswers && Object.keys(templateAnswers).length
+      ? { template_answers: templateAnswers }
+      : {}),
   };
+}
+
+function normalizeProfileClientType(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'buyer' || value === 'seller' || value === 'investor') return value;
+  return '';
+}
+
+function normalizeTemplateAnswers(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const [id, value] of Object.entries(raw)) {
+    if (!/^[a-z0-9_]+$/.test(id)) continue;
+    const text = String(value || '').trim();
+    if (!text) continue;
+    out[id] = text.slice(0, 160);
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function toIdString(value) {
@@ -390,7 +421,9 @@ export async function createOrReuseLeadProfile({
 }
 
 function leadSlotFor(conversationId, leadType) {
-  const suffix = ['buyer', 'seller', 'client'].find((name) => String(leadType || '').endsWith(`_${name}`));
+  const suffix = ['buyer', 'seller', 'client', 'investor'].find((name) =>
+    String(leadType || '').endsWith(`_${name}`),
+  );
   if (!conversationId || !suffix) return undefined;
   return `${conversationId}:${suffix}`.slice(0, 80);
 }

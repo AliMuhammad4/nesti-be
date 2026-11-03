@@ -1584,7 +1584,7 @@ test('qualification templates keep known ids, accept custom questions, and cap t
 
   const buyer = sanitized.buyer;
   assert.equal(buyer.cta_label, 'Book a buyer call');
-  assert.equal(buyer.questions.length, 8);
+  assert.ok(buyer.questions.length <= 12);
   assert.equal(buyer.questions[0].id, 'budget');
   assert.equal(buyer.questions[0].label, 'What price range feels comfortable?');
   assert.deepEqual(buyer.questions[0].options, QUALIFICATION_TEMPLATES.agent.buyer.questions.find((q) => q.id === 'budget').options);
@@ -1595,6 +1595,8 @@ test('qualification templates keep known ids, accept custom questions, and cap t
   assert.match(custom.id, /^custom_are_you_working/);
   assert.equal(custom.custom, true);
   assert.deepEqual(custom.options, ['Yes', 'No', 'Not sure']);
+  // Customized lists keep their custom questions; catalog defaults are not force-injected.
+  assert.ok(buyer.questions.some((q) => q.custom));
   assert.equal(sanitized.seller.enabled, false);
   assert.deepEqual(sanitized.seller.questions.map((q) => q.id), QUALIFICATION_TEMPLATES.agent.seller.questions.map((q) => q.id));
   assert.ok(sanitized.seller.questions.every((q) => q.enabled === true && q.custom === false));

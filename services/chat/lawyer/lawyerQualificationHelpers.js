@@ -2,6 +2,7 @@ import { mergeLawyerQualificationForScoring } from '../scoring/index.js';
 import { mergeSignals } from '../scoring/index.js';
 export function pickLawyerFormQualification(storedForm) {
   if (!storedForm) return {};
+  const clientType = String(storedForm.client_type || '').toLowerCase() || null;
   return {
     transaction_stage: storedForm.transaction_stage || null,
     closing_timeline: storedForm.closing_timeline || null,
@@ -13,6 +14,8 @@ export function pickLawyerFormQualification(storedForm) {
     legal_services_needed: storedForm.legal_services_needed || null,
     preferred_contact_method: storedForm.preferred_contact_method || null,
     best_time_to_contact: storedForm.best_time_to_contact || null,
+    client_type: clientType,
+    via_company: storedForm.via_company || null,
   };
 }
 export function pickLawyerFormSignals(storedForm) {
@@ -64,6 +67,8 @@ export function mergeLawyerAiDetailsForMeta(parsedAiDetails, derivedQual) {
     preferred_contact_method:
       parsedAiDetails?.preferred_contact_method || derivedQual.preferred_contact_method || '',
     best_time_to_contact: parsedAiDetails?.best_time_to_contact || derivedQual.best_time_to_contact || '',
+    client_type: parsedAiDetails?.client_type || derivedQual.client_type || '',
+    via_company: parsedAiDetails?.via_company || derivedQual.via_company || '',
   };
 }
 
@@ -95,6 +100,7 @@ export function buildLawyerLeadProfileUpdate(parsedAiDetails, derivedQual, formC
       parsedAiDetails?.best_time_to_contact ||
       derivedQual.best_time_to_contact ||
       formContact?.best_time_to_contact,
+    via_company: parsedAiDetails?.via_company || derivedQual.via_company || formContact?.via_company,
     property_address: parsedAiDetails?.property_address || formContact?.address,
     location:
       parsedAiDetails?.location ||

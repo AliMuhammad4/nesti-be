@@ -80,7 +80,7 @@ export function roleForUser(user, profile) {
 }
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
-const MAX_TEMPLATE_QUESTIONS = 8;
+const MAX_TEMPLATE_QUESTIONS = 12;
 const MAX_QUESTION_OPTIONS = 8;
 const MAX_KNOWLEDGE_FILES = 6;
 const MAX_KNOWLEDGE_TEXT = 6000;
@@ -142,8 +142,29 @@ export function sanitizeQualificationTemplates(input, role) {
         if (!question.label || seen.has(question.id)) return false;
         seen.add(question.id);
         return true;
-      })
-      .slice(0, MAX_TEMPLATE_QUESTIONS);
+      });
+    // Upgrade legacy catalog templates that are missing newer defaults.
+    // Skip hand-curated short lists and templates that already include custom questions.
+    const knownOnly = questions.length > 0 && questions.every((question) => !question.custom && baseById.has(question.id));
+    const missingDefaults = base.questions.filter((question) => !seen.has(question.id));
+    if (knownOnly && questions.length >= 4 && missingDefaults.length) {
+      for (const question of missingDefaults) {
+        questions.push({ ...question });
+        seen.add(question.id);
+      }
+    }
+    // Prefer keeping catalog defaults when capping — drop trailing custom extras first.
+    while (questions.length > MAX_TEMPLATE_QUESTIONS) {
+      let dropAt = -1;
+      for (let i = questions.length - 1; i >= 0; i -= 1) {
+        if (questions[i].custom) {
+          dropAt = i;
+          break;
+        }
+      }
+      if (dropAt >= 0) questions.splice(dropAt, 1);
+      else questions.pop();
+    }
     return [type, {
       enabled: raw.enabled !== false,
       cta_label: clip(raw.cta_label, 60) || base.cta_label,

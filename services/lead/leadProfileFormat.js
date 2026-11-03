@@ -106,6 +106,8 @@ export function mapLeadProfileForApi(profile, profType) {
             down_payment_readiness: p.qualification?.mortgage_broker?.down_payment_readiness || null,
             purchase_purpose: p.qualification?.mortgage_broker?.purchase_purpose || null,
             urgency_signal: p.qualification?.mortgage_broker?.urgency_signal || null,
+            investment_type: p.qualification?.mortgage_broker?.investment_type || null,
+            owns_investments: p.qualification?.mortgage_broker?.owns_investments || null,
           }
         : profType === PROFESSIONAL_TYPE.LAWYER
           ? {
@@ -117,6 +119,7 @@ export function mapLeadProfileForApi(profile, profType) {
               realtor_involved: p.qualification?.lawyer?.realtor_involved || null,
               first_time_buyer: p.qualification?.lawyer?.first_time_buyer || null,
               legal_services_needed: p.qualification?.lawyer?.legal_services_needed || null,
+              via_company: p.qualification?.lawyer?.via_company || null,
             }
           : {
               mortgage_status: p.qualification?.agent?.mortgage_status || null,
@@ -126,6 +129,10 @@ export function mapLeadProfileForApi(profile, profType) {
               living_situation: p.qualification?.agent?.living_situation || null,
               urgency_readiness: p.qualification?.agent?.urgency_readiness || null,
               buy_property_location: p.qualification?.agent?.buy_property_location || null,
+              investment_type: p.qualification?.agent?.investment_type || null,
+              investment_goal: p.qualification?.agent?.investment_goal || null,
+              owns_investments: p.qualification?.agent?.owns_investments || null,
+              down_payment_readiness: p.qualification?.agent?.down_payment_readiness || null,
             },
   };
 }

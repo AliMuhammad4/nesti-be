@@ -131,6 +131,13 @@ export const QUALIFICATION_TEMPLATES = {
       ['budget', 'What is your investment budget?', BUDGET_OPTIONS],
       ['investment_goal', 'Are you focused on rental income or appreciation?', ['Rental income', 'Appreciation', 'Both']],
       ['timeline', 'When are you planning to invest?', TIMELINE_OPTIONS],
+      ['property_type', 'What property type are you targeting?', PROPERTY_TYPE_OPTIONS],
+      ['preapproval', 'Are you pre-approved, paying cash, or still arranging financing?', ['Fully pre-approved', 'Paying cash', 'In progress', 'Not yet', 'Unsure']],
+      ['realtor_status', 'Are you currently working with a realtor?', ['No', 'Yes but open', 'Yes exclusively']],
+      ['owns_investments', 'Do you already own investment properties?', ['Yes', 'No']],
+      ['down_payment', 'How ready is your down payment / capital?', ['Ready now', 'Within 30 days', 'Still accumulating', 'Not sure']],
+      ['viewing_readiness', 'Ready to tour investment properties?', ['Yes ASAP', 'Within a few weeks', 'Maybe later', 'Just browsing']],
+      ['urgency_readiness', 'If the right deal appeared tomorrow, would you make an offer?', ['Yes immediately', 'Maybe', 'No']],
     ]),
   },
   mortgage_broker: {
@@ -183,9 +190,35 @@ export const QUALIFICATION_TEMPLATES = {
 
 /** Question ids the public intake form already collects for this role. Chat skips them when filled. */
 export const INTAKE_QUESTION_IDS = {
-  agent: ['intent', 'location', 'budget', 'timeline', 'property_type', 'preapproval', 'expected_price'],
-  mortgage_broker: ['purpose', 'location', 'property_value', 'timeline', 'preapproval', 'down_payment', 'household_income'],
-  lawyer: ['legal_service', 'location', 'transaction_type', 'closing_date'],
+  agent: [
+    'intent',
+    'location',
+    'budget',
+    'timeline',
+    'property_type',
+    'preapproval',
+    'expected_price',
+    'buying_another',
+    'investment_type',
+    'investment_goal',
+    'realtor_status',
+    'owns_investments',
+    'down_payment',
+    'viewing_readiness',
+    'urgency_readiness',
+  ],
+  mortgage_broker: [
+    'purpose',
+    'location',
+    'property_value',
+    'timeline',
+    'preapproval',
+    'down_payment',
+    'household_income',
+    'investment_type',
+    'owns_investments',
+  ],
+  lawyer: ['legal_service', 'location', 'transaction_type', 'closing_date', 'via_company'],
 };
 
 export function templateQuestionLabel(role, id) {

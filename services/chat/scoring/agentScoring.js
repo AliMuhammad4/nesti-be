@@ -5,7 +5,16 @@
 import logger from '../../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 
-import { extractSignals, mergeSignals, buildLeadType, buildLeadClassification, GRADE_ORDER } from './common.js';
+import {
+  extractSignals,
+  mergeSignals,
+  buildLeadType,
+  buildLeadClassification,
+  resolveInvestorClientType,
+  normalizeInvestmentType,
+  normalizeInvestmentGoal,
+  GRADE_ORDER,
+} from './common.js';
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 import {
   bumpLeadProfileStats,
@@ -81,13 +90,28 @@ export const mergeQualificationForScoring = (formQualification = {}, aiDetails =
   const fq = formQualification || {};
   const ai = aiDetails || {};
   const pick = (key) => (ai[key] && String(ai[key]).trim() ? ai[key] : fq[key]) || null;
+  const investmentType = normalizeInvestmentType(pick('investment_type') || '');
+  const investmentGoal = normalizeInvestmentGoal(pick('investment_goal') || '');
+  const clientType = resolveInvestorClientType({
+    clientType: pick('client_type') || '',
+    motivationReason: pick('motivation_reason') || '',
+    investmentType: investmentType || '',
+    investmentGoal: investmentGoal || '',
+  }) || pick('client_type');
+  const motivation = pick('motivation_reason')
+    || (clientType === 'investor' ? 'investment' : null);
   return {
-    mortgage_status:    pick('mortgage_status'),
-    realtor_status:     pick('realtor_status'),
-    motivation_reason:  pick('motivation_reason'),
-    viewing_readiness:  pick('viewing_readiness'),
-    living_situation:   pick('living_situation'),
-    urgency_readiness:  pick('urgency_readiness'),
+    mortgage_status: pick('mortgage_status'),
+    realtor_status: pick('realtor_status'),
+    motivation_reason: motivation,
+    viewing_readiness: pick('viewing_readiness'),
+    living_situation: pick('living_situation'),
+    urgency_readiness: pick('urgency_readiness'),
+    client_type: clientType,
+    investment_type: investmentType || null,
+    investment_goal: investmentGoal || null,
+    owns_investments: pick('owns_investments'),
+    down_payment_readiness: pick('down_payment_readiness') || pick('down_payment'),
   };
 };
 
@@ -140,12 +164,52 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
 
   let motivationScore = 0;
   const mr = fq.motivation_reason;
-  if (['relocation', 'family_change', 'divorce', 'investment'].includes(mr)) { motivationScore = 10; reasons.push('Motivation: strong'); }
-  else if (['upgrading', 'downsizing'].includes(mr)) { motivationScore = 6; reasons.push('Motivation: medium'); }
-  else if (mr === 'just_exploring') { motivationScore = 0; reasons.push('Motivation: low'); }
-  else if (/relocat|job transfer|divorce|new baby|investment/.test(text)) { motivationScore = 10; reasons.push('Motivation: strong'); }
-  else if (/upgrad(e|ing)|downsiz(e|ing)/.test(text)) { motivationScore = 6; reasons.push('Motivation: medium'); }
-  else if (/just browsing|just looking|just exploring/.test(text)) { motivationScore = 0; reasons.push('Motivation: low'); }
+  const isInvestor = String(fq.client_type || '').toLowerCase() === 'investor' || mr === 'investment';
+  // Investors are scored via investorScore below — do not also award motivation for "investment".
+  if (!isInvestor) {
+    if (['relocation', 'family_change', 'divorce', 'investment'].includes(mr)) { motivationScore = 10; reasons.push('Motivation: strong'); }
+    else if (['upgrading', 'downsizing'].includes(mr)) { motivationScore = 6; reasons.push('Motivation: medium'); }
+    else if (mr === 'just_exploring') { motivationScore = 0; reasons.push('Motivation: low'); }
+    else if (/relocat|job transfer|divorce|new baby|investment/.test(text)) { motivationScore = 10; reasons.push('Motivation: strong'); }
+    else if (/upgrad(e|ing)|downsiz(e|ing)/.test(text)) { motivationScore = 6; reasons.push('Motivation: medium'); }
+    else if (/just browsing|just looking|just exploring/.test(text)) { motivationScore = 0; reasons.push('Motivation: low'); }
+  }
+
+  let investorScore = 0;
+  if (isInvestor) {
+    // Compensates for skipped buyer-only motivation (+10) + living (+5) buckets.
+    investorScore += 6;
+    reasons.push('Client type: investor');
+    const invType = normalizeInvestmentType(fq.investment_type || '');
+    if (invType) {
+      investorScore += 5;
+      reasons.push(`Investment type: ${invType.replace(/_/g, ' ')}`);
+    }
+    const invGoal = normalizeInvestmentGoal(fq.investment_goal || '');
+    if (invGoal === 'both' || invGoal === 'rental_income' || invGoal === 'appreciation') {
+      investorScore += 4;
+      reasons.push(`Investment goal: ${invGoal.replace(/_/g, ' ')}`);
+    } else if (invGoal) {
+      investorScore += 2;
+      reasons.push(`Investment goal: ${invGoal.replace(/_/g, ' ')}`);
+    }
+    const owns = String(fq.owns_investments || '').toLowerCase();
+    if (owns === 'yes') {
+      investorScore += 3;
+      reasons.push('Portfolio: already owns investment properties');
+    } else if (owns === 'no') {
+      investorScore += 1;
+      reasons.push('Portfolio: first investment property');
+    }
+    const dp = String(fq.down_payment_readiness || fq.down_payment || '').toLowerCase();
+    if (/(ready_now|ready now|funds_ready|proof_of_funds|available)/.test(dp)) {
+      investorScore += 2;
+      reasons.push('Capital: down payment / funds ready');
+    } else if (/(within_30|within 30|30 days)/.test(dp)) {
+      investorScore += 1;
+      reasons.push('Capital: funds within 30 days');
+    }
+  }
 
   let viewingScore = 0;
   const vr = fq.viewing_readiness;
@@ -189,7 +253,7 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
 
   const finalScore = Math.min(
     timelineScore + mortgageScore + budgetScore + realtorScore +
-    motivationScore + viewingScore + livingScore + areaScore +
+    motivationScore + investorScore + viewingScore + livingScore + areaScore +
     urgencyScore + engagementScore + contactBoost,
     100
   );
@@ -206,7 +270,7 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
     reasons,
     subScores: {
       timelineScore, mortgageScore, budgetScore, realtorScore,
-      motivationScore, viewingScore, livingScore, areaScore,
+      motivationScore, investorScore, viewingScore, livingScore, areaScore,
       urgencyScore, engagementScore, contactBoost,
     },
   };
@@ -365,7 +429,19 @@ export const createLeadRecords = async ({
   formContact,
   aiDetails,
 }) => {
-  const leadType = buildLeadType(leadGrade, intent);
+  const investmentType = normalizeInvestmentType(
+    formContact?.investment_type || aiDetails?.investment_type || '',
+  );
+  const investmentGoal = normalizeInvestmentGoal(
+    formContact?.investment_goal || aiDetails?.investment_goal || '',
+  );
+  const clientType = resolveInvestorClientType({
+    clientType: formContact?.client_type || aiDetails?.client_type || '',
+    motivationReason: formContact?.motivation_reason || aiDetails?.motivation_reason || '',
+    investmentType,
+    investmentGoal,
+  });
+  const leadType = buildLeadType(leadGrade, intent, clientType);
   const signals  = leadMeta.signals || {};
   const now      = new Date();
 
@@ -449,13 +525,43 @@ export const createLeadRecords = async ({
             financingFromSignal ||
             '',
           realtor_status: formContact?.realtor_status || aiDetails?.realtor_status || '',
-          motivation_reason: formContact?.motivation_reason || aiDetails?.motivation_reason || '',
+          motivation_reason:
+            formContact?.motivation_reason
+            || aiDetails?.motivation_reason
+            || (clientType === 'investor' ? 'investment' : '')
+            || '',
           viewing_readiness: formContact?.viewing_readiness || aiDetails?.viewing_readiness || '',
           living_situation: formContact?.living_situation || aiDetails?.living_situation || '',
           urgency_readiness: formContact?.urgency_readiness || aiDetails?.urgency_readiness || '',
           buy_property_location: formContact?.buy_property_location || '',
+          investment_type: investmentType,
+          investment_goal: investmentGoal,
+          owns_investments: formContact?.owns_investments || aiDetails?.owns_investments || '',
+          down_payment_readiness:
+            formContact?.down_payment_readiness
+            || formContact?.down_payment
+            || aiDetails?.down_payment_readiness
+            || '',
         },
       },
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(clientType === 'investor' || investmentType || investmentGoal
+        ? {
+            template_answers: {
+              ...(investmentType ? { investment_type: investmentType } : {}),
+              ...(investmentGoal ? { investment_goal: investmentGoal } : {}),
+              ...(formContact?.owns_investments
+                ? { owns_investments: formContact.owns_investments }
+                : {}),
+              ...(formContact?.down_payment_readiness || formContact?.down_payment
+                ? {
+                    down_payment:
+                      formContact.down_payment_readiness || formContact.down_payment,
+                  }
+                : {}),
+            },
+          }
+        : {}),
       source: 'chatbot',
       total_score: leadScore,
     },
@@ -494,6 +600,18 @@ export const createLeadRecords = async ({
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
       professional_type: PROFESSIONAL_TYPE.AGENT,
       repeat_visitor: reusedExisting,
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(investmentType ? { investment_type: investmentType } : {}),
+      ...(investmentGoal ? { investment_goal: investmentGoal } : {}),
+      ...(formContact?.owns_investments
+        ? { owns_investments: formContact.owns_investments }
+        : {}),
+      ...(formContact?.down_payment_readiness || formContact?.down_payment
+        ? {
+            down_payment_readiness:
+              formContact.down_payment_readiness || formContact.down_payment,
+          }
+        : {}),
     },
     ...(icpFit ? { icp_fit: {
       fit_score: icpFit.fit_score,

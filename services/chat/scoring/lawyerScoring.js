@@ -47,6 +47,9 @@ export const deriveLawyerQualificationFromText = (text = '') => {
   else if (/property dispute|real estate dispute|legal advice|property advice|dispute advice/i.test(t)) out.legal_services_needed = 'property_dispute_advice';
   else if (/document review|review documents/i.test(t)) out.legal_services_needed = 'document_review';
   else if (/other legal|not listed|something else|other service/i.test(t)) out.legal_services_needed = 'other';
+  if (/through (a )?compan|corporation|holding company|llc\b/i.test(t)) out.via_company = 'company';
+  else if (/personally|in my (own )?name|personal name/i.test(t)) out.via_company = 'personally';
+  if (/investment (property|closing)|investor|rental property/i.test(t)) out.client_type = 'investor';
   return out;
 };
 
@@ -65,6 +68,8 @@ export const mergeLawyerQualificationForScoring = (formQualification = {}, aiDet
     legal_services_needed: pick('legal_services_needed'),
     preferred_contact_method: pick('preferred_contact_method'),
     best_time_to_contact: pick('best_time_to_contact'),
+    client_type:          pick('client_type'),
+    via_company:          pick('via_company'),
   };
 };
 
@@ -134,10 +139,31 @@ export const scoreLawyerLead = ({
   else if (lsn === 'document_review') { legalServicesScore = 5; reasons.push('Legal services: document review'); }
   else if (lsn === 'other') { legalServicesScore = 3; reasons.push('Legal services: other'); }
 
+  let investorScore = 0;
+  const isInvestor = String(fq.client_type || '').toLowerCase() === 'investor';
+  if (isInvestor) {
+    investorScore += 4;
+    reasons.push('Client type: investor');
+    const via = String(fq.via_company || '').toLowerCase();
+    if (via === 'company' || via === 'through_a_company') {
+      investorScore += 3;
+      reasons.push('Purchasing through a company');
+    } else if (via === 'personally') {
+      investorScore += 2;
+      reasons.push('Purchasing personally');
+    } else if (via === 'not_sure') {
+      investorScore += 1;
+      reasons.push('Entity structure: not sure yet');
+    } else if (via) {
+      investorScore += 1;
+      reasons.push('Entity structure noted');
+    }
+  }
+
   const finalScore = Math.min(
     transactionStageScore + closingTimelineScore + transactionTypeScore +
     propertyValueScore + mortgageStatusScore + realtorScore +
-    firstTimeBuyerScore + legalServicesScore,
+    firstTimeBuyerScore + legalServicesScore + investorScore,
     100
   );
 
@@ -161,7 +187,7 @@ export const scoreLawyerLead = ({
       sub_scores:   {
         transactionStageScore, closingTimelineScore, transactionTypeScore,
         propertyValueScore, mortgageStatusScore, realtorScore,
-        firstTimeBuyerScore, legalServicesScore,
+        firstTimeBuyerScore, legalServicesScore, investorScore,
       },
       signals,
       ...(hasContact && contactInfo ? { contact: contactInfo } : {}),
@@ -187,11 +213,14 @@ export const createLawyerLeadRecords = async ({
   formContact,
   aiDetails,
 }) => {
-  const leadType = buildLawyerLeadType(leadGrade);
   const signals  = leadMeta.signals || {};
   const now      = new Date();
   const fq       = formContact || {};
   const ai       = aiDetails || {};
+  const rawClientType = String(fq.client_type || ai.client_type || '').toLowerCase();
+  const clientType = rawClientType === 'investor' ? 'investor' : '';
+  const leadType = buildLawyerLeadType(leadGrade, clientType);
+  const viaCompany = ai.via_company || fq.via_company || '';
 
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
@@ -222,8 +251,20 @@ export const createLawyerLeadRecords = async ({
           realtor_involved: ai.realtor_involved || fq.realtor_involved || '',
           first_time_buyer: ai.first_time_buyer || fq.first_time_buyer || '',
           legal_services_needed: ai.legal_services_needed || fq.legal_services_needed || '',
+          via_company: viaCompany,
         },
       },
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(clientType === 'investor' || viaCompany
+        ? {
+            template_answers: {
+              ...(viaCompany ? { via_company: viaCompany } : {}),
+              ...(fq.legal_services_needed || ai.legal_services_needed
+                ? { legal_service: fq.legal_services_needed || ai.legal_services_needed }
+                : {}),
+            },
+          }
+        : {}),
       source: 'chatbot',
       total_score: leadScore,
     },
@@ -262,6 +303,8 @@ export const createLawyerLeadRecords = async ({
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
       professional_type: PROFESSIONAL_TYPE.LAWYER,
       repeat_visitor: reusedExisting,
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(viaCompany ? { via_company: viaCompany } : {}),
     },
     ...(icpFit
       ? {

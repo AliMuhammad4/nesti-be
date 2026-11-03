@@ -26,6 +26,7 @@ function pickMatchedLeadForResponse(ml) {
   if (!ml || typeof ml !== 'object') return null;
   const out = {
     intent: ml.intent ?? null,
+    client_type: ml.client_type ?? null,
     preferred_contact_method: ml.preferred_contact_method ?? null,
     best_time_to_contact: ml.best_time_to_contact ?? null,
     property_location: ml.property_location ?? null,
@@ -40,6 +41,8 @@ function pickMatchedLeadForResponse(ml) {
     viewing_readiness: ml.viewing_readiness ?? null,
     living_situation: ml.living_situation ?? null,
     urgency_readiness: ml.urgency_readiness ?? null,
+    investment_type: ml.investment_type ?? null,
+    investment_goal: ml.investment_goal ?? null,
   };
   const has = Object.values(out).some((v) => v != null && v !== '');
   return has ? out : null;

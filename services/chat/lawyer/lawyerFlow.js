@@ -36,7 +36,13 @@ export const lawyerFlow = {
   enhanceWithAi: lawyerEnhanceWithAi,
   mergeSignalsForMeta: lawyerMergeSignalsForMeta,
   getPersistedGrade: identityPersistedGrade,
-  getLeadClassification: (finalGrade) => tieredProfessionalLabel(finalGrade, 'Lawyer Client'),
+  getLeadClassification: (finalGrade, extras = {}) => {
+    const clientType = extras?.clientType || extras?.client_type || '';
+    if (String(clientType).toLowerCase() === 'investor') {
+      return tieredProfessionalLabel(finalGrade, 'Investor');
+    }
+    return tieredProfessionalLabel(finalGrade, 'Lawyer Client');
+  },
   getMergedAiDetails: mergeLawyerAiDetailsForMeta,
   getLeadProfileUpdate: buildLawyerLeadProfileUpdate,
 };

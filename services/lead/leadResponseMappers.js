@@ -47,6 +47,11 @@ function buildSpecificFacts(profileView, leadMatch) {
   if (q?.mortgage_timeline) facts.push(`Mortgage timeline: ${q.mortgage_timeline}`);
   if (q?.pre_approval_status) facts.push(`Financing: ${q.pre_approval_status}`);
   if (q?.transaction_stage) facts.push(`Transaction stage: ${q.transaction_stage}`);
+  if (q?.investment_type) facts.push(`Investment type: ${q.investment_type}`);
+  if (q?.investment_goal) facts.push(`Investment goal: ${q.investment_goal}`);
+  if (q?.owns_investments) facts.push(`Owns other investments: ${q.owns_investments}`);
+  if (q?.down_payment_readiness) facts.push(`Down payment / capital: ${q.down_payment_readiness}`);
+  if (q?.via_company) facts.push(`Purchasing entity: ${q.via_company}`);
   return facts;
 }
 
@@ -161,6 +166,10 @@ function emptyAgentQualification() {
     living_situation: null,
     urgency_readiness: null,
     buy_property_location: null,
+    investment_type: null,
+    investment_goal: null,
+    owns_investments: null,
+    down_payment_readiness: null,
   };
 }
 
@@ -281,6 +290,9 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     leadProfile: opts.leadProfile || null,
     leadMatch,
   });
+  const profileStats = opts.leadProfile?.stats && typeof opts.leadProfile.stats === 'object'
+    ? opts.leadProfile.stats
+    : null;
   const core = {
     id: String(leadMatch._id),
     professional_type: null,
@@ -291,6 +303,12 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     contact: profileView.contact,
     property: profileView.property,
     qualification: profileView.qualification,
+    ...(profileStats
+      ? {
+          stats: profileStats,
+          total_matches: Number(profileStats.total_matches || 0),
+        }
+      : { total_matches: 0 }),
     appointment_status: resolveAppointmentStatus(
       leadMatch.match_status,
       convo?.calendly_booking_status,

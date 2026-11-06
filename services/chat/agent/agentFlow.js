@@ -12,6 +12,7 @@ import {
 import { buildAgentSystemPrompt } from '../prompts/index.js';
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 import logger from '../../../utils/logger.js';
+import { readQualificationAlias, readQualificationAliasFrom } from '../../professionalAssistant/qualificationFieldAliases.js';
 
 export const agentFlow = {
   flowRole: PROFESSIONAL_TYPE.AGENT,
@@ -36,8 +37,7 @@ export const agentFlow = {
       investment_type: storedForm.investment_type || null,
       investment_goal: storedForm.investment_goal || null,
       owns_investments: storedForm.owns_investments || null,
-      down_payment_readiness:
-        storedForm.down_payment_readiness || storedForm.down_payment || null,
+      down_payment_readiness: readQualificationAlias(storedForm, 'down_payment') || null,
     };
   },
 
@@ -202,8 +202,7 @@ export const agentFlow = {
       investment_type: ai.investment_type || derivedQual.investment_type || fc.investment_type,
       investment_goal: ai.investment_goal || derivedQual.investment_goal || fc.investment_goal,
       owns_investments: ai.owns_investments || fc.owns_investments,
-      down_payment_readiness:
-        ai.down_payment_readiness || fc.down_payment_readiness || fc.down_payment,
+      down_payment_readiness: readQualificationAliasFrom('down_payment', ai, fc),
     };
   },
 };

@@ -3,6 +3,7 @@ import { getMortgageBrokerActionFlow } from '../config/mortgageBrokerActionFlow.
 import { getLawyerActionFlow } from '../config/lawyerActionFlow.js';
 import { questionLabel } from '../../professionalAssistant/assistantSettings.js';
 import { chatAnswersByQuestion, intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
+import { qualificationAliasKeys } from '../../professionalAssistant/qualificationFieldAliases.js';
 
 const DETAIL_KEYS = {
   location: ['property_address', 'location', 'buy_property_location', 'address'],
@@ -17,7 +18,7 @@ const DETAIL_KEYS = {
   legal_service: ['legal_services_needed'],
   transaction_type: ['transaction_stage', 'transaction_type'],
   amount: ['financing_amount', 'loan_amount'],
-  down_payment: ['down_payment_readiness'],
+  down_payment: qualificationAliasKeys('down_payment'),
   household_income: ['household_income'],
 };
 

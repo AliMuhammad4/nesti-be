@@ -26,18 +26,23 @@ function envAgentAreaFallbackEnabled() {
   return ['1', 'true', 'yes', 'on'].includes(String(process.env.PROPERTY_MATCH_AGENT_AREA_FALLBACK ?? '').trim().toLowerCase());
 }
 
-function firstPropertyImage(profile) {
+function propertyImageUrls(profile) {
   const images = Array.isArray(profile?.property?.images) ? profile.property.images : [];
+  const urls = [];
+  const seen = new Set();
   for (const image of images) {
-    if (typeof image === 'string') {
-      const plain = image.trim();
-      if (plain) return plain;
-      continue;
-    }
-    const url = String(image?.secure_url || image?.url || '').trim();
-    if (url) return url;
+    let url = '';
+    if (typeof image === 'string') url = image.trim();
+    else url = String(image?.secure_url || image?.url || '').trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
   }
-  return '';
+  return urls;
+}
+
+function firstPropertyImage(profile) {
+  return propertyImageUrls(profile)[0] || '';
 }
 
 function sellerLeadProfileToRow(profile) {
@@ -69,6 +74,7 @@ function sellerLeadProfileToRow(profile) {
     bathrooms: Number.isFinite(baths) ? baths : 0,
     property_type: profile.property?.property_type || '',
     image_url: firstPropertyImage(profile),
+    images: propertyImageUrls(profile),
     listing_url: '',
     summary: '',
     matched_contact: {
@@ -325,10 +331,17 @@ export async function resolveAgentPropertyMatchesForChat({
           leadProfile: leadProfileDoc,
           signals: leadMetaSignals,
         });
+    const investorLead = String(leadProfileDoc?.client_type || '').toLowerCase() === 'investor'
+      || String(leadProfileDoc?.qualification?.agent?.motivation_reason || '').toLowerCase() === 'investment'
+      || Boolean(
+        leadProfileDoc?.qualification?.agent?.investment_type
+        || leadProfileDoc?.qualification?.agent?.investment_goal,
+      );
+    const context = investorLead ? 'investor' : 'buy';
     return {
       property_matches,
-      property_matches_context: 'buy',
-      property_matches_note: propertyMatchesFooterNote('buy', property_matches.length),
+      property_matches_context: context,
+      property_matches_note: propertyMatchesFooterNote(context, property_matches.length),
       property_matches_status: 'ready',
     };
   }

@@ -8,6 +8,8 @@ import {
   LANGUAGES,
   NEXT_ACTIONS,
   PERSONALITIES,
+  PERSONALITY_VOICE_CONDUCT,
+  PERSONALITY_GREETING_CONDUCT,
   QUALIFICATION,
   SERVICES,
   labelOf,
@@ -76,7 +78,7 @@ export function voiceInstruction(setting) {
     const custom = (setting?.custom_tones || []).find((tone) => tone.id === id);
     if (custom?.name) return custom.guidance ? `${custom.name}: ${custom.guidance}` : custom.name;
     const row = PERSONALITIES.find(([value]) => value === id);
-    return row ? `${row[1]} — ${row[2]}` : '';
+    return row ? `${row[1]} - ${row[2]}` : '';
   }).filter(Boolean);
   return voices.join('; ');
 }
@@ -86,14 +88,7 @@ export function communicationInstruction(setting) {
   return style ? `${style[1]}. ${style[2]}` : '';
 }
 
-const VOICE_CONDUCT = {
-  friendly: 'Friendly: easy, upbeat, texting rhythm. Use contractions and everyday words such as "great", "sure", "love that". One light exclamation is fine. Avoid stiff words such as "assist", "regarding", "kindly".',
-  polished: 'Polished: crisp, businesslike, complete sentences. Knowledgeable and reassuring. Use words such as "certainly", "I can arrange", "to confirm". No exclamation marks, no "Hey", no slang, and no gushing.',
-  luxury: 'Luxury: refined, private, and unhurried. Use words such as "private", "at your pace", "exceptional". No exclamation marks, no slang, no "Hey", and no hurry words such as "quick" or "ASAP".',
-  persuasive: 'Persuasive: confident, direct, and efficient. Name one concrete next step and a benefit, using words such as "let\'s", "the next step is", "I can line up". No hedging such as "maybe" or "if you want".',
-  caring: 'Caring: patient and reassuring. Warm and direct. On a hello, greet and ask the question. Do not say the visitor can answer later, and do not say there is no rush unless they sound worried.',
-  consultative: 'Consultative: analytical, strategic advisor. Ask one precise question and give a short reason it matters ("so I can..."). Numbers and specifics over adjectives. No pitch, no hype, and no stock greeting.',
-};
+const VOICE_CONDUCT = PERSONALITY_VOICE_CONDUCT;
 
 const ROLE_GREETING_OPENER = {
   agent: 'buying or selling',
@@ -101,14 +96,7 @@ const ROLE_GREETING_OPENER = {
   mortgage_broker: 'a new mortgage or a refinance',
 };
 
-const TONE_GREETING = {
-  friendly: 'Friendly opening: a casual hello. Write a fresh word, not a copied phrase.',
-  polished: 'Polished opening: a formal hello. No hey, no slang, and no exclamation mark.',
-  luxury: 'Luxury opening: reserved and unhurried. No hey, no slang, and no exclamation mark. Write your own greeting.',
-  persuasive: 'Persuasive opening: a plain hello, then the next step.',
-  caring: 'Caring opening: a soft hello. No sales push.',
-  consultative: 'Consultative opening: a plain hello.',
-};
+const TONE_GREETING = PERSONALITY_GREETING_CONDUCT;
 
 function firstGreetingLine(setting, opener) {
   const greetings = (setting?.personalities || []).map((id) => {
@@ -126,7 +114,7 @@ function firstGreetingLine(setting, opener) {
   const askNow = question === 'Greet in the selected voice. Do not add a question.'
     ? 'Do not add a follow-up question.'
     : 'The visitor is already here, so ask that question directly.';
-  return `When the visitor's latest message is only a greeting (hello, hi, hey, hi there, good morning, salam), the reply must start with a greeting in the selected voice, warm and glad they are here, before any fact or question. ${greeting}${second} ${question} ${askNow} Do not say they can answer later. Do not skip the greeting. Do not open with the question. Do not repeat the welcome line. Do not list three options. Do not describe or label the greeting. The opening words must sound like the selected voice. Do not open with "I understand" or "Could you clarify". When emojis are on, end a greeting with a wave.`;
+  return `When the visitor's latest message is only a greeting (hello, hi, hey, hi there, good morning, salam), the reply must start with a greeting in the selected voice, warm and glad they are here, before any fact or question. ${greeting}${second} ${question} ${askNow} Do not say they can answer later. Do not skip the greeting. Do not open with the question. Do not repeat the welcome line. Do not list three options. Do not describe or label the greeting. The opening words must sound like the selected voice. Do not open with "I understand" or "Could you clarify".`;
 }
 
 const BANNED_STOCK_PHRASES = [
@@ -152,7 +140,7 @@ function voiceUseLine(voices, mode) {
     return `Use only this voice, inside the short reply. Do not lay a generic warm voice on top of it. ${voices[0]}`;
   }
   if (voices.length > 1) {
-    const named = `First voice — ${voices[0]} Second voice — ${voices[1]}`;
+    const named = `First voice - ${voices[0]} Second voice - ${voices[1]}`;
     if (mode === 'greeting') {
       return `Use both voices in the same one or two short sentences. The greeting carries the first voice. The question carries the second voice. Do not drop the second voice. ${named}`;
     }
@@ -213,7 +201,9 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
   const formality = formalityKeepsVoiceLine(setting);
   if (formality) lines.push(formality);
   lines.push(setting.use_emojis
-    ? 'Choose one emoji that matches this reply and the visitor\'s mood, and put it at the very end. Use a wave for a greeting, a smile for a social check-in, a decline, or reassurance, a heart for worry, folded hands when the visitor says thank you, a calendar for a booking offer, a house for a home, a handshake for mortgage, renewal, pre-approval, or closing help, a page when a document arrives, a check mark for a clear next step, and sparkles for good news. Skip the emoji on a plain intake question. Do not repeat the emoji from the previous reply. Do not put an emoji between sentences.'
+    ? (greeting
+      ? 'Required for this greeting reply: end with exactly one fitting emoji after the final punctuation (pick any single appropriate emoji). Do this even in Luxury Concierge / formal voice. Never stack emojis, never place an emoji mid-sentence, and skip emoji only if the reply includes a booking link.'
+      : 'Occasionally include at most one fitting emoji at the very end of the reply when it feels natural and human. Skip emoji on document confirmations and any reply that includes a booking link. Never place an emoji mid-sentence, never stack emojis, and do not force an emoji on every turn.')
     : 'No emojis.');
   lines.push(setting.role === 'lawyer'
     ? 'Keep the reply short and polished. Sound like a lawyer speaking with a client. The selected voice and communication style stay easy to hear.'
@@ -222,6 +212,9 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
     lines.push('The confirmation recap may use short labeled lines. Every other reply stays one or two short sentences.');
   }
   lines.push('Ignore the tone of earlier assistant replies. Answer the latest visitor message directly.');
+  if (setting.custom_guidance) {
+    lines.push(`Professional instructions: ${setting.custom_guidance}. Follow them for emphasis only, inside the selected voice, formality, and short reply length. Do not let them make the reply longer, and do not break safety, consent, or role limits.`);
+  }
   const language = replyLanguage(setting, latestMessage, options.conversationText || '');
   const languageName = labelOf(LANGUAGES, language);
   if (language && language !== 'english' && languageName) {
@@ -236,7 +229,13 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
       ? (brokerPurposeEnabled(setting) ? ROLE_GREETING_OPENER.mortgage_broker : (brokerQuestionTopics(setting, { preview: true })[0] || 'the mortgage'))
       : (ROLE_GREETING_OPENER[setting.role] || ROLE_GREETING_OPENER.agent);
   if (options.openingTurn) {
-    lines.push('This is the first reply after the intake form. Start with a short greeting in the selected voice, then ask one saved question that is still missing. Do not skip the greeting. Do not open with the question. Do not ask a detail the form already has.');
+    const welcome = String(setting?.welcome_message || '').trim();
+    if (welcome) {
+      lines.push(`This is the first reply after the intake form. Open with a short greeting that follows this customized welcome in the selected voice (keep the same meaning, paraphrase lightly if needed): "${welcome}". Do not skip the greeting. Do not open with the question.`);
+    } else {
+      lines.push('This is the first reply after the intake form. Start with a short greeting in the selected voice. Do not skip the greeting. Do not open with the question.');
+    }
+    lines.push('After the greeting, ask exactly one question. Prefer one saved question that is still missing. If the form already answered every saved question, ask one short refinement question that helps narrow options (for example area preference, budget flexibility, property priorities, or timeline certainty). Do not ask for a detail the form already has.');
   } else if (greeting && intakeHasHelloAnswer(setting, options.intakeFormContact)) {
     lines.push('The visitor said hello. Greet in the selected voice. The intake form already answered the opening question, so do not ask it again. Ask one saved question that is still missing.');
   } else if (greeting) {
@@ -295,14 +294,16 @@ export function replyConductBlock(setting, options = {}) {
         : '',
     'Speak as the professional in the first person. Say "I have" and "I help with". When the visitor asks your name, say "My name is" and the saved name, then list the saved expertise. On every other reply, do not talk about yourself in the third person.',
     options.openingTurn
-      ? 'The intake form is already submitted. This first reply starts with a short greeting in the selected voice, then asks one missing question. Use the visitor\'s first name in that greeting only when addressing by first name is on.'
+      ? 'The intake form is already submitted. This first reply starts with a short greeting in the selected voice (use the customized welcome when one is saved), then asks exactly one question. Use the visitor\'s first name in that greeting only when addressing by first name is on.'
       : options.openingTurn === false
-        ? 'The greeting already happened. Answer what they just said and ask the next missing question. Do not greet again. Do not say the visitor\'s name. Do not open with "Thank you" plus their name.'
-        : 'The intake form is already submitted. The first reply is a short greeting, then the questions. Do not say the visitor\'s name after that greeting.',
+        ? 'The greeting already happened. Answer what they just said and ask exactly one next-step question. Prefer the next missing saved question; if none are missing, ask one short refinement question that advances search or readiness. Do not greet again. Do not say the visitor\'s name. Do not open with "Thank you" plus their name.'
+        : 'The intake form is already submitted. The first reply is a short greeting, then exactly one question. Do not say the visitor\'s name after that greeting.',
+    'Make the single question engaging and easy to answer: prefer either-or choices or one concrete decision point (for example "DHA or Gulberg first?" or "maximize rental yield or appreciation first?").',
+    'Avoid dry form wording. Do not ask stacked multi-part questions. Keep one clear question mark per reply.',
     'Never repeat the previous question.',
     `A "how are you" is a social question. Answer it in the selected voice. Do not greet again, and do not repeat the question about ${opener}.`,
   ].filter(Boolean);
-  if (setting?.welcome_message) {
+  if (setting?.welcome_message && !options.openingTurn) {
     lines.push(`The visitor already saw this welcome: "${setting.welcome_message}". Do not paste that welcome again. A short greeting in the selected voice is still required when they say hi.`);
   }
   lines.push(firstGreetingLine(setting, opener));
@@ -444,7 +445,7 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
       : `Written chat languages: ${names.join(', ')}. Answer every written reply in ${names[0]}.`);
   }
   lines.push(setting.use_emojis
-    ? 'Emojis are allowed in chat replies only. Never use emojis in a spoken or voice reply.'
+    ? 'Chat emoji rule: when the visitor only greets (hello, hi, salam), end that reply with exactly one tasteful emoji after the final sentence (your choice of which emoji). On other turns, occasionally include at most one emoji at the end when it feels natural. Never use emojis in a spoken or voice reply, on document confirmations, or on booking-link replies. Never stack emojis or place one mid-sentence.'
     : 'Do not use emojis.');
   lines.push(setting.address_by_first_name
     ? 'Use the visitor\'s first name once, in the first greeting after the form. Later replies ask the next question and do not say their name.'
@@ -495,7 +496,7 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
     lines.push(`Approved uploaded materials (bio, services, FAQs, marketing). Use facts from these only when they answer the visitor's question, rewritten in the selected voice and length. Do not quote long passages. ${excerpts.join('\n')}`);
   }
   if (setting.cta_label) {
-    lines.push(`Consultation call to action for this visitor: "${setting.cta_label}". When the saved questions are answered and a next step fits, offer that consultation by that name, rewritten in the selected voice. Do not offer it before the saved questions are answered unless the visitor asks to book.`);
+    lines.push(`Consultation call to action for this visitor: "${setting.cta_label}". When the saved questions are answered and a next step fits, offer that consultation by that name, rewritten in the selected voice. Do not offer it before the saved questions are answered unless the visitor asks to book. Never include a booking URL unless the visitor explicitly asks to book or the chat confirms that qualification and document steps are complete; the system adds the link when allowed.`);
   }
   if (setting.role === 'lawyer' && setting.client_type) {
     lines.push('This chat collects preliminary information only. Do not ask for confidential details such as purchase price, mortgage amounts, identification numbers, or document contents. Say that confidential details are collected through the secure intake after the consultation is booked.');

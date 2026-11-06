@@ -121,12 +121,12 @@ export function buildMortgageLeadProfileUpdate(parsedAiDetails, derivedQual, for
     credit_score_range: p.credit_score_range || d.credit_score_range || f.credit_score_range,
     employment_status: p.employment_status || d.employment_status || f.employment_status,
     household_income: p.household_income || d.household_income || f.household_income,
-    down_payment_readiness: p.down_payment_readiness || d.down_payment_readiness || f.down_payment_readiness,
+    mortgage_down_payment_readiness: p.down_payment_readiness || d.down_payment_readiness || f.down_payment_readiness,
     purchase_purpose: p.purchase_purpose || d.purchase_purpose || f.purchase_purpose,
     urgency_signal: p.urgency_signal || d.urgency_signal || f.urgency_signal,
     budget: p.budget || d.budget || f.budget,
     mortgage_property_budget: p.property_budget || d.property_budget || f.property_budget,
     mortgage_investment_type: p.investment_type || d.investment_type || f.investment_type,
-    owns_investments: p.owns_investments || d.owns_investments || f.owns_investments,
+    mortgage_owns_investments: p.owns_investments || d.owns_investments || f.owns_investments,
   };
 }

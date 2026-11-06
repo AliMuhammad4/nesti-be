@@ -12,6 +12,7 @@ import {
   documentRequestIds,
   leadDocumentLinkFilter,
   nextDocumentRequest,
+  followUpSkipIds,
   requestDocumentForReply,
   sniffChatFile,
 } from '../services/chat/documents/chatDocumentService.js';
@@ -157,7 +158,8 @@ test('document requests are sanitized and reach the broker prompt', () => {
     document_requests: ['pay_stubs', 'not-a-document', 'photo_id'],
   }, 'mortgage_broker');
   assert.deepEqual(setting.document_requests, ['pay_stubs', 'photo_id']);
-  const prompt = buildPreviewChatPrompt('mortgage_broker', { full_name: 'Sam Broker' }, { assistantSetting: setting });
+  const prompt = buildPreviewChatPrompt('mortgage_broker', { full_name: 'Sam Broker' }, { assistantSetting: setting   });
+
   assert.match(prompt, /Recent pay stubs/);
   assert.match(prompt, /Photo ID/);
   assert.equal(nextDocumentRequest(setting, []).label, 'Recent pay stubs');
@@ -216,6 +218,19 @@ test('document requests are sanitized and reach the broker prompt', () => {
     userMessage: 'I need help',
     setting,
   }).request, null);
+  const afterQualification = applyDocumentAsk(
+    'I can help with that. What is your preferred closing date?',
+    nextDocumentRequest(setting, []),
+    {
+      userMessage: 'I have a mortgage question',
+      previousReply: 'What kind of mortgage are you considering?',
+      setting,
+      qualificationOpen: false,
+    },
+  );
+  assert.equal(afterQualification.request.id, 'pay_stubs');
+  assert.doesNotMatch(afterQualification.reply, /preferred closing date/i);
+  assert.match(afterQualification.reply, /recent pay stubs/i);
   const bookedEarly = applyDocumentAsk(
     'I recommend booking a consultation to discuss your pre-approval and next steps. Would you like to arrange a convenient time for our discussion?',
     nextDocumentRequest(setting, []),
@@ -372,4 +387,94 @@ test('document requests are sanitized and reach the broker prompt', () => {
   });
   assert.equal(paused.request, null);
   assert.doesNotMatch(paused.reply, /upload/i);
+});
+
+test('document follow-up only skips a requested file after a clear deferral', () => {
+  const setting = { role: 'mortgage_broker', document_requests: ['pay_stubs'] };
+  const context = { intent: 'mortgage', text: 'mortgage renewal' };
+  const ask = { role: 'assistant', content: 'Please upload your recent pay stubs.' };
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: 'Can I send the pay stubs next week?' },
+  ]), []);
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: 'I have a question about my mortgage.' },
+  ]), []);
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: "I don't have the pay stubs right now." },
+  ]), ['pay_stubs']);
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: 'Can we book a meeting?' },
+  ]), ['pay_stubs']);
+});
+
+test('reviews every attachment in a multi-file turn against the outstanding request', () => {
+  const agent = sanitizeAssistant({
+    applied: true,
+    role: 'agent',
+    document_requests: ['preapproval_letter', 'proof_of_funds', 'photo_id', 'home_photos', 'listing_sheet'],
+  }, 'agent');
+  const investorCtx = {
+    priorDocuments: [],
+    clientType: 'investor',
+    intent: 'buy',
+    text: 'investor buy',
+    previousReply: 'Please upload your proof of funds.',
+  };
+  const receipt = {
+    _id: 'receipt',
+    status: 'ready',
+    text_ready: true,
+    kind: 'pdf',
+    original_filename: 'Receipt-2389-2765.pdf',
+    summary: 'A payment receipt for an online subscription.',
+    extracted_text: 'Receipt total $20. Cursor Pro Plus.',
+    document_type: 'receipt',
+  };
+  const proof = {
+    _id: 'proof',
+    status: 'ready',
+    text_ready: true,
+    kind: 'pdf',
+    original_filename: 'Proof.pdf',
+    summary: 'Bank statement showing proof of funds available for a down payment.',
+    extracted_text: 'Proof of funds. Available balance supports the purchase.',
+    document_type: 'bank statement',
+  };
+  // Last file alone would miss the match if it were only the receipt; both must be reviewed.
+  const onlyLastWouldMiss = documentReviewReply([proof, receipt], agent, investorCtx);
+  assert.match(onlyLastWouldMiss, /proof of funds/i);
+  assert.doesNotMatch(onlyLastWouldMiss, /different file/i);
+  assert.doesNotMatch(onlyLastWouldMiss, /listing or MLS sheet/i);
+  const bothWrong = documentReviewReply([
+    {
+      _id: 'img1',
+      status: 'ready',
+      text_ready: true,
+      kind: 'image',
+      original_filename: '1765527631275-14.jpg',
+      summary: 'A person wearing a light blue blazer sitting outdoors.',
+      extracted_text: 'Person seated outdoors.',
+      document_type: 'photo',
+    },
+    {
+      _id: 'img2',
+      status: 'ready',
+      text_ready: true,
+      kind: 'image',
+      original_filename: '2.JPG',
+      summary: 'A person in a black jacket standing near a gate.',
+      extracted_text: 'Person standing near a gate.',
+      document_type: 'photo',
+    },
+  ], agent, investorCtx);
+  assert.match(bothWrong, /different file/i);
+  assert.doesNotMatch(bothWrong, /listing or MLS sheet/i);
+  // Without clientType, seller mis-detect must not drive the next ask when clientType is set.
+  const withType = documentReviewReply([receipt], agent, investorCtx);
+  assert.match(withType, /different file/i);
+  assert.doesNotMatch(withType, /listing or MLS sheet/i);
 });

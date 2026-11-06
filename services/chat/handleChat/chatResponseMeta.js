@@ -15,6 +15,7 @@ export async function buildChatResponseMeta({
   deferCalendlyLink,
   calendlyLinkForVisitor,
   isAutomatedBookingEnabled,
+  assistantSetting = null,
   finalScore,
   finalGrade,
   aiIntent,
@@ -47,6 +48,11 @@ export async function buildChatResponseMeta({
       : null;
 
   const visitorFacingIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent;
+  const scheduleActions = assistantSetting?.next_actions;
+  const scheduleAllowed = !assistantSetting?.applied
+    || !Array.isArray(scheduleActions)
+    || !scheduleActions.length
+    || scheduleActions.includes('schedule');
 
   return {
     intent: visitorFacingIntent,
@@ -65,6 +71,7 @@ export async function buildChatResponseMeta({
     calendly_link: deferCalendlyLink ? null : calendlyLinkForVisitor || null,
     conversation_id: conversation._id ? String(conversation._id) : null,
     automated_booking_enabled: isAutomatedBookingEnabled,
+    schedule_allowed: Boolean(isAutomatedBookingEnabled && scheduleAllowed),
     calendly_booking_status: calendlyBookingSnap?.calendly_booking_status ?? null,
     calendly_booking_at: calendlyBookingSnap?.calendly_booking_at ?? null,
     post_booking_checklist:

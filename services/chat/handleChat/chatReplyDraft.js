@@ -4,6 +4,7 @@ import {
   briefDocumentAnswer,
   documentReadReply,
   documentReviewReply,
+  intakeHasPropertyImages,
 } from '../documents/chatDocumentService.js';
 import {
   finishAgentReply,
@@ -56,7 +57,10 @@ export async function draftProfessionalChatReply(state) {
       userMessage: trimmedMessage,
       conversationText,
       intent,
-      text: `${storedForm?.intent || ''} ${conversationText || ''} ${trimmedMessage}`,
+      text: `${storedForm?.intent || ''} ${storedForm?.mortgage_status || ''} ${conversationText || ''} ${trimmedMessage}`,
+      clientType: storedForm?.client_type || appliedAssistantSetting?.client_type || '',
+      mortgageStatus: storedForm?.mortgage_status || '',
+      propertyImages: intakeHasPropertyImages(storedForm),
       history,
       previousReply: lastAssistantReply,
     })
@@ -92,7 +96,7 @@ export async function draftProfessionalChatReply(state) {
       flow_role: flow?.flowRole || 'agent',
     });
   } else if (reviewReply) {
-    aiReply = reviewReply;
+    aiReply = shapeDocumentReply(reviewReply);
     logger.info('Chat service: document reviewed against the request', {
       op: 'chat.message',
       session_id: sessionId,
@@ -137,7 +141,7 @@ export async function draftProfessionalChatReply(state) {
             ? 280
             : (flow?.flowRole === 'lawyer' || flow?.flowRole === 'mortgage_broker'
               ? (['educational', 'consultative'].includes(appliedAssistantSetting?.communication_style) ? 280 : 180)
-              : 120))
+              : 200))
           : 600,
         onDelta: typeof onReplyDelta === 'function' && previewForOwner
           ? (text) => onReplyDelta(String(text || '').trim())

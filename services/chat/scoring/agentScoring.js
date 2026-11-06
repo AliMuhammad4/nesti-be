@@ -24,6 +24,7 @@ import {
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
+import { readQualificationAlias, storedFieldForQuestionId, questionIdForStoredField } from '../../professionalAssistant/qualificationFieldAliases.js';
 
 export const bestGrade = (a, b) =>
   (GRADE_ORDER[a] || 0) >= (GRADE_ORDER[b] || 0) ? a : b;
@@ -111,7 +112,10 @@ export const mergeQualificationForScoring = (formQualification = {}, aiDetails =
     investment_type: investmentType || null,
     investment_goal: investmentGoal || null,
     owns_investments: pick('owns_investments'),
-    down_payment_readiness: pick('down_payment_readiness') || pick('down_payment'),
+    down_payment_readiness: readQualificationAlias({
+      down_payment_readiness: pick('down_payment_readiness'),
+      down_payment: pick('down_payment'),
+    }, 'down_payment'),
   };
 };
 
@@ -201,7 +205,7 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
       investorScore += 1;
       reasons.push('Portfolio: first investment property');
     }
-    const dp = String(fq.down_payment_readiness || fq.down_payment || '').toLowerCase();
+    const dp = String(readQualificationAlias(fq, 'down_payment') || '').toLowerCase();
     if (/(ready_now|ready now|funds_ready|proof_of_funds|available)/.test(dp)) {
       investorScore += 2;
       reasons.push('Capital: down payment / funds ready');
@@ -538,9 +542,8 @@ export const createLeadRecords = async ({
           investment_goal: investmentGoal,
           owns_investments: formContact?.owns_investments || aiDetails?.owns_investments || '',
           down_payment_readiness:
-            formContact?.down_payment_readiness
-            || formContact?.down_payment
-            || aiDetails?.down_payment_readiness
+            readQualificationAlias(formContact, 'down_payment')
+            || readQualificationAlias(aiDetails, 'down_payment')
             || '',
         },
       },
@@ -553,10 +556,10 @@ export const createLeadRecords = async ({
               ...(formContact?.owns_investments
                 ? { owns_investments: formContact.owns_investments }
                 : {}),
-              ...(formContact?.down_payment_readiness || formContact?.down_payment
+              ...(readQualificationAlias(formContact, 'down_payment')
                 ? {
-                    down_payment:
-                      formContact.down_payment_readiness || formContact.down_payment,
+                    [questionIdForStoredField('down_payment_readiness')]:
+                      readQualificationAlias(formContact, 'down_payment'),
                   }
                 : {}),
             },
@@ -606,10 +609,10 @@ export const createLeadRecords = async ({
       ...(formContact?.owns_investments
         ? { owns_investments: formContact.owns_investments }
         : {}),
-      ...(formContact?.down_payment_readiness || formContact?.down_payment
+      ...(readQualificationAlias(formContact, 'down_payment')
         ? {
-            down_payment_readiness:
-              formContact.down_payment_readiness || formContact.down_payment,
+            [storedFieldForQuestionId('down_payment')]:
+              readQualificationAlias(formContact, 'down_payment'),
           }
         : {}),
     },

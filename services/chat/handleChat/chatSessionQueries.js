@@ -60,6 +60,12 @@ export const getChatSessionMessagesService = async ({ id: sessionId, embedToken 
     intent: m.intent || null,
     created_at: m.createdAt,
     attachments: await signStoredAttachments(m.meta?.attachments),
+    ...(m.meta?.selected_property && typeof m.meta.selected_property === 'object'
+      ? { selected_property: m.meta.selected_property }
+      : {}),
+    ...(typeof m.meta?.selected_property_context === 'string' && m.meta.selected_property_context.trim()
+      ? { selected_property_context: m.meta.selected_property_context.trim() }
+      : {}),
   })));
 
   return {
@@ -165,13 +171,21 @@ export const selectChatPropertyMatchService = async ({ id: sessionId, embedToken
     return { status: 400, body: { success: false, message: 'Selected property is empty' } };
   }
 
-  const leadMatch = await LeadMatch.findOne({
+  // Buyer + investor chat leads both store inquired property from "I'm interested".
+  let leadMatch = await LeadMatch.findOne({
     conversation_id: conversation._id,
     user_id: embed.user_id,
-    lead_type: /_(buyer|client)$/,
+    lead_type: /_(buyer|client|investor)$/,
   }).sort({ updatedAt: -1, createdAt: -1 });
   if (!leadMatch) {
-    return { status: 404, body: { success: false, message: 'Buyer lead not found for this chat session' } };
+    // Fallback: any lead on this conversation (covers race before lead_type is finalized).
+    leadMatch = await LeadMatch.findOne({
+      conversation_id: conversation._id,
+      user_id: embed.user_id,
+    }).sort({ updatedAt: -1, createdAt: -1 });
+  }
+  if (!leadMatch) {
+    return { status: 404, body: { success: false, message: 'Lead not found for this chat session' } };
   }
 
   const linkedSellerLeadMatchId = await resolveLinkedSellerLeadMatchId({

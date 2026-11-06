@@ -154,6 +154,7 @@ export const mapMatchResults = (picked, maxDisplayScore, source = 'seller_lead')
       bathrooms: row.bathrooms,
       property_type: row.property_type,
       image_url: row.image_url || '',
+      images: Array.isArray(row.images) ? row.images.filter(Boolean) : (row.image_url ? [row.image_url] : []),
       listing_url: row.listing_url || '',
       summary: row.summary || '',
       match_score: Math.min(maxDisplayScore, Math.round(score)),

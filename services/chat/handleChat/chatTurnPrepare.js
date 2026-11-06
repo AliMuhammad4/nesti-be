@@ -185,6 +185,12 @@ export async function prepareProfessionalChatTurn(input) {
       session: sessionId,
       contact: currentContact,
       attachments: turnAttachments,
+      ...(formPatch?.selected_property && typeof formPatch.selected_property === 'object'
+        ? { selected_property: formPatch.selected_property }
+        : {}),
+      ...(typeof formPatch?.selected_property_context === 'string' && formPatch.selected_property_context.trim()
+        ? { selected_property_context: formPatch.selected_property_context.trim() }
+        : {}),
     },
   });
 
@@ -282,6 +288,7 @@ export async function prepareProfessionalChatTurn(input) {
     calendlyLinkForVisitor,
     propertyMatchesEnabled,
   });
+  systemPromptOptions.contactKnown = hasContact;
   const visitorClientType = landingMode ? '' : (previewPersona || clientTypeForForm(storedForm));
   const typedAssistant = !landingMode && appliedAssistantLoaded
     ? settingForClientType(appliedAssistantLoaded, visitorClientType)

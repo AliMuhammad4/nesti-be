@@ -162,13 +162,25 @@ export function buildCollectionEmptyState(kind, context = {}) {
     };
   }
   if (kind === 'property_matches') {
-    const side = context.intent === 'sell' ? 'buyer pipeline leads' : 'seller listings';
+    const clientType = String(context.client_type || context.clientType || '').trim().toLowerCase();
+    const isInvestor = clientType === 'investor'
+      || context.intent === 'investor'
+      || Boolean(context.investment_type || context.investment_goal);
+    if (context.intent === 'sell') {
+      return {
+        reason: 'No buyer pipeline leads currently match this lead profile.',
+        action: 'Update listing details and run matching again.',
+      };
+    }
+    if (isInvestor) {
+      return {
+        reason: 'No investment options currently match this lead profile.',
+        action: 'Adjust markets, budget, property type, or investment criteria and retry to surface more options.',
+      };
+    }
     return {
-      reason: `No ${side} currently match this lead profile.`,
-      action:
-        context.intent === 'sell'
-          ? 'Update listing details and run matching again.'
-          : 'Adjust budget/location/features and retry to surface more listings.',
+      reason: 'No seller listings currently match this lead profile.',
+      action: 'Adjust budget/location/features and retry to surface more listings.',
     };
   }
   return null;

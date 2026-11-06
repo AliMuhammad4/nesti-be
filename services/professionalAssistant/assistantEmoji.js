@@ -1,4 +1,3 @@
-import { GREETING_START, isClosingRefusal, isGreetingOnly, isSocialCheck } from './visitorMessage.js';
 import { withWarmGreeting } from './replyStyle.js';
 
 function stripEmojis(reply) {
@@ -6,70 +5,35 @@ function stripEmojis(reply) {
     .replace(/\p{Extended_Pictographic}/gu, '')
     .replace(/[\uFE0E\uFE0F\u200D]/g, '')
     .replace(/\s{2,}/g, ' ')
-    .replace(/\s+([.!?？])/g, '$1')
+    .replace(/\s+([.!?…])/g, '$1')
     .trim();
 }
 
-
-const ALLOWED_EMOJI = ['👋', '🙂', '💛', '🙏', '📅', '🏡', '🤝', '📄', '✅', '✨'];
-const EMOJI_ALIASES = { '🏠': '🏡', '😊': '🙂', '😁': '🙂', '😃': '🙂', '😄': '🙂', '✋': '👋', '👍': '✅', '🤗': '🤝' };
-
-function firstAllowedEmoji(reply) {
-  const matches = String(reply || '').match(/\p{Extended_Pictographic}/gu) || [];
-  for (const emoji of matches) {
-    if (ALLOWED_EMOJI.includes(emoji)) return emoji;
-    if (EMOJI_ALIASES[emoji]) return EMOJI_ALIASES[emoji];
-  }
-  return '';
+/** Calendly markdown/URL already renders as a booking card — keep those replies emoji-free. */
+function replyHasBookingSurface(reply) {
+  const raw = String(reply || '');
+  return /\[([^\]]+)\]\(https?:\/\/(?:[\w-]+\.)?calendly\.com\/[^)\s]+\)/i.test(raw)
+    || /https?:\/\/(?:[\w-]+\.)?calendly\.com\//i.test(raw);
 }
 
-function fallbackEmoji(text, userMessage = '', documentReceived = false) {
-  const visitor = String(userMessage || '');
-  const reply = String(text || '');
-  if (isSocialCheck(visitor)) return '🙂';
-  if (isGreetingOnly(visitor) || GREETING_START.test(reply) || /\b(ass?lam|ass?alam|alaikum|alaykum)\b/i.test(`${visitor} ${reply}`)) return '👋';
-  if (isClosingRefusal(visitor) || /\b(not sure|unsure|don't know|dont know|confused)\b/i.test(visitor)) return '🙂';
-  if (/\b(worried|anxious|stressed|nervous|scared|overwhelmed|concerned)\b/i.test(visitor)) return '💛';
-  if (/\b(thank|thanks|appreciate)\b/i.test(visitor)) return '🙏';
-  if (/\b(meet|meting|meeting|appointment|schedule|book)\b/i.test(visitor) || /\b(book|schedule|calendly|available time)\b/i.test(reply)) return '📅';
-  if (/\b(later|not now|do not want to tell|dont want to tell|don't want to tell|rather not)\b/i.test(visitor)) return '';
-  if (/\b(home|house|property|sell|selling|buy|buying)\b/i.test(`${visitor} ${reply}`)) return '🏡';
-  if (documentReceived || /\b(uploaded|attached|attaching|here is my|here's my|sending my|sent my|receipt|invoice|this document|this file|this pdf|this photo|this image)\b/i.test(`${visitor} ${reply}`)) return '📄';
-  const statements = reply.split(/[.!]/).map((part) => part.trim()).filter((part) => part.length > 20);
-  if (!/[?？]/.test(reply) && statements.length >= 2) return '✨';
-  return '';
-}
-
-function placeEmoji(text, emoji) {
-  return `${String(text).trim()} ${emoji}`;
-}
-
-export function withOccasionalEmoji(reply, setting, { previousReply = '', userMessage = '', documentReceived = false } = {}) {
-  const text = stripEmojis(reply);
-  const visitor = String(userMessage || '');
-  if (/calendly\.com/i.test(reply)) return text;
-  if (!setting?.use_emojis) return text;
-  if (isGreetingOnly(visitor)) {
-    const wave = '👋';
-    if (String(previousReply || '').includes(wave)) return text;
-    return placeEmoji(text, wave);
+/**
+ * Emoji policy for finished replies.
+ * When use_emojis is on: keep whatever the model wrote (prompt asks for occasional emoji).
+ * When off: strip all pictographs.
+ * Booking cards and document-review turns stay emoji-free either way.
+ */
+export function withOccasionalEmoji(reply, setting, { documentReceived = false } = {}) {
+  const raw = String(reply || '').trim();
+  if (!raw) return '';
+  if (!setting?.use_emojis || documentReceived || replyHasBookingSurface(raw)) {
+    return stripEmojis(raw);
   }
-  const fromModel = firstAllowedEmoji(reply);
-  const chosen = fromModel || fallbackEmoji(text, userMessage, documentReceived);
-  if (!chosen) return text;
-  if (String(previousReply || '').includes(chosen)) {
-    if (!fromModel && documentReceived) {
-      const alternate = ['✅', '✨', '🤝', '📄'].find((emoji) => emoji !== chosen && !String(previousReply || '').includes(emoji));
-      if (alternate) return placeEmoji(text, alternate);
-    }
-    return text;
-  }
-  return placeEmoji(text, chosen);
+  return raw;
 }
 
 export function finishAgentReply(reply, { userMessage = '', previousReply = '', setting = null, documentReceived = false, conversationText = '' } = {}) {
   const original = String(reply || '').trim();
   if (!setting) return original;
   const text = withWarmGreeting(original, setting, userMessage, conversationText);
-  return withOccasionalEmoji(text, setting, { previousReply, role: 'agent', userMessage, documentReceived });
+  return withOccasionalEmoji(text, setting, { documentReceived });
 }

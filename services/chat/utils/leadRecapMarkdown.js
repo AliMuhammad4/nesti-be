@@ -20,6 +20,14 @@ function humanize(v) {
     no_savings: 'No savings yet',
   };
   if (mortgageTokenMap[key]) return mortgageTokenMap[key];
+  // Money / budget intake slugs (aligned with frontend formatLeadIntakeSlug).
+  if (/^under_\d+(?:\.\d+)?k$/i.test(key)) {
+    return 'Under $' + key.split('_')[1].toUpperCase();
+  }
+  if (/^\d+(?:\.\d+)?m_plus$/i.test(key)) {
+    const n = key.split('_')[0].replace(/m/i, '');
+    return '$' + n + 'M+';
+  }
   return t.replace(/_/g, ' ');
 }
 
@@ -238,7 +246,7 @@ export function buildLeadRecapMarkdownLines({
   add('Name', name);
   if (compact) {
     add(isSell ? 'Property address' : 'Location', location);
-    add(isSell ? 'Expected selling price' : 'Budget', budgetOrPrice);
+    add(isSell ? 'Expected selling price' : 'Budget', humanize(budgetOrPrice) || budgetOrPrice);
     add('Timeline', timeline);
     add('Property type', propertyType);
     return rows;
@@ -246,7 +254,7 @@ export function buildLeadRecapMarkdownLines({
   add('Email', email);
   add('Phone', phone);
   add(isSell ? 'Property address' : 'Location', location);
-  add(isSell ? 'Expected selling price' : 'Budget', budgetOrPrice);
+  add(isSell ? 'Expected selling price' : 'Budget', humanize(budgetOrPrice) || budgetOrPrice);
   add('Property type', propertyType);
   add(isSell ? 'Bedrooms' : 'Bedrooms required', beds);
   add(isSell ? 'Bathrooms' : 'Bathrooms required', baths);

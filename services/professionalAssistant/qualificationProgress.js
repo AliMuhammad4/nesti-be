@@ -1,10 +1,11 @@
 import { questionLabel } from './assistantSettings.js';
+import { readQualificationAlias } from './qualificationFieldAliases.js';
 import { isGreetingOnly } from './visitorMessage.js';
 import { userSignalsBookingIntent } from '../chat/utils/chatBookingReply.js';
 
 const QUESTION_CUES = {
   intent: /\b(buying or selling|buy or sell|looking to buy|looking to sell|exploring)\b/i,
-  location: /\b(where|location|city|area|jurisdiction|located|neighbou?rhood|markets?)\b/i,
+  location: /\b(where|location|city|areas?|jurisdiction|located|neighbou?rhoods?|markets?)\b/i,
   budget: /\b(budget|price range)\b/i,
   timeline: /\b(timeline|how soon|when are you|when do you|when would you|closing date)\b/i,
   property_type: /\b(property type|type of property|kind of home|kind of property|residential or commercial)\b/i,
@@ -23,6 +24,7 @@ const QUESTION_CUES = {
   investment_goal: /\b(rental income|appreciation|cash ?flow)\b/i,
   realtor_status: /\b(working with (a )?(realtor|agent)|have (a )?(realtor|agent)|no (realtor|agent))\b/i,
   owns_investments: /\b(other investment|own other|already own|portfolio)\b/i,
+  preferred_contact_method: /\b(preferred contact|contact method|best time to (contact|reach)|how (should|can) (we|i) (reach|contact)|follow-?ups?)\b/i,
   down_payment: /\b(down ?payment|proof of funds|capital ready|funds ready)\b/i,
   viewing_readiness: /\b(tour|viewing|see properties|see options)\b/i,
   urgency_readiness: /\b(make an offer|ready to (buy|offer|close)|right deal)\b/i,
@@ -39,7 +41,7 @@ const SHARED_FORM_VALUE = {
   investment_goal: (form) => form.investment_goal,
   realtor_status: (form) => form.realtor_status,
   owns_investments: (form) => form.owns_investments,
-  down_payment: (form) => form.down_payment_readiness || form.down_payment,
+  down_payment: (form) => readQualificationAlias(form, 'down_payment'),
   viewing_readiness: (form) => form.viewing_readiness,
   urgency_readiness: (form) => form.urgency_readiness,
   household_income: (form) => form.household_income,
@@ -59,14 +61,18 @@ const FORM_VALUE = {
     preapproval: (form) => form.mortgage_status,
     realtor_status: (form) => form.realtor_status,
     owns_investments: (form) => form.owns_investments,
-    down_payment: (form) => form.down_payment_readiness || form.down_payment,
+    down_payment: (form) => readQualificationAlias(form, 'down_payment'),
     viewing_readiness: (form) => form.viewing_readiness,
     urgency_readiness: (form) => form.urgency_readiness,
-    preferred_contact_method: (form) => (
-      form.preferred_contact_method && form.best_time_to_contact
-        ? `${form.preferred_contact_method}|${form.best_time_to_contact}`
-        : form.preferred_contact_method || ''
-    ),
+        preferred_contact_method: (form) => {
+      if (form.preferred_contact_method && form.best_time_to_contact) {
+        return `${form.preferred_contact_method}|${form.best_time_to_contact}`;
+      }
+      if (form.preferred_contact_method) return form.preferred_contact_method;
+      // Email/phone already collected on intake — do not re-ask preferred contact method.
+      if (String(form.email || '').trim() || String(form.phone || '').trim()) return 'contact_on_file';
+      return '';
+    },
     motivation_reason: (form) => form.motivation_reason,
     living_situation: (form) => form.living_situation,
   },
@@ -100,7 +106,13 @@ export function intakeValueFor(role, id, form) {
 
 function answersQuestion(text) {
   const value = String(text || '').trim();
-  return Boolean(value) && !isGreetingOnly(value);
+  if (!value || isGreetingOnly(value)) return false;
+  const questionText = value
+    .replace(/^(?:yes|yeah|yep|no|okay|ok|sure)[,.! ]+/i, '')
+    .replace(/[?？!！.]+$/g, '')
+    .trim();
+  if (!questionText) return false;
+  return !/^(?:(?:why|what|how|when|where|which|who|can you|could you|would you|do you|does it|is it|are you|are there|please explain|please clarify|i have a question|i have questions|not sure what|what do you mean)\b|(?:i(?:'m| am) (?:confused|not sure|unclear|uncertain)|i do not understand|i don't understand|i dont understand|i(?:'m| am) having trouble understanding|can you explain|could you explain|please explain what|what does .* mean))\b/i.test(questionText);
 }
 
 const CUE_STOP_WORDS = new Set(['what', 'which', 'when', 'where', 'your', 'you', 'are', 'the', 'this', 'that', 'have', 'with', 'for', 'and', 'about', 'there', 'would', 'like', 'into', 'from', 'type', 'kind']);
@@ -244,6 +256,48 @@ export function openQualificationQuestionIds(setting, form, answeredIds = []) {
 export function qualificationStillOpen(setting, form, answeredIds = []) {
   if (!setting?.applied) return false;
   return openQualificationQuestionIds(setting, form, answeredIds).length > 0;
+}
+
+const AGENT_INTAKE_ASK_IDS = [
+  'location',
+  'budget',
+  'timeline',
+  'property_type',
+  'preapproval',
+  'realtor_status',
+  'motivation_reason',
+  'living_situation',
+  'viewing_readiness',
+  'urgency_readiness',
+  'investment_type',
+  'investment_goal',
+  'owns_investments',
+  'down_payment',
+  'preferred_contact_method',
+  'buying_another',
+  'expected_price',
+];
+
+/** Drop model questions that re-ask intake/chat answers already on file. */
+export function stripAnsweredIntakeAsks(reply, role, form, answeredIds = []) {
+  const text = String(reply || '').trim();
+  if (!text || !form || typeof form !== 'object') return text;
+  const answered = new Set(answeredIds);
+  const filledIds = (role === 'agent' ? AGENT_INTAKE_ASK_IDS : Object.keys(FORM_VALUE[role] || {}))
+    .filter((id) => answered.has(id) || filled(intakeValueFor(role, id, form)));
+  if (!filledIds.length) return text;
+
+  const sentences = text.split(/(?<=[.!?？])\s+/).filter(Boolean);
+  const kept = sentences.filter((sentence) => {
+    if (!/[?？]/.test(sentence)) return true;
+    const asked = latestAsked(sentence, filledIds, {});
+    return !asked.length;
+  });
+  if (!kept.length) {
+    const statements = sentences.filter((sentence) => !/[?？]/.test(sentence));
+    return statements.join(' ').replace(/\s+/g, ' ').trim() || text;
+  }
+  return kept.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 export function intakeHasHelloAnswer(setting, form) {

@@ -58,6 +58,20 @@ export function visitorPausesDetails(text) {
   return userSignalsBookingIntent(t) || /\b(later|not now|do not want to tell|dont want to tell|don't want to tell|rather not|in (?:the |our )?meeting|when we meet)\b/.test(t);
 }
 
+export function visitorSkipsDocumentRequest(text, requestedDocument = '') {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (userSignalsBookingIntent(value)) return true;
+  const normalized = value.toLowerCase();
+  const document = /\b(document|file|upload|attachment|proof of funds|pre-?approval|photo id|identification|bank statement|funds)\b/i;
+  const refusal = /\b(skip|later|not now|rather not|not comfortable|don't have|dont have|do not have|can't|cannot|won't|will not|unable|not ready)\b/i;
+  const requestedName = String(requestedDocument || '').toLowerCase().replace(/^(?:recent|current)\s+/, '').trim();
+  if ((document.test(normalized) || (requestedName && normalized.includes(requestedName))) && refusal.test(normalized)) return true;
+  if (/[?？]/.test(value)) return false;
+  return value.split(/\s+/).length <= 8
+    && /\b(later|not now|rather not|skip it|not comfortable|don't have it|dont have it|do not have it|can't provide it|cannot provide it)\b/i.test(normalized);
+}
+
 const PAUSE_COPY = {
   french: { meet: 'Je peux vous rencontrer. Choisissez un moment qui vous convient.', later: 'Nous pourrons voir ces détails quand vous serez prêt.' },
   spanish: { meet: 'Puedo reunirme con usted. Elija un horario que le convenga.', later: 'Podemos ver esos detalles cuando esté listo.' },
@@ -106,11 +120,48 @@ export function appendCalendlyBookingLink(
   return `${body}\n\n[${label}](${url})`;
 }
 
+function withoutUploadAsk(reply) {
+  return String(reply || '')
+    .split(/(?<=[.!?？])\s+/)
+    .filter((sentence) => {
+      if (!sentence) return false;
+      // Drop document/upload asks so booking is not stacked with another upload request.
+      if (/\b(upload|proof of funds|pre-?approval|photo id|document|send the file)\b/i.test(sentence) && /[?？]|please|recommend|can you|could you|when you are ready/i.test(sentence)) {
+        return false;
+      }
+      return true;
+    })
+    .join(' ')
+    .trim();
+}
+
 /** After a document was requested, a reply with no file can end with the consultation link. */
 export function offerConsultationAfterSkippedUpload(reply, calendlyUrl, { allowSchedule = true, label = '' } = {}) {
-  const text = String(reply || '').trim();
+  const cleaned = withoutUploadAsk(reply)
+    .split(/(?<=[.!?？])\s+/)
+    .filter((sentence) => sentence && !/[?？]/.test(sentence))
+    .slice(0, 2)
+    .join(' ')
+    .trim();
+  const text = cleaned || String(reply || '').trim().replace(/[?？]+\s*$/, '');
   const note = /\b(consultation|meeting|appointment|book)\b/i.test(text)
     ? text
-    : `${text} You can send the documents whenever they are ready. We can also pick a time to go through this.`.trim();
+    : allowSchedule
+      ? `${text} You can send the documents whenever they are ready. We can also pick a time to go through this.`.trim()
+      : `${text} You can send the documents whenever they are ready.`.trim();
   return appendCalendlyBookingLink(note, calendlyUrl, { allowSchedule, label, force: true });
+}
+
+/** Remove scheduling links without deleting unrelated URLs from an answer. */
+export function stripBookingLinks(reply, bookingUrl = '') {
+  const knownUrl = String(bookingUrl || '').trim().replace(/[.,!?]+$/g, '');
+  const isBookingUrl = (url) => {
+    const candidate = String(url || '').replace(/[.,!?]+$/g, '');
+    return /calendly\.com/i.test(candidate) || Boolean(knownUrl && candidate === knownUrl);
+  };
+  return String(reply || '')
+    .replace(/\n*\[[^\]]+\]\((https?:\/\/[^)\s]+)\)/gi, (link, url) => (isBookingUrl(url) ? '' : link))
+    .replace(/https?:\/\/[^\s)]+/gi, (url) => (isBookingUrl(url) ? '' : url))
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }

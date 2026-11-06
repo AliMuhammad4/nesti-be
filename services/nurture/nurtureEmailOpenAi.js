@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import logger from '../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+import { readQualificationAlias } from '../professionalAssistant/qualificationFieldAliases.js';
 
 let _openaiClient = null;
 function getOpenAI() {
@@ -68,7 +69,7 @@ function qualificationSlice(profile, profType) {
     investment_type: q.investment_type || null,
     investment_goal: q.investment_goal || null,
     owns_investments: q.owns_investments || null,
-    down_payment_readiness: q.down_payment_readiness || q.down_payment || null,
+    down_payment_readiness: readQualificationAlias(q, 'down_payment') || null,
   };
 }
 

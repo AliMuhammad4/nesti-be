@@ -5,12 +5,33 @@ import { coerceContactIdentityFields, hasIdentityContact } from '../utils/contac
 import { classifyLeadForFlow } from '../flows/flowRoleMeta.js';
 import { syncLeadMatchAfterTurn, buildChatResponseMeta } from './index.js';
 import { identityReply } from '../utils/profileVisitorFacts.js';
-import { appendCalendlyBookingLink, holdFurtherQuestions, offerConsultationAfterSkippedUpload, userSignalsBookingIntent } from '../utils/chatBookingReply.js';
-import { keepOpenQuestion, qualificationStillOpen, quickRepliesForReply } from '../../professionalAssistant/qualificationProgress.js';
-import { dropRepeatedVisitorName, replyLanguage } from '../../professionalAssistant/replyStyle.js';
+import {
+  appendCalendlyBookingLink,
+  holdFurtherQuestions,
+  offerConsultationAfterSkippedUpload,
+  stripBookingLinks,
+  userSignalsBookingIntent,
+} from '../utils/chatBookingReply.js';
+import {
+  keepOpenQuestion,
+  qualificationStillOpen,
+  quickRepliesForReply,
+  stripAnsweredIntakeAsks,
+} from '../../professionalAssistant/qualificationProgress.js';
+import {
+  availableOptionsOffer,
+  applyAgentOpeningFunnel,
+  dropRepeatedVisitorName,
+  replyLanguage,
+  REPLY_QUESTION_RE,
+  REPLY_SENTENCE_SPLIT_RE,
+} from '../../professionalAssistant/replyStyle.js';
 import {
   assistantAnnouncingOptionCards,
   assistantOfferedAvailableOptions,
+  historyDeclinedAvailableOptions,
+  historyOfferedAvailableOptions,
+  isAvailableOptionsDeclineMessage,
   shouldRefetchPropertyMatchesForMessage,
 } from '../utils/propertyMatchesRequestIntent.js';
 import { stripPropertyListingsFromReply } from '../utils/stripPropertyListingsFromReply.js';
@@ -127,6 +148,8 @@ export async function finishProfessionalChatTurn(state, patch) {
     if (!propertyMatchesEnabled) {
       finalReply =
         'Thanks for sharing. I can help refine your preferences and connect you with the professional for tailored options.';
+    } else if (!hasContact) {
+      finalReply = 'I can show available options once I have a contact detail. What name, email, or phone number should I use?';
     }
   }
 
@@ -142,9 +165,140 @@ export async function finishProfessionalChatTurn(state, patch) {
   }
   finalReply = holdFurtherQuestions(finalReply, trimmedMessage, replyLanguage(appliedAssistantSetting, trimmedMessage, conversationText));
   finalReply = keepOpenQuestion(finalReply, appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions, trimmedMessage);
+  const flowRole = flow?.flowRole || '';
+  if (!landingMode && ['agent', 'mortgage_broker', 'lawyer'].includes(flowRole) && (storedForm || mergedFormContact)) {
+    // Prefer this-turn form + AI extraction so we do not re-ask a city the visitor just named.
+    const formForIntakeStrip = {
+      ...(storedForm && typeof storedForm === 'object' ? storedForm : {}),
+      ...(mergedFormContact && typeof mergedFormContact === 'object' ? mergedFormContact : {}),
+    };
+    const extractedLocation = String(
+      parsedAiDetails?.property_address
+      || parsedAiDetails?.location
+      || parsedAiDetails?.buy_property_location
+      || '',
+    ).trim();
+    if (extractedLocation) {
+      if (!String(formForIntakeStrip.location || '').trim()) {
+        formForIntakeStrip.location = extractedLocation;
+      }
+      if (!String(formForIntakeStrip.buy_property_location || '').trim()) {
+        formForIntakeStrip.buy_property_location = extractedLocation;
+      }
+    }
+    finalReply = stripAnsweredIntakeAsks(
+      finalReply,
+      flowRole,
+      formForIntakeStrip,
+      systemPromptOptions.chatAnsweredQuestions || [],
+    );
+  }
   const visitorAskedToMeet = userSignalsBookingIntent(trimmedMessage);
-  const stillAsking = /[?？]/.test(finalReply) && !visitorAskedToMeet;
   const questionsOpen = qualificationStillOpen(appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions);
+  const visitorClientTypeEarly = String(
+    storedForm?.client_type || appliedAssistantSetting?.client_type || visitorClientType || '',
+  ).toLowerCase();
+  const isInvestorVisitor = visitorClientTypeEarly === 'investor'
+    || String(storedForm?.motivation_reason || '').toLowerCase() === 'investment'
+    || Boolean(storedForm?.investment_type || storedForm?.investment_goal);
+  const declinedOptionsThisTurn = isAvailableOptionsDeclineMessage(trimmedMessage);
+  const optionsAlreadyDeclined = declinedOptionsThisTurn || historyDeclinedAvailableOptions(history);
+  const optionsAlreadyShown = Boolean(
+    storedForm?.property_matches_shown
+    || mergedFormContact?.property_matches_shown
+    || storedForm?.property_options_status === 'shown'
+    || mergedFormContact?.property_options_status === 'shown',
+  );
+  const optionsStatus = String(
+    storedForm?.property_options_status
+    || mergedFormContact?.property_options_status
+    || '',
+  ).toLowerCase();
+  const optionsAlreadyOffered = historyOfferedAvailableOptions(history)
+    || assistantOfferedAvailableOptions(lastAssistantReply)
+    || optionsAlreadyShown
+    || optionsAlreadyDeclined
+    || optionsStatus === 'offered'
+    || optionsStatus === 'shown'
+    || optionsStatus === 'declined';
+  // Buyers/investors must get one "available options" ask before docs or booking.
+  // Never re-ask after they already saw cards or declined matches.
+  // Skip on the very first assistant reply after form submit so greeting/intake lands first.
+  const isOpeningFormTurn = Number(interactionCount || 0) <= 1
+    || !(Array.isArray(history) ? history : []).some((message) => message?.role === 'assistant');
+  finalReply = applyAgentOpeningFunnel(finalReply, {
+    isOpeningFormTurn,
+    flowRole,
+    namedReply: Boolean(namedReply),
+    isOutOfScopeMessage: Boolean(isOutOfScopeMessage),
+    isInvestorVisitor,
+    intent,
+    locationHint: String(
+      storedForm?.location
+      || storedForm?.buy_property_location
+      || mergedFormContact?.location
+      || mergedFormContact?.buy_property_location
+      || '',
+    ).trim(),
+    setting: appliedAssistantSetting,
+    userMessage: trimmedMessage,
+    conversationText,
+  });
+  const shouldForceOptionsOffer = Boolean(
+    !landingMode
+    && !namedReply
+    && !isOutOfScopeMessage
+    && flowRole === 'agent'
+    && propertyMatchesEnabled
+    && hasContact
+    && intent !== 'sell'
+    && !questionsOpen
+    && !isOpeningFormTurn
+    && !refetchPropertyMatches
+    && !optionsAlreadyOffered
+    && !optionsAlreadyDeclined
+    && !assistantOfferedAvailableOptions(finalReply)
+    && !assistantAnnouncingOptionCards(finalReply)
+    && !visitorAskedToMeet,
+  );
+  if (shouldForceOptionsOffer) {
+    const statements = String(finalReply || '')
+      .split(REPLY_SENTENCE_SPLIT_RE)
+      .filter((sentence) => sentence && !REPLY_QUESTION_RE.test(sentence) && !/\b(upload|proof of funds|pre-?approval|document)\b/i.test(sentence))
+      .slice(0, 2)
+      .join(' ')
+      .trim();
+    const offerAsk = availableOptionsOffer(
+      appliedAssistantSetting,
+      isInvestorVisitor,
+      trimmedMessage,
+      conversationText,
+    );
+    if (offerAsk) {
+      finalReply = `${statements || (replyLanguage(appliedAssistantSetting, trimmedMessage, conversationText) === 'english'
+      ? (isInvestorVisitor ? 'Thanks for sharing your investment details.' : 'Thanks for sharing your details.')
+      : '')} ${offerAsk}`.trim();
+    }
+  } else if (declinedOptionsThisTurn) {
+    // Acknowledge the decline and move on — do not re-pitch the same options ask.
+    const statements = stripPropertyListingsFromReply(finalReply)
+      .split(REPLY_SENTENCE_SPLIT_RE)
+      .filter((sentence) => {
+        if (!sentence) return false;
+        if (assistantOfferedAvailableOptions(sentence)) return false;
+        if (/\b(available )?(investment )?(options|listings|properties|matches)\b/i.test(sentence) && REPLY_QUESTION_RE.test(sentence)) {
+          return false;
+        }
+        return true;
+      })
+      .slice(0, 2)
+      .join(' ')
+      .trim();
+    finalReply = statements
+      || (isInvestorVisitor
+        ? 'No problem — we can skip those listings for now and keep refining what you want.'
+        : 'No problem — we can skip those listings for now and keep refining what you want.');
+  }
   const documentContext = {
     intent,
     text: `${storedForm?.intent || ''} ${storedForm?.mortgage_status || ''} ${conversationText || ''} ${trimmedMessage}`,
@@ -162,25 +316,30 @@ export async function finishProfessionalChatTurn(state, patch) {
   );
   const offeringOptions = assistantOfferedAvailableOptions(finalReply);
   const showingOptions = refetchPropertyMatches || assistantAnnouncingOptionCards(finalReply);
-  const waitOnOptions = offeringOptions || showingOptions;
-  if (!waitOnOptions && !stillAsking && isAutomatedBookingEnabled && calendlyLinkForVisitor && scheduleAllowed && !namedReply && (visitorAskedToMeet || (!questionsOpen && !documentStillOpen && !deferCalendlyLink && hasContact))) {
-    finalReply = appendCalendlyBookingLink(finalReply, calendlyLinkForVisitor, {
-      userMessage: trimmedMessage,
-      allowSchedule: scheduleAllowed,
-      label: appliedAssistantSetting?.cta_label || '',
-    });
-  }
-
+  const waitOnOptions = offeringOptions || showingOptions || shouldForceOptionsOffer;
+  const optionsGateOpen = Boolean(
+    propertyMatchesEnabled
+    && intent !== 'sell'
+    && flowRole === 'agent'
+    && !optionsAlreadyOffered
+    && !showingOptions
+    && !refetchPropertyMatches,
+  );
   const stillReadingDocument = /still (reading|looking)/i.test(directDocumentReply || '');
   let requestedDocument = null;
-  if (waitOnOptions) {
+  if (waitOnOptions || shouldForceOptionsOffer) {
     // Options offer or listings turn: wait for the visitor before document/booking lines.
-  } else if (visitorSkippedUpload && scheduleAllowed && !namedReply && !deferCalendlyLink && calendlyLinkForVisitor) {
-    finalReply = offerConsultationAfterSkippedUpload(finalReply, calendlyLinkForVisitor, {
-      allowSchedule: scheduleAllowed,
-      label: appliedAssistantSetting?.cta_label || '',
-    });
-  } else if (!namedReply && !landingMode && appliedAssistantSetting?.applied && appliedAssistantSetting.document_requests?.length && !isOutOfScopeMessage && !stillReadingDocument) {
+    finalReply = stripBookingLinks(finalReply, calendlyLinkForVisitor);
+  } else if (
+    !namedReply
+    && !landingMode
+    && !optionsGateOpen
+    && appliedAssistantSetting?.applied
+    && appliedAssistantSetting.document_requests?.length
+    && !isOutOfScopeMessage
+    && !stillReadingDocument
+    && !visitorSkippedUpload
+  ) {
     const asked = applyDocumentAsk(
       finalReply,
       nextDocumentRequest(appliedAssistantSetting, sharedDocuments, documentContext, followUpSkipIds(appliedAssistantSetting, sharedDocuments, documentContext, history, lastAssistantReply)),
@@ -188,13 +347,48 @@ export async function finishProfessionalChatTurn(state, patch) {
     );
     finalReply = asked.reply;
     requestedDocument = asked.request;
-    if (appliedAssistantSetting.use_emojis) {
-      finalReply = withOccasionalEmoji(finalReply, appliedAssistantSetting, {
-        previousReply: lastAssistantReply,
-        userMessage: trimmedMessage,
-        documentReceived: Boolean(requestedDocument) || turnAttachments.length > 0,
-      });
+    if (requestedDocument) {
+      finalReply = stripBookingLinks(finalReply, calendlyLinkForVisitor);
     }
+  }
+  if (visitorSkippedUpload && !waitOnOptions && !namedReply) {
+    finalReply = offerConsultationAfterSkippedUpload(finalReply, calendlyLinkForVisitor, {
+      allowSchedule: isAutomatedBookingEnabled && scheduleAllowed,
+      label: appliedAssistantSetting?.cta_label || '',
+    });
+  }
+  const replyStillAsking = REPLY_QUESTION_RE.test(finalReply) && !visitorAskedToMeet;
+  const bookingLinkAllowed = Boolean(
+    !waitOnOptions
+    && !replyStillAsking
+    && !optionsGateOpen
+    && isAutomatedBookingEnabled
+    && calendlyLinkForVisitor
+    && scheduleAllowed
+    && !namedReply
+    && !requestedDocument
+    && (
+      visitorAskedToMeet
+      || visitorSkippedUpload
+      || (!questionsOpen && !documentStillOpen && !deferCalendlyLink && hasContact)
+    ),
+  );
+  if (bookingLinkAllowed) {
+    finalReply = appendCalendlyBookingLink(finalReply, calendlyLinkForVisitor, {
+      userMessage: trimmedMessage,
+      allowSchedule: scheduleAllowed,
+      label: appliedAssistantSetting?.cta_label || '',
+    });
+  } else {
+    finalReply = stripBookingLinks(finalReply, calendlyLinkForVisitor);
+  }
+  // Always run: when use_emojis is off this still strips model emojis from the reply.
+  if (appliedAssistantSetting) {
+    finalReply = withOccasionalEmoji(finalReply, appliedAssistantSetting, {
+      previousReply: lastAssistantReply,
+      userMessage: trimmedMessage,
+      documentReceived: Boolean(requestedDocument) || turnAttachments.length > 0,
+    });
   }
   const visitorFirstName = String(storedForm?.name || storedForm?.full_name || '').trim().split(/\s+/)[0] || '';
   finalReply = dropRepeatedVisitorName(finalReply, visitorFirstName, {
@@ -240,7 +434,18 @@ export async function finishProfessionalChatTurn(state, patch) {
   conversation.is_qualified = leadMeta.qualified;
   conversation.emotional_state = emotionalState;
   conversation.last_interaction_at = new Date();
-  conversation.form_data = mergedFormContact;
+  const formDataToPersist = {
+    ...(mergedFormContact && typeof mergedFormContact === 'object' ? mergedFormContact : {}),
+  };
+  delete formDataToPersist.selected_property;
+  delete formDataToPersist.selected_property_context;
+  if (declinedOptionsThisTurn) {
+    formDataToPersist.property_options_status = 'declined';
+    formDataToPersist.property_matches_shown = true;
+  } else if (shouldForceOptionsOffer && formDataToPersist.property_options_status !== 'shown') {
+    formDataToPersist.property_options_status = 'offered';
+  }
+  conversation.form_data = formDataToPersist;
   if (visitorClientType) conversation.client_type = visitorClientType;
   await conversation.save();
   const conversationMetaSnapshot = {
@@ -302,6 +507,7 @@ export async function finishProfessionalChatTurn(state, patch) {
     deferCalendlyLink,
     calendlyLinkForVisitor,
     isAutomatedBookingEnabled,
+    assistantSetting: appliedAssistantSetting,
     finalScore,
     finalGrade,
     aiIntent,

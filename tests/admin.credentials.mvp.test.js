@@ -329,8 +329,13 @@ test('listAdminSubscriptionsService kind=all uses skip correctly', async () => {
     }));
 
   try {
+    const User = (await import('../models/User.js')).default;
     const pro = makeRows('p', 5);
     const client = makeRows('c', 5);
+    // withoutAdminUsers() calls User.find(...).distinct('_id') before listing.
+    bag.stub(User, 'find', () => ({
+      distinct: async () => [],
+    }));
     bag.stub(Subscription, 'find', () => {
       const chain = {
         sort: () => chain,

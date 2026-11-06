@@ -4,6 +4,8 @@ import {
   appendCalendlyBookingLink,
   holdFurtherQuestions,
   offerConsultationAfterSkippedUpload,
+  stripBookingLinks,
+  visitorSkipsDocumentRequest,
   userSignalsBookingIntent,
 } from '../services/chat/utils/chatBookingReply.js';
 
@@ -15,6 +17,15 @@ test('userSignalsBookingIntent detects availability messages', () => {
   assert.equal(userSignalsBookingIntent('can you have a meting with me'), true);
   assert.equal(userSignalsBookingIntent('show me available options'), false);
   assert.equal(userSignalsBookingIntent('If approved tomorrow, I would maybe start house hunting. My email is a@b.com and my phone is 555.'), false);
+});
+
+test('only clear deferrals or meeting requests skip a document request', () => {
+  assert.equal(visitorSkipsDocumentRequest('Can I send the proof of funds next week?'), false);
+  assert.equal(visitorSkipsDocumentRequest('I have a question about the documents'), false);
+  assert.equal(visitorSkipsDocumentRequest('I will upload the documents later'), true);
+  assert.equal(visitorSkipsDocumentRequest("I don't have the proof of funds"), true);
+  assert.equal(visitorSkipsDocumentRequest("I don't have the pay stubs right now", 'Recent pay stubs'), true);
+  assert.equal(visitorSkipsDocumentRequest('Can we meet tomorrow?'), true);
 });
 
 test('a meeting request drops the next question and can carry the booking link', () => {
@@ -41,6 +52,27 @@ test('a skipped upload ends with the consultation link', () => {
   assert.match(linked, /\[Book a consultation\]\(https:\/\/calendly\.com\/demo\/consult\)/);
   const blocked = offerConsultationAfterSkippedUpload('I can keep going.', CALENDLY_URL, { allowSchedule: false });
   assert.equal(blocked.includes(CALENDLY_URL), false);
+  assert.doesNotMatch(blocked, /pick a time|meeting|appointment/i);
+  assert.match(blocked, /send the documents whenever they are ready/i);
+});
+
+test('stripBookingLinks removes generated Calendly links in markdown and plain text', () => {
+  assert.equal(
+    stripBookingLinks('Book here: [Schedule](https://calendly.com/demo/consult)'),
+    'Book here:',
+  );
+  assert.equal(
+    stripBookingLinks('Book here: https://calendly.com/demo/consult.'),
+    'Book here:',
+  );
+  assert.equal(
+    stripBookingLinks('Read more: [Property guide](https://example.com/guide)'),
+    'Read more: [Property guide](https://example.com/guide)',
+  );
+  assert.equal(
+    stripBookingLinks('Schedule here: https://booking.example/agent', 'https://booking.example/agent'),
+    'Schedule here:',
+  );
 });
 
 test('appendCalendlyBookingLink does not attach a link when scheduling is off', () => {

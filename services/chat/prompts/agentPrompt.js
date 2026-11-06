@@ -5,6 +5,7 @@ import { questionLabel, questionOptions } from '../../professionalAssistant/assi
 import { intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
 import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
 import { communicationInstruction, formalityInstruction, voiceInstruction } from '../../professionalAssistant/professionalAssistantService.js';
+import { readQualificationAlias } from '../../professionalAssistant/qualificationFieldAliases.js';
 
 function appliedAssistant(options) {
   return options.assistantSetting?.applied ? options.assistantSetting : null;
@@ -38,7 +39,13 @@ function hasIntakeAnswer(settingId, formContact = {}) {
     viewing_readiness: formContact.viewing_readiness,
     living_situation: formContact.living_situation,
     urgency_readiness: formContact.urgency_readiness,
-    preferred_contact_method: formContact.preferred_contact_method && formContact.best_time_to_contact,
+    preferred_contact_method: (
+      (formContact.preferred_contact_method && formContact.best_time_to_contact)
+      || formContact.preferred_contact_method
+      // Email/phone on the intake form already give a reachable channel — skip re-asking preferred contact.
+      || formContact.email
+      || formContact.phone
+    ),
     name: formContact.name || formContact.full_name,
     email: formContact.email,
     phone: formContact.phone,
@@ -52,7 +59,7 @@ function hasIntakeAnswer(settingId, formContact = {}) {
     investment_type: formContact.investment_type,
     investment_goal: formContact.investment_goal,
     owns_investments: formContact.owns_investments,
-    down_payment: formContact.down_payment_readiness || formContact.down_payment,
+    down_payment: readQualificationAlias(formContact, 'down_payment'),
     viewing_readiness: formContact.viewing_readiness,
     urgency_readiness: formContact.urgency_readiness,
   };
@@ -310,23 +317,28 @@ ${voiceOn
 - After they share availability (morning/evening/etc.) or agree to a viewing, include the Calendly Markdown link in the SAME reply — do NOT re-list their contact recap.
 - Do NOT promise you already scheduled them or that a confirmation email is on the way unless they completed Calendly booking. Use the booking link instead.
 - ${voiceOn ? 'Match the selected communication style for the length of a scheduling reply, and keep the booking link when you share it.' : 'Keep scheduling replies to 1–2 short sentences plus the booking link — no filler motivational closings.'}`;
+  const optionsFlowInstruction = !propertyMatchesEnabled
+    ? 'Do not offer or claim property cards are available; continue with the next useful qualification or contact detail.'
+    : options.contactKnown === false
+      ? 'Collect one contact detail (name, email, or phone) before asking whether a buyer or investor wants available options; do not claim cards are available yet.'
+      : 'After qualification, ask a buyer or investor once whether they want available options and wait for their answer.';
   const meetingOrder = blockSchedule
     ? `NEXT STEP ORDER:
 1) Recap once and ask confirmation.
-2) After confirmation, ask a buyer or investor once if they want available options. Do not ask a seller.
+2) ${optionsFlowInstruction} Do not ask a seller.
 3) Continue with the next unanswered qualification question.
 4) Do not share a Calendly link unless the client asks to schedule.`
     : voiceOn
       ? `MEETING-FIRST EXECUTION ORDER:
 1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back. A saved lead is not announced and does not skip this order.
 2) Ask one missing checked qualification question. A short answer such as "yes" closes only that question. Do not share a meeting link in that reply.
-3) After every missing question is answered, a buyer or investor is asked once whether they want to see available options. Wait for their answer. Do not ask a seller, and do not claim the cards are already visible.
+3) ${optionsFlowInstruction} Do not ask a seller, and do not claim the cards are already visible.
 4) After they say yes or ask to see options, point at the cards in one short sentence. Then ask for the next requested document, one file at a time. If the visitor does not upload a file, stop asking and share the meeting link, unless they already asked to book.
 5) After they agree, share one Calendly link clearly and stop repeating booking CTAs unless they ask again.
 6) When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.`
       : `MEETING-FIRST EXECUTION ORDER:
 1) Recap once and ask confirmation.
-2) After confirmation, ask a buyer or investor once if they want available options. Do not ask a seller.
+2) ${optionsFlowInstruction} Do not ask a seller.
 3) Once they show interest in a listing, ask to share available times.
 4) After they agree, share one Calendly link clearly and stop repeating booking CTAs unless they ask again.
 5) After link share, keep follow-ups short, practical, and professional.`;
@@ -334,7 +346,9 @@ ${voiceOn
     ? (applied
       ? `PROPERTY MATCHES (buy intent):
 - Matching listings are shown ONLY in the chat UI property cards (not in your visible reply). Never list properties, prices, beds/baths, numbered lists, or bullet listing rows in the visible message.
-- After the checked questions are answered, ask once, in the selected voice, whether a buyer or investor wants to see available options, and wait. Do not copy a stock question. Do not claim the cards are visible yet.
+- ${options.contactKnown === false
+    ? 'Before offering cards, collect one contact detail (name, email, or phone). Do not imply that cards are available before the visitor consents.'
+    : 'After the checked questions are answered, ask once, in the selected voice, whether a buyer or investor wants to see available options, and wait. Do not copy a stock question. Do not claim the cards are visible yet.'}
 - When they say yes or explicitly ask to see options, matches, listings, homes, or investment properties: reply with one short sentence that points at the cards, such as "Here are options that fit what you shared." Do not repeat details the intake form already collected.
 - For investors, frame options around markets, budget, investment type, and investment goal from intake — do not ask buyer-only details like bedrooms or living situation.
 - An FAQ cannot replace that reply, including any answer about finding a property.
@@ -343,7 +357,9 @@ ${voiceOn
 - NEVER repeat the lead recap bullet list on later turns (scheduling, viewings, options, or general Q&A). Contact details were captured at intake.`
       : `PROPERTY MATCHES (buy intent):
 - Matching listings are shown ONLY in the chat UI property cards (not in your visible reply). Never list properties, prices, beds/baths, numbered lists, or bullet listing rows in the visible message.
-- After the visitor confirms their details, ask once whether a buyer or investor wants to see available options, and wait. A yes or their own request shows the cards.
+- ${options.contactKnown === false
+    ? 'Before offering cards, collect one contact detail (name, email, or phone). Do not imply that cards are available before the visitor consents.'
+    : 'After the visitor confirms their details, ask once whether a buyer or investor wants to see available options, and wait. A yes or their own request shows the cards.'}
 - When they say yes or explicitly ask to see options, matches, listings, or homes: reply in ONE short sentence only (max ~15 words), e.g. "Here are your available options below." Do NOT recap contact/details, do NOT enumerate homes, do NOT re-ask for preferred contact method or best time if META already has them.
 - For a seller, do not offer property match cards. Ask about the property they are selling.
 - NEVER repeat the lead recap bullet list on later turns (scheduling, viewings, options, or general Q&A). Contact details were captured at intake.`)
@@ -385,7 +401,8 @@ ${previewChat
   : applied
     ? `The intake form already has intent, location, budget, timeline, property type, and mortgage status${intakeIsInvestor ? ', plus investment type, investment goal, capital readiness, and related investor fields' : ''}. Do not ask for any of those again.
 - Ask only the next open saved qualification question, one at a time.
-- When no open qualification questions remain, ask a buyer or investor once about available options (if matches are enabled), then documents, then booking. Do not invent extra preference questions such as beds, baths, parking, or must-haves unless a saved question still asks for them.
+- When no open qualification questions remain, your next reply must ask once whether they want to see available ${intakeIsInvestor ? 'investment ' : ''}options. Do not ask for documents or a booking link in that same reply. Wait for their answer. After they say yes, point at the cards. Only then request one document, then booking.
+- Do not invent extra preference questions such as beds, baths, parking, or must-haves unless a saved question still asks for them.
 - Do not ask for a pre-approval letter when mortgage status is paying cash; proof of funds / photo ID may still apply.
 - For a seller, never offer property match cards.`
     : `The intake form already has intent, location, budget, timeline, property type, and mortgage status. Do not ask for any of those again.

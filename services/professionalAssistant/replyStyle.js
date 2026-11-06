@@ -105,6 +105,229 @@ export function replyLanguage(setting, userMessage = '', earlierText = '') {
   return 'english';
 }
 
+
+/** ASCII ?, Arabic ؟ (U+061F), fullwidth ？ (U+FF1F). Never rely on a literal ؟ in source — encoding breaks it. */
+export const REPLY_QUESTION_RE = /[?\u061F\uFF1F]/u;
+export const REPLY_SENTENCE_SPLIT_RE = /(?<=[.!\u003F\u061F\uFF1F])\s+/u;
+
+export function replyHasQuestionMark(text) {
+  return REPLY_QUESTION_RE.test(String(text || ''));
+}
+
+export function splitReplySentences(text) {
+  return String(text || '').split(REPLY_SENTENCE_SPLIT_RE).map((part) => part.trim()).filter(Boolean);
+}
+
+const OPTIONS_OFFER_COPY = {
+  english: {
+    buyer: {
+      friendly: 'Would you like to take a look at available options that fit what you shared?',
+      polished: 'Would you like to review available options that fit your criteria?',
+      luxury: 'Would you like me to curate a selection of available options based on your criteria?',
+      consultative: 'Would it be helpful to review available options that fit what you shared?',
+      persuasive: 'Shall I show you available options that match what you are looking for?',
+      default: 'Would you like to see available options that fit what you shared?',
+    },
+    investor: {
+      friendly: 'Would you like to take a look at investment options that fit what you shared?',
+      polished: 'Would you like to review available investment options that fit your criteria?',
+      luxury: 'Would you like me to curate investment options based on your criteria?',
+      consultative: 'Would it be helpful to review investment options that fit what you shared?',
+      persuasive: 'Shall I show you investment options that match your goals?',
+      default: 'Would you like to see available investment options that fit what you shared?',
+    },
+  },
+  french: {
+    buyer: 'Souhaitez-vous voir les options disponibles qui correspondent à vos critères ?',
+    investor: 'Souhaitez-vous voir les options de placement qui correspondent à vos objectifs ?',
+  },
+  spanish: {
+    buyer: '¿Le gustaría ver opciones disponibles que se ajusten a lo que busca?',
+    investor: '¿Le gustaría ver opciones de inversión que se ajusten a sus objetivos?',
+  },
+  mandarin: {
+    buyer: '您想看看符合您需求的房源选项吗？',
+    investor: '您想看看符合您投资目标的房源选项吗？',
+  },
+  cantonese: {
+    buyer: '你想睇下符合你需要嘅樓盤選項嗎？',
+    investor: '你想睇下符合你投資目標嘅樓盤選項嗎？',
+  },
+  arabic: {
+    buyer: 'هل ترغب في الاطلاع على الخيارات المتاحة التي تناسب ما شاركته؟',
+    investor: 'هل ترغب في الاطلاع على خيارات استثمارية تناسب أهدافك؟',
+  },
+  hindi: {
+    buyer: 'क्या आप अपनी ज़रूरतों के अनुसार उपलब्ध विकल्प देखना चाहेंगे?',
+    investor: 'क्या आप अपने निवेश लक्ष्यों के अनुसार विकल्प देखना चाहेंगे?',
+  },
+  punjabi: {
+    buyer: 'ਕੀ ਤੁਸੀਂ ਆਪਣੀਆਂ ਲੋੜਾਂ ਮੁਤਾਬਕ ਉਪਲਬਧ ਵਿਕਲਪ ਦੇਖਣਾ ਚਾਹੋਗੇ?',
+    investor: 'ਕੀ ਤੁਸੀਂ ਆਪਣੇ ਨਿਵੇਸ਼ ਟੀਚਿਆਂ ਮੁਤਾਬਕ ਵਿਕਲਪ ਦੇਖਣਾ ਚਾਹੋਗੇ?',
+  },
+  tamil: {
+    buyer: 'உங்கள் தேவைகளுக்குப் பொருந்தும் கிடைக்கக்கூடிய விருப்பங்களைப் பார்க்க விரும்புகிறீர்களா?',
+    investor: 'உங்கள் முதலீட்டு இலக்குகளுக்குப் பொருந்தும் விருப்பங்களைப் பார்க்க விரும்புகிறீர்களா?',
+  },
+};
+
+export function availableOptionsOffer(setting, isInvestor, userMessage = '', earlierText = '') {
+  const audience = isInvestor ? 'investor' : 'buyer';
+  const language = replyLanguage(setting, userMessage, earlierText);
+  const copy = OPTIONS_OFFER_COPY[language];
+  const primary = setting?.personalities?.[0] || '';
+  if (!copy) {
+    if (language === 'other') return '';
+    return OPTIONS_OFFER_COPY.english[audience].default;
+  }
+  const question = typeof copy[audience] === 'string'
+    ? copy[audience]
+    : copy[audience][primary] || copy[audience].default;
+  if (language !== 'english') return question;
+  const custom = customToneById(setting, primary);
+  const leadIn = customLeadIn(custom);
+  return leadIn ? joinLawyerSentences(leadIn, question, false) : question;
+}
+
+const INVESTOR_OPENING_QUESTION = {
+  english: { intro: 'Great start.', question: 'Should we prioritize rental yield or long-term appreciation first?' },
+  french: { intro: 'Très bon début.', question: 'Faut-il privilégier le rendement locatif ou l’appréciation à long terme ?' },
+  spanish: { intro: 'Excelente comienzo.', question: '¿Priorizamos primero el rendimiento del alquiler o la apreciación a largo plazo?' },
+  arabic: { intro: 'بداية رائعة.', question: 'هل نُعطي الأولوية لعائد الإيجار أم لزيادة القيمة على المدى الطويل؟' },
+  hindi: { intro: 'बहुत अच्छी शुरुआत।', question: 'क्या हम पहले किराये की आय को प्राथमिकता दें या लंबी अवधि में मूल्य वृद्धि को?' },
+  punjabi: { intro: 'ਬਹੁਤ ਵਧੀਆ ਸ਼ੁਰੂਆਤ।', question: 'ਕੀ ਅਸੀਂ ਪਹਿਲਾਂ ਕਿਰਾਏ ਦੀ ਆਮਦਨ ਨੂੰ ਤਰਜੀਹ ਦੇਈਏ ਜਾਂ ਲੰਬੇ ਸਮੇਂ ਦੇ ਮੁੱਲ ਵਾਧੇ ਨੂੰ?' },
+  tamil: { intro: 'சிறந்த தொடக்கம்.', question: 'வாடகை வருவாய்க்கு முன்னுரிமை அளிப்போமா அல்லது நீண்டகால மதிப்பு உயர்வுக்கா?' },
+};
+
+
+const AGENT_OPENING_FUNNEL = {
+  english: {
+    buy: {
+      withLocation: (loc) => `Great start. In ${loc}, which should we lock first: neighborhood shortlist or property features?`,
+      without: 'Great start. Which should we lock first: neighborhood shortlist or property features?',
+    },
+    sell: {
+      without: 'Great start. Would you like to prioritize a faster sale or testing a higher asking price first?',
+    },
+  },
+  french: {
+    buy: {
+      withLocation: (loc) => `Bon d\u00e9but. \u00c0 ${loc}, que priorisons-nous d'abord : la shortlist de quartiers ou les caract\u00e9ristiques ?`,
+      without: "Bon d\u00e9but. Que priorisons-nous d'abord : la shortlist de quartiers ou les caract\u00e9ristiques ?",
+    },
+    sell: {
+      without: 'Bon d\u00e9but. Priorisez-vous une vente plus rapide ou un prix demand\u00e9 plus \u00e9lev\u00e9 ?',
+    },
+  },
+  spanish: {
+    buy: {
+      withLocation: (loc) => `Buen comienzo. En ${loc}, \u00bfqu\u00e9 cerramos primero: lista corta de barrios o caracter\u00edsticas?`,
+      without: 'Buen comienzo. \u00bfQu\u00e9 cerramos primero: lista corta de barrios o caracter\u00edsticas?',
+    },
+    sell: {
+      without: 'Buen comienzo. \u00bfPriorizamos una venta m\u00e1s r\u00e1pida o probar un precio m\u00e1s alto?',
+    },
+  },
+  arabic: {
+    buy: {
+      // "Great start. In {loc}, which should we lock first: neighborhood shortlist or property features?"
+      withLocation: (loc) => `\u0628\u062f\u0627\u064a\u0629 \u062c\u064a\u062f\u0629. \u0641\u064a ${loc}\u060c \u0628\u0645\u0627\u0630\u0627 \u0646\u0628\u062f\u0623: \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0623\u062d\u064a\u0627\u0621 \u0623\u0645 \u0645\u0645\u064a\u0632\u0627\u062a \u0627\u0644\u0639\u0642\u0627\u0631\u061f`,
+      without: '\u0628\u062f\u0627\u064a\u0629 \u062c\u064a\u062f\u0629. \u0628\u0645\u0627\u0630\u0627 \u0646\u0628\u062f\u0623: \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0623\u062d\u064a\u0627\u0621 \u0623\u0645 \u0645\u0645\u064a\u0632\u0627\u062a \u0627\u0644\u0639\u0642\u0627\u0631\u061f',
+    },
+    sell: {
+      without: '\u0628\u062f\u0627\u064a\u0629 \u062c\u064a\u062f\u0629. \u0647\u0644 \u062a\u0641\u0636\u0644 \u0628\u064a\u0639\u0627\u064b \u0623\u0633\u0631\u0639 \u0623\u0645 \u062a\u062c\u0631\u0628\u0629 \u0633\u0639\u0631 \u0637\u0644\u0628 \u0623\u0639\u0644\u0649\u061f',
+    },
+  },
+};
+
+/**
+ * Buyer/seller opening funnel ask, localized to the visitor language.
+ * Returns '' when language is non-English and we have no copy — never fall back to English.
+ */
+export function agentOpeningFunnelQuestion(setting, {
+  intent = 'buy',
+  location = '',
+  userMessage = '',
+  earlierText = '',
+} = {}) {
+  const language = replyLanguage(setting, userMessage, earlierText);
+  const copy = AGENT_OPENING_FUNNEL[language];
+  if (!copy) return '';
+  const side = intent === 'sell' ? 'sell' : 'buy';
+  const pack = copy[side] || copy.buy;
+  if (!pack) return '';
+  const area = String(location || '').trim();
+  if (side === 'buy' && area && typeof pack.withLocation === 'function') {
+    return pack.withLocation(area);
+  }
+  return pack.without || '';
+}
+
+/**
+ * Opening-turn funnel rewrite for agent chat.
+ * Keeps the model reply when it already asks a question (incl. Arabic ؟).
+ * Appends a localized funnel ask only when the reply has no question yet.
+ */
+export function applyAgentOpeningFunnel(finalReply, {
+  isOpeningFormTurn = false,
+  flowRole = '',
+  namedReply = false,
+  isOutOfScopeMessage = false,
+  isInvestorVisitor = false,
+  intent = 'buy',
+  locationHint = '',
+  setting = null,
+  userMessage = '',
+  conversationText = '',
+} = {}) {
+  if (!isOpeningFormTurn || flowRole !== 'agent' || namedReply || isOutOfScopeMessage) {
+    return String(finalReply || '');
+  }
+  const original = String(finalReply || '').trim();
+  if (replyHasQuestionMark(original)) return original;
+
+  const base = splitReplySentences(original)
+    .filter((sentence) => sentence && !replyHasQuestionMark(sentence))
+    .slice(0, 2)
+    .join(' ')
+    .trim();
+
+  const firstQuestion = isInvestorVisitor
+    ? investorOpeningQuestion(setting, userMessage, conversationText, locationHint)
+    : agentOpeningFunnelQuestion(setting, {
+      intent,
+      location: locationHint,
+      userMessage,
+      earlierText: conversationText,
+    });
+  if (!firstQuestion) return original;
+
+  const language = replyLanguage(setting, userMessage, conversationText);
+  const fallbackThanks = language === 'english' ? 'Thanks for sharing those details.' : '';
+  const lead = base || fallbackThanks;
+  if (!lead) return firstQuestion;
+  return `${lead} ${firstQuestion}`.trim();
+}
+
+export function investorOpeningQuestion(setting, userMessage = '', earlierText = '', location = '') {
+  const language = replyLanguage(setting, userMessage, earlierText);
+  const copy = INVESTOR_OPENING_QUESTION[language];
+  if (!copy) return '';
+  const area = String(location || '').trim();
+  let question = copy.question;
+  if (area) {
+    if (language === 'english') question = `In ${area}, ${question.charAt(0).toLowerCase()}${question.slice(1)}`;
+    else if (language === 'french') question = `À ${area}, ${question}`;
+    else if (language === 'spanish') question = `En ${area}, ${question}`;
+    else if (language === 'arabic') question = `في ${area}، ${question}`;
+    else if (language === 'hindi') question = `${area} में, ${question}`;
+    else if (language === 'punjabi') question = `${area} ਵਿੱਚ, ${question}`;
+    else if (language === 'tamil') question = `${area}-இல், ${question}`;
+    else question = `${area}: ${question}`;
+  }
+  return `${copy.intro} ${question}`;
+}
+
 export function withWarmGreeting(reply, setting, userMessage = '', earlierText = '') {
   const text = String(reply || '').trim();
   if (!text || !isGreetingOnly(userMessage)) return text;

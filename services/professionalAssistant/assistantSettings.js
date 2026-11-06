@@ -114,6 +114,13 @@ function slugId(text, index) {
   return slug ? `custom_${slug}` : `custom_question_${index + 1}`;
 }
 
+/** Exact pre-expansion catalog ids. Only these full lists auto-receive newer defaults. */
+const LEGACY_FULL_QUALIFICATION_IDS = Object.freeze({
+  agent: Object.freeze({
+    investor: Object.freeze(['investment_type', 'location', 'budget', 'investment_goal', 'timeline']),
+  }),
+});
+
 export function sanitizeQualificationTemplates(input, role) {
   const defaults = defaultQualificationTemplates(role);
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
@@ -143,11 +150,22 @@ export function sanitizeQualificationTemplates(input, role) {
         seen.add(question.id);
         return true;
       });
-    // Upgrade legacy catalog templates that are missing newer defaults.
-    // Skip hand-curated short lists and templates that already include custom questions.
+        // Upgrade legacy catalog templates that are missing newer defaults.
+    // Only append when the saved list is an ordered prefix of the current catalog
+    // (true legacy full templates). Skip hand-curated short/reordered lists and
+    // templates that already include custom questions.
     const knownOnly = questions.length > 0 && questions.every((question) => !question.custom && baseById.has(question.id));
     const missingDefaults = base.questions.filter((question) => !seen.has(question.id));
-    if (knownOnly && questions.length >= 4 && missingDefaults.length) {
+    const savedIds = questions.map((question) => question.id);
+    const legacyIds = LEGACY_FULL_QUALIFICATION_IDS[role]?.[type];
+    // Upgrade only an exact prior full catalog — not every ordered prefix (that would
+    // erase hand-curated shortlists that happen to start like the defaults).
+    const isExactLegacyFullCatalog = knownOnly
+      && missingDefaults.length > 0
+      && Array.isArray(legacyIds)
+      && savedIds.length === legacyIds.length
+      && savedIds.every((id, index) => id === legacyIds[index]);
+    if (isExactLegacyFullCatalog) {
       for (const question of missingDefaults) {
         questions.push({ ...question });
         seen.add(question.id);

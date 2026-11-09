@@ -2,7 +2,7 @@
 
 const DOCUMENT_RECEIVED = {
   pay_stubs: /pay\s*stubs?|paystubs?|payslips?/i,
-  notice_of_assessment: /notice of assessment|\bt4\b|\bnoa\b/i,
+  notice_of_assessment: /notice of assessment|\bt4\b|\bnoa\b|\bw-?2\b|\b1099\b|\b1040\b|tax return/i,
   mortgage_statement: /mortgage statement/i,
   preapproval_letter: /pre-?approval/i,
   proof_of_funds: /proof of funds|bank statement|down payment|funds available/i,
@@ -36,6 +36,9 @@ const DOCUMENT_REVIEW = {
     exactDone: (got) => `This is the ${got}. That is all the documents I need for now.`,
     other: (got, next) => (next ? `This is the ${got}. When you are ready, you can send the ${next}.` : `This is the ${got}. We can continue with the other details.`),
     different: (next) => (next ? `This is a different file. When you are ready, you can send the ${next}.` : 'This is a different file. We can continue with the other details.'),
+    perFile: (file, got) => (got ? `${file} is the ${got}` : `${file} is not one of the documents I asked for`),
+    perFileSummary: (lines, next) => `I reviewed all ${lines.length} files: ${lines.join('; ')}.${next ? ` When you are ready, please share the ${next}.` : ' That is all the documents I need for now.'}`,
+    differentClarify: (expected) => `I reviewed the file you shared, and it is not the ${expected} I asked for, so it is not needed right now. When you are ready, please share the ${expected}.`,
     duplicate: (next) => (next ? `You already sent this file. When you are ready, you can send the ${next}.` : 'You already sent this file. We can continue with the other details.'),
     received: () => 'I have the file.',
     receivedDone: () => 'I have the file. That is all the documents I need for now.',
@@ -81,7 +84,7 @@ const DOCUMENT_REVIEW = {
 const DOCUMENT_NAMES = {
   english: {
     pay_stubs: 'recent pay stubs',
-    notice_of_assessment: 'notice of assessment or T4',
+    notice_of_assessment: 'tax or income documents (Canada: NOA/T4; U.S.: W-2/1099/tax return)',
     mortgage_statement: 'current mortgage statement',
     preapproval_letter: 'pre-approval letter',
     proof_of_funds: 'proof of funds',
@@ -95,7 +98,7 @@ const DOCUMENT_NAMES = {
   },
   french: {
     pay_stubs: 'talons de paie récents',
-    notice_of_assessment: 'avis de cotisation ou T4',
+    notice_of_assessment: 'documents fiscaux ou de revenus (Canada : avis de cotisation/T4; États-Unis : W-2/1099/déclaration fiscale)',
     mortgage_statement: 'relevé hypothécaire actuel',
     preapproval_letter: 'lettre de préapprobation',
     proof_of_funds: 'preuve de fonds',
@@ -109,7 +112,7 @@ const DOCUMENT_NAMES = {
   },
   spanish: {
     pay_stubs: 'recibos de nómina recientes',
-    notice_of_assessment: 'aviso de evaluación o T4',
+    notice_of_assessment: 'documentos fiscales o de ingresos (Canadá: aviso de evaluación/T4; EE. UU.: W-2/1099/declaración de impuestos)',
     mortgage_statement: 'estado de cuenta hipotecario',
     preapproval_letter: 'carta de preaprobación',
     proof_of_funds: 'comprobante de fondos',
@@ -123,7 +126,7 @@ const DOCUMENT_NAMES = {
   },
   mandarin: {
     pay_stubs: '近期工资单',
-    notice_of_assessment: '评估通知或T4',
+    notice_of_assessment: '税务或收入文件（加拿大：评估通知/T4；美国：W-2/1099/纳税申报表）',
     mortgage_statement: '当前房贷对账单',
     preapproval_letter: '预批信',
     proof_of_funds: '资金证明',
@@ -137,7 +140,7 @@ const DOCUMENT_NAMES = {
   },
   cantonese: {
     pay_stubs: '近期糧單',
-    notice_of_assessment: '評稅通知或T4',
+    notice_of_assessment: '稅務或收入文件（加拿大：評稅通知/T4；美國：W-2/1099/納稅申報表）',
     mortgage_statement: '現時按揭月結單',
     preapproval_letter: '預批信',
     proof_of_funds: '資金證明',
@@ -151,7 +154,7 @@ const DOCUMENT_NAMES = {
   },
   arabic: {
     pay_stubs: 'كشوف الرواتب الأخيرة',
-    notice_of_assessment: 'إشعار التقييم أو T4',
+    notice_of_assessment: 'مستندات ضريبية أو إثبات دخل (كندا: NOA/T4؛ الولايات المتحدة: W-2/1099/الإقرار الضريبي)',
     mortgage_statement: 'كشف الرهن الحالي',
     preapproval_letter: 'خطاب الموافقة المبدئية',
     proof_of_funds: 'إثبات الأموال',
@@ -165,7 +168,7 @@ const DOCUMENT_NAMES = {
   },
   hindi: {
     pay_stubs: 'हाल की वेतन पर्चियाँ',
-    notice_of_assessment: 'आकलन नोटिस या T4',
+    notice_of_assessment: 'कर या आय दस्तावेज़ (कनाडा: NOA/T4; अमेरिका: W-2/1099/टैक्स रिटर्न)',
     mortgage_statement: 'मौजूदा गिरवी विवरण',
     preapproval_letter: 'पूर्व-स्वीकृति पत्र',
     proof_of_funds: 'धन का प्रमाण',
@@ -179,7 +182,7 @@ const DOCUMENT_NAMES = {
   },
   punjabi: {
     pay_stubs: 'ਹਾਲੀਆ ਤਨਖਾਹ ਸਲਿੱਪਾਂ',
-    notice_of_assessment: 'ਮੁਲਾਂਕਣ ਨੋਟਿਸ ਜਾਂ T4',
+    notice_of_assessment: 'ਟੈਕਸ ਜਾਂ ਆਮਦਨ ਦਸਤਾਵੇਜ਼ (ਕੈਨੇਡਾ: NOA/T4; ਅਮਰੀਕਾ: W-2/1099/ਟੈਕਸ ਰਿਟਰਨ)',
     mortgage_statement: 'ਮੌਜੂਦਾ ਰਹਿਨ ਬਿਆਨ',
     preapproval_letter: 'ਪ੍ਰੀ-ਅਪਰੂਵਲ ਪੱਤਰ',
     proof_of_funds: 'ਫੰਡਾਂ ਦਾ ਸਬੂਤ',
@@ -193,7 +196,7 @@ const DOCUMENT_NAMES = {
   },
   tamil: {
     pay_stubs: 'சமீபத்திய சம்பளச் சீட்டுகள்',
-    notice_of_assessment: 'மதிப்பீட்டு அறிவிப்பு அல்லது T4',
+    notice_of_assessment: 'வரி அல்லது வருமான ஆவணங்கள் (கனடா: NOA/T4; அமெரிக்கா: W-2/1099/வரி அறிக்கை)',
     mortgage_statement: 'தற்போதைய அடமான அறிக்கை',
     preapproval_letter: 'முன்அனுமதி கடிதம்',
     proof_of_funds: 'நிதி சான்று',

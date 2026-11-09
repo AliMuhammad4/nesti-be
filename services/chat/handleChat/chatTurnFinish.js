@@ -11,16 +11,22 @@ import {
   offerConsultationAfterSkippedUpload,
   stripBookingLinks,
   userSignalsBookingIntent,
+  isDocumentDeclineMessage,
 } from '../utils/chatBookingReply.js';
 import {
   keepOpenQuestion,
   qualificationStillOpen,
   quickRepliesForReply,
   stripAnsweredIntakeAsks,
+  openQualificationQuestionIds,
 } from '../../professionalAssistant/qualificationProgress.js';
+import { questionLabel } from '../../professionalAssistant/assistantSettings.js';
 import {
   availableOptionsOffer,
   applyAgentOpeningFunnel,
+  investorStrategyGoalConflict,
+  declineRefinementReply,
+  DECLINE_REFINE_RE,
   dropRepeatedVisitorName,
   replyLanguage,
   REPLY_QUESTION_RE,
@@ -31,6 +37,7 @@ import {
   assistantOfferedAvailableOptions,
   historyDeclinedAvailableOptions,
   historyOfferedAvailableOptions,
+  classifyAvailableOptionsFeedback,
   isAvailableOptionsDeclineMessage,
   shouldRefetchPropertyMatchesForMessage,
 } from '../utils/propertyMatchesRequestIntent.js';
@@ -47,6 +54,7 @@ import {
   nextDocumentRequest,
 } from '../documents/chatDocumentService.js';
 import { withOccasionalEmoji } from '../../professionalAssistant/professionalAssistantService.js';
+import { keepModelEmoji } from '../../professionalAssistant/assistantEmoji.js';
 import { buildPreviewLeadSummary, leadClientTypeExtras } from './previewLeadSummary.js';
 import { normalizePersistedGradeByScore } from './chatPlan.js';
 
@@ -209,6 +217,9 @@ export async function finishProfessionalChatTurn(state, patch) {
     || storedForm?.property_options_status === 'shown'
     || mergedFormContact?.property_options_status === 'shown',
   );
+  const optionsFeedback = flow?.flowRole === 'agent' && isInvestorVisitor && optionsAlreadyShown
+    ? classifyAvailableOptionsFeedback(trimmedMessage)
+    : null;
   const optionsStatus = String(
     storedForm?.property_options_status
     || mergedFormContact?.property_options_status
@@ -243,6 +254,19 @@ export async function finishProfessionalChatTurn(state, patch) {
     setting: appliedAssistantSetting,
     userMessage: trimmedMessage,
     conversationText,
+    nextQuestion: questionLabel(
+      appliedAssistantSetting,
+      openQualificationQuestionIds(
+        appliedAssistantSetting,
+        { ...(storedForm && typeof storedForm === 'object' ? storedForm : {}), ...(mergedFormContact && typeof mergedFormContact === 'object' ? mergedFormContact : {}) },
+        systemPromptOptions.chatAnsweredQuestions || [],
+      )[0],
+    ) || '',
+    investmentGoalKnown: Boolean(storedForm?.investment_goal || mergedFormContact?.investment_goal),
+    strategyGoalConflict: investorStrategyGoalConflict(
+      storedForm?.investment_type || mergedFormContact?.investment_type,
+      storedForm?.investment_goal || mergedFormContact?.investment_goal,
+    ),
   });
   const shouldForceOptionsOffer = Boolean(
     !landingMode
@@ -279,7 +303,7 @@ export async function finishProfessionalChatTurn(state, patch) {
       ? (isInvestorVisitor ? 'Thanks for sharing your investment details.' : 'Thanks for sharing your details.')
       : '')} ${offerAsk}`.trim();
     }
-  } else if (declinedOptionsThisTurn) {
+  } else if (declinedOptionsThisTurn && !optionsFeedback) {
     // Acknowledge the decline and move on — do not re-pitch the same options ask.
     const statements = stripPropertyListingsFromReply(finalReply)
       .split(REPLY_SENTENCE_SPLIT_RE)
@@ -299,6 +323,17 @@ export async function finishProfessionalChatTurn(state, patch) {
         ? 'No problem — we can skip those listings for now and keep refining what you want.'
         : 'No problem — we can skip those listings for now and keep refining what you want.');
   }
+  if (declinedOptionsThisTurn && flowRole === 'agent') {
+    finalReply = declineRefinementReply(finalReply, {
+      nextQuestion: questionLabel(
+        appliedAssistantSetting,
+        openQualificationQuestionIds(appliedAssistantSetting, storedForm || {}, systemPromptOptions.chatAnsweredQuestions || [])[0],
+      ) || '',
+      isInvestor: isInvestorVisitor,
+      language: replyLanguage(appliedAssistantSetting, trimmedMessage, conversationText),
+    });
+  }
+  const refinementPending = DECLINE_REFINE_RE.test(String(lastAssistantReply || ''));
   const documentContext = {
     intent,
     text: `${storedForm?.intent || ''} ${storedForm?.mortgage_status || ''} ${conversationText || ''} ${trimmedMessage}`,
@@ -307,7 +342,12 @@ export async function finishProfessionalChatTurn(state, patch) {
     mortgageStatus: storedForm?.mortgage_status || '',
   };
   const documentsAlreadyAsked = followUpSkipIds(appliedAssistantSetting, sharedDocuments, documentContext, history, lastAssistantReply);
-  const visitorSkippedUpload = !turnAttachments.length && !questionsOpen && documentsAlreadyAsked.length > 0;
+  // Explicit deferral of an asked document ends the document sequence (all document requests are optional).
+  const documentDeclined = documentsAlreadyAsked.length > 0
+    && !turnAttachments.length
+    && isDocumentDeclineMessage(trimmedMessage);
+  const visitorSkippedUpload = !turnAttachments.length && !questionsOpen && documentsAlreadyAsked.length > 0
+    && (!optionsFeedback || documentDeclined);
   const documentStillOpen = Boolean(
     !visitorSkippedUpload
     && appliedAssistantSetting?.applied
@@ -339,6 +379,13 @@ export async function finishProfessionalChatTurn(state, patch) {
     && !isOutOfScopeMessage
     && !stillReadingDocument
     && !visitorSkippedUpload
+    && !optionsFeedback
+    // Answer a direct visitor question first; after a decline, refine criteria instead of asking for files.
+    && !REPLY_QUESTION_RE.test(trimmedMessage)
+    && !declinedOptionsThisTurn
+    && !(optionsAlreadyDeclined && questionsOpen)
+    && !refinementPending
+    && !documentDeclined
   ) {
     const asked = applyDocumentAsk(
       finalReply,
@@ -351,17 +398,20 @@ export async function finishProfessionalChatTurn(state, patch) {
       finalReply = stripBookingLinks(finalReply, calendlyLinkForVisitor);
     }
   }
+  let consultationOffered = false;
   if (visitorSkippedUpload && !waitOnOptions && !namedReply) {
+    consultationOffered = Boolean(isAutomatedBookingEnabled && scheduleAllowed && calendlyLinkForVisitor);
     finalReply = offerConsultationAfterSkippedUpload(finalReply, calendlyLinkForVisitor, {
       allowSchedule: isAutomatedBookingEnabled && scheduleAllowed,
       label: appliedAssistantSetting?.cta_label || '',
     });
   }
   const replyStillAsking = REPLY_QUESTION_RE.test(finalReply) && !visitorAskedToMeet;
-  const bookingLinkAllowed = Boolean(
+  // When the reply already offers "we can also pick a time", never strip the link it promises.
+  const bookingLinkAllowed = consultationOffered || Boolean(
     !waitOnOptions
     && !replyStillAsking
-    && !optionsGateOpen
+    && (!optionsGateOpen || documentDeclined)
     && isAutomatedBookingEnabled
     && calendlyLinkForVisitor
     && scheduleAllowed
@@ -384,9 +434,11 @@ export async function finishProfessionalChatTurn(state, patch) {
   }
   // Always run: when use_emojis is off this still strips model emojis from the reply.
   if (appliedAssistantSetting) {
+    finalReply = keepModelEmoji(finalReply, aiReply, appliedAssistantSetting);
     finalReply = withOccasionalEmoji(finalReply, appliedAssistantSetting, {
       previousReply: lastAssistantReply,
       userMessage: trimmedMessage,
+      // Upload reviews and operational document asks stay emoji-free.
       documentReceived: Boolean(requestedDocument) || turnAttachments.length > 0,
     });
   }
@@ -520,10 +572,14 @@ export async function finishProfessionalChatTurn(state, patch) {
     extractedData: parsedAiDetails,
     refetchPropertyMatches,
     propertyMatchesEnabled,
+    qualificationOpen: questionsOpen,
   });
 
   // Lead lookup, CRM write, and the new-lead email run after the reply is ready.
-  void syncLeadTask;
+  // Fire-and-forget: an unhandled rejection here would crash the API process.
+  void Promise.resolve(syncLeadTask).catch((error) => {
+    logger.warn('Lead sync after chat turn failed', { error: error?.message });
+  });
 
   const quickReplies = !landingMode && appliedAssistantSetting?.applied && appliedAssistantSetting.question_overrides
     ? quickRepliesForReply(appliedAssistantSetting, finalReply, systemPromptOptions.chatAnsweredQuestions || [])

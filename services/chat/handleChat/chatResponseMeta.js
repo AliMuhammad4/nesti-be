@@ -27,10 +27,13 @@ export async function buildChatResponseMeta({
   mortgageBrokerSnapshotSignals,
   extractedData,
   refetchPropertyMatches = false,
+  qualificationOpen = false,
 }) {
   const sellIntent = String(aiIntent || '').toLowerCase() === 'sell';
   const property_matches_available = Boolean(
-    supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact && !sellIntent,
+    supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact && !sellIntent
+      // Qualify first: cards only after open template questions are answered, unless the visitor explicitly asks.
+      && (!qualificationOpen || refetchPropertyMatches),
   );
 
   const calendlyBookingSnap = conversationSnapshot || {

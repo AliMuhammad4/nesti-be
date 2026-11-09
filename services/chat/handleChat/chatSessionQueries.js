@@ -32,7 +32,7 @@ export const getChatSessionMessagesService = async ({ id: sessionId, embedToken 
     session_id: sessionId.trim(),
     user_id: embed.user_id,
   })
-    .select('_id session_id')
+    .select('_id session_id form_data')
     .lean();
 
   if (!conversation) {
@@ -74,6 +74,11 @@ export const getChatSessionMessagesService = async ({ id: sessionId, embedToken 
       success: true,
       session_id: sessionId.trim(),
       conversation_id: String(conversation._id),
+      property_options_status: conversation.form_data?.property_options_status || null,
+      form_data: {
+        property_options_status: conversation.form_data?.property_options_status || null,
+        property_matches_shown: Boolean(conversation.form_data?.property_matches_shown),
+      },
       messages,
       total: messages.length,
     },

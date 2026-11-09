@@ -97,8 +97,11 @@ test('declining shown matches does not reload or consent to options', () => {
   for (const decline of [
     "i dont want to go with those porperties",
     "i dont want to go with those options",
+    "i don6 want to go with those options",
+    "i don6t want to go with those options",
   ]) {
     assert.equal(isAvailableOptionsDeclineMessage(decline), true);
+    assert.equal(isAvailableOptionsRequestMessage(decline), false);
     assert.equal(isAvailableOptionsConsentMessage(decline, { afterOptionsOffer: true }), false);
     assert.equal(
       shouldRefetchPropertyMatchesForMessage(decline, {
@@ -107,6 +110,10 @@ test('declining shown matches does not reload or consent to options', () => {
       false,
     );
   }
+  assert.equal(
+    isAvailableOptionsRequestMessage('but i don6 want to go with those options'),
+    false,
+  );
 });
 
 test('localized available-options offers are detected so the ask is not repeated', () => {

@@ -203,7 +203,7 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
   lines.push(setting.use_emojis
     ? (greeting
       ? 'Required for this greeting reply: end with exactly one fitting emoji after the final punctuation (pick any single appropriate emoji). Do this even in Luxury Concierge / formal voice. Never stack emojis, never place an emoji mid-sentence, and skip emoji only if the reply includes a booking link.'
-      : 'Occasionally include at most one fitting emoji at the very end of the reply when it feels natural and human. Skip emoji on document confirmations and any reply that includes a booking link. Never place an emoji mid-sentence, never stack emojis, and do not force an emoji on every turn.')
+      : 'Emojis are switched on: end most conversational replies (about every other turn, including qualification questions and replies about property options) with exactly one fitting emoji after the final punctuation. Skip emoji on document confirmations and any reply that includes a booking link. Never place an emoji mid-sentence or between sentences (only after the final sentence), never on operational instructions such as upload requests, never stack emojis, and do not force an emoji on every turn.')
     : 'No emojis.');
   lines.push(setting.role === 'lawyer'
     ? 'Keep the reply short and polished. Sound like a lawyer speaking with a client. The selected voice and communication style stay easy to hear.'
@@ -236,6 +236,7 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
       lines.push('This is the first reply after the intake form. Start with a short greeting in the selected voice. Do not skip the greeting. Do not open with the question.');
     }
     lines.push('After the greeting, ask exactly one question. Prefer one saved question that is still missing. If the form already answered every saved question, ask one short refinement question that helps narrow options (for example area preference, budget flexibility, property priorities, or timeline certainty). Do not ask for a detail the form already has.');
+    lines.push('Opening quality: greet by first name with a brief, specific welcome, then one sentence that accurately reflects their brief (strategy, goal, market, budget). No filler openers such as "It\'s a pleasure to connect", "It\'s great to see your interest", or "Great start". Write budgets with a currency symbol, capital K/M, and an en dash (for example $400K–$700K). If the strategy and goal pull in different directions (for example fix and flip with a rental income goal), acknowledge both neutrally and ask which matters most instead of asserting either.');
   } else if (greeting && intakeHasHelloAnswer(setting, options.intakeFormContact)) {
     lines.push('The visitor said hello. Greet in the selected voice. The intake form already answered the opening question, so do not ask it again. Ask one saved question that is still missing.');
   } else if (greeting) {
@@ -294,13 +295,13 @@ export function replyConductBlock(setting, options = {}) {
         : '',
     'Speak as the professional in the first person. Say "I have" and "I help with". When the visitor asks your name, say "My name is" and the saved name, then list the saved expertise. On every other reply, do not talk about yourself in the third person.',
     options.openingTurn
-      ? 'The intake form is already submitted. This first reply starts with a short greeting in the selected voice (use the customized welcome when one is saved), then asks exactly one question. Use the visitor\'s first name in that greeting only when addressing by first name is on.'
+      ? 'The intake form is already submitted. This first reply starts with a short greeting in the selected voice (use the customized welcome when one is saved), then asks exactly one question. Use the visitor\'s first name in that greeting only when addressing by first name is on. No filler openers such as "It\'s a pleasure to connect" or "It\'s great to see your interest". Reflect their brief accurately, write budgets like $400K–$700K, and when strategy and goal pull in different directions (fix and flip with a rental income goal) acknowledge both neutrally and ask which matters most.'
       : options.openingTurn === false
         ? 'The greeting already happened. Answer what they just said and ask exactly one next-step question. Prefer the next missing saved question; if none are missing, ask one short refinement question that advances search or readiness. Do not greet again. Do not say the visitor\'s name. Do not open with "Thank you" plus their name.'
         : 'The intake form is already submitted. The first reply is a short greeting, then exactly one question. Do not say the visitor\'s name after that greeting.',
     'Make the single question engaging and easy to answer: prefer either-or choices or one concrete decision point (for example "DHA or Gulberg first?" or "maximize rental yield or appreciation first?").',
     'Avoid dry form wording. Do not ask stacked multi-part questions. Keep one clear question mark per reply.',
-    'Never repeat the previous question.',
+    'Never repeat the previous question. Never invent durations, timelines, prices, or statistics you were not given (for example "several weeks to a few months"). When asked how long something takes or what happens next, ground the answer in the current step: matching options can be shown here in the chat, and viewings, offers, and closing timing are confirmed by the professional.',
     `A "how are you" is a social question. Answer it in the selected voice. Do not greet again, and do not repeat the question about ${opener}.`,
   ].filter(Boolean);
   if (setting?.welcome_message && !options.openingTurn) {
@@ -445,7 +446,7 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
       : `Written chat languages: ${names.join(', ')}. Answer every written reply in ${names[0]}.`);
   }
   lines.push(setting.use_emojis
-    ? 'Chat emoji rule: when the visitor only greets (hello, hi, salam), end that reply with exactly one tasteful emoji after the final sentence (your choice of which emoji). On other turns, occasionally include at most one emoji at the end when it feels natural. Never use emojis in a spoken or voice reply, on document confirmations, or on booking-link replies. Never stack emojis or place one mid-sentence.'
+    ? 'Chat emoji rule: when the visitor only greets (hello, hi, salam), end that reply with exactly one tasteful emoji after the final sentence (your choice of which emoji). On other turns, end most conversational replies (about every other turn, including qualification questions) with exactly one fitting emoji after the final punctuation. Never use emojis in a spoken or voice reply, on document confirmations, or on booking-link replies. Never stack emojis or place one mid-sentence or between sentences; it belongs only after the final sentence. No emoji on operational instructions such as upload requests.'
     : 'Do not use emojis.');
   lines.push(setting.address_by_first_name
     ? 'Use the visitor\'s first name once, in the first greeting after the form. Later replies ask the next question and do not say their name.'
@@ -512,7 +513,7 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
     .map((id) => labelOf(DOCUMENT_REQUESTS[setting.role] || [], id))
     .filter(Boolean);
   if (requestedDocs.length) {
-    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects for this visitor, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. Do not ask for a pre-approval letter when the visitor is paying cash. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and while a saved qualification question is still unanswered. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
+    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects for this visitor, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. Do not ask for a pre-approval letter when the visitor is paying cash. For U.S. mortgage income verification, tax returns, W-2s, or 1099s may be relevant instead of Canada's NOA/T4; request only what this professional needs for the visitor's market and situation. Remind visitors to redact account numbers and unrelated sensitive details where practical. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and while a saved qualification question is still unanswered. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
   }
   lines.push(`CUSTOMIZATION PRIORITY — assistant style: The selected voice, communication style, formality, and language preferences above override conflicting general persona or style instructions elsewhere in this prompt. Keep role-specific safety and accuracy requirements.`);
   if (setting.role === 'agent') {

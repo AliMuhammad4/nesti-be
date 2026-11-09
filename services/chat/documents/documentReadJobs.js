@@ -1,4 +1,5 @@
 import mammoth from 'mammoth';
+import mongoose from 'mongoose';
 import OpenAI from 'openai';
 import { PDFParse } from 'pdf-parse';
 import LeadDocument from '../../../models/LeadDocument.js';
@@ -168,7 +169,9 @@ export async function resumeDocumentReads(documentsOrIds = []) {
     if (!id || doc.status === 'ready' || doc.status === 'failed') return;
     const key = String(id);
     if (readsInFlight.has(key)) return;
-    void readChatDocument(id);
+    void readChatDocument(id).catch((error) => {
+      logger.warn('Chat document resume failed', { id: key, error: error?.message });
+    });
   });
 }
 
@@ -178,6 +181,9 @@ export async function readChatDocument(documentId) {
   readsInFlight.add(key);
   try {
     await readChatDocumentBody(documentId);
+  } catch (error) {
+    // One file's failure (lookup or status write) must not abort the other reads or crash the API.
+    logger.warn('Chat document read crashed', { id: key, error: error?.message });
   } finally {
     readsInFlight.delete(key);
   }

@@ -135,6 +135,15 @@ function withoutUploadAsk(reply) {
     .trim();
 }
 
+/** Visitor defers or declines the requested upload ("not interested", "I'll skip the documents", "later"). */
+export function isDocumentDeclineMessage(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/\bdon[0-9]?t\b/g, 'dont');
+  if (!t) return false;
+  const refuses = /\b(not interested|no thanks|no thank you|dont want|do not want|don't want|dont have|don't have|rather not|prefer not|not now|not right now|later|skip|not comfortable|no need|not needed|not ready)\b/.test(t);
+  const aboutDocs = /\b(documents?|docs?|files?|upload|proof|statements?|letters?|id|share (it|them|that)|send (it|them|that))\b/.test(t);
+  return refuses && (aboutDocs || /^(no|nope|not now|later|skip( it)?|not interested|no thanks)[.!]*$/.test(t));
+}
+
 /** After a document was requested, a reply with no file can end with the consultation link. */
 export function offerConsultationAfterSkippedUpload(reply, calendlyUrl, { allowSchedule = true, label = '' } = {}) {
   const cleaned = withoutUploadAsk(reply)

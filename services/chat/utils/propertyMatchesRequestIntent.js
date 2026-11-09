@@ -22,6 +22,8 @@ function isSoftOtherOptionsPreference(text) {
 export function isAvailableOptionsRequestMessage(text) {
   const t = String(text || '').trim().toLowerCase();
   if (!t) return false;
+  // Declining shown cards is never a request to show/refetch them.
+  if (isAvailableOptionsDeclineMessage(t)) return false;
   // "other options" in a preference discussion is not a listings request by itself.
   if (isSoftOtherOptionsPreference(t)) return false;
   if (asksToSeeOptionsDespiteTypos(t)) return true;
@@ -127,7 +129,11 @@ export function assistantAnnouncingOptionCards(text) {
 
 /** Visitor declined listing/option cards (or said they are not interested in shown matches). */
 export function isAvailableOptionsDeclineMessage(text) {
-  const t = String(text || '').trim().toLowerCase();
+  const t = String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\bdon[0-9]t\b/g, 'dont')
+    .replace(/\bdon[0-9]\b/g, 'dont');
   if (!t) return false;
   if (
     /\b(not interested|no thanks|no thank you|don't want|dont want|do not want|don't need|dont need|pass on|skip)\b/.test(t)
@@ -145,7 +151,30 @@ export function isAvailableOptionsDeclineMessage(text) {
   ) {
     return true;
   }
+  // Negative preference about shown options ("they are not looking suitable for me", "these don't fit").
+  if (
+    /\b(options?|listings?|properties|matches?|homes?|houses?|those|these|them|they|none)\b/.test(t)
+    && (
+      /\b(not|dont|don't|doesn't|doesnt|isn't|isnt|aren't|arent|never|no)\b[^.?!]{0,40}\b(suitable|suit|right|fit|fits|fitting|match|matching|work|working|relevant|appealing|for me|for us|what i (want|need)|what we (want|need)|my (style|taste|budget|criteria))\b/.test(t)
+      || /\b(unsuitable|not for me|not for us|not my (style|taste)|none of (them|these|those) (work|fit|suit))\b/.test(t)
+    )
+  ) {
+    return true;
+  }
   return false;
+}
+
+export function classifyAvailableOptionsFeedback(text) {
+  if (isAvailableOptionsDeclineMessage(text)) return 'declined';
+  const t = String(text || '').trim().toLowerCase();
+  if (
+    /\b(?:they|these|those|the options?|the properties|the listings?|the matches|the homes?)\s+(?:look|seem|sound)\s+(?:really\s+)?(?:good|great|nice|promising)\b/.test(t)
+    || /\b(?:i|we)\s+(?:really\s+)?(?:like|love)\s+(?:them|these|those|the options?|the properties|the listings?)\b/.test(t)
+    || /\b(?:good|great|nice)\s+(?:options?|properties|listings?|matches|homes?)\b/.test(t)
+  ) {
+    return 'positive';
+  }
+  return null;
 }
 
 export function isAvailableOptionsConsentMessage(text, { afterOptionsOffer = false } = {}) {
@@ -201,9 +230,19 @@ export function shouldRefetchPropertyMatchesForMessage(text, {
   return (
     isAvailableOptionsRequestMessage(text) ||
     isPropertyMatchesRequestMessage(text) ||
+    isRefinedOptionsAnswer(text, previousAssistantReply) ||
     isAvailableOptionsConsentMessage(text, { afterOptionsOffer: offered })
   );
 }
+
+/** Visitor answers the post-decline "which should we adjust first" prompt with new criteria. */
+export function isRefinedOptionsAnswer(text, previousAssistantReply = '') {
+  if (!/which should we adjust first/i.test(String(previousAssistantReply || ''))) return false;
+  const t = String(text || '').trim().toLowerCase();
+  if (!t || isAvailableOptionsDeclineMessage(t)) return false;
+  return /\b(see|show|view|find|look|want|prefer|instead|change|switch|area|budget|price|location|in|near|around|type|condo|house|townhouse|apartment|rental|flip)\b/.test(t);
+}
+
 
 /** True when visitor already declined options/matches earlier in the thread. */
 export function historyDeclinedAvailableOptions(history = []) {

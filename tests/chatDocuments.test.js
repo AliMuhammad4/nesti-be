@@ -17,6 +17,7 @@ import {
   sniffChatFile,
 } from '../services/chat/documents/chatDocumentService.js';
 import { buildPreviewChatPrompt, sanitizeAssistant } from '../services/professionalAssistant/professionalAssistantService.js';
+import { documentCoversRequest, localizedDocumentName } from '../services/chat/documents/documentCoverage.js';
 
 test('chat uploads accept pdf, docx, and images and reject other bytes', () => {
   assert.equal(sniffChatFile(Buffer.from('%PDF-1.4\n'), 'application/pdf').kind, 'pdf');
@@ -207,6 +208,13 @@ test('document requests are sanitized and reach the broker prompt', () => {
   assert.equal(documentRequestIds({ role: 'lawyer', document_requests: ['purchase_agreement', 'condo_status'] }, { text: 'detached house' }).includes('condo_status'), false);
   assert.equal(documentRequestIds({ role: 'lawyer', document_requests: ['purchase_agreement', 'condo_status'] }, { text: 'a condo purchase' }).includes('condo_status'), true);
   assert.equal(nextDocumentRequest(setting, [{ original_filename: 'paystubs.pdf', summary: '' }]).id, 'photo_id');
+  assert.equal(documentCoversRequest({ original_filename: '2024 W-2.pdf' }, 'notice_of_assessment'), true);
+  assert.equal(documentCoversRequest({ original_filename: '1099-NEC.pdf' }, 'notice_of_assessment'), true);
+  assert.equal(documentCoversRequest({ original_filename: '1040-tax-return.pdf' }, 'notice_of_assessment'), true);
+  assert.match(nextDocumentRequest({ role: 'mortgage_broker', document_requests: ['notice_of_assessment'] }, []).label, /W-2\/1099/);
+  for (const language of ['french', 'spanish', 'chinese', 'arabic', 'hindi', 'punjabi', 'tamil']) {
+    assert.match(localizedDocumentName('notice_of_assessment', language), /W-2\/1099/);
+  }
   const asked = applyDocumentAsk('I can look at the file.', nextDocumentRequest(setting, []), {
     userMessage: 'I need a mortgage',
     setting,
@@ -471,7 +479,7 @@ test('reviews every attachment in a multi-file turn against the outstanding requ
       document_type: 'photo',
     },
   ], agent, investorCtx);
-  assert.match(bothWrong, /different file/i);
+  assert.match(bothWrong, /is not one of the documents I asked for;.*is not one of the documents I asked for/i);
   assert.doesNotMatch(bothWrong, /listing or MLS sheet/i);
   // Without clientType, seller mis-detect must not drive the next ask when clientType is set.
   const withType = documentReviewReply([receipt], agent, investorCtx);

@@ -1,4 +1,32 @@
 import LeadMatch from '../../../models/LeadMatch.js';
+import ChatMessage from '../../../models/ChatMessage.js';
+import logger from '../../../utils/logger.js';
+
+const TRANSCRIPT_MATCH_LIMIT = 10;
+const matchKey = (m) => String(m?.id || m?._id || m?.listing_url || m?.title || '');
+
+/**
+ * Persist the shown match set on the assistant message it was attached to, so the lead
+ * conversation transcript can render the same cards. Skips when that set is already stored.
+ */
+export async function persistMatchesOnLatestAssistantMessage(conversationId, matches, context) {
+  const rows = (Array.isArray(matches) ? matches : []).slice(0, TRANSCRIPT_MATCH_LIMIT);
+  if (!conversationId || !rows.length) return false;
+  const [latest, lastWithMatches] = await Promise.all([
+    ChatMessage.findOne({ conversation_id: conversationId, role: 'assistant' }).sort({ createdAt: -1 }).select('_id meta').lean(),
+    ChatMessage.findOne({ conversation_id: conversationId, role: 'assistant', 'meta.property_matches.0': { $exists: true } })
+      .sort({ createdAt: -1 }).select('_id meta.property_matches').lean(),
+  ]);
+  if (!latest?._id) return false;
+  const signature = rows.map(matchKey).join('|');
+  const previous = (lastWithMatches?.meta?.property_matches || []).map(matchKey).join('|');
+  if (previous && previous === signature) return false;
+  await ChatMessage.updateOne(
+    { _id: latest._id },
+    { $set: { 'meta.property_matches': rows, 'meta.property_matches_context': String(context || 'buy') } },
+  );
+  return true;
+}
 import { resolveAgentPropertyMatchesForChat } from '../../agent/propertyMatch/matchService.js';
 import { enrichPropertyMatch } from '../../lead/leadPropertyMatchHelpers.js';
 import { buildLeadConversionPack } from '../../conversion/buildLeadConversionPack.js';
@@ -83,6 +111,15 @@ export async function buildPropertyMatchesPayload({
   const conversion = leadMatchDoc
     ? buildLeadConversionPack({ leadMatch: leadMatchDoc, conversation, intent: propertyMatchIntent })
     : null;
+
+  if (matchStatus === 'ready' && p === 1 && shownMatches.length) {
+    const ranked = [...shownMatches]
+      .sort((a, b) => Number(b?.match_score ?? b?.score ?? 0) - Number(a?.match_score ?? a?.score ?? 0))
+      .slice(0, TRANSCRIPT_MATCH_LIMIT)
+      .map(enrichPropertyMatch);
+    await persistMatchesOnLatestAssistantMessage(conversation._id, ranked, resolvedMatchesContext)
+      .catch((error) => logger.warn('Persist transcript matches failed', { error: error?.message }));
+  }
 
   if (shouldMarkPropertyOptionsShown(matchStatus)) {
     const nextForm = {

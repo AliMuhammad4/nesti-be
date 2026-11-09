@@ -30,7 +30,7 @@ import {
 } from '../services/professionalAssistant/professionalAssistantService.js';
 import { withTurnReminder } from '../services/chat/handleChat/chatOpenAiTurn.js';
 import { buildChatResponseMeta } from '../services/chat/handleChat/chatResponseMeta.js';
-import { PERSONALITIES, QUALIFICATION_TEMPLATES, legacyPersonalityId } from '../services/professionalAssistant/catalog.js';
+import { DOCUMENT_REQUESTS, PERSONALITIES, QUALIFICATION_TEMPLATES, legacyPersonalityId } from '../services/professionalAssistant/catalog.js';
 import {
   applyProfileIdentity,
   clientTypeForForm,
@@ -1634,6 +1634,19 @@ test('every role ships buyer, seller, and investor templates with a call to acti
   assert.equal(legacyPersonalityId('caring'), 'friendly');
   assert.equal(legacyPersonalityId('investor_specialist'), 'consultative');
   assert.equal(legacyPersonalityId('friendly'), 'friendly');
+});
+
+test('investor qualification and mortgage documents distinguish Canadian and U.S. markets', () => {
+  const agentQuestions = QUALIFICATION_TEMPLATES.agent.investor.questions;
+  assert.match(agentQuestions.find((question) => question.id === 'location').label, /city, province or state, and country/i);
+  assert.match(agentQuestions.find((question) => question.id === 'budget').label, /CAD in Canada or USD in the U\.S\./i);
+
+  const brokerQuestions = QUALIFICATION_TEMPLATES.mortgage_broker.investor.questions;
+  assert.match(brokerQuestions.find((question) => question.id === 'down_payment').label, /vary by market and lender/i);
+  assert.match(
+    DOCUMENT_REQUESTS.mortgage_broker.find(([id]) => id === 'notice_of_assessment')[1],
+    /Canada: NOA\/T4; U\.S\.: W-2\/1099\/tax return/,
+  );
 });
 
 test('qualification templates keep known ids, accept custom questions, and cap the list', () => {

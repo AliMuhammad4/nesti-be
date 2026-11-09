@@ -1,7 +1,7 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sanitizeAssistant, settingForClientType, clientTypeForForm, questionLabel } from '../services/professionalAssistant/assistantSettings.js';
-import { QUALIFICATION_TEMPLATES } from '../services/professionalAssistant/catalog.js';
+import { DOCUMENT_REQUESTS, QUALIFICATION_TEMPLATES } from '../services/professionalAssistant/catalog.js';
 import { buildAgentSystemPrompt } from '../services/chat/prompts/agentPrompt.js';
 import { buildPreviewLeadSummary, leadClientTypeExtras } from '../services/chat/handleChat/previewLeadSummary.js';
 import {
@@ -12,11 +12,13 @@ import {
 } from '../services/professionalAssistant/qualificationProgress.js';
 import {
   availableOptionsOffer,
+  investorOptionsFeedbackInstruction,
   investorOpeningQuestion,
   replyLanguage,
 } from '../services/professionalAssistant/replyStyle.js';
 import {
   assistantOfferedAvailableOptions,
+  classifyAvailableOptionsFeedback,
   isAvailableOptionsConsentMessage,
   isAvailableOptionsDeclineMessage,
   shouldRefetchPropertyMatchesForMessage,
@@ -262,6 +264,27 @@ test('investor options offer, consent, decline, and calendly strip/append', () =
   assert.equal(visitorSkipsDocumentRequest("I don't have the proof of funds right now", 'proof of funds'), true);
 });
 
+test('investor match feedback is handed to the model with customization and qualification guidance', () => {
+  const setting = settingForClientType(investorSetting(), 'investor');
+  assert.equal(classifyAvailableOptionsFeedback('they look good'), 'positive');
+  assert.equal(
+    classifyAvailableOptionsFeedback('but i don6t want to go with those options you have shared'),
+    'declined',
+  );
+  assert.equal(classifyAvailableOptionsFeedback('what is the expected return?'), null);
+
+  const positive = investorOptionsFeedbackInstruction('positive', questionLabel(setting, 'budget'));
+  assert.match(positive, /configured assistant voice, tone, formality, response length, language, and custom guidance/i);
+  assert.match(positive, /What is your investment budget\?/i);
+  assert.match(positive, /Do not request documents/i);
+  assert.match(positive, /configured emoji rule/i);
+
+  const declined = investorOptionsFeedbackInstruction('declined');
+  assert.match(declined, /Acknowledge the decline without arguing/i);
+  assert.match(declined, /market, budget, or property type/i);
+  assert.match(declined, /Do not use canned wording/i);
+});
+
 test('investor document ask uses investor-relevant requests and skips after deferral', () => {
   const setting = settingForClientType(investorSetting(), 'investor');
   const next = nextDocumentRequest(setting, [], { clientType: 'investor', intent: 'buy', text: 'investor rental' });
@@ -353,4 +376,24 @@ test('investor multi-file document review keeps investor doc order (no listing/M
   const wrongOnly = documentReviewReply([receipt], setting, ctx);
   assert.match(wrongOnly, /different file/i);
   assert.doesNotMatch(wrongOnly, /listing or MLS sheet/i);
+});
+
+
+test('investor catalog stays CA/US-aligned for questions and documents', () => {
+  const investorQs = QUALIFICATION_TEMPLATES.agent.investor.questions;
+  const byId = Object.fromEntries(investorQs.map((q) => [q.id, q]));
+  assert.match(byId.location.label, /province or state/i);
+  assert.match(byId.budget.label, /CAD|USD|market currency/i);
+  assert.match(byId.preapproval.label, /pre-approved|cash|financ/i);
+  assert.ok(byId.investment_type.options.some((o) => /flip/i.test(o)));
+  assert.ok(byId.investment_type.options.some((o) => /commercial/i.test(o)));
+  assert.ok(byId.owns_investments.options.some((o) => /company|llc/i.test(o)));
+
+  const agentDocs = DOCUMENT_REQUESTS.agent.map(([id, label]) => ({ id, label }));
+  const proof = agentDocs.find((d) => d.id === 'proof_of_funds');
+  const pre = agentDocs.find((d) => d.id === 'preapproval_letter');
+  assert.match(proof.label, /bank letter|statement/i);
+  assert.match(pre.label, /U\.S\.|Canada/i);
+  const condo = DOCUMENT_REQUESTS.lawyer.find(([id]) => id === 'condo_status');
+  assert.match(condo[1], /HOA|status certificate/i);
 });

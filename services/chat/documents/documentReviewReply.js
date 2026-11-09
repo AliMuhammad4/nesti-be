@@ -72,12 +72,25 @@ export function documentReviewReply(documents = [], setting = null, context = {}
   // Only advance past the outstanding request when none of this turn's files covered it.
   if (expected && !matched.includes(expected.id)) skip.add(expected.id);
   const next = nextDocumentRequest(setting, after, requestContextValue, [...skip]);
+  // Several new files in one turn: say what each one is so none looks skipped.
+  if (novel.length > 1 && copy.perFile) {
+    const lines = novel.map((doc) => {
+      const covered = requestIds.find((id) => documentCoversRequest(doc, id));
+      return copy.perFile(String(doc.original_filename || 'file'), covered ? name(covered) : '');
+    });
+    const outstanding = expected && !matched.includes(expected.id) ? expected : next;
+    return copy.perFileSummary(lines, outstanding ? name(outstanding.id) : '');
+  }
   if (expected && matched.includes(expected.id)) {
     return next ? copy.exactNext(name(expected.id), name(next.id)) : copy.exactDone(name(expected.id));
   }
   if (matched.length) {
     const got = matched[0];
     return next ? copy.other(name(got), name(next.id)) : copy.other(name(got));
+  }
+  // Visitor asked about the upload ("what is this?"): clarify it is not the requested file and keep that request.
+  if (expected && /[?\u061F\uFF1F]|^\s*(what|which|why|is this)\b/i.test(String(context.userMessage || '')) && copy.differentClarify) {
+    return copy.differentClarify(name(expected.id));
   }
   if (expected) return copy.different(next ? name(next.id) : '');
   return next ? copy.received() : copy.receivedDone();

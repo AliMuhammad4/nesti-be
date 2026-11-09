@@ -77,7 +77,7 @@ test('voiceTurnReminder asks the model for emoji on greetings and occasionally m
   assert.match(greetingReminder, /Luxury Concierge/);
 
   const midChat = voiceTurnReminder(setting, 'my budget is 500k', { openingTurn: false });
-  assert.match(midChat, /Occasionally include at most one fitting emoji/);
+  assert.match(midChat, /end most conversational replies \(about every other turn[^)]*\) with exactly one fitting emoji/);
   assert.doesNotMatch(midChat, /Skip emoji on plain intake questions/i);
 });
 

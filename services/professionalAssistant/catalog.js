@@ -124,6 +124,7 @@ const BUDGET_OPTIONS = ['Under $400k', '$400k–$700k', '$700k–$1M', '$1M+'];
 const TIMELINE_OPTIONS = ['As soon as possible', '1–3 months', '3–6 months', '6–12 months', 'Just exploring'];
 const PROPERTY_TYPE_OPTIONS = ['Detached house', 'Townhouse', 'Condo', 'Multi-family', 'Other'];
 const DOWN_PAYMENT_OPTIONS = ['20% or more', '10–19%', '5–9%', 'Under 5%', 'Not yet'];
+const INVESTOR_DOWN_PAYMENT_OPTIONS = ['Cash purchase / no financing', 'Under 15%', '15–19%', '20–24%', '25% or more', 'Not sure'];
 const INCOME_OPTIONS = ['Under $70k', '$70k–$100k', '$100k–$150k', '$150k–$200k', '$200k+'];
 const CLOSING_OPTIONS = ['Within 30 days', '30–60 days', '60–90 days', 'Not set yet'];
 
@@ -149,16 +150,17 @@ export const QUALIFICATION_TEMPLATES = {
       ['buying_another', 'Are you also buying another property?', ['Yes', 'No', 'Not sure yet']],
     ]),
     investor: template('Book an Investment Consultation', [
-      ['investment_type', 'What type of investment are you interested in?', ['Rental property', 'Fix and flip', 'Pre-construction', 'Multi-unit', 'Commercial']],
-      ['location', 'Which markets are you considering?'],
-      ['budget', 'What is your investment budget?', BUDGET_OPTIONS],
+      ['investment_type', 'What type of investment are you interested in?', ['Long-term rental', 'Short-term rental', 'Fix and flip', 'New construction / pre-construction', 'Multi-unit', 'Commercial']],
+      ['location', 'Which city, province or state, and country are you considering?'],
+      ['budget', 'What is your approximate investment budget in the market currency (CAD in Canada or USD in the U.S.)?', BUDGET_OPTIONS],
       ['investment_goal', 'Are you focused on rental income or appreciation?', ['Rental income', 'Appreciation', 'Both']],
       ['timeline', 'When are you planning to invest?', TIMELINE_OPTIONS],
       ['property_type', 'What property type are you targeting?', PROPERTY_TYPE_OPTIONS],
-      ['preapproval', 'Are you pre-approved, paying cash, or still arranging financing?', ['Fully pre-approved', 'Paying cash', 'In progress', 'Not yet', 'Unsure']],
+      ['preapproval', 'Are you pre-approved, paying cash, or still arranging financing in Canada or the U.S.?', ['Fully pre-approved', 'Paying cash', 'In progress', 'Not yet', 'Unsure']],
       ['realtor_status', 'Are you currently working with a realtor?', ['No', 'Yes but open', 'Yes exclusively']],
-      ['owns_investments', 'Do you already own investment properties?', ['Yes', 'No']],
-      ['down_payment', 'How ready is your down payment / capital?', ['Ready now', 'Within 30 days', 'Still accumulating', 'Not sure']],
+      ['owns_investments', 'Do you already own investment properties?', ['Yes', 'No', 'Through a company / LLC']],
+
+      ['down_payment', 'How ready is your down payment or cash capital (requirements vary by market and lender)?', ['Ready now', 'Within 30 days', 'Still accumulating', 'Not sure']],
       ['viewing_readiness', 'Ready to tour investment properties?', ['Yes ASAP', 'Within a few weeks', 'Maybe later', 'Just browsing']],
       ['urgency_readiness', 'If the right deal appeared tomorrow, would you make an offer?', ['Yes immediately', 'Maybe', 'No']],
     ]),
@@ -179,9 +181,9 @@ export const QUALIFICATION_TEMPLATES = {
       ['timeline', 'When would you like to review your options?', TIMELINE_OPTIONS],
     ]),
     investor: template('Book an Investment Financing Consultation', [
-      ['investment_type', 'What type of investment property are you considering?', ['Rental property', 'Multi-unit', 'Pre-construction', 'Commercial', 'Vacation rental']],
-      ['property_value', 'What is the purchase price range?', BUDGET_OPTIONS],
-      ['down_payment', 'What down payment do you have available?', DOWN_PAYMENT_OPTIONS],
+      ['investment_type', 'What type of investment property are you considering?', ['Long-term rental', 'Short-term rental', 'Fix and flip', 'Multi-unit', 'New construction / pre-construction', 'Commercial']],
+      ['property_value', 'What is your approximate purchase price range in the market currency (CAD in Canada or USD in the U.S.)?', BUDGET_OPTIONS],
+      ['down_payment', 'What approximate down-payment range or cash-purchase plan do you expect (requirements vary by market and lender)?', INVESTOR_DOWN_PAYMENT_OPTIONS],
       ['owns_investments', 'Do you own other investment properties?', ['Yes', 'No']],
       ['timeline', 'When do you need financing?', TIMELINE_OPTIONS],
     ]),
@@ -376,15 +378,15 @@ export const QUALIFICATION = {
 
 export const DOCUMENT_REQUESTS = {
   agent: [
-    ['preapproval_letter', 'Pre-approval letter', 'Buyer and investor'],
-    ['proof_of_funds', 'Proof of funds', 'Buyer and investor'],
+    ['preapproval_letter', 'Mortgage pre-approval letter (U.S. or Canada)', 'Buyer and investor'],
+    ['proof_of_funds', 'Proof of funds (bank letter or statement)', 'Buyer and investor'],
     ['photo_id', 'Photo ID', 'Buyer, seller, and investor'],
     ['home_photos', 'Photos of the home', 'Seller'],
     ['listing_sheet', 'Listing or MLS sheet', 'Seller'],
   ],
   mortgage_broker: [
     ['pay_stubs', 'Recent pay stubs'],
-    ['notice_of_assessment', 'Notice of assessment or T4'],
+    ['notice_of_assessment', 'Tax or income documents (Canada: NOA/T4; U.S.: W-2/1099/tax return)'],
     ['mortgage_statement', 'Current mortgage statement'],
     ['preapproval_letter', 'Pre-approval letter'],
     ['photo_id', 'Photo ID'],
@@ -394,7 +396,7 @@ export const DOCUMENT_REQUESTS = {
     ['title_deed', 'Title or deed'],
     ['mortgage_commitment', 'Mortgage commitment'],
     ['photo_id', 'Photo ID'],
-    ['condo_status', 'Condo status certificate'],
+    ['condo_status', 'Condo status certificate / HOA docs (Canada status certificate; U.S. HOA/condo docs)'],
   ],
 };
 

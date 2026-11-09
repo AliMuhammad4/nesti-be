@@ -318,7 +318,7 @@ async function syncLeadMatchBody({
           newLeadMatch,
           persistedGrade,
           conversion_preview,
-        });
+        }).catch((error) => logger.warn('New lead email failed', { error: error?.message }));
         if (flow.landingMode) {
           void notifyAdminsOfLandingLead({
             leadMatch: newLeadMatch,

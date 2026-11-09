@@ -105,6 +105,15 @@ export function replyLanguage(setting, userMessage = '', earlierText = '') {
   return 'english';
 }
 
+export function investorOptionsFeedbackInstruction(feedback, nextQuestion = '') {
+  const question = String(nextQuestion || '').trim();
+  const progression = feedback === 'declined'
+    ? 'Acknowledge the decline without arguing, pitching the same listings again, or asking for documents. Ask one focused question about which search criterion to change, such as market, budget, or property type.'
+    : question
+      ? `Acknowledge the positive feedback naturally, then ask this next unanswered qualification question in the selected voice: "${question}"`
+      : 'Acknowledge the positive feedback naturally, then ask one useful investor follow-up about what they like most or what they want to explore next.';
+  return `The visitor is responding to property matches already shown. Write this turn yourself in the configured assistant voice, tone, formality, response length, language, and custom guidance. Do not use canned wording. ${progression} Ask only one question. Do not request documents, add a booking link, or repeat property matches on this turn. Follow the configured emoji rule.`;
+}
 
 /** ASCII ?, Arabic ؟ (U+061F), fullwidth ？ (U+FF1F). Never rely on a literal ؟ in source — encoding breaks it. */
 export const REPLY_QUESTION_RE = /[?\u061F\uFF1F]/u;
@@ -279,34 +288,123 @@ export function applyAgentOpeningFunnel(finalReply, {
   setting = null,
   userMessage = '',
   conversationText = '',
+  nextQuestion = '',
+  investmentGoalKnown = false,
+  strategyGoalConflict = false,
 } = {}) {
   if (!isOpeningFormTurn || flowRole !== 'agent' || namedReply || isOutOfScopeMessage) {
     return String(finalReply || '');
   }
-  const original = String(finalReply || '').trim();
-  if (replyHasQuestionMark(original)) return original;
+  const original = polishOpeningReply(finalReply);
+  if (replyHasQuestionMark(original) && !(isInvestorVisitor && asksGenericBuyerFunnel(original))) return original;
 
   const base = splitReplySentences(original)
-    .filter((sentence) => sentence && !replyHasQuestionMark(sentence))
+    .filter((sentence) => sentence && !replyHasQuestionMark(sentence) && !asksGenericBuyerFunnel(sentence))
     .slice(0, 2)
     .join(' ')
     .trim();
 
-  const firstQuestion = isInvestorVisitor
-    ? investorOpeningQuestion(setting, userMessage, conversationText, locationHint)
-    : agentOpeningFunnelQuestion(setting, {
-      intent,
-      location: locationHint,
-      userMessage,
-      earlierText: conversationText,
-    });
-  if (!firstQuestion) return original;
-
+  const area = displayLocation(locationHint);
   const language = replyLanguage(setting, userMessage, conversationText);
+  const openAsk = String(nextQuestion || '').trim();
+  // Prefer the next unanswered saved question (English catalog labels) over canned funnel copy.
+  let firstQuestion = isInvestorVisitor && strategyGoalConflict && language === 'english'
+    ? INVESTOR_STRATEGY_CONFIRM_QUESTION
+    : openAsk && language === 'english'
+    ? (replyHasQuestionMark(openAsk) ? openAsk : `${openAsk.replace(/[.!\s]+$/, '')}?`)
+    : isInvestorVisitor && strategyGoalConflict && language === 'english'
+      ? INVESTOR_STRATEGY_CONFIRM_QUESTION
+      : isInvestorVisitor && !investmentGoalKnown
+      ? investorOpeningQuestion(setting, userMessage, conversationText, area)
+      : isInvestorVisitor && language === 'english'
+      ? INVESTOR_REFINEMENT_QUESTION
+      : agentOpeningFunnelQuestion(setting, {
+        intent,
+        location: area,
+        userMessage,
+        earlierText: conversationText,
+      });
+  if (!firstQuestion) return original;
+  // A tailored model sentence already opens the reply: drop the canned "Great start." intro.
+  if (base) {
+    const parts = splitReplySentences(firstQuestion);
+    if (parts.length > 1 && !replyHasQuestionMark(parts[0])) firstQuestion = parts.slice(1).join(' ');
+  }
+
   const fallbackThanks = language === 'english' ? 'Thanks for sharing those details.' : '';
   const lead = base || fallbackThanks;
   if (!lead) return firstQuestion;
   return `${lead} ${firstQuestion}`.trim();
+}
+
+const GENERIC_OPENER_RE = /^(?:it'?s|it is)\s+(?:a\s+)?(?:pleasure|great|wonderful|nice|lovely)\s+(?:to\s+)?(?:connect|see|meet|hear)\b[^.!?]*[.!?]\s*/i;
+const GREAT_START_RE = /(^|\s)great start[.!]\s*/gi;
+const BUYER_FUNNEL_RE = /neighbou?rhood shortlist or property features/i;
+/** English investor refinement when every saved question is answered and no conflict exists. */
+const INVESTOR_REFINEMENT_QUESTION = 'What matters most on the first shortlist: purchase price, renovation scope, or exit timeline?';
+const INVESTOR_STRATEGY_CONFIRM_QUESTION = 'Should we prioritize resale profit from the flip, or hold the property for rental income?';
+
+function asksGenericBuyerFunnel(text) {
+  return BUYER_FUNNEL_RE.test(String(text || ''));
+}
+
+/** Fix and flip targets resale profit; a rental-income goal points to buy-and-hold. */
+export function investorStrategyGoalConflict(investmentType, investmentGoal) {
+  const type = String(investmentType || '').toLowerCase().replace(/_/g, ' ');
+  const goal = String(investmentGoal || '').toLowerCase().replace(/_/g, ' ');
+  return /\bflip\b/.test(type) && /\brental|cash ?flow\b/.test(goal) && !/\bboth\b/.test(goal);
+}
+
+/** "400k–700k" / "400k 700k" / "400K-700K" -> "$400K–$700K" (catalog bands are dollar bands). */
+export function formatBudgetBands(text) {
+  return String(text || '').replace(
+    /(\$?)(\d+(?:\.\d+)?)\s*([km])\s*(?:[-\u2013\u2014]|\s|to)\s*\$?(\d+(?:\.\d+)?)\s*([km])\b/gi,
+    (_m, _d, a, ua, b, ub) => `$${a}${ua.toUpperCase()}\u2013$${b}${ub.toUpperCase()}`,
+  );
+}
+
+/** Opening-turn polish: drop filler openers and canned "Great start.", format budget bands. */
+export function polishOpeningReply(reply) {
+  let text = String(reply || '').trim();
+  const sentences = splitReplySentences(text);
+  const kept = sentences.filter((sentence) => !GENERIC_OPENER_RE.test(sentence));
+  if (sentences.length > 1 && kept.length && kept.length < sentences.length) {
+    const rest = kept.join(' ');
+    const name = GENERIC_OPENER_RE.test(sentences[0])
+      ? sentences[0].match(/,\s*([A-Z][\p{L}'-]+)[.!]\s*$/u)?.[1]
+      : '';
+    text = name ? `Welcome, ${name}. ${rest}` : rest;
+  }
+  if (splitReplySentences(text).length > 1) text = text.replace(GREAT_START_RE, '$1').replace(/\s{2,}/g, ' ').trim();
+  return formatBudgetBands(text);
+}
+
+const DOCUMENT_LINE_RE = /\b(upload|proof of funds|pre-?approval|photo id|document|bank statement)\b/i;
+const DECLINE_REFINE_QUESTION = {
+  investor: 'Which should we adjust first: the area, budget, property type, or investment strategy?',
+  buyer: 'Which should we adjust first: the area, budget, or property type?',
+};
+export const DECLINE_REFINE_RE = /which should we adjust first/i;
+
+/**
+ * After a visitor declines shown options: brief acknowledgement plus one refinement question.
+ * Drops document/upload lines; prefers the next unanswered saved question (English labels).
+ */
+export function declineRefinementReply(reply, { nextQuestion = '', isInvestor = false, language = 'english' } = {}) {
+  const sentences = splitReplySentences(reply).filter((sentence) => !DOCUMENT_LINE_RE.test(sentence));
+  const statements = sentences.filter((sentence) => !replyHasQuestionMark(sentence));
+  const questions = sentences.filter((sentence) => replyHasQuestionMark(sentence));
+  if (language !== 'english') return sentences.join(' ').trim() || String(reply || '').trim();
+  const ask = questions[0]
+    || (nextQuestion ? (replyHasQuestionMark(nextQuestion) ? nextQuestion : `${String(nextQuestion).replace(/[.!\s]+$/, '')}?`) : '')
+    || DECLINE_REFINE_QUESTION[isInvestor ? 'investor' : 'buyer'];
+  const lead = statements.slice(0, 1).join(' ').trim() || 'Understood, those options are not the right fit.';
+  return `${lead} ${ask}`.replace(/\s+/g, ' ').trim();
+}
+
+/** "lahore" -> "Lahore", "new york" -> "New York"; keeps existing capitals (e.g. "GTA"). */
+export function displayLocation(location) {
+  return String(location || '').trim().replace(/(^|[\s,/-])(\p{Ll})/gu, (_, sep, c) => `${sep}${c.toUpperCase()}`);
 }
 
 export function investorOpeningQuestion(setting, userMessage = '', earlierText = '', location = '') {

@@ -1,4 +1,26 @@
 import { GREETING_START, isGreetingOnly } from './visitorMessage.js';
+import {
+  AREA_PREFIX,
+  INVESTOR_OPENING_QUESTION,
+  INVESTOR_REFINEMENT_QUESTION,
+  INVESTOR_STRATEGY_CONFIRM_QUESTION,
+  TURN_FALLBACK,
+} from './localizedReplyCopy.js';
+
+/**
+ * Urdu vs Arabic (same script). Urdu-only letters: \u0679 tteh, \u0688 ddal, \u0691 rreh, \u06BA noon ghunna,
+ * \u06BE do-chashmi heh, \u06C1 heh goal, \u06D2 / \u06D3 yeh barree. Otherwise Urdu (Farsi) yeh \u06CC or keheh \u06A9
+ * with no Arabic-only letter (\u064A yeh, \u0643 kaf, \u0629 teh marbuta, \u0649 alef maksura). Real Arabic keeps
+ * the Arabic letters, so it is never read as Urdu.
+ */
+const URDU_ONLY_LETTERS = /[\u0679\u0688\u0691\u06BA\u06BE\u06C1\u06D2\u06D3]/u;
+const URDU_FARSI_LETTERS = /[\u06CC\u06A9]/u;
+const ARABIC_ONLY_LETTERS = /[\u064A\u0643\u0629\u0649]/u;
+export function looksUrdu(text) {
+  const value = String(text || '');
+  if (URDU_ONLY_LETTERS.test(value)) return true;
+  return URDU_FARSI_LETTERS.test(value) && !ARABIC_ONLY_LETTERS.test(value);
+}
 
 const WARM_HELLO = {
   english: {
@@ -24,13 +46,16 @@ const WARM_HELLO = {
   mandarin: { default: '您好，很高兴您来了' },
   cantonese: { default: '你好，好高兴你嚟' },
   arabic: { default: 'مرحبا، يسعدني تواصلك' },
+  urdu: { default: 'السلام علیکم، خوش آمدید' },
   hindi: { default: 'नमस्ते, आपका स्वागत है' },
   punjabi: { default: 'ਸਤ ਸ੍ਰੀ ਅਕਾਲ' },
   tamil: { default: 'வணக்கம்' },
 };
 
 const STRONG_LANGUAGE = [
-  ['arabic', (text) => /\p{Script=Arabic}/u.test(text) || /\b(marhaba|assalamu|as-salamu|assalam|asslam|salam|salaam)\b/i.test(text)],
+  // Urdu before Arabic: both use the Arabic script.
+  ['urdu', (text) => looksUrdu(text)],
+  ['arabic', (text) => (/\p{Script=Arabic}/u.test(text) && !looksUrdu(text)) || /\b(marhaba|assalamu|as-salamu|assalam|asslam|salam|salaam)\b/i.test(text)],
   ['hindi', (text) => /\p{Script=Devanagari}/u.test(text) || /\b(namaste|namaskar)\b/i.test(text)],
   ['punjabi', (text) => /\p{Script=Gurmukhi}/u.test(text) || /\b(sat sri akal)\b/i.test(text)],
   ['tamil', (text) => /\p{Script=Tamil}/u.test(text) || /\bvanakkam\b/i.test(text)],
@@ -60,7 +85,8 @@ function hanLanguage(selected, text) {
 }
 
 function unmistakableLanguage(id, text) {
-  if (id === 'arabic') return /\p{Script=Arabic}/u.test(text) || /\b(marhaba|assalamu|as-salamu|assalam|asslam|salam|salaam)\b/i.test(text);
+  if (id === 'urdu') return looksUrdu(text);
+  if (id === 'arabic') return (/\p{Script=Arabic}/u.test(text) && !looksUrdu(text)) || /\b(marhaba|assalamu|as-salamu|assalam|asslam|salam|salaam)\b/i.test(text);
   if (id === 'french') return /[àâäçéèêëîïôùûüœ]/i.test(text) || /\b(bonjour|bonsoir)\b/i.test(text);
   if (id === 'spanish') return /[áéíóúñü¿¡]/i.test(text) || /\b(hola|holas|holi|ola|olas)\b/i.test(text);
   if (id === 'hindi') return /\p{Script=Devanagari}/u.test(text) || /\b(namaste|namaskar)\b/i.test(text);
@@ -166,6 +192,10 @@ const OPTIONS_OFFER_COPY = {
     buyer: 'هل ترغب في الاطلاع على الخيارات المتاحة التي تناسب ما شاركته؟',
     investor: 'هل ترغب في الاطلاع على خيارات استثمارية تناسب أهدافك؟',
   },
+  urdu: {
+    buyer: 'کیا آپ اپنی ضرورت کے مطابق دستیاب آپشنز دیکھنا چاہیں گے؟',
+    investor: 'کیا آپ اپنے سرمایہ کاری کے اہداف کے مطابق آپشنز دیکھنا چاہیں گے؟',
+  },
   hindi: {
     buyer: 'क्या आप अपनी ज़रूरतों के अनुसार उपलब्ध विकल्प देखना चाहेंगे?',
     investor: 'क्या आप अपने निवेश लक्ष्यों के अनुसार विकल्प देखना चाहेंगे?',
@@ -198,16 +228,9 @@ export function availableOptionsOffer(setting, isInvestor, userMessage = '', ear
   return leadIn ? joinLawyerSentences(leadIn, question, false) : question;
 }
 
-const INVESTOR_OPENING_QUESTION = {
-  english: { intro: 'Great start.', question: 'Should we prioritize rental yield or long-term appreciation first?' },
-  french: { intro: 'Très bon début.', question: 'Faut-il privilégier le rendement locatif ou l’appréciation à long terme ?' },
-  spanish: { intro: 'Excelente comienzo.', question: '¿Priorizamos primero el rendimiento del alquiler o la apreciación a largo plazo?' },
-  arabic: { intro: 'بداية رائعة.', question: 'هل نُعطي الأولوية لعائد الإيجار أم لزيادة القيمة على المدى الطويل؟' },
-  hindi: { intro: 'बहुत अच्छी शुरुआत।', question: 'क्या हम पहले किराये की आय को प्राथमिकता दें या लंबी अवधि में मूल्य वृद्धि को?' },
-  punjabi: { intro: 'ਬਹੁਤ ਵਧੀਆ ਸ਼ੁਰੂਆਤ।', question: 'ਕੀ ਅਸੀਂ ਪਹਿਲਾਂ ਕਿਰਾਏ ਦੀ ਆਮਦਨ ਨੂੰ ਤਰਜੀਹ ਦੇਈਏ ਜਾਂ ਲੰਬੇ ਸਮੇਂ ਦੇ ਮੁੱਲ ਵਾਧੇ ਨੂੰ?' },
-  tamil: { intro: 'சிறந்த தொடக்கம்.', question: 'வாடகை வருவாய்க்கு முன்னுரிமை அளிப்போமா அல்லது நீண்டகால மதிப்பு உயர்வுக்கா?' },
-};
-
+export function turnFallbackReply(key, language = 'english') {
+  return TURN_FALLBACK[language]?.[key] || '';
+}
 
 const AGENT_OPENING_FUNNEL = {
   english: {
@@ -245,6 +268,15 @@ const AGENT_OPENING_FUNNEL = {
     },
     sell: {
       without: '\u0628\u062f\u0627\u064a\u0629 \u062c\u064a\u062f\u0629. \u0647\u0644 \u062a\u0641\u0636\u0644 \u0628\u064a\u0639\u0627\u064b \u0623\u0633\u0631\u0639 \u0623\u0645 \u062a\u062c\u0631\u0628\u0629 \u0633\u0639\u0631 \u0637\u0644\u0628 \u0623\u0639\u0644\u0649\u061f',
+    },
+  },
+  urdu: {
+    buy: {
+      withLocation: (loc) => `اچھا آغاز۔ ${loc} میں، پہلے کیا طے کریں: محلوں کی مختصر فہرست یا پراپرٹی کی خصوصیات؟`,
+      without: 'اچھا آغاز۔ پہلے کیا طے کریں: محلوں کی مختصر فہرست یا پراپرٹی کی خصوصیات؟',
+    },
+    sell: {
+      without: 'اچھا آغاز۔ کیا آپ پہلے جلد فروخت کو ترجیح دیں گے یا زیادہ قیمت آزمانے کو؟',
     },
   },
 };
@@ -308,22 +340,23 @@ export function applyAgentOpeningFunnel(finalReply, {
   const language = replyLanguage(setting, userMessage, conversationText);
   const openAsk = String(nextQuestion || '').trim();
   // Prefer the next unanswered saved question (English catalog labels) over canned funnel copy.
-  let firstQuestion = isInvestorVisitor && strategyGoalConflict && language === 'english'
-    ? INVESTOR_STRATEGY_CONFIRM_QUESTION
-    : openAsk && language === 'english'
+  const englishOpenAsk = openAsk && language === 'english'
     ? (replyHasQuestionMark(openAsk) ? openAsk : `${openAsk.replace(/[.!\s]+$/, '')}?`)
-    : isInvestorVisitor && strategyGoalConflict && language === 'english'
-      ? INVESTOR_STRATEGY_CONFIRM_QUESTION
-      : isInvestorVisitor && !investmentGoalKnown
-      ? investorOpeningQuestion(setting, userMessage, conversationText, area)
-      : isInvestorVisitor && language === 'english'
-      ? INVESTOR_REFINEMENT_QUESTION
-      : agentOpeningFunnelQuestion(setting, {
-        intent,
-        location: area,
-        userMessage,
-        earlierText: conversationText,
-      });
+    : '';
+  // Investors never fall through to the buyer funnel (neighbourhood shortlist / features), in any language.
+  let firstQuestion = isInvestorVisitor
+    ? (strategyGoalConflict
+      ? (INVESTOR_STRATEGY_CONFIRM_QUESTION[language] || '')
+      : englishOpenAsk
+        || (!investmentGoalKnown
+          ? investorOpeningQuestion(setting, userMessage, conversationText, area)
+          : (INVESTOR_REFINEMENT_QUESTION[language] || '')))
+    : englishOpenAsk || agentOpeningFunnelQuestion(setting, {
+      intent,
+      location: area,
+      userMessage,
+      earlierText: conversationText,
+    });
   if (!firstQuestion) return original;
   // A tailored model sentence already opens the reply: drop the canned "Great start." intro.
   if (base) {
@@ -340,9 +373,6 @@ export function applyAgentOpeningFunnel(finalReply, {
 const GENERIC_OPENER_RE = /^(?:it'?s|it is)\s+(?:a\s+)?(?:pleasure|great|wonderful|nice|lovely)\s+(?:to\s+)?(?:connect|see|meet|hear)\b[^.!?]*[.!?]\s*/i;
 const GREAT_START_RE = /(^|\s)great start[.!]\s*/gi;
 const BUYER_FUNNEL_RE = /neighbou?rhood shortlist or property features/i;
-/** English investor refinement when every saved question is answered and no conflict exists. */
-const INVESTOR_REFINEMENT_QUESTION = 'What matters most on the first shortlist: purchase price, renovation scope, or exit timeline?';
-const INVESTOR_STRATEGY_CONFIRM_QUESTION = 'Should we prioritize resale profit from the flip, or hold the property for rental income?';
 
 function asksGenericBuyerFunnel(text) {
   return BUYER_FUNNEL_RE.test(String(text || ''));
@@ -413,16 +443,7 @@ export function investorOpeningQuestion(setting, userMessage = '', earlierText =
   if (!copy) return '';
   const area = String(location || '').trim();
   let question = copy.question;
-  if (area) {
-    if (language === 'english') question = `In ${area}, ${question.charAt(0).toLowerCase()}${question.slice(1)}`;
-    else if (language === 'french') question = `À ${area}, ${question}`;
-    else if (language === 'spanish') question = `En ${area}, ${question}`;
-    else if (language === 'arabic') question = `في ${area}، ${question}`;
-    else if (language === 'hindi') question = `${area} में, ${question}`;
-    else if (language === 'punjabi') question = `${area} ਵਿੱਚ, ${question}`;
-    else if (language === 'tamil') question = `${area}-இல், ${question}`;
-    else question = `${area}: ${question}`;
-  }
+  if (area) question = AREA_PREFIX[language] ? AREA_PREFIX[language](area, question) : `${area}: ${question}`;
   return `${copy.intro} ${question}`;
 }
 

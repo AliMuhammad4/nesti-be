@@ -167,10 +167,18 @@ export const trackAnalyticsSchema = Joi.object({
 export const submitPublicLeadSchema = Joi.object({
   full_name: Joi.string().trim().max(120).required(),
   email: Joi.string().trim().email().allow('').empty('').optional(),
-  phone: Joi.string().trim().max(40).allow('').empty('').optional(),
-  intent: Joi.string().valid('buy', 'sell', 'unspecified').optional(),
-  location: Joi.string().trim().max(180).allow('').optional(),
-  address: Joi.string().trim().max(220).allow('').optional(),
+  phone: Joi.string().trim().max(40)
+    .pattern(/^\+?[\d\s().-]+$/, 'phone number')
+    .custom((value, helpers) => {
+      const digits = value.replace(/\D/g, '').length;
+      return digits >= 7 && digits <= 15 ? value : helpers.message('Please enter a valid phone number');
+    })
+    .allow('').empty('').optional(),
+  intent: Joi.string().valid('buy', 'sell', 'invest', 'unspecified').optional(),
+  client_type: Joi.string().trim().lowercase().max(40).allow('').optional(),
+  location: Joi.string().trim().max(400).allow('').optional(),
+  address: Joi.string().trim().max(400).allow('').optional(),
+  buy_property_location: Joi.string().trim().max(400).allow('').optional(),
   budget: Joi.string().trim().max(80).allow('').optional(),
   price: Joi.string().trim().max(80).allow('').optional(),
   timeline: Joi.string().trim().max(80).allow('').optional(),
@@ -224,6 +232,7 @@ export const submitPublicLeadSchema = Joi.object({
   employment_status: Joi.string().trim().max(80).allow('').optional(),
   household_income: Joi.string().trim().max(80).allow('').optional(),
   down_payment_readiness: Joi.string().trim().max(80).allow('').optional(),
+  buying_another: Joi.string().trim().max(20).allow('').optional(),
   property_budget: Joi.string().trim().max(80).allow('').optional(),
   purchase_purpose: Joi.string().trim().max(80).allow('').optional(),
   urgency_signal: Joi.string().trim().max(80).allow('').optional(),
@@ -234,8 +243,20 @@ export const submitPublicLeadSchema = Joi.object({
   realtor_involved: Joi.string().trim().max(20).allow('').optional(),
   first_time_buyer: Joi.string().trim().max(20).allow('').optional(),
   legal_services_needed: Joi.string().trim().max(220).allow('').optional(),
+  via_company: Joi.string().trim().max(40).allow('').optional(),
+  investment_type: Joi.string().trim().max(80).allow('').optional(),
+  investment_goal: Joi.string().trim().max(120).allow('').optional(),
+  owns_investments: Joi.string().trim().max(20).allow('').optional(),
+  investment_financing: Joi.string().trim().max(80).allow('').optional(),
+  borrower_entity: Joi.string().trim().max(80).allow('').optional(),
+  market_country: Joi.string().trim().max(40).allow('').optional(),
+  market_region: Joi.string().trim().max(80).allow('').optional(),
+  market_city: Joi.string().trim().max(120).allow('').optional(),
+  market_country_name: Joi.string().trim().max(120).allow('').optional(),
   session_id: Joi.string().trim().max(120).allow('').optional(),
   visitor_id: Joi.string().trim().max(120).allow('').optional(),
+  form_source: Joi.string().valid('contact_page', 'popup').optional(),
+  seller_photos_unavailable: Joi.boolean().optional(),
 }).or('email', 'phone');
 
 export const submitPublicFeedbackSchema = Joi.object({

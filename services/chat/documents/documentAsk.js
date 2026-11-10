@@ -6,12 +6,14 @@ import {
   assistantOfferedAvailableOptions,
 } from '../utils/propertyMatchesRequestIntent.js';
 import { DOCUMENT_NAMES } from './documentCoverage.js';
+import { allMarketDocumentNames, marketDocumentName } from '../../professionalAssistant/brokerInvestorMarket.js';
 const DOCUMENT_ASK = {
   french: (name, quick) => (quick ? `Envoyez ${name} ici.` : `Vous pouvez envoyer ${name} ici.`),
   spanish: (name, quick) => (quick ? `Suba ${name} aquí.` : `Puede subir ${name} aquí.`),
   mandarin: (name) => `请在这里上传${name}。`,
   cantonese: (name) => `請喺呢度上載${name}。`,
   arabic: (name) => `يمكنك رفع ${name} من هنا.`,
+  urdu: (name) => `آپ ${name} یہاں بھیج سکتے ہیں۔`,
   hindi: (name) => `आप ${name} यहाँ भेज सकते हैं।`,
   punjabi: (name) => `ਤੁਸੀਂ ${name} ਇੱਥੇ ਭੇਜ ਸਕਦੇ ਹੋ।`,
   tamil: (name) => `நீங்கள் ${name} இங்கே அனுப்பலாம்.`,
@@ -20,7 +22,9 @@ const DOCUMENT_ASK = {
 function documentAskLine(request, setting, userMessage, conversationText = '') {
   const language = replyLanguage(setting, userMessage, conversationText);
   const names = DOCUMENT_NAMES[language] || DOCUMENT_NAMES.english;
-  const name = names[request.id] || DOCUMENT_NAMES.english[request.id] || String(request.label || '').toLowerCase();
+  const marketLanguage = DOCUMENT_NAMES[language] ? language : 'english';
+  const marketName = marketDocumentName(request.id, request.market, marketLanguage);
+  const name = marketName || names[request.id] || DOCUMENT_NAMES.english[request.id] || String(request.label || '').toLowerCase();
   const quick = setting?.communication_style === 'quick';
   const formal = setting?.formality === 'formal' || ['luxury', 'polished'].includes(setting?.personalities?.[0]);
   if (DOCUMENT_ASK[language]) return DOCUMENT_ASK[language](name, quick);
@@ -29,8 +33,24 @@ function documentAskLine(request, setting, userMessage, conversationText = '') {
   return `You can upload your ${name} here.`;
 }
 
+function gentleDocumentReask(request, setting, userMessage, conversationText = '') {
+  const language = replyLanguage(setting, userMessage, conversationText);
+  if (language && language !== 'english') return documentAskLine(request, setting, userMessage, conversationText);
+  const marketName = marketDocumentName(request.id, request.market, 'english');
+  const name = marketName || DOCUMENT_NAMES.english[request.id] || String(request.label || '').toLowerCase();
+  const quick = setting?.communication_style === 'quick';
+  const formal = setting?.formality === 'formal' || ['luxury', 'polished'].includes(setting?.personalities?.[0]);
+  if (quick) return `Send your ${name} when you can, or say skip if you do not have it.`;
+  if (formal) return `Whenever it is convenient, you may upload your ${name} here, or let me know if it is not available and we will continue.`;
+  return `No rush, you can upload your ${name} whenever it suits you, or just tell me if you do not have it and we will keep going.`;
+}
+
 function requestPatterns(request) {
-  const names = [request?.label, ...Object.values(DOCUMENT_NAMES).map((pack) => pack[request?.id])].filter(Boolean);
+  const names = [
+    request?.label,
+    ...Object.values(DOCUMENT_NAMES).map((pack) => pack[request?.id]),
+    ...allMarketDocumentNames(request?.id),
+  ].filter(Boolean);
   return [...new Set(names.map((name) => String(name).toLowerCase().replace(/\s+/g, ' ').trim()))]
     .filter((name) => name.length >= 4);
 }
@@ -98,11 +118,15 @@ export function applyDocumentAsk(reply, request, { previousReply = '', userMessa
   if (!request?.label || qualificationOpen || isGreetingOnly(userMessage) || visitorPausesDetails(userMessage) || (shortAnswer && !previousWasDetail)) {
     return { reply: withoutDocumentSentence(text, request), request: null };
   }
-  // Options offer / card announce must wait for the visitor — do not stack a document ask.
   if (assistantOfferedAvailableOptions(text) || assistantAnnouncingOptionCards(text)) {
     return { reply: withoutDocumentSentence(text, request), request: null };
   }
   if (isOpeningIntake(text, setting?.role) && !replyPushesMeeting(text)) return { reply: withoutDocumentSentence(text, request), request: null };
+  if (requestDocumentForReply(request, previousReply) && requestDocumentForReply(request, text)) {
+    const acknowledgement = withoutDocumentSentence(text, request);
+    const reask = gentleDocumentReask(request, setting, userMessage, conversationText);
+    return { reply: [acknowledgement, reask].filter(Boolean).join(' '), request };
+  }
   if (requestDocumentForReply(request, previousReply) || requestDocumentForReply(request, text)) return { reply: text, request };
   if (replyAsks(text) && !previousWasDetail && qualificationOpen !== false) {
     return { reply: withoutDocumentSentence(text, request), request: null };

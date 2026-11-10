@@ -14,6 +14,7 @@ import {
   buildLeadContext,
   finalizeNurtureDraftBody,
   generateDraft,
+  nurtureEmailStyle,
   refineDraft,
 } from '../services/nurture/nurtureEmailOpenAi.js';
 import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurturePropertyMatchesContext.js';
@@ -24,6 +25,7 @@ import {
 } from '../services/nurture/nurtureEmailTemplate.js';
 import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
 import { ownerQuery } from '../services/lead/leadProfileHelpers.js';
+import { leadOptedOutOfNurture, withNurtureUnsubscribeFooter } from '../services/nurture/nurtureUnsubscribe.js';
 import { getOrCreateSubscriptionForUser } from '../services/billing/subscriptionService.js';
 import {
   assertWithinPlanQuota,
@@ -340,6 +342,9 @@ export async function postNurtureDraft(req, res, next) {
         referral_context || bundle.leadMatch?.compatibility_factors?.referral_id,
       ),
       referral_context: referral_context || null,
+      email_style: await nurtureEmailStyle(req.user._id, {
+        conversationId: bundle.leadMatch?.conversation_id || bundle.conversation?._id || null,
+      }),
     });
     const draftRaw = await generateDraft(leadContext, {
       goal,
@@ -398,6 +403,9 @@ export async function postNurtureRefine(req, res, next) {
         referral_context || bundle.leadMatch?.compatibility_factors?.referral_id,
       ),
       referral_context: referral_context || null,
+      email_style: await nurtureEmailStyle(req.user._id, {
+        conversationId: bundle.leadMatch?.conversation_id || bundle.conversation?._id || null,
+      }),
     });
     const draftRaw = await refineDraft(leadContext, { subject, body_text: bodyForAi }, instruction);
     const draft = finalizeNurtureDraftBody(draftRaw, { calendly_url, signature });
@@ -450,6 +458,13 @@ export async function postNurtureSend(req, res, next) {
         return res.status(403).json(payload);
       }
       throw err;
+    }
+
+    if (leadOptedOutOfNurture(bundle.leadMatch)) {
+      return res.status(409).json({
+        success: false,
+        message: 'This client unsubscribed from follow-up emails, so no email was sent.',
+      });
     }
 
     const recipient = resolveRecipientEmail(to_email, bundle);
@@ -522,11 +537,15 @@ export async function postNurtureSend(req, res, next) {
       });
     }
 
+    const withOptOut = withNurtureUnsubscribeFooter(
+      { message: plainMessageForSend, htmlMessage: htmlForSend },
+      bundle.leadMatch?._id || null,
+    );
     const result = await sendEmail({
       email: recipient,
       subject,
-      message: plainMessageForSend,
-      htmlMessage: htmlForSend,
+      message: withOptOut.message,
+      htmlMessage: withOptOut.htmlMessage || htmlForSend,
     });
 
     const baseLog = nurtureLogPayload({

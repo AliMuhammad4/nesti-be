@@ -8,6 +8,34 @@ import {
   createOrReuseLeadProfile,
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
+import {
+  isOtherMarket,
+  marketCountryFromForm,
+  marketRegionFromText,
+  normalizeMarketRegion,
+} from '../../professionalAssistant/brokerInvestorMarket.js';
+
+/** Lawyer market (Canada vs U.S.): explicit form/AI values, else inferred from the property address/location. */
+export function resolveLawyerMarket(formContact = {}, aiDetails = {}, contactInfo = {}) {
+  const f = formContact || {};
+  const ai = aiDetails || {};
+  const text = `${f.address || contactInfo?.address || ai.property_address || ''} ${f.location || ai.location || ''}`.trim();
+  const country = isOtherMarket(f.market_country) ? 'other' : marketCountryFromForm({
+    market_country: f.market_country || ai.market_country,
+    market_region: f.market_region || ai.market_region,
+    address: text,
+  });
+  const rawRegion = f.market_region || ai.market_region || '';
+  const region = normalizeMarketRegion(rawRegion, country) || String(rawRegion || '').trim() || marketRegionFromText(text, country);
+  const city = String(f.market_city || ai.market_city || '').trim();
+  const countryName = country === 'other' ? String(f.market_country_name || ai.market_country_name || '').trim().slice(0, 80) : '';
+  return {
+    market_country: country || '',
+    market_region: region || '',
+    ...(city ? { market_city: city } : {}),
+    ...(countryName ? { market_country_name: countryName } : {}),
+  };
+}
 const LAWYER_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestLawyerGrade = (a, b) =>
   (LAWYER_GRADE_ORDER[a] || 0) >= (LAWYER_GRADE_ORDER[b] || 0) ? a : b;
@@ -26,9 +54,12 @@ export const deriveLawyerQualificationFromText = (text = '') => {
   else if (/home sale|selling|sale of|selling my home/i.test(t)) out.transaction_type = 'home_sale';
   else if (/refinanc|refi/i.test(t)) out.transaction_type = 'refinance';
   else if (/title transfer|transfer title|estate transfer/i.test(t)) out.transaction_type = 'title_transfer';
-  if (/\$?1\s*m|\$?1,?000,?000|1m\+|million plus|over a million/i.test(t)) out.property_value = '1m_plus';
-  else if (/\$?700k|\$?700,?000|700k.?1m|700.?1\s*m|700k to 1m/i.test(t)) out.property_value = '700k_1m';
-  else if (/\$?400k|\$?400,?000|400k.?700k|400.?700/i.test(t)) out.property_value = '400k_700k';
+  // Ranges first ("$400k–$700k", "$700k–$1M" are form labels); "1 month" is not "$1M".
+  if (/\$?400\s*k?\s*(?:[-–—]|to)\s*\$?700\s*k/i.test(t)) out.property_value = '400k_700k';
+  else if (/\$?700\s*k?\s*(?:[-–—]|to)\s*\$?1\s*m\b/i.test(t)) out.property_value = '700k_1m';
+  else if (/\$1\s*m\b|\b1\s*m\+|\$?1,000,000|\b1m\b(?!\s*onth)|million plus|over a million/i.test(t)) out.property_value = '1m_plus';
+  else if (/\$?700k|\$?700,?000/i.test(t)) out.property_value = '700k_1m';
+  else if (/\$?400k|\$?400,?000/i.test(t)) out.property_value = '400k_700k';
   else if (/under 400|below 400|less than 400k/i.test(t)) out.property_value = 'under_400k';
   if (/fully approved|mortgage approved|loan approved|approved/i.test(t)) out.mortgage_status = 'fully_approved';
   else if (/conditional|conditions|subject to/i.test(t)) out.mortgage_status = 'conditional_approval';
@@ -47,9 +78,11 @@ export const deriveLawyerQualificationFromText = (text = '') => {
   else if (/property dispute|real estate dispute|legal advice|property advice|dispute advice/i.test(t)) out.legal_services_needed = 'property_dispute_advice';
   else if (/document review|review documents/i.test(t)) out.legal_services_needed = 'document_review';
   else if (/other legal|not listed|something else|other service/i.test(t)) out.legal_services_needed = 'other';
-  if (/through (a )?compan|corporation|holding company|llc\b/i.test(t)) out.via_company = 'company';
+  if (/(through|via|under) (a |my |our |the )?compan|corporation|holding company|\bllc\b/i.test(t)) out.via_company = 'company';
   else if (/personally|in my (own )?name|personal name/i.test(t)) out.via_company = 'personally';
   if (/investment (property|closing)|investor|rental property/i.test(t)) out.client_type = 'investor';
+  if (/\bcanada\b|\bcanadian\b/i.test(t)) out.market_country = 'CA';
+  else if (/\busa\b|united states|\bu\.s\.(a\.?)?(?![a-z])/i.test(t)) out.market_country = 'US';
   return out;
 };
 
@@ -70,6 +103,10 @@ export const mergeLawyerQualificationForScoring = (formQualification = {}, aiDet
     best_time_to_contact: pick('best_time_to_contact'),
     client_type:          pick('client_type'),
     via_company:          pick('via_company'),
+    market_country:       pick('market_country'),
+    market_region:        pick('market_region'),
+    market_city:          pick('market_city'),
+    market_country_name:          pick('market_country_name'),
   };
 };
 
@@ -221,6 +258,7 @@ export const createLawyerLeadRecords = async ({
   const clientType = rawClientType === 'investor' ? 'investor' : '';
   const leadType = buildLawyerLeadType(leadGrade, clientType);
   const viaCompany = ai.via_company || fq.via_company || '';
+  const market = resolveLawyerMarket(fq, ai, contactInfo);
 
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
@@ -252,6 +290,10 @@ export const createLawyerLeadRecords = async ({
           first_time_buyer: ai.first_time_buyer || fq.first_time_buyer || '',
           legal_services_needed: ai.legal_services_needed || fq.legal_services_needed || '',
           via_company: viaCompany,
+          market_country: market.market_country,
+          market_region: market.market_region,
+          ...(market.market_city ? { market_city: market.market_city } : {}),
+          ...(market.market_country_name ? { market_country_name: market.market_country_name } : {}),
         },
       },
       ...(clientType ? { client_type: clientType } : {}),
@@ -305,6 +347,10 @@ export const createLawyerLeadRecords = async ({
       repeat_visitor: reusedExisting,
       ...(clientType ? { client_type: clientType } : {}),
       ...(viaCompany ? { via_company: viaCompany } : {}),
+      ...(market.market_country ? { market_country: market.market_country } : {}),
+      ...(market.market_region ? { market_region: market.market_region } : {}),
+      ...(market.market_city ? { market_city: market.market_city } : {}),
+      ...(market.market_country_name ? { market_country_name: market.market_country_name } : {}),
     },
     ...(icpFit
       ? {

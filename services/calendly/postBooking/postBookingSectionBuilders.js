@@ -9,6 +9,7 @@ import {
 import { humanizeFinancingStatus } from '../../agent/propertyMatch/scoreRows.js';
 import { agentDisplayName, fetchPropertyMatchBundle, loadLeadProfileForConversation } from './postBookingContext.js';
 import { getLawyerActionFlow } from '../../chat/config/lawyerActionFlow.js';
+import { marketFromLeadProfile } from '../../professionalAssistant/brokerInvestorMarket.js';
 import {
   EMAIL_LINK_STYLE,
   MAX_MAP_STOPS,
@@ -402,6 +403,12 @@ function humanizeMortgageField(key, val) {
       '5_9':     '5–9%',
       under_5:   'Under 5%',
       no_savings: 'No savings yet',
+      cash_purchase: 'Cash purchase',
+      '25_plus': '25%+',
+      '20_24':   '20–24%',
+      '15_19':   '15–19%',
+      under_15:  'Under 15%',
+      not_sure:  'Not sure yet',
     },
     property_budget: {
       clearly_defined: 'Clearly defined',
@@ -424,13 +431,19 @@ export async function buildMortgagePreapprovalDocsSection(ctx) {
   });
   const guest = escapeHtml(leadProfile?.full_name?.trim() || 'there');
   const broker = agentDisplayName(ctx);
+  const market = String(leadProfile?.qualification?.mortgage_broker?.market_country || '').toUpperCase();
+  const taxDocsLi = market === 'US'
+    ? '<li style="margin-bottom:0;"><strong>W-2s / tax returns</strong> — as requested for your file (e.g. W-2s, 1099s, recent tax returns).</li>'
+    : market === 'CA'
+      ? '<li style="margin-bottom:0;"><strong>T4s / tax documents</strong> — as requested for your file (e.g. T4, notices of assessment).</li>'
+      : '<li style="margin-bottom:0;"><strong>Tax documents</strong> — as requested for your file (e.g. T4 / notices of assessment in Canada, W-2s / tax returns in the U.S.).</li>';
   const sectionHtml = `
     <p style="margin:0 0 12px;">Hi ${guest}, here is a concise <strong>pre-approval document checklist</strong> to prepare for your appointment with <strong>${escapeHtml(broker)}</strong>. Bring what applies to your situation; your broker will confirm the exact list.</p>
     <ul style="margin:0;padding-left:20px;line-height:1.55;">
       <li style="margin-bottom:8px;"><strong>Pay stubs</strong> — recent pay periods (often last 30–60 days).</li>
       <li style="margin-bottom:8px;"><strong>Bank statements</strong> — accounts used for down payment and closing.</li>
       <li style="margin-bottom:8px;"><strong>Government-issued ID</strong>.</li>
-      <li style="margin-bottom:0;"><strong>T4s / tax documents</strong> — as requested for your file (e.g. T4, notices of assessment).</li>
+      ${taxDocsLi}
     </ul>
     <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#64748b;">Not a complete underwriting list; self-employed and other situations may require more. Not financial or tax advice.</p>
   `;
@@ -512,12 +525,29 @@ export async function buildLawyerClosingChecklistSection(ctx) {
   const lawyer = agentDisplayName(ctx);
   const stage = escapeHtml(leadProfile?.transaction_stage?.replace(/_/g, ' ') || '—');
   const closing = escapeHtml(leadProfile?.closing_timeline?.replace(/_/g, ' ') || '—');
+  // Country-specific wording (saved market, else inferred from the stored address / location).
+  const lawyerMarket = marketFromLeadProfile(
+    leadProfile?.property ? leadProfile : { ...(leadProfile || {}), property: { address: leadProfile?.address, location: leadProfile?.location } },
+    'lawyer',
+  ).market_country;
+  const checklistLi = lawyerMarket === 'US'
+    ? 'review outstanding contingencies, the title commitment, lender instructions, and the Closing Disclosure.'
+    : 'review outstanding conditions, title matters, lender instructions, and closing adjustments.';
+  const lawyerInvestor = String(leadProfile?.client_type || ctx.conversation?.client_type || '').toLowerCase() === 'investor';
+  const viaCompany = /company|corporat|llc|holding/i.test(String(leadProfile?.qualification?.lawyer?.via_company || ctx.conversation?.form_data?.via_company || ''));
+  const entityDocs = lawyerMarket === 'US' ? 'LLC or corporation documents' : lawyerMarket === 'CA' ? 'corporate documents' : 'company documents';
+  const investorDocs = lawyerInvestor
+    ? ` For this investment property: current leases and rent roll if tenanted${viaCompany ? `; ${entityDocs} and who signs for the company` : ''}.`
+    : '';
+  const documentsLi = (lawyerMarket === 'US'
+    ? 'government-issued ID; signed purchase agreement; lender or loan correspondence; any title or HOA documents received.'
+    : 'government-issued ID; agreement of purchase and sale; lender or mortgage correspondence; void cheque for deposits if requested.') + investorDocs;
   const sectionHtml = `
     <p style="margin:0 0 12px;">Hi ${guest}, here is a concise <strong>closing checklist</strong> and <strong>document preparation</strong> guide before your consultation with <strong>${lawyer}</strong>. Your lawyer will confirm what applies to your file.</p>
     <ul style="margin:0 0 12px;padding-left:20px;line-height:1.55;">
       <li style="margin-bottom:8px;"><strong>Transaction snapshot:</strong> stage ${stage}; expected closing window ${closing}.</li>
-      <li style="margin-bottom:8px;"><strong>Closing checklist:</strong> review outstanding conditions, title matters, lender instructions, and closing adjustments.</li>
-      <li style="margin-bottom:8px;"><strong>Documents to prepare:</strong> government-issued ID; agreement of purchase and sale; lender or mortgage correspondence; void cheque for deposits if requested.</li>
+      <li style="margin-bottom:8px;"><strong>Closing checklist:</strong> ${checklistLi}</li>
+      <li style="margin-bottom:8px;"><strong>Documents to prepare:</strong> ${documentsLi}</li>
       <li style="margin-bottom:0;"><strong>Questions to bring:</strong> title, insurance, closing costs, and any dates that must align with your lender.</li>
     </ul>
     <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">Not legal advice — general preparation only.</p>
@@ -536,11 +566,19 @@ export async function buildLawyerLegalPreparationSection(ctx) {
   });
   const guest = escapeHtml(leadProfile?.full_name?.trim() || 'there');
   const lawyer = agentDisplayName(ctx);
-  const flow = getLawyerActionFlow(ctx.conversation.lead_grade || 'warm');
+  const prepMarket = marketFromLeadProfile(
+    leadProfile?.property ? leadProfile : { ...(leadProfile || {}), property: { address: leadProfile?.address, location: leadProfile?.location } },
+    'lawyer',
+  ).market_country;
+  const flow = getLawyerActionFlow(ctx.conversation.lead_grade || 'warm', {
+    clientType: leadProfile?.client_type || ctx.conversation?.client_type || ctx.conversation?.form_data?.client_type || '',
+    market: prepMarket,
+  });
+  const regionWord = prepMarket === 'US' ? 'state' : prepMarket === 'CA' ? 'province' : 'province or state';
   const sectionHtml = `
     <p style="margin:0 0 12px;">Hi ${guest}, you&rsquo;ve booked <strong>${escapeHtml(flow.goal)}</strong> with <strong>${lawyer}</strong>. This section summarizes <strong>legal preparation</strong> themes — not legal advice.</p>
     <ul style="margin:0 0 12px;padding-left:20px;line-height:1.55;">
-      <li style="margin-bottom:8px;">What typically happens between offer acceptance and closing (milestones vary by province and file).</li>
+      <li style="margin-bottom:8px;">What typically happens between offer acceptance and closing (milestones vary by ${regionWord} and file).</li>
       <li style="margin-bottom:8px;">How your lawyer coordinates with your lender and realtor when applicable.</li>
       <li style="margin-bottom:0;">Documents and information to gather early so review stays on schedule.</li>
     </ul>

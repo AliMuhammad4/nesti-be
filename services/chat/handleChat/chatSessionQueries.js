@@ -9,6 +9,7 @@ import { supportsPropertyMatches } from '../flows/flowRoleMeta.js';
 import { flowTypeForConversation } from './chatFlowResolution.js';
 import { buildPropertyMatchesPayload } from './chatPropertyMatchesPayload.js';
 import { signStoredAttachments } from '../documents/chatDocumentService.js';
+import { leadProfilePreviewFromMeta } from './leadProfilePreview.js';
 import { propertyMatchesEnabledForPlan, readSavedPlan } from './chatPlan.js';
 import {
   normalizeInquiredProperty,
@@ -65,6 +66,9 @@ export const getChatSessionMessagesService = async ({ id: sessionId, embedToken 
       : {}),
     ...(typeof m.meta?.selected_property_context === 'string' && m.meta.selected_property_context.trim()
       ? { selected_property_context: m.meta.selected_property_context.trim() }
+      : {}),
+    ...(m.role === 'user' && leadProfilePreviewFromMeta(m.meta)
+      ? { lead_profile_preview: leadProfilePreviewFromMeta(m.meta) }
       : {}),
   })));
 

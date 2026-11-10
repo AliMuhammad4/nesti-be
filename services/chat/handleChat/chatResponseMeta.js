@@ -79,7 +79,7 @@ export async function buildChatResponseMeta({
     calendly_booking_at: calendlyBookingSnap?.calendly_booking_at ?? null,
     post_booking_checklist:
       calendlyBookingSnap?.calendly_booking_status === 'booked'
-        ? getPostBookingChecklistForMeta(flow, finalGrade, aiIntent)
+        ? getPostBookingChecklistForMeta(flow, finalGrade, aiIntent, conversation?.form_data || null)
         : null,
     ...(mortgage_affordability_snapshot ? { mortgage_affordability_snapshot } : {}),
   };

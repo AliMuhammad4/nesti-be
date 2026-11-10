@@ -62,6 +62,15 @@ const leadMatchSchema = new mongoose.Schema(
     last_contact_at: {
       type: Date,
     },
+    // Client clicked the unsubscribe link in a follow-up email: no more nurture emails to this lead.
+    nurture_opted_out: {
+      type: Boolean,
+      default: false,
+    },
+    nurture_opted_out_at: {
+      type: Date,
+      default: null,
+    },
     ai_insights: {
       payload: {
         type: mongoose.Schema.Types.Mixed,

@@ -1639,7 +1639,8 @@ test('every role ships buyer, seller, and investor templates with a call to acti
 test('investor qualification and mortgage documents distinguish Canadian and U.S. markets', () => {
   const agentQuestions = QUALIFICATION_TEMPLATES.agent.investor.questions;
   assert.match(agentQuestions.find((question) => question.id === 'location').label, /city, province or state, and country/i);
-  assert.match(agentQuestions.find((question) => question.id === 'budget').label, /CAD in Canada or USD in the U\.S\./i);
+  assert.match(agentQuestions.find((question) => question.id === 'budget').label, /in USD\?/i);
+  assert.doesNotMatch(agentQuestions.find((question) => question.id === 'budget').label, /\bCAD\b/);
 
   const brokerQuestions = QUALIFICATION_TEMPLATES.mortgage_broker.investor.questions;
   assert.match(brokerQuestions.find((question) => question.id === 'down_payment').label, /vary by market and lender/i);

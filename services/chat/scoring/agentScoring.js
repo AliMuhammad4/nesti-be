@@ -26,6 +26,11 @@ import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
 import { readQualificationAlias, storedFieldForQuestionId, questionIdForStoredField } from '../../professionalAssistant/qualificationFieldAliases.js';
 
+/** Vacant land / lot listings have no bedrooms, bathrooms, parking, or backyard. */
+function isLandType(value) {
+  return /\b(land|lot|acreage|vacant)\b/i.test(String(value || ''));
+}
+
 export const bestGrade = (a, b) =>
   (GRADE_ORDER[a] || 0) >= (GRADE_ORDER[b] || 0) ? a : b;
 
@@ -450,10 +455,11 @@ export const createLeadRecords = async ({
   const now      = new Date();
 
   const sellerPrice = intent === 'sell' ? (formContact?.price || aiDetails?.budget || signals.budget || '') : '';
+  // The intake form's picked area ("Dubai, United Arab Emirates") beats the city parsed from the opening text.
   const locCombined =
-    signals.location ||
     formContact?.location ||
     formContact?.buy_property_location ||
+    signals.location ||
     aiDetails?.property_address ||
     '';
   const { budgetStr: buyerBudgetStr, financingStr: buyerFinancingFromBudget } =
@@ -510,13 +516,22 @@ export const createLeadRecords = async ({
         budget: intent === 'buy' ? budgetBuy : '',
         expected_price: sellerPrice,
         timeline: signals.timeline || '',
-        bedrooms: formContact?.beds || aiDetails?.bedrooms || (signals.beds != null ? String(signals.beds) : ''),
-        bathrooms: formContact?.baths || aiDetails?.bathrooms || (signals.baths != null ? String(signals.baths) : ''),
+        // Land has no bedrooms, bathrooms, parking, or backyard: never save stray values for it.
+        ...((isLandType(formContact?.property_type || aiDetails?.property_type)) ? {
+          bedrooms: '',
+          bathrooms: '',
+          must_have_features: formContact?.must_have_features || '',
+          parking_required: '',
+          backyard_needed: '',
+        } : {
+          bedrooms: formContact?.beds || aiDetails?.bedrooms || (signals.beds != null ? String(signals.beds) : ''),
+          bathrooms: formContact?.baths || aiDetails?.bathrooms || (signals.baths != null ? String(signals.baths) : ''),
+          must_have_features: formContact?.must_have_features || aiDetails?.must_have_features || '',
+          parking_required: formContact?.parking_required || aiDetails?.parking_required || '',
+          backyard_needed: formContact?.backyard_needed || aiDetails?.backyard_needed || '',
+        }),
         square_footage: signals.area || '',
         property_type: formContact?.property_type || aiDetails?.property_type || '',
-        must_have_features: formContact?.must_have_features || aiDetails?.must_have_features || '',
-        parking_required: formContact?.parking_required || aiDetails?.parking_required || '',
-        backyard_needed: formContact?.backyard_needed || aiDetails?.backyard_needed || '',
         school_district_important: formContact?.school_district_important || '',
         images: intent === 'sell' && Array.isArray(formContact?.property_images) ? formContact.property_images : [],
       },
@@ -545,6 +560,12 @@ export const createLeadRecords = async ({
             readQualificationAlias(formContact, 'down_payment')
             || readQualificationAlias(aiDetails, 'down_payment')
             || '',
+          market_country: String(formContact?.market_country || '').trim(),
+          market_region: String(formContact?.market_region || '').trim(),
+          market_city: String(formContact?.market_city || '').trim().slice(0, 120),
+          market_country_name: String(formContact?.market_country || '').trim().toLowerCase() === 'other'
+            ? String(formContact?.market_country_name || '').trim().slice(0, 80)
+            : '',
         },
       },
       ...(clientType ? { client_type: clientType } : {}),

@@ -152,11 +152,11 @@ export const QUALIFICATION_TEMPLATES = {
     investor: template('Book an Investment Consultation', [
       ['investment_type', 'What type of investment are you interested in?', ['Long-term rental', 'Short-term rental', 'Fix and flip', 'New construction / pre-construction', 'Multi-unit', 'Commercial']],
       ['location', 'Which city, province or state, and country are you considering?'],
-      ['budget', 'What is your approximate investment budget in the market currency (CAD in Canada or USD in the U.S.)?', BUDGET_OPTIONS],
+      ['budget', 'What is your approximate investment budget in USD?', BUDGET_OPTIONS],
       ['investment_goal', 'Are you focused on rental income or appreciation?', ['Rental income', 'Appreciation', 'Both']],
       ['timeline', 'When are you planning to invest?', TIMELINE_OPTIONS],
       ['property_type', 'What property type are you targeting?', PROPERTY_TYPE_OPTIONS],
-      ['preapproval', 'Are you pre-approved, paying cash, or still arranging financing in Canada or the U.S.?', ['Fully pre-approved', 'Paying cash', 'In progress', 'Not yet', 'Unsure']],
+      ['preapproval', 'Are you pre-approved, paying cash, or still arranging financing?', ['Fully pre-approved', 'Paying cash', 'In progress', 'Not yet', 'Unsure']],
       ['realtor_status', 'Are you currently working with a realtor?', ['No', 'Yes but open', 'Yes exclusively']],
       ['owns_investments', 'Do you already own investment properties?', ['Yes', 'No', 'Through a company / LLC']],
 
@@ -182,7 +182,7 @@ export const QUALIFICATION_TEMPLATES = {
     ]),
     investor: template('Book an Investment Financing Consultation', [
       ['investment_type', 'What type of investment property are you considering?', ['Long-term rental', 'Short-term rental', 'Fix and flip', 'Multi-unit', 'New construction / pre-construction', 'Commercial']],
-      ['property_value', 'What is your approximate purchase price range in the market currency (CAD in Canada or USD in the U.S.)?', BUDGET_OPTIONS],
+      ['property_value', 'What is your approximate purchase price range in USD?', BUDGET_OPTIONS],
       ['down_payment', 'What approximate down-payment range or cash-purchase plan do you expect (requirements vary by market and lender)?', INVESTOR_DOWN_PAYMENT_OPTIONS],
       ['owns_investments', 'Do you own other investment properties?', ['Yes', 'No']],
       ['timeline', 'When do you need financing?', TIMELINE_OPTIONS],
@@ -271,6 +271,7 @@ export const LANGUAGES = [
   ['hindi', 'Hindi'],
   ['tamil', 'Tamil'],
   ['punjabi', 'Punjabi'],
+  ['urdu', 'Urdu'],
   ['arabic', 'Arabic'],
   ['other', 'Other supported language'],
 ];
@@ -378,7 +379,7 @@ export const QUALIFICATION = {
 
 export const DOCUMENT_REQUESTS = {
   agent: [
-    ['preapproval_letter', 'Mortgage pre-approval letter (U.S. or Canada)', 'Buyer and investor'],
+    ['preapproval_letter', 'Mortgage pre-approval letter', 'Buyer and investor'],
     ['proof_of_funds', 'Proof of funds (bank letter or statement)', 'Buyer and investor'],
     ['photo_id', 'Photo ID', 'Buyer, seller, and investor'],
     ['home_photos', 'Photos of the home', 'Seller'],
@@ -390,6 +391,9 @@ export const DOCUMENT_REQUESTS = {
     ['mortgage_statement', 'Current mortgage statement'],
     ['preapproval_letter', 'Pre-approval letter'],
     ['photo_id', 'Photo ID'],
+    ['proof_of_funds', 'Proof of down payment or funds (bank statements)'],
+    ['lease_agreements', 'Lease agreements or rent roll (investment / rental properties)'],
+    ['entity_documents', 'Company documents for corporate / LLC borrowers (Canada: articles of incorporation; U.S.: LLC operating agreement)'],
   ],
   lawyer: [
     ['purchase_agreement', 'Purchase or sale agreement'],
@@ -397,6 +401,7 @@ export const DOCUMENT_REQUESTS = {
     ['mortgage_commitment', 'Mortgage commitment'],
     ['photo_id', 'Photo ID'],
     ['condo_status', 'Condo status certificate / HOA docs (Canada status certificate; U.S. HOA/condo docs)'],
+    ['entity_documents', 'Company documents for a purchase through a corporation / LLC (investor clients)'],
   ],
 };
 

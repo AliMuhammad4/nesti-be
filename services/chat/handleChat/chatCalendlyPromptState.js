@@ -33,11 +33,6 @@ export function shouldDeferCalendlyLink(
   const holdsFirstReply =
     isLawyerOrBroker || flow?.flowRole === PROFESSIONAL_TYPE.AGENT;
 
-  /**
-   * Preflight often sends every field on the first POST; without this, deferral lifts immediately
-   * and the tier "exact prompt" forces Schedule Here on turn 1. Hold the URL until the visitor
-   * has sent at least one follow-up (confirm / correct / extra detail) so we recap + Q&A first.
-   */
   if (
     holdsFirstReply &&
     isAutomatedBookingEnabled &&
@@ -97,7 +92,7 @@ export async function buildFlowSystemPromptOptions({
   const checklistIntentForPrompt =
     conversation.intent === 'sell' || conversation.intent === 'buy' ? conversation.intent : intent;
   const postBookingChatChecklistForPrompt = calendlyBookedForPrompt
-    ? getPostBookingChecklistForPrompt(flow, checklistGradeForPrompt, checklistIntentForPrompt)
+    ? getPostBookingChecklistForPrompt(flow, checklistGradeForPrompt, checklistIntentForPrompt, storedForm)
     : [];
 
   const base = {

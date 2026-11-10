@@ -16,6 +16,7 @@ import { questionLabel } from '../../professionalAssistant/assistantSettings.js'
 import { openQualificationQuestionIds } from '../../professionalAssistant/qualificationProgress.js';
 import { investorOptionsFeedbackInstruction } from '../../professionalAssistant/replyStyle.js';
 import { classifyAvailableOptionsFeedback } from '../utils/propertyMatchesRequestIntent.js';
+import { agentDocumentContextFromForm, brokerDocumentContextFromForm, lawyerDocumentContextFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 import { buildOutOfScopeReply, detectOutOfScopeMessage } from '../utils/chatScopeGuard.js';
 
 export async function draftProfessionalChatReply(state) {
@@ -88,6 +89,10 @@ export async function draftProfessionalChatReply(state) {
       clientType: storedForm?.client_type || appliedAssistantSetting?.client_type || '',
       mortgageStatus: storedForm?.mortgage_status || '',
       propertyImages: intakeHasPropertyImages(storedForm),
+      // Market-specific document names / order (Canada vs U.S.) for the next-file line.
+      ...(appliedAssistantSetting?.role === 'mortgage_broker' ? brokerDocumentContextFromForm(storedForm) : {}),
+      ...(appliedAssistantSetting?.role === 'lawyer' ? lawyerDocumentContextFromForm(storedForm) : {}),
+      ...(appliedAssistantSetting?.role === 'agent' ? agentDocumentContextFromForm(storedForm) : {}),
       history,
       previousReply: lastAssistantReply,
     })

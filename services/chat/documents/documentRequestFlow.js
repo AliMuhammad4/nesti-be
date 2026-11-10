@@ -2,6 +2,7 @@ import { DOCUMENT_REQUESTS, idsOf, labelOf } from '../../professionalAssistant/c
 import { visitorSkipsDocumentRequest } from '../utils/chatBookingReply.js';
 import { documentCoversRequest } from './documentCoverage.js';
 import { requestDocumentForReply } from './documentAsk.js';
+import { brokerDocumentOrder } from '../../professionalAssistant/brokerInvestorMarket.js';
 function payingCashFromContext(context = {}) {
   const status = String(context.mortgageStatus || context.mortgage_status || '').trim().toLowerCase();
   if (status === 'paying_cash' || status === 'cash') return true;
@@ -11,14 +12,25 @@ function payingCashFromContext(context = {}) {
 
 export function requestContext(intentOrContext) {
   if (typeof intentOrContext === 'string') {
-    return { intent: intentOrContext, text: '', propertyImages: false, clientType: '', mortgageStatus: '' };
+    return { intent: intentOrContext, text: '', propertyImages: false, clientType: '', mortgageStatus: '', market: '' };
   }
+  const ctx = intentOrContext || {};
   return {
-    intent: String(intentOrContext?.intent || ''),
-    text: String(intentOrContext?.text || ''),
-    propertyImages: Boolean(intentOrContext?.propertyImages),
-    clientType: String(intentOrContext?.clientType || '').trim().toLowerCase(),
-    mortgageStatus: String(intentOrContext?.mortgageStatus || intentOrContext?.mortgage_status || '').trim().toLowerCase(),
+    intent: String(ctx.intent || ''),
+    text: String(ctx.text || ''),
+    propertyImages: Boolean(ctx.propertyImages),
+    clientType: String(ctx.clientType || '').trim().toLowerCase(),
+    mortgageStatus: String(ctx.mortgageStatus || ctx.mortgage_status || '').trim().toLowerCase(),
+    // Mortgage broker market + investor financing (Canada vs U.S. document names and order).
+    // 'CA' | 'US' | 'other' (the "other country" names are keyed lowercase; upper-casing it lost them).
+    market: (() => {
+      const raw = String(ctx.market || '').trim();
+      return raw.toLowerCase() === 'other' ? 'other' : raw.toUpperCase();
+    })(),
+    purchasePurpose: String(ctx.purchasePurpose || '').trim().toLowerCase(),
+    financingType: String(ctx.financingType || '').trim(),
+    borrowerEntity: String(ctx.borrowerEntity || '').trim(),
+    ownsInvestments: String(ctx.ownsInvestments || '').trim().toLowerCase(),
   };
 }
 
@@ -62,11 +74,15 @@ function orderedRequestIds(role, wanted, context) {
     }
     return forVisitor.filter((id) => wanted.includes(id) && !(id === 'home_photos' && context.propertyImages));
   } else if (role === 'mortgage_broker') {
-    if (/\brenew/i.test(text)) order = ['mortgage_statement', 'photo_id', 'notice_of_assessment', 'pay_stubs', 'preapproval_letter'];
-    else if (/\brefinanc/i.test(text)) order = ['mortgage_statement', 'pay_stubs', 'notice_of_assessment', 'photo_id', 'preapproval_letter'];
-    else order = ['pay_stubs', 'notice_of_assessment', 'photo_id', 'preapproval_letter', 'mortgage_statement'];
+    const broker = brokerDocumentOrder({ ...context, cash: cashPurchase });
+    const allowed = wanted.filter((id) => !broker.exclude.has(id));
+    const ranked = [...broker.order.filter((id) => allowed.includes(id)), ...allowed.filter((id) => !broker.order.includes(id))];
+    return ranked.length ? ranked : (allowed.length ? allowed : []);
   } else if (role === 'lawyer') {
-    order = ['purchase_agreement', 'photo_id', 'title_deed', 'mortgage_commitment', ...(condo ? ['condo_status'] : [])];
+    // Company documents only when the client buys through a company (investor intake "via company").
+    const company = context.borrowerEntity === 'company';
+    order = ['purchase_agreement', 'photo_id', ...(company ? ['entity_documents'] : []), 'title_deed', 'mortgage_commitment', ...(condo ? ['condo_status'] : [])];
+    if (!company) wanted = wanted.filter((id) => id !== 'entity_documents');
   }
   const ranked = [...order.filter((id) => wanted.includes(id)), ...wanted.filter((id) => !order.includes(id))];
   if (role === 'lawyer' && !condo) {
@@ -89,7 +105,21 @@ export function nextDocumentRequest(setting, documents = [], intentOrContext = '
   const skip = new Set(skipIds);
   const missing = documentRequestIds(setting, intentOrContext).find((id) => !skip.has(id) && labelOf(catalog, id) && !(documents || []).some((doc) => documentCoversRequest(doc, id)));
   if (!missing) return null;
-  return { id: missing, label: labelOf(catalog, missing) };
+  const context = requestContext(intentOrContext);
+  return { id: missing, label: labelOf(catalog, missing), ...(context.market ? { market: context.market } : {}) };
+}
+
+/**
+ * The still-missing document a reply already asks for (a document review line names the next file), so the
+ * turn does not append a second, different upload ask.
+ */
+export function requestNamedInReply(setting, documents = [], intentOrContext = '', reply = '') {
+  const catalog = DOCUMENT_REQUESTS[setting?.role] || [];
+  const context = requestContext(intentOrContext);
+  const id = documentRequestIds(setting, intentOrContext).find((candidate) => labelOf(catalog, candidate)
+    && !(documents || []).some((doc) => documentCoversRequest(doc, candidate))
+    && requestDocumentForReply({ id: candidate, label: labelOf(catalog, candidate) }, reply));
+  return id ? { id, label: labelOf(catalog, id), ...(context.market ? { market: context.market } : {}) } : null;
 }
 
 /** Document ids the assistant already requested in prior replies (do not re-ask on a wrong upload). */

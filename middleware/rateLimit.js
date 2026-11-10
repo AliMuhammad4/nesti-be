@@ -113,8 +113,6 @@ const buildLimiter = ({
       ? { store: new MongoRateLimitStore(`limiter-${limiterStoreSequence += 1}`) }
       : {}),
   });
-
-// Broad limiter for all auth routes.
 export const authGlobalLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -122,7 +120,6 @@ export const authGlobalLimiter = buildLimiter({
   keyGenerator: authKeyByIp,
 });
 
-// Sensitive auth actions (signup/login/reset/otp resend).
 export const authSensitiveLimiter = buildLimiter({
   windowMs: 10 * 60 * 1000,
   max: 25,
@@ -130,7 +127,6 @@ export const authSensitiveLimiter = buildLimiter({
   keyGenerator: authKeyByEmailAndIp,
 });
 
-// OTP verification can happen multiple times in short bursts.
 export const authOtpVerifyLimiter = buildLimiter({
   windowMs: 10 * 60 * 1000,
   max: 40,
@@ -138,7 +134,6 @@ export const authOtpVerifyLimiter = buildLimiter({
   keyGenerator: authKeyByEmailAndIp,
 });
 
-// Authenticated auth endpoints should rate-limit per user, not shared IP.
 export const authUserLimiter = buildLimiter({
   windowMs: 10 * 60 * 1000,
   max: 120,
@@ -166,6 +161,14 @@ export const publicChatSessionLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000,
   max: 60,
   message: 'Too many chat session requests. Please try again later.',
+  keyGenerator: authKeyByIp,
+  shared: true,
+});
+
+export const publicLeadSubmitLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many inquiries from this connection. Please try again in a few minutes.',
   keyGenerator: authKeyByIp,
   shared: true,
 });

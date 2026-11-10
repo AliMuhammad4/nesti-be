@@ -5,6 +5,7 @@
 import { appliedPersonaText } from '../../professionalAssistant/professionalAssistantService.js';
 import { questionLabel } from '../../professionalAssistant/assistantSettings.js';
 import { intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
+import { lawyerInvestorPromptBlock, lawyerMarketPromptBlock } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 function filled(value) {
   return String(value || '').trim().length > 0;
@@ -152,10 +153,18 @@ export function buildLawyerPromptMainTemplate({
   intakeFormContact = null,
   blockSchedule = false,
   chatAnsweredQuestions = [],
+  previewSignals = null,
 }) {
   const bookingAskLine = 'Would you like me to share available consultation times now?';
   const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
   const applied = assistantSetting?.applied ? assistantSetting : null;
+  // Test My AI preview: market / investor blocks from the persona and chat text (no intake form there).
+  const previewMarket = previewConversation && (previewSignals?.market_country || previewSignals?.market_region)
+    ? lawyerMarketPromptBlock(previewSignals)
+    : '';
+  const previewInvestor = previewConversation && previewSignals
+    ? lawyerInvestorPromptBlock(previewSignals, { fromChat: true })
+    : '';
   const intakeMirrorLine = applied
     ? '- This is often the visitor\'s first message after submitting the intake form: acknowledge it in one short sentence in the selected voice, then ask one short follow-up question that helps me prepare. Do not list their answers back.'
     : `- This is often the visitor's first message after submitting the intake form: briefly mirror what they shared (bullet list is fine), ask whether anything should be corrected, and include 1–2 short follow-up questions that help ${name} prepare (not a sales push).`;
@@ -226,9 +235,9 @@ ${applied
 3) Do not share a Calendly link unless the client asks to schedule.`
     : applied
       ? `MEETING-FIRST EXECUTION ORDER:
-1) On the first reply, greet in one short sentence. The intake answers stay in the background. Do not list them back and do not say the visitor's name again after the greeting.
+1) On the first reply, greet in one short sentence: a warm hello (with their first name when first-name use is on), not a flat thank-you line. The intake answers stay in the background. Do not list them back and do not say the visitor's name again after the greeting.
 2) Ask one missing checked follow-up. A short answer such as "yes" closes only that question. Do not share a meeting link in that reply.
-3) After every missing follow-up is answered, ask for the next requested document, one file at a time. If the visitor does not upload a file, stop asking and share the consultation link.
+3) After every missing follow-up is answered, ask for the next requested document, one file at a time: name only that one document, never a list of several. If the visitor does not upload a file, stop asking and share the consultation link.
 4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
 5) When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.`
       : `MEETING-FIRST EXECUTION ORDER:
@@ -280,7 +289,7 @@ ${meetingStrategy}
 ${meetingOrder}
 
 ${questionsBlock}
-
+${!previewConversation && formProvided ? `\n${lawyerMarketPromptBlock(intakeFormContact)}\n` : ''}${!previewConversation && formProvided && lawyerInvestorPromptBlock(intakeFormContact) ? `\n${lawyerInvestorPromptBlock(intakeFormContact)}\n` : ''}${previewMarket ? `\n${previewMarket}\n` : ''}${previewInvestor ? `\n${previewInvestor}\n` : ''}
 ${questionFlow}
 
 ENGAGEMENT:
@@ -310,6 +319,9 @@ After EVERY reply, append one JSON block on a NEW line starting with ###META###:
     "first_time_buyer": "",
     "client_type": "",
     "via_company": "",
+    "market_country": "",
+    "market_region": "",
+    "market_city": "",
     "legal_services_needed": "",
     "preferred_contact_method": "",
     "best_time_to_contact": "",
@@ -331,6 +343,9 @@ FIELD VALUES (exact enums):
 - For INVESTMENT closings: set client_type "investor" and fill via_company from intake or chat. Do not re-ask once known. Prefer via_company over first_time_buyer for investors.
 - client_type: "investor" | "personal" | ""
 - via_company: "personally" | "company" | "not_sure" | ""
+- market_country: "CA" | "US" | "" (keep the intake form value; never switch it)
+- market_region: province/territory or state code (e.g. "ON", "QC", "TX", "FL") | ""
+- market_city: the city or town of the property / target area (e.g. "Calgary", "Austin"); keep the intake form value | ""
 - legal_services_needed: "full_closing" | "purchase_closing" | "sale_closing" | "refinance_legal_work" | "agreement_review" | "title_transfer" | "document_review" | "mortgage_document_review" | "property_dispute_advice" | "other" | ""
 - preferred_contact_method: "phone" | "email" | "video_call" | ""
 - best_time_to_contact: "morning" | "afternoon" | "evening" | "anytime" | ""

@@ -1,4 +1,5 @@
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
+import { marketChoiceFromForm, marketCountryFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 const MORTGAGE_STORED_QUALIFICATION_KEYS = [
   'mortgage_timeline',
   'pre_approval_status',
@@ -13,6 +14,12 @@ const MORTGAGE_STORED_QUALIFICATION_KEYS = [
   'client_type',
   'investment_type',
   'owns_investments',
+  'investment_financing',
+  'borrower_entity',
+  'market_country',
+  'market_region',
+  'market_city',
+  'market_country_name',
 ];
 export function pickStoredFormQualification(storedForm) {
   if (!storedForm) return {};
@@ -22,6 +29,8 @@ export function pickStoredFormQualification(storedForm) {
   }
   const purpose = String(o.purchase_purpose || '').toLowerCase();
   if (!o.client_type && purpose === 'investment') o.client_type = 'investor';
+  // Market from the explicit country, or inferred from province/state / location text.
+  if (!o.market_country) o.market_country = marketChoiceFromForm(storedForm) || null;
   return o;
 }
 export function pickStoredFormSignals(storedForm) {
@@ -108,6 +117,12 @@ export function mergeMortgageAiDetailsForMeta(parsedAiDetails, derivedQual) {
     client_type: p.client_type || d.client_type || '',
     investment_type: p.investment_type || d.investment_type || '',
     owns_investments: p.owns_investments || d.owns_investments || '',
+    investment_financing: p.investment_financing || d.investment_financing || '',
+    borrower_entity: p.borrower_entity || d.borrower_entity || '',
+    market_country: p.market_country || d.market_country || '',
+    market_region: p.market_region || d.market_region || '',
+    market_city: p.market_city || d.market_city || '',
+    market_country_name: p.market_country_name || d.market_country_name || '',
   };
 }
 
@@ -128,5 +143,12 @@ export function buildMortgageLeadProfileUpdate(parsedAiDetails, derivedQual, for
     mortgage_property_budget: p.property_budget || d.property_budget || f.property_budget,
     mortgage_investment_type: p.investment_type || d.investment_type || f.investment_type,
     mortgage_owns_investments: p.owns_investments || d.owns_investments || f.owns_investments,
+    mortgage_investment_financing: p.investment_financing || d.investment_financing || f.investment_financing,
+    mortgage_borrower_entity: p.borrower_entity || d.borrower_entity || f.borrower_entity,
+    // The form's explicit country/region wins over a model guess.
+    mortgage_market_country: marketChoiceFromForm(f) || marketChoiceFromForm({ market_country: p.market_country || d.market_country }) || undefined,
+    mortgage_market_region: f.market_region || p.market_region || d.market_region,
+    mortgage_market_city: f.market_city || p.market_city || d.market_city,
+    mortgage_market_country_name: f.market_country_name || p.market_country_name || d.market_country_name,
   };
 }

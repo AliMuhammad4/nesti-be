@@ -23,6 +23,21 @@ function duplicateLeadSlot(error) {
   return error?.code === 11000 || error?.cause?.code === 11000;
 }
 
+export function existingLeadTypePattern(intentSuffix, clientType = '') {
+  const suffixes = [String(intentSuffix || 'lead')];
+  if (suffixes[0] !== 'seller' || String(clientType || '').toLowerCase() === 'investor') suffixes.push('investor');
+  return new RegExp(`(${[...new Set(suffixes)].join('|')})$`);
+}
+
+async function findExistingLeadMatch({ conversationId, userId, intentSuffix, clientType }) {
+  const query = LeadMatch.findOne({
+    conversation_id: conversationId,
+    user_id: userId,
+    lead_type: existingLeadTypePattern(intentSuffix, clientType),
+  });
+  return typeof query?.sort === 'function' ? query.sort({ last_contact_at: -1, updatedAt: -1 }) : query;
+}
+
 function resolveMatchClientType(formContact, aiIntent) {
   const fromForm = String(formContact?.client_type || '').trim().toLowerCase();
   if (fromForm) return fromForm;
@@ -50,7 +65,7 @@ function computeLeadTypeForMatch(flow, persistedGrade, aiIntent, formContact = n
   return buildLeadType(persistedGrade, intent, clientType);
 }
 
-const LEAD_PROFILE_UPDATE_PATHS = {
+export const LEAD_PROFILE_UPDATE_PATHS = {
   full_name: 'identity.full_name',
   email: 'identity.email',
   phone: 'identity.phone',
@@ -80,6 +95,10 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   investment_goal: 'qualification.agent.investment_goal',
   owns_investments: 'qualification.agent.owns_investments',
   down_payment_readiness: 'qualification.agent.down_payment_readiness',
+  agent_market_country: 'qualification.agent.market_country',
+  agent_market_region: 'qualification.agent.market_region',
+  agent_market_city: 'qualification.agent.market_city',
+  agent_market_country_name: 'qualification.agent.market_country_name',
   mortgage_timeline: 'qualification.mortgage_broker.mortgage_timeline',
   pre_approval_status: 'qualification.mortgage_broker.pre_approval_status',
   credit_score_range: 'qualification.mortgage_broker.credit_score_range',
@@ -91,6 +110,12 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   mortgage_property_budget: 'qualification.mortgage_broker.property_budget',
   mortgage_investment_type: 'qualification.mortgage_broker.investment_type',
   mortgage_owns_investments: 'qualification.mortgage_broker.owns_investments',
+  mortgage_investment_financing: 'qualification.mortgage_broker.investment_financing',
+  mortgage_borrower_entity: 'qualification.mortgage_broker.borrower_entity',
+  mortgage_market_country: 'qualification.mortgage_broker.market_country',
+  mortgage_market_region: 'qualification.mortgage_broker.market_region',
+  mortgage_market_city: 'qualification.mortgage_broker.market_city',
+  mortgage_market_country_name: 'qualification.mortgage_broker.market_country_name',
   transaction_stage: 'qualification.lawyer.transaction_stage',
   closing_timeline: 'qualification.lawyer.closing_timeline',
   transaction_type: 'qualification.lawyer.transaction_type',
@@ -99,6 +124,10 @@ const LEAD_PROFILE_UPDATE_PATHS = {
   first_time_buyer: 'qualification.lawyer.first_time_buyer',
   legal_services_needed: 'qualification.lawyer.legal_services_needed',
   via_company: 'qualification.lawyer.via_company',
+  lawyer_market_country: 'qualification.lawyer.market_country',
+  lawyer_market_region: 'qualification.lawyer.market_region',
+  lawyer_market_city: 'qualification.lawyer.market_city',
+  lawyer_market_country_name: 'qualification.lawyer.market_country_name',
 };
 
 function hasMeaningfulSellerListingUpdate(previousProfile = {}, mergedQual = {}) {
@@ -124,7 +153,6 @@ function hasMeaningfulSellerListingUpdate(previousProfile = {}, mergedQual = {})
   return false;
 }
 
-/** Writes the additive client-type fields on the LeadProfile. Never touches scoring, dedupe, or notifications. */
 export async function applyLeadClientTypeExtras(leadMatch, extras) {
   if (!leadMatch?.lead_profile_id || !extras?.client_type) return;
   const set = {
@@ -144,7 +172,10 @@ export async function syncLeadMatchAfterTurn(args) {
     : null;
   const leadIntent = usesFixedBuyIntentForLeadMatch(args?.flow) ? 'unspecified' : (formIntent || args?.aiIntent);
   const intentSuffix = args?.flow?.getIntentSuffix ? args.flow.getIntentSuffix(leadIntent) : 'lead';
-  const key = conversationId ? `lead:${args.userId}:${conversationId}:${intentSuffix}` : '';
+  const lockSuffix = intentSuffix === 'seller' && resolveMatchClientType(args?.formContact, args?.aiIntent) === 'investor'
+    ? 'buyer'
+    : intentSuffix;
+  const key = conversationId ? `lead:${args.userId}:${conversationId}:${lockSuffix}` : '';
   if (!key) return syncLeadMatchBody(args);
   return withExclusiveKey(key, () => syncLeadMatchBody(args));
 }
@@ -181,22 +212,20 @@ async function syncLeadMatchBody({
       : null;
   const leadIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : (formIntent || aiIntent);
   const intentSuffix = flow.getIntentSuffix(leadIntent);
+  const matchClientType = resolveMatchClientType(formContact, aiIntent);
   let existingLeadMatch = canCreateLeads && !forceCreateLead && existingLeadMatchPrefetched?._id
     ? existingLeadMatchPrefetched
     : null;
   if (canCreateLeads && !forceCreateLead && !existingLeadMatch) {
-    existingLeadMatch = await LeadMatch.findOne({
-      conversation_id: conversation._id,
-      user_id: userId,
-      lead_type: new RegExp(`${intentSuffix}$`),
+    existingLeadMatch = await findExistingLeadMatch({
+      conversationId: conversation._id,
+      userId,
+      intentSuffix,
+      clientType: matchClientType,
     });
   }
   const creatingNewLead = forceCreateLead || !existingLeadMatch;
 
-  /**
-   * Agents need a ProfessionalProfile row (ICP, business context). Lawyers and mortgage brokers
-   * often embed the chatbot before finishing Settings; we still persist CRM leads when contact exists.
-   */
   const profileRequiredForNewLead = flow?.flowRole === PROFESSIONAL_TYPE.AGENT;
   const canPersistNewLead = hasContact && (!profileRequiredForNewLead || professionalProfile);
 
@@ -246,10 +275,12 @@ async function syncLeadMatchBody({
     });
     } catch (error) {
       if (!duplicateLeadSlot(error)) throw error;
-      existingLeadMatch = await LeadMatch.findOne({
-        conversation_id: conversation._id,
-        user_id: userId,
-        lead_type: new RegExp(`${intentSuffix}$`),
+      // The slot is taken: pick up that row (investor or not) and fall through to the update path below.
+      existingLeadMatch = await findExistingLeadMatch({
+        conversationId: conversation._id,
+        userId,
+        intentSuffix,
+        clientType: matchClientType,
       });
       logger.warn('Chat service: lead already exists for this conversation', {
         op: 'chat.lead',
@@ -314,10 +345,33 @@ async function syncLeadMatchBody({
           appointment_status,
           conversion_preview,
         });
+        const fc = formContact || {};
+        const ai = parsedAiDetails || {};
         void sendNewLeadCreatedEmailIfEnabled(userId, {
           newLeadMatch,
           persistedGrade,
           conversion_preview,
+          // Same detail rows as inquiry / public-form emails (market, budget in USD, investor fields).
+          details: {
+            type: 'chat_lead',
+            professional_type: flowType,
+            client_name: contactInfo?.name || fc.name || fc.full_name || '',
+            intent: leadIntent,
+            client_type: fc.client_type || matchClientType || '',
+            purchase_purpose: fc.purchase_purpose || '',
+            via_company: fc.via_company || '',
+            investment_type: fc.investment_type || ai.investment_type || '',
+            owns_investments: fc.owns_investments || '',
+            investment_financing: fc.investment_financing || '',
+            borrower_entity: fc.borrower_entity || '',
+            preferred_location: fc.location || fc.buy_property_location || fc.address || fc.property_address || ai.location || '',
+            timeline: fc.timeline || fc.mortgage_timeline || fc.closing_timeline || '',
+            market_country: fc.market_country || '',
+            market_region: fc.market_region || '',
+            market_city: fc.market_city || '',
+            market_country_name: fc.market_country_name || '',
+            budget: fc.budget || fc.property_budget || fc.property_value || fc.price || '',
+          },
         }).catch((error) => logger.warn('New lead email failed', { error: error?.message }));
         if (flow.landingMode) {
           void notifyAdminsOfLandingLead({

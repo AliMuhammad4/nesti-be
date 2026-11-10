@@ -18,11 +18,18 @@ import { getOrCreateSubscriptionForUser } from '../services/billing/subscription
 import { assertWithinPlanQuota, PlanQuotaError } from '../services/billing/planQuota.js';
 import { withNestiNurtureCalendlyTracking } from '../services/nurture/nurtureCalendlyTracking.js';
 import { loadPropertyMatchesForNurtureEmail } from '../services/nurture/nurturePropertyMatchesContext.js';
-import { buildLeadContext, generateDraft } from '../services/nurture/nurtureEmailOpenAi.js';
+import { buildLeadContext, generateDraft, nurtureEmailStyle } from '../services/nurture/nurtureEmailOpenAi.js';
 import {
   composeNurtureEmailHtml,
   prepareNurturePlainBodyForEmail,
 } from '../services/nurture/nurtureEmailTemplate.js';
+import { leadOptedOutOfNurture, withNurtureUnsubscribeFooter } from '../services/nurture/nurtureUnsubscribe.js';
+import { loadAppliedAssistantSetting } from '../services/professionalAssistant/assistantStore.js';
+export function assistantAllowsAutomatedFollowup(setting) {
+  if (!setting?.applied) return true;
+  const actions = Array.isArray(setting.next_actions) ? setting.next_actions : [];
+  return actions.includes('follow_up');
+}
 
 const AUTOMATION_TYPE = 'fifteen_day_followup';
 const TERMINAL_STATUSES = new Set(['converted', 'closed_lost']);
@@ -107,12 +114,12 @@ function roleSpecificNurtureTone(profType) {
 }
 
 function buildSimpleFollowupEmail({ user, professionalProfile, profile, leadMatch }) {
-  const name = recipientName(profile, leadMatch) || 'there';
+  const name = recipientName(profile, leadMatch) || '';
   const senderName = professionalName(user, professionalProfile);
   const calendlyUrl = String(professionalProfile?.calendly_link || '').trim();
   const subject = `Checking in from ${senderName}`;
   const textParts = [
-    `Hi ${name},`,
+    name ? `Hi ${name},` : 'Hello,',
     `I wanted to quickly follow up and see if you had any questions or updates since we last connected.`,
     `If you are still exploring options, reply to this email and I will be happy to help with the next step.`,
   ];
@@ -123,7 +130,7 @@ function buildSimpleFollowupEmail({ user, professionalProfile, profile, leadMatc
   const message = textParts.join('\n\n');
   const htmlMessage = `
     <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1f2937">
-      <p>Hi ${escapeHtml(name)},</p>
+      <p>${name ? `Hi ${escapeHtml(name)},` : 'Hello,'}</p>
       <p>I wanted to quickly follow up and see if you had any questions or updates since we last connected.</p>
       <p>If you are still exploring options, reply to this email and I will be happy to help with the next step.</p>
       ${
@@ -172,6 +179,7 @@ async function buildFollowupEmail({ user, professionalProfile, profile, leadMatc
     const leadContext = buildLeadContext(leadMatch, profile, conversation, {
       property_matches: propertyMatches,
       viewer_professional_role: user?.role || null,
+      email_style: await nurtureEmailStyle(user?._id, { conversationId: leadMatch?.conversation_id || null }),
     });
     const draft = await generateDraft(leadContext, {
       goal: roleSpecificNurtureGoal(profType),
@@ -241,6 +249,13 @@ async function sendFollowupForLead(leadMatch, now, followupDays) {
   if (!(await userCanReceiveAutomatedFollowups(user))) {
     return { sent: false, skipped: 'feature_unavailable' };
   }
+  if (leadOptedOutOfNurture(leadMatch)) {
+    return { sent: false, skipped: 'unsubscribed' };
+  }
+  const assistantSetting = await loadAppliedAssistantSetting(user._id).catch(() => null);
+  if (!assistantAllowsAutomatedFollowup(assistantSetting)) {
+    return { sent: false, skipped: 'follow_up_off' };
+  }
 
   try {
     const subscription = await getOrCreateSubscriptionForUser(user);
@@ -286,13 +301,14 @@ async function sendFollowupForLead(leadMatch, now, followupDays) {
     return { sent: false, skipped: 'failed_today' };
   }
 
-  const email = await buildFollowupEmail({
+  const built = await buildFollowupEmail({
     user,
     professionalProfile,
     profile,
     leadMatch,
     conversation,
   });
+  const email = { ...built, ...withNurtureUnsubscribeFooter(built, leadMatch._id) };
   const result = await sendEmail({
     email: recipient,
     subject: email.subject,
@@ -350,6 +366,7 @@ export async function runFifteenDayNurtureFollowups(options = {}) {
 
   const candidates = await LeadMatch.find({
     match_status: { $nin: [...TERMINAL_STATUSES] },
+    nurture_opted_out: { $ne: true },
     $or: [
       { last_contact_at: { $lte: dueBefore } },
       { last_contact_at: { $exists: false }, createdAt: { $lte: dueBefore } },

@@ -41,6 +41,7 @@ export const handleChat = async (req, res, next) => {
       previewAssistantDraft,
       testPersona,
       attachmentIds,
+      leadProfilePreview,
     } = req.body;
 
     logger.info('Chat API: request', {
@@ -77,6 +78,7 @@ export const handleChat = async (req, res, next) => {
       previewAssistantDraft,
       testPersona: preview === true ? testPersona : undefined,
       attachmentIds,
+      leadProfilePreview,
       viewerUserId: req.user?._id || null,
       onReplyDelta: preview === true
         ? (text) => {
@@ -254,6 +256,10 @@ export const scorePreview = async (req, res, next) => {
         client_type:          formContact.client_type || null,
         via_company:          formContact.via_company || null,
         legal_services_needed: formContact.legal_services_needed || null,
+        market_country:       formContact.market_country || null,
+        market_region:        formContact.market_region || null,
+        market_city:          formContact.market_city || null,
+        market_country_name:          formContact.market_country_name || null,
       };
       const result = scoreLawyerLead({
         message:          '',
@@ -279,6 +285,12 @@ export const scorePreview = async (req, res, next) => {
         client_type:            formContact.client_type || null,
         investment_type:        formContact.investment_type || null,
         owns_investments:       formContact.owns_investments || null,
+        investment_financing:   formContact.investment_financing || null,
+        borrower_entity:        formContact.borrower_entity || null,
+        market_country:         formContact.market_country || null,
+        market_region:          formContact.market_region || null,
+        market_city:            formContact.market_city || null,
+        market_country_name:            formContact.market_country_name || null,
         urgency_signal:         formContact.urgency_signal || null,
         budget:                 formContact.budget || null,
       };

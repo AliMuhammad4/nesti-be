@@ -393,7 +393,7 @@ test('investor catalog stays CA/US-aligned for questions and documents', () => {
   const proof = agentDocs.find((d) => d.id === 'proof_of_funds');
   const pre = agentDocs.find((d) => d.id === 'preapproval_letter');
   assert.match(proof.label, /bank letter|statement/i);
-  assert.match(pre.label, /U\.S\.|Canada/i);
+  assert.match(pre.label, /pre-approval letter/i);
   const condo = DOCUMENT_REQUESTS.lawyer.find(([id]) => id === 'condo_status');
   assert.match(condo[1], /HOA|status certificate/i);
 });

@@ -34,6 +34,7 @@ export const handleChatService = async ({
   viewerUserId = null,
   onReplyDelta = null,
   attachmentIds = [],
+  leadProfilePreview = null,
 }) => {
   if (!message || typeof message !== 'string' || !message.trim()) {
     return { status: 400, body: { success: false, message: 'message is required' } };
@@ -91,6 +92,7 @@ export const handleChatService = async ({
     formContact,
     forceNewLead,
     attachmentIds,
+    leadProfilePreview,
     landingMode,
     landingSettings,
     embedToken,

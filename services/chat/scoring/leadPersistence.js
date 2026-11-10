@@ -202,6 +202,7 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
       latest_budget_text: budgetText,
       min_budget: parsedBudget.min,
       max_budget: parsedBudget.max,
+      // Every market (Canada included) stores budgets in USD.
       currency: budgetText ? 'USD' : '',
       confidence: parsedBudget.confidence,
     },
@@ -243,6 +244,11 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         investment_goal: payload.qualification?.agent?.investment_goal || '',
         owns_investments: payload.qualification?.agent?.owns_investments || '',
         down_payment_readiness: payload.qualification?.agent?.down_payment_readiness || '',
+        buying_another: payload.qualification?.agent?.buying_another || '',
+        market_country: payload.qualification?.agent?.market_country || '',
+        market_region: payload.qualification?.agent?.market_region || '',
+        market_city: payload.qualification?.agent?.market_city || '',
+        market_country_name: payload.qualification?.agent?.market_country_name || '',
       },
       mortgage_broker: {
         mortgage_timeline: payload.qualification?.mortgage_broker?.mortgage_timeline || '',
@@ -256,6 +262,12 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         property_budget: payload.qualification?.mortgage_broker?.property_budget || '',
         investment_type: payload.qualification?.mortgage_broker?.investment_type || '',
         owns_investments: payload.qualification?.mortgage_broker?.owns_investments || '',
+        investment_financing: payload.qualification?.mortgage_broker?.investment_financing || '',
+        borrower_entity: payload.qualification?.mortgage_broker?.borrower_entity || '',
+        market_country: payload.qualification?.mortgage_broker?.market_country || '',
+        market_region: payload.qualification?.mortgage_broker?.market_region || '',
+        market_city: payload.qualification?.mortgage_broker?.market_city || '',
+        market_country_name: payload.qualification?.mortgage_broker?.market_country_name || '',
       },
       lawyer: {
         transaction_stage: payload.qualification?.lawyer?.transaction_stage || '',
@@ -267,6 +279,10 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         first_time_buyer: payload.qualification?.lawyer?.first_time_buyer || '',
         legal_services_needed: payload.qualification?.lawyer?.legal_services_needed || '',
         via_company: payload.qualification?.lawyer?.via_company || '',
+        market_country: payload.qualification?.lawyer?.market_country || '',
+        market_region: payload.qualification?.lawyer?.market_region || '',
+        market_city: payload.qualification?.lawyer?.market_city || '',
+        market_country_name: payload.qualification?.lawyer?.market_country_name || '',
       },
     },
     scoring: {
@@ -331,12 +347,32 @@ export async function createValidatedLeadProfile(payload) {
   return LeadProfile.create(validated);
 }
 
-function buildNonEmptyPatch(payload) {
-  const patch = {};
+/** Home-only fields a Land inquiry blanks (vacant land has no bedrooms, bathrooms, parking or backyard). */
+const LAND_CLEARED_PROPERTY_FIELDS = ['bedrooms', 'bathrooms', 'parking_required', 'backyard_needed'];
+
+function isLandPropertyType(value) {
+  return /\b(land|lot|acreage|vacant)\b/i.test(String(value || ''));
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+/**
+ * Dot-path $set patch with only non-empty values, so a repeat submission that leaves a field blank
+ * (e.g. contact_preferences.preferred_contact_method) keeps the saved value instead of blanking it.
+ */
+function buildNonEmptyPatch(payload, prefix = '', patch = {}) {
   for (const [k, v] of Object.entries(payload || {})) {
+    const path = prefix ? `${prefix}.${k}` : k;
     if (v == null) continue;
     if (typeof v === 'string' && v.trim() === '') continue;
-    patch[k] = v;
+    if (Array.isArray(v) && !v.length) continue;
+    if (isPlainObject(v)) {
+      buildNonEmptyPatch(v, path, patch);
+      continue;
+    }
+    patch[path] = v;
   }
   return patch;
 }
@@ -370,8 +406,6 @@ export async function createOrReuseLeadProfile({
     ...(phone ? [{ 'identity.canonical_phone': phone }] : []),
   ];
 
-  // Always exclude seller profiles from reuse for non-sell intents.
-  // Seller profiles contain property listing data (images, prices) that must never be overwritten.
   const intentExclusion = {};
   if (validated.intent !== 'sell') {
     intentExclusion.$nor = [
@@ -380,7 +414,6 @@ export async function createOrReuseLeadProfile({
       { 'property.images.0': { $exists: true } },
     ];
   } else {
-    // For seller leads, don't reuse buyer profiles
     intentExclusion.$nor = [
       { intent: 'buy' },
       { 'intent_summary.primary_intent': 'buy' },
@@ -403,11 +436,12 @@ export async function createOrReuseLeadProfile({
   }
 
   const patch = buildNonEmptyPatch(validated);
-  // Do not overwrite aggregate/history fields on profile reuse.
-  delete patch.lead_refs;
-  delete patch.stats;
-  delete patch.intent_summary;
-  delete patch.lifecycle;
+  for (const key of Object.keys(patch)) {
+    if (/^(lead_refs|stats|intent_summary|lifecycle)(\.|$)/.test(key)) delete patch[key];
+  }
+  if (isLandPropertyType(validated.property?.property_type)) {
+    for (const field of LAND_CLEARED_PROPERTY_FIELDS) patch[`property.${field}`] = '';
+  }
   const leadProfile = await LeadProfile.findByIdAndUpdate(
     existingProfile._id,
     { $set: patch, $unset: LEGACY_LEAD_PROFILE_UNSET },
@@ -420,17 +454,19 @@ export async function createOrReuseLeadProfile({
   return { leadProfile: await LeadProfile.findById(leadProfile._id), reusedExisting: true };
 }
 
-function leadSlotFor(conversationId, leadType) {
-  const suffix = ['buyer', 'seller', 'client', 'investor'].find((name) =>
+export function leadSlotFor(conversationId, leadType, professionalType = '') {
+  let suffix = ['buyer', 'seller', 'client', 'investor'].find((name) =>
     String(leadType || '').endsWith(`_${name}`),
   );
   if (!conversationId || !suffix) return undefined;
+  if (suffix === 'investor') suffix = professionalType === PROFESSIONAL_TYPE.AGENT ? 'buyer' : 'client';
   return `${conversationId}:${suffix}`.slice(0, 80);
 }
 
 export async function createValidatedLeadMatch(payload) {
   const conversationId = toIdString(payload.conversation_id);
-  const leadSlot = payload.lead_slot || leadSlotFor(conversationId, payload.lead_type);
+  const leadSlot = payload.lead_slot
+    || leadSlotFor(conversationId, payload.lead_type, payload.compatibility_factors?.professional_type);
   const candidate = {
     ...payload,
     user_id: toIdString(payload.user_id),
@@ -466,7 +502,7 @@ export async function bumpLeadProfileStats(leadProfileId, intent = 'buy', leadTy
   inc['stats.total_inquiries'] = 1;
   inc['stats.total_sessions'] = 1;
   const lt = String(leadType || '');
-  const isClientLead = /_client$/.test(lt);
+  const isClientLead = /_client$/.test(lt) || (/_investor$/.test(lt) && intent === 'unspecified');
   if (intent === 'sell') inc['stats.sell_matches'] = 1;
   else if (isClientLead) inc['stats.client_matches'] = 1;
   else if (intent !== 'unspecified') inc['stats.buy_matches'] = 1;

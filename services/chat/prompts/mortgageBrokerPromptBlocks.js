@@ -1,6 +1,7 @@
 import { appliedPersonaText } from '../../professionalAssistant/professionalAssistantService.js';
 import { questionLabel } from '../../professionalAssistant/assistantSettings.js';
 import { intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
+import { brokerInvestorPromptBlock, isBrokerInvestorForm, marketSummary } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 function filled(value) {
   return String(value || '').trim().length > 0;
@@ -18,10 +19,17 @@ function knownBrokerIntake(form = {}) {
     ['timeline', 'application timeline'],
     ['preapproval', 'pre-approval status'],
     ['amount', 'financing amount'],
+    ['investment_type', 'investment property type'],
+    ['owns_investments', 'other investment properties owned'],
+    ['down_payment', 'down payment or capital'],
   ];
-  return labels
+  const known = labels
     .filter(([id]) => filled(brokerIntakeValue(id, form)))
     .map(([, label]) => label);
+  if (marketSummary(form)) known.push('market country and province or state');
+  if (isBrokerInvestorForm(form) && filled(form?.investment_financing)) known.push('investment financing path');
+  if (isBrokerInvestorForm(form) && filled(form?.borrower_entity)) known.push('borrowing personally or through a company');
+  return known;
 }
 
 export function openBrokerFollowUps(setting, form = {}, answeredIds = []) {
@@ -146,9 +154,14 @@ export function buildMortgageBrokerPromptMainTemplate({
   intakeFormContact = null,
   blockSchedule = false,
   chatAnsweredQuestions = [],
+  previewSignals = null,
 }) {
   const bookingAskLine = 'Would you like me to share available consultation times now?';
   const bookingAfterAvailabilityLine = 'Great - please choose a time that works best for you.';
+  // Test My AI preview: investor block from the persona and chat text (no intake form there).
+  const previewInvestor = previewConversation && previewSignals && isBrokerInvestorForm(previewSignals)
+    ? brokerInvestorPromptBlock(previewSignals, { fromChat: true })
+    : '';
   const deferCalendlySection = deferCalendlyLink && previewConversation
     ? `
 BOOKING LINK DEFERRAL:
@@ -221,9 +234,9 @@ ${applied
 3) Do not share a Calendly link unless the client asks to schedule.`
     : applied
       ? `MEETING-FIRST EXECUTION ORDER:
-1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back.
+1) On the first reply, greet in one short sentence: a warm hello (with their first name when first-name use is on), not a flat thank-you line. After that, acknowledge what they just said without their name. Do not list it back.
 2) Ask one missing checked follow-up. A short answer such as "yes" closes only that question. Do not share a meeting link in that reply.
-3) After every missing follow-up is answered, ask for the next requested document, one file at a time. If the visitor does not upload a file, stop asking and share the consultation link.
+3) After every missing follow-up is answered, ask for the next requested document, one file at a time: name only that one document, never a list of several. If the visitor does not upload a file, stop asking and share the consultation link.
 4) After they agree, share one Calendly link clearly and avoid repeating booking CTAs unless they ask again.
 5) Keep post-link follow-ups concise and practical.`
       : `MEETING-FIRST EXECUTION ORDER:
@@ -281,7 +294,7 @@ ${meetingOrder}
 ${questionsBlock}
 
 ${questionFlow}
-
+${!previewConversation && isBrokerInvestorForm(intakeFormContact || {}) ? `\n${brokerInvestorPromptBlock(intakeFormContact || {})}\n` : ''}${previewInvestor ? `\n${previewInvestor}\n` : ''}
 ENGAGEMENT:
 - Ask frequent, bite-sized questions to keep the conversation active.
 - ${applied ? 'Match the selected communication style for length and detail. A quick style stays short. An educational or consultative style may explain more.' : 'Keep replies concise so the user is encouraged to respond quickly.'}
@@ -320,6 +333,11 @@ After EVERY reply, append one JSON block on a NEW line starting with ###META### 
     "client_type": "",
     "investment_type": "",
     "owns_investments": "",
+    "investment_financing": "",
+    "borrower_entity": "",
+    "market_country": "",
+    "market_region": "",
+    "market_city": "",
     "urgency_signal": "",
     "preferred_contact_method": "",
     "best_time_to_contact": "",
@@ -339,18 +357,23 @@ FIELD VALUES GUIDE FOR META (use these exact values):
 - credit_score_range: "750_plus" | "700_749" | "650_699" | "600_649" | "under_600" | ""
 - employment_status: "full_time" | "self_employed" | "contract" | "new_job" | "unemployed" | ""
 - household_income: "200k_plus" | "150k_200k" | "100k_150k" | "70k_100k" | "under_70k" | ""
-- down_payment_readiness: "20_plus" | "10_19" | "5_9" | "under_5" | "no_savings" | ""
+- down_payment_readiness: "20_plus" | "10_19" | "5_9" | "under_5" | "no_savings" | "" (investors: "cash_purchase" | "25_plus" | "20_24" | "15_19" | "under_15" | "not_sure")
 - property_budget: "clearly_defined" | "approximate" | "not_sure" | ""
 - purchase_purpose: "primary_residence" | "investment" | "vacation_home" | "refinance" | ""
 - For INVESTMENT purchases: set purchase_purpose "investment", client_type "investor", and fill investment_type / owns_investments from intake or chat. Do not re-ask those once known.
 - client_type: "investor" | "" (set "investor" when purpose is investment)
-- investment_type: "rental_property" | "multi_unit" | "pre_construction" | "commercial" | "vacation_rental" | ""
+- investment_type: "rental_property" | "vacation_rental" | "multi_unit" | "commercial" | "fix_and_flip" | "brrrr" | "pre_construction" | ""
 - owns_investments: "yes" | "no" | ""
+- investment_financing: "conventional_rental" | "dscr" (U.S. only) | "b_private_lender" (Canada only) | "hard_money_bridge" (U.S. only) | "portfolio" (U.S. only) | "commercial_mortgage" | "refinance_equity" | "cash_purchase" | "not_sure" | ""
+- borrower_entity: "personally" | "company" (Canada corporation / holdco, U.S. LLC or corporation) | "not_sure" | ""
+- market_country: "CA" | "US" | "" (keep the intake form value; never switch it)
+- market_region: province/territory or state code (e.g. "ON", "BC", "TX", "FL") | ""
+- market_city: the city or town of the property / target area (e.g. "Calgary", "Austin"); keep the intake form value | ""
 - urgency_signal: "yes" | "maybe" | "no" | ""
 - preferred_contact_method: "phone" | "text" | "email" | "whatsapp" | "video_call" | "in_person" | ""
 - best_time_to_contact: "morning" | "afternoon" | "evening" | "anytime" | ""
-- property_address: full address or area (e.g. "123 Main St", "DHA Lahore", "Downtown")
-- location: city, neighbourhood or area they are looking in (e.g. "Lahore", "Karachi", "DHA")
+- property_address: full address or area (e.g. "123 Main St", "Downtown Toronto", "Austin, TX")
+- location: city, neighbourhood or area they are looking in (e.g. "Toronto", "Dallas", "Downtown")
 - bedrooms: number of bedrooms (e.g. 2, 3, 4) — extract when user says "3 bed", "looking for 2 bedroom"
 - bathrooms: number of bathrooms (e.g. 1, 2, 3) — extract when user mentions bathrooms
 - area: square footage or marla (e.g. "1500", "5 marla") — extract when user mentions size

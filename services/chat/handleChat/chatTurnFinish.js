@@ -31,6 +31,7 @@ import {
   replyLanguage,
   REPLY_QUESTION_RE,
   REPLY_SENTENCE_SPLIT_RE,
+  turnFallbackReply,
 } from '../../professionalAssistant/replyStyle.js';
 import {
   assistantAnnouncingOptionCards,
@@ -52,11 +53,13 @@ import {
   followUpSkipIds,
   intakeHasPropertyImages,
   nextDocumentRequest,
+  requestNamedInReply,
 } from '../documents/chatDocumentService.js';
 import { withOccasionalEmoji } from '../../professionalAssistant/professionalAssistantService.js';
 import { keepModelEmoji } from '../../professionalAssistant/assistantEmoji.js';
 import { buildPreviewLeadSummary, leadClientTypeExtras } from './previewLeadSummary.js';
 import { normalizePersistedGradeByScore } from './chatPlan.js';
+import { agentDocumentContextFromForm, brokerDocumentContextFromForm, lawyerDocumentContextFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 export async function finishProfessionalChatTurn(state, patch) {
   const {
@@ -131,6 +134,8 @@ export async function finishProfessionalChatTurn(state, patch) {
     || !Array.isArray(scheduleActions)
     || !scheduleActions.length
     || scheduleActions.includes('schedule');
+  // "Suggest a consultation" off: never offer the booking link on our own; only when the visitor asks to meet.
+  const consultationSuggestOff = Boolean(appliedAssistant?.applied && appliedAssistant?.suggest_consultation === false);
   const recapLines = refetchPropertyMatches || flow?.flowRole === 'lawyer' || flow?.flowRole === 'mortgage_broker'
     ? []
     : buildLeadRecapMarkdownLines({
@@ -151,13 +156,15 @@ export async function finishProfessionalChatTurn(state, patch) {
   ) {
     finalReply = injectLeadRecapIntoReply(aiReply, recapLines);
   }
+  // Fixed fallback lines follow the visitor's reply language; with no copy for it, keep the model reply.
+  const turnLanguage = replyLanguage(appliedAssistantSetting, trimmedMessage, conversationText);
+  const fallbackIn = (key) => turnFallbackReply(key, turnLanguage);
   if (refetchPropertyMatches) {
     finalReply = stripPropertyListingsFromReply(finalReply);
     if (!propertyMatchesEnabled) {
-      finalReply =
-        'Thanks for sharing. I can help refine your preferences and connect you with the professional for tailored options.';
+      finalReply = fallbackIn('matchesOff') || finalReply || turnFallbackReply('matchesOff');
     } else if (!hasContact) {
-      finalReply = 'I can show available options once I have a contact detail. What name, email, or phone number should I use?';
+      finalReply = fallbackIn('needContact') || finalReply || turnFallbackReply('needContact');
     }
   }
 
@@ -169,7 +176,7 @@ export async function finishProfessionalChatTurn(state, patch) {
   });
   if (namedReply) finalReply = namedReply;
   if (appliedAssistantSetting?.client_type_blocked) {
-    finalReply = 'This assistant is not set up for that client type. Please choose another option or contact the professional directly.';
+    finalReply = fallbackIn('clientTypeBlocked') || turnFallbackReply('clientTypeBlocked');
   }
   finalReply = holdFurtherQuestions(finalReply, trimmedMessage, replyLanguage(appliedAssistantSetting, trimmedMessage, conversationText));
   finalReply = keepOpenQuestion(finalReply, appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions, trimmedMessage);
@@ -319,9 +326,9 @@ export async function finishProfessionalChatTurn(state, patch) {
       .join(' ')
       .trim();
     finalReply = statements
-      || (isInvestorVisitor
-        ? 'No problem — we can skip those listings for now and keep refining what you want.'
-        : 'No problem — we can skip those listings for now and keep refining what you want.');
+      || fallbackIn(isInvestorVisitor ? 'skipListingsInvestor' : 'skipListings')
+      || stripPropertyListingsFromReply(finalReply)
+      || turnFallbackReply(isInvestorVisitor ? 'skipListingsInvestor' : 'skipListings');
   }
   if (declinedOptionsThisTurn && flowRole === 'agent') {
     finalReply = declineRefinementReply(finalReply, {
@@ -340,6 +347,9 @@ export async function finishProfessionalChatTurn(state, patch) {
     propertyImages: intakeHasPropertyImages(storedForm),
     clientType: storedForm?.client_type || appliedAssistantSetting?.client_type || '',
     mortgageStatus: storedForm?.mortgage_status || '',
+    ...(appliedAssistantSetting?.role === 'mortgage_broker' ? brokerDocumentContextFromForm(storedForm) : {}),
+    ...(appliedAssistantSetting?.role === 'lawyer' ? lawyerDocumentContextFromForm(storedForm) : {}),
+    ...(appliedAssistantSetting?.role === 'agent' ? agentDocumentContextFromForm(storedForm) : {}),
   };
   const documentsAlreadyAsked = followUpSkipIds(appliedAssistantSetting, sharedDocuments, documentContext, history, lastAssistantReply);
   // Explicit deferral of an asked document ends the document sequence (all document requests are optional).
@@ -387,7 +397,11 @@ export async function finishProfessionalChatTurn(state, patch) {
     && !refinementPending
     && !documentDeclined
   ) {
-    const asked = applyDocumentAsk(
+    // An upload turn's review line already names the next file: keep that one instead of adding another ask.
+    const reviewNamed = turnAttachments.length
+      ? requestNamedInReply(appliedAssistantSetting, [...(sharedDocuments || []), ...turnAttachments], documentContext, finalReply)
+      : null;
+    const asked = reviewNamed ? { reply: finalReply, request: reviewNamed } : applyDocumentAsk(
       finalReply,
       nextDocumentRequest(appliedAssistantSetting, sharedDocuments, documentContext, followUpSkipIds(appliedAssistantSetting, sharedDocuments, documentContext, history, lastAssistantReply)),
       { previousReply: previousAssistantReply, userMessage: trimmedMessage, setting: appliedAssistantSetting, conversationText, qualificationOpen: !turnAttachments.length && qualificationStillOpen(appliedAssistantSetting, storedForm, systemPromptOptions.chatAnsweredQuestions) },
@@ -400,10 +414,12 @@ export async function finishProfessionalChatTurn(state, patch) {
   }
   let consultationOffered = false;
   if (visitorSkippedUpload && !waitOnOptions && !namedReply) {
-    consultationOffered = Boolean(isAutomatedBookingEnabled && scheduleAllowed && calendlyLinkForVisitor);
+    const offerSchedule = isAutomatedBookingEnabled && scheduleAllowed && (!consultationSuggestOff || visitorAskedToMeet);
+    consultationOffered = Boolean(offerSchedule && calendlyLinkForVisitor);
     finalReply = offerConsultationAfterSkippedUpload(finalReply, calendlyLinkForVisitor, {
-      allowSchedule: isAutomatedBookingEnabled && scheduleAllowed,
+      allowSchedule: offerSchedule,
       label: appliedAssistantSetting?.cta_label || '',
+      language: turnLanguage,
     });
   }
   const replyStillAsking = REPLY_QUESTION_RE.test(finalReply) && !visitorAskedToMeet;
@@ -415,6 +431,7 @@ export async function finishProfessionalChatTurn(state, patch) {
     && isAutomatedBookingEnabled
     && calendlyLinkForVisitor
     && scheduleAllowed
+    && (!consultationSuggestOff || visitorAskedToMeet)
     && !namedReply
     && !requestedDocument
     && (
@@ -428,6 +445,7 @@ export async function finishProfessionalChatTurn(state, patch) {
       userMessage: trimmedMessage,
       allowSchedule: scheduleAllowed,
       label: appliedAssistantSetting?.cta_label || '',
+      language: turnLanguage,
     });
   } else {
     finalReply = stripBookingLinks(finalReply, calendlyLinkForVisitor);
@@ -438,8 +456,9 @@ export async function finishProfessionalChatTurn(state, patch) {
     finalReply = withOccasionalEmoji(finalReply, appliedAssistantSetting, {
       previousReply: lastAssistantReply,
       userMessage: trimmedMessage,
-      // Upload reviews and operational document asks stay emoji-free.
-      documentReceived: Boolean(requestedDocument) || turnAttachments.length > 0,
+      // Upload reviews stay emoji-free. A document ask keeps the model's one friendly emoji (as the agent's
+      // question turns do); stripping it here removed every emoji from the broker / lawyer first reply.
+      documentReceived: turnAttachments.length > 0,
     });
   }
   const visitorFirstName = String(storedForm?.name || storedForm?.full_name || '').trim().split(/\s+/)[0] || '';

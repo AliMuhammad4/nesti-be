@@ -2,7 +2,7 @@
 
 const DOCUMENT_RECEIVED = {
   pay_stubs: /pay\s*stubs?|paystubs?|payslips?/i,
-  notice_of_assessment: /notice of assessment|\bt4\b|\bnoa\b|\bw-?2\b|\b1099\b|\b1040\b|tax return/i,
+  notice_of_assessment: /notice of assessment|\bt4\b|\bnoa\b|\bt1 generals?\b|\bw-?2\b|\b1099\b|\b1040\b|tax return/i,
   mortgage_statement: /mortgage statement/i,
   preapproval_letter: /pre-?approval/i,
   proof_of_funds: /proof of funds|bank statement|down payment|funds available/i,
@@ -13,6 +13,8 @@ const DOCUMENT_RECEIVED = {
   title_deed: /title deed|certificate of title|\bdeed\b/i,
   mortgage_commitment: /mortgage commitment/i,
   condo_status: /status certificate|condo status/i,
+  lease_agreements: /lease agreements?|rental agreements?|tenancy agreements?|rent roll/i,
+  entity_documents: /articles of (incorporation|organi[sz]ation)|operating agreement|certificate of (incorporation|formation)|corporate (documents|minute book)|\bllc\b/i,
 };
 
 const GENERIC_DOCUMENT_TYPES = new Set(['document', 'photo', 'file', 'image', 'pdf', 'word', 'attachment', 'upload']);
@@ -32,6 +34,7 @@ export function documentCoversRequest(doc, id) {
 
 const DOCUMENT_REVIEW = {
   english: {
+    wrongFile: (file, expected) => `This is a different file${file ? `: I received "${file}", not the ${expected} I asked for` : `, not the ${expected} I asked for`}. When you are ready, please send the ${expected}, or tell me if you do not have it.`,
     exactNext: (got, next) => `This is the ${got}. When you are ready, you can send the ${next} as well.`,
     exactDone: (got) => `This is the ${got}. That is all the documents I need for now.`,
     other: (got, next) => (next ? `This is the ${got}. When you are ready, you can send the ${next}.` : `This is the ${got}. We can continue with the other details.`),
@@ -44,6 +47,7 @@ const DOCUMENT_REVIEW = {
     receivedDone: () => 'I have the file. That is all the documents I need for now.',
   },
   french: {
+    wrongFile: (file, expected) => `C'est un autre fichier${file ? ` : j'ai reçu « ${file} », pas ${expected}` : `, pas ${expected}`}. Quand vous êtes prêt, envoyez ${expected}, ou dites-moi si vous ne l'avez pas.`,
     exactNext: (got, next) => `C'est bien ${got}. Quand vous êtes prêt, vous pouvez aussi envoyer ${next}.`,
     exactDone: (got) => `C'est bien ${got}. Ce sont tous les documents dont j'ai besoin pour le moment.`,
     other: (got, next) => (next ? `C'est bien ${got}. Quand vous êtes prêt, vous pouvez envoyer ${next}.` : `C'est bien ${got}. Nous pouvons continuer avec les autres détails.`),
@@ -53,6 +57,7 @@ const DOCUMENT_REVIEW = {
     receivedDone: () => `J'ai bien le fichier. Ce sont tous les documents dont j'ai besoin pour le moment.`,
   },
   spanish: {
+    wrongFile: (file, expected) => `Este es otro archivo${file ? `: recibí "${file}", no ${expected}` : `, no ${expected}`}. Cuando pueda, envíe ${expected}, o dígame si no lo tiene.`,
     exactNext: (got, next) => `Este es ${got}. Cuando pueda, también puede enviar ${next}.`,
     exactDone: (got) => `Este es ${got}. Con esto tengo los documentos que necesito por ahora.`,
     other: (got, next) => (next ? `Este es ${got}. Cuando pueda, puede enviar ${next}.` : `Este es ${got}. Podemos seguir con los otros detalles.`),
@@ -62,6 +67,7 @@ const DOCUMENT_REVIEW = {
     receivedDone: () => 'Ya tengo el archivo. Con esto tengo los documentos que necesito por ahora.',
   },
   arabic: {
+    wrongFile: (file, expected) => `هذا ملف مختلف${file ? `: وصلني "${file}" وليس ${expected}` : `، وليس ${expected}`}. عندما تكون جاهزًا، أرسل ${expected}، أو أخبرني إذا لم يكن لديك.`,
     exactNext: (got, next) => `هذا هو ${got}. عندما تكون جاهزًا، يمكنك أيضًا إرسال ${next}.`,
     exactDone: (got) => `هذا هو ${got}. هذه كل المستندات التي أحتاجها الآن.`,
     other: (got, next) => (next ? `هذا هو ${got}. عندما تكون جاهزًا، يمكنك إرسال ${next}.` : `هذا هو ${got}. يمكننا المتابعة بالتفاصيل الأخرى.`),
@@ -70,7 +76,18 @@ const DOCUMENT_REVIEW = {
     received: () => 'وصلتني الملف.',
     receivedDone: () => 'وصلتني الملف. هذه كل المستندات التي أحتاجها الآن.',
   },
+  urdu: {
+    wrongFile: (file, expected) => `یہ کوئی اور فائل ہے${file ? `: مجھے "${file}" ملی، ${expected} نہیں` : `، ${expected} نہیں`}۔ جب آپ تیار ہوں، ${expected} بھیج دیں، یا بتا دیں اگر یہ آپ کے پاس نہیں ہے۔`,
+    exactNext: (got, next) => `یہ ${got} ہے۔ جب آپ تیار ہوں، ${next} بھی بھیج سکتے ہیں۔`,
+    exactDone: (got) => `یہ ${got} ہے۔ فی الحال مجھے یہی دستاویزات چاہیے تھیں۔`,
+    other: (got, next) => (next ? `یہ ${got} ہے۔ جب آپ تیار ہوں، ${next} بھیج سکتے ہیں۔` : `یہ ${got} ہے۔ ہم باقی بات چیت جاری رکھ سکتے ہیں۔`),
+    different: (next) => (next ? `یہ کوئی اور فائل ہے۔ جب آپ تیار ہوں، ${next} بھیج سکتے ہیں۔` : 'یہ کوئی اور فائل ہے۔ ہم باقی بات چیت جاری رکھ سکتے ہیں۔'),
+    duplicate: (next) => (next ? `آپ یہ فائل پہلے ہی بھیج چکے ہیں۔ جب آپ تیار ہوں، ${next} بھیج سکتے ہیں۔` : 'آپ یہ فائل پہلے ہی بھیج چکے ہیں۔ ہم باقی بات چیت جاری رکھ سکتے ہیں۔'),
+    received: () => 'فائل مل گئی۔',
+    receivedDone: () => 'فائل مل گئی۔ فی الحال مجھے یہی دستاویزات چاہیے تھیں۔',
+  },
   hindi: {
+    wrongFile: (file, expected) => `यह कोई और फ़ाइल है${file ? `: मुझे "${file}" मिली, ${expected} नहीं` : `, ${expected} नहीं`}। जब आप तैयार हों, ${expected} भेज दें, या बता दें अगर यह आपके पास नहीं है।`,
     exactNext: (got, next) => `यह ${got} है। जब आप तैयार हों, ${next} भी भेज सकते हैं।`,
     exactDone: (got) => `यह ${got} है। अभी के लिए मुझे यही दस्तावेज़ चाहिए थे।`,
     other: (got, next) => (next ? `यह ${got} है। जब आप तैयार हों, ${next} भेज सकते हैं।` : `यह ${got} है। हम बाकी बातचीत जारी रख सकते हैं।`),
@@ -78,6 +95,36 @@ const DOCUMENT_REVIEW = {
     duplicate: (next) => (next ? `आप यह फ़ाइल पहले ही भेज चुके हैं। जब आप तैयार हों, ${next} भेज सकते हैं।` : 'आप यह फ़ाइल पहले ही भेज चुके हैं। हम बाकी बातचीत जारी रख सकते हैं।'),
     received: () => 'फ़ाइल मिल गई।',
     receivedDone: () => 'फ़ाइल मिल गई। अभी के लिए मुझे यही दस्तावेज़ चाहिए थे।',
+  },
+  punjabi: {
+    wrongFile: (file, expected) => `ਇਹ ਕੋਈ ਹੋਰ ਫਾਈਲ ਹੈ${file ? `: ਮੈਨੂੰ "${file}" ਮਿਲੀ, ${expected} ਨਹੀਂ` : `, ${expected} ਨਹੀਂ`}। ਜਦੋਂ ਤੁਸੀਂ ਤਿਆਰ ਹੋਵੋ, ${expected} ਭੇਜ ਦਿਓ, ਜਾਂ ਦੱਸ ਦਿਓ ਜੇ ਇਹ ਤੁਹਾਡੇ ਕੋਲ ਨਹੀਂ ਹੈ।`,
+    exactNext: (got, next) => `ਇਹ ${got} ਹੈ। ਜਦੋਂ ਤੁਸੀਂ ਤਿਆਰ ਹੋਵੋ, ${next} ਵੀ ਭੇਜ ਸਕਦੇ ਹੋ।`,
+    exactDone: (got) => `ਇਹ ${got} ਹੈ। ਫ਼ਿਲਹਾਲ ਮੈਨੂੰ ਇਹੀ ਦਸਤਾਵੇਜ਼ ਚਾਹੀਦੇ ਸਨ।`,
+    other: (got, next) => (next ? `ਇਹ ${got} ਹੈ। ਜਦੋਂ ਤੁਸੀਂ ਤਿਆਰ ਹੋਵੋ, ${next} ਭੇਜ ਸਕਦੇ ਹੋ।` : `ਇਹ ${got} ਹੈ। ਅਸੀਂ ਬਾਕੀ ਗੱਲਬਾਤ ਜਾਰੀ ਰੱਖ ਸਕਦੇ ਹਾਂ।`),
+    different: (next) => (next ? `ਇਹ ਕੋਈ ਹੋਰ ਫਾਈਲ ਹੈ। ਜਦੋਂ ਤੁਸੀਂ ਤਿਆਰ ਹੋਵੋ, ${next} ਭੇਜ ਸਕਦੇ ਹੋ।` : 'ਇਹ ਕੋਈ ਹੋਰ ਫਾਈਲ ਹੈ। ਅਸੀਂ ਬਾਕੀ ਗੱਲਬਾਤ ਜਾਰੀ ਰੱਖ ਸਕਦੇ ਹਾਂ।'),
+    duplicate: (next) => (next ? `ਤੁਸੀਂ ਇਹ ਫਾਈਲ ਪਹਿਲਾਂ ਹੀ ਭੇਜ ਚੁੱਕੇ ਹੋ। ਜਦੋਂ ਤੁਸੀਂ ਤਿਆਰ ਹੋਵੋ, ${next} ਭੇਜ ਸਕਦੇ ਹੋ।` : 'ਤੁਸੀਂ ਇਹ ਫਾਈਲ ਪਹਿਲਾਂ ਹੀ ਭੇਜ ਚੁੱਕੇ ਹੋ। ਅਸੀਂ ਬਾਕੀ ਗੱਲਬਾਤ ਜਾਰੀ ਰੱਖ ਸਕਦੇ ਹਾਂ।'),
+    received: () => 'ਫਾਈਲ ਮਿਲ ਗਈ।',
+    receivedDone: () => 'ਫਾਈਲ ਮਿਲ ਗਈ। ਫ਼ਿਲਹਾਲ ਮੈਨੂੰ ਇਹੀ ਦਸਤਾਵੇਜ਼ ਚਾਹੀਦੇ ਸਨ।',
+  },
+  tamil: {
+    wrongFile: (file, expected) => `இது வேறு கோப்பு${file ? `: எனக்கு "${file}" கிடைத்தது, ${expected} அல்ல` : `, ${expected} அல்ல`}. நீங்கள் தயாரானதும் ${expected} அனுப்புங்கள், அல்லது உங்களிடம் இல்லையென்றால் சொல்லுங்கள்.`,
+    exactNext: (got, next) => `இது ${got}. நீங்கள் தயாரானதும் ${next} கூட அனுப்பலாம்.`,
+    exactDone: (got) => `இது ${got}. இப்போதைக்கு எனக்குத் தேவையான ஆவணங்கள் இவ்வளவுதான்.`,
+    other: (got, next) => (next ? `இது ${got}. நீங்கள் தயாரானதும் ${next} அனுப்பலாம்.` : `இது ${got}. மற்ற விவரங்களுடன் தொடரலாம்.`),
+    different: (next) => (next ? `இது வேறு கோப்பு. நீங்கள் தயாரானதும் ${next} அனுப்பலாம்.` : 'இது வேறு கோப்பு. மற்ற விவரங்களுடன் தொடரலாம்.'),
+    duplicate: (next) => (next ? `இந்தக் கோப்பை ஏற்கனவே அனுப்பியுள்ளீர்கள். நீங்கள் தயாரானதும் ${next} அனுப்பலாம்.` : 'இந்தக் கோப்பை ஏற்கனவே அனுப்பியுள்ளீர்கள். மற்ற விவரங்களுடன் தொடரலாம்.'),
+    received: () => 'கோப்பு கிடைத்தது.',
+    receivedDone: () => 'கோப்பு கிடைத்தது. இப்போதைக்கு எனக்குத் தேவையான ஆவணங்கள் இவ்வளவுதான்.',
+  },
+  mandarin: {
+    wrongFile: (file, expected) => `这是另一个文件${file ? `：我收到的是"${file}"，不是${expected}` : `，不是${expected}`}。准备好后请发送${expected}，如果没有也请告诉我。`,
+    exactNext: (got, next) => `这是${got}。准备好后，您也可以发送${next}。`,
+    exactDone: (got) => `这是${got}。目前我需要的文件就这些。`,
+    other: (got, next) => (next ? `这是${got}。准备好后，您可以发送${next}。` : `这是${got}。我们可以继续其他细节。`),
+    different: (next) => (next ? `这是另一个文件。准备好后，您可以发送${next}。` : '这是另一个文件。我们可以继续其他细节。'),
+    duplicate: (next) => (next ? `您已经发送过这个文件。准备好后，您可以发送${next}。` : '您已经发送过这个文件。我们可以继续其他细节。'),
+    received: () => '文件已收到。',
+    receivedDone: () => '文件已收到。目前我需要的文件就这些。',
   },
 };
 
@@ -95,6 +142,8 @@ const DOCUMENT_NAMES = {
     title_deed: 'title or deed',
     mortgage_commitment: 'mortgage commitment',
     condo_status: 'condo status certificate',
+    lease_agreements: 'lease agreements or rent roll',
+    entity_documents: 'company documents',
   },
   french: {
     pay_stubs: 'talons de paie récents',
@@ -109,6 +158,8 @@ const DOCUMENT_NAMES = {
     title_deed: 'titre de propriété',
     mortgage_commitment: 'engagement hypothécaire',
     condo_status: 'certificat de l\'état de la copropriété',
+    lease_agreements: 'baux de location',
+    entity_documents: 'documents de la société',
   },
   spanish: {
     pay_stubs: 'recibos de nómina recientes',
@@ -123,6 +174,8 @@ const DOCUMENT_NAMES = {
     title_deed: 'título de propiedad',
     mortgage_commitment: 'compromiso hipotecario',
     condo_status: 'certificado de estado del condominio',
+    lease_agreements: 'contratos de arrendamiento',
+    entity_documents: 'documentos de la empresa o LLC',
   },
   mandarin: {
     pay_stubs: '近期工资单',
@@ -137,6 +190,8 @@ const DOCUMENT_NAMES = {
     title_deed: '产权文件',
     mortgage_commitment: '贷款承诺函',
     condo_status: '公寓状态证明',
+    lease_agreements: '租约或租金清单',
+    entity_documents: '公司文件',
   },
   cantonese: {
     pay_stubs: '近期糧單',
@@ -151,6 +206,8 @@ const DOCUMENT_NAMES = {
     title_deed: '業權文件',
     mortgage_commitment: '按揭承諾書',
     condo_status: '大廈狀況證明',
+    lease_agreements: '租約或租金清單',
+    entity_documents: '公司文件',
   },
   arabic: {
     pay_stubs: 'كشوف الرواتب الأخيرة',
@@ -165,6 +222,8 @@ const DOCUMENT_NAMES = {
     title_deed: 'سند الملكية',
     mortgage_commitment: 'التزام الرهن',
     condo_status: 'شهادة حالة الشقة',
+    lease_agreements: 'عقود الإيجار أو كشف الإيجارات',
+    entity_documents: 'مستندات الشركة',
   },
   hindi: {
     pay_stubs: 'हाल की वेतन पर्चियाँ',
@@ -179,6 +238,24 @@ const DOCUMENT_NAMES = {
     title_deed: 'मालिकाना दस्तावेज़',
     mortgage_commitment: 'गिरवी प्रतिबद्धता',
     condo_status: 'कॉन्डो स्थिति प्रमाणपत्र',
+    lease_agreements: 'किराया समझौते या किराया सूची',
+    entity_documents: 'कंपनी के दस्तावेज़',
+  },
+  urdu: {
+    pay_stubs: 'حالیہ تنخواہ کی پرچیاں',
+    notice_of_assessment: 'ٹیکس یا آمدنی کی دستاویزات (کینیڈا: NOA/T4؛ امریکہ: W-2/1099/ٹیکس ریٹرن)',
+    mortgage_statement: 'موجودہ مارگیج اسٹیٹمنٹ',
+    preapproval_letter: 'پری اپروول لیٹر',
+    proof_of_funds: 'فنڈز کا ثبوت',
+    photo_id: 'تصویری شناختی کارڈ',
+    home_photos: 'گھر کی تصاویر',
+    listing_sheet: 'لسٹنگ شیٹ',
+    purchase_agreement: 'خرید یا فروخت کا معاہدہ',
+    title_deed: 'ملکیت کی دستاویز',
+    mortgage_commitment: 'مارگیج کمٹمنٹ',
+    condo_status: 'کونڈو اسٹیٹس سرٹیفکیٹ',
+    lease_agreements: 'کرایہ کے معاہدے یا کرایہ کی فہرست',
+    entity_documents: 'کمپنی کی دستاویزات',
   },
   punjabi: {
     pay_stubs: 'ਹਾਲੀਆ ਤਨਖਾਹ ਸਲਿੱਪਾਂ',
@@ -193,6 +270,8 @@ const DOCUMENT_NAMES = {
     title_deed: 'ਮਲਕੀਅਤ ਦਸਤਾਵੇਜ਼',
     mortgage_commitment: 'ਰਹਿਨ ਵਚਨ',
     condo_status: 'ਕੋਂਡੋ ਸਥਿਤੀ ਸਰਟੀਫਿਕੇਟ',
+    lease_agreements: 'ਕਿਰਾਏ ਦੇ ਇਕਰਾਰ ਜਾਂ ਕਿਰਾਇਆ ਸੂਚੀ',
+    entity_documents: 'ਕੰਪਨੀ ਦੇ ਦਸਤਾਵੇਜ਼',
   },
   tamil: {
     pay_stubs: 'சமீபத்திய சம்பளச் சீட்டுகள்',
@@ -207,6 +286,8 @@ const DOCUMENT_NAMES = {
     title_deed: 'உரிமைப் பத்திரம்',
     mortgage_commitment: 'அடமான உறுதி',
     condo_status: 'காண்டோ நிலை சான்றிதழ்',
+    lease_agreements: 'வாடகை ஒப்பந்தங்கள் அல்லது வாடகைப் பட்டியல்',
+    entity_documents: 'நிறுவன ஆவணங்கள்',
   },
 };
 

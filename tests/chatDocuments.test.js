@@ -362,8 +362,10 @@ test('document requests are sanitized and reach the broker prompt', () => {
     document_type: 'photo',
   }], settingForReview, { priorDocuments: [] });
   assert.match(wrongPhoto, /This is a different file/i);
-  assert.match(wrongPhoto, /photo ID/i);
-  assert.doesNotMatch(wrongPhoto, /send the recent pay stubs/i);
+  // Names the file that arrived and asks again for the same document (not the next one).
+  assert.match(wrongPhoto, /WP6A4670\.JPG/);
+  assert.match(wrongPhoto, /send the recent pay stubs/i);
+  assert.doesNotMatch(wrongPhoto, /photo ID/i);
   assert.doesNotMatch(wrongPhoto, /four individuals|lively conversation/i);
   const askedAgain = documentReviewReply([{
     status: 'ready',

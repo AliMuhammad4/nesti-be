@@ -81,7 +81,8 @@ export function summarizeSellerCredentialMetrics(rows = []) {
   let totalSoldHomeValue = 0;
   let soldHomesWithValue = 0;
   let soldHomesWithClosedValue = 0;
-  let currency = 'USD';
+  // Budgets are USD on every market (Canada included), so the totals never mix currencies.
+  const currency = 'USD';
 
   rows.forEach((row, index) => {
     const profile = row?.lead_profile_id && typeof row.lead_profile_id === 'object'
@@ -90,7 +91,6 @@ export function summarizeSellerCredentialMetrics(rows = []) {
     const profileId = String(profile?._id || row?.lead_profile_id || '').trim();
     const clientKey = profileId || String(row?._id || `seller-row-${index}`);
     clientKeys.add(clientKey);
-    currency = profile?.budget_profile?.currency || currency;
 
     const estimatedValue = estimatedPropertyValue(profile);
     if (!['converted', 'closed_lost'].includes(row?.match_status)) {

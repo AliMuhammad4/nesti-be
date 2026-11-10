@@ -1,5 +1,6 @@
 import { replyLanguage } from '../../professionalAssistant/replyStyle.js';
 import { textIsKnown } from './documentPromptText.js';
+import { marketDocumentName } from '../../professionalAssistant/brokerInvestorMarket.js';
 import {
   DOCUMENT_REVIEW,
   documentCoversRequest,
@@ -12,6 +13,9 @@ import {
   nextDocumentRequest,
   requestContext,
 } from './documentRequestFlow.js';
+
+/** A previous reply that already said "different file" (any supported language). */
+const WRONG_FILE_ALREADY_FLAGGED = /different file|autre fichier|otro archivo|ملف مختلف|کوئی اور فائل|कोई और फ़ाइल|ਕੋਈ ਹੋਰ ਫਾਈਲ|வேறு கோப்பு|另一个文件/i;
 
 export function isSameChatDocument(existing, incoming) {
   if (!existing || !incoming) return false;
@@ -37,7 +41,8 @@ export function documentReviewReply(documents = [], setting = null, context = {}
   const language = replyLanguage(setting, context.userMessage, context.conversationText);
   const copy = DOCUMENT_REVIEW[language] || DOCUMENT_REVIEW.english;
   const requestContextValue = requestContext(context);
-  const name = (id) => localizedDocumentName(id, language);
+  // Market-specific names (English / French / Spanish) when the visitor's country is known.
+  const name = (id) => marketDocumentName(id, requestContextValue.market, language) || localizedDocumentName(id, language);
 
   // Review every attachment in the turn (not only the last). Duplicates of prior uploads are noted separately.
   const novel = [];
@@ -91,6 +96,13 @@ export function documentReviewReply(documents = [], setting = null, context = {}
   // Visitor asked about the upload ("what is this?"): clarify it is not the requested file and keep that request.
   if (expected && /[?\u061F\uFF1F]|^\s*(what|which|why|is this)\b/i.test(String(context.userMessage || '')) && copy.differentClarify) {
     return copy.differentClarify(name(expected.id));
+  }
+  // Wrong file (every role and language): name the file that arrived and ask again for the SAME document once.
+  // If the previous reply already flagged a different file, move on instead of looping on the same request.
+  if (expected && !WRONG_FILE_ALREADY_FLAGGED.test(String(context.previousReply || ''))) {
+    const say = copy.wrongFile || DOCUMENT_REVIEW.english.wrongFile;
+    const file = novel.length === 1 ? String(novel[0].original_filename || novel[0].filename || '').trim().slice(0, 80) : '';
+    return say(file, name(expected.id));
   }
   if (expected) return copy.different(next ? name(next.id) : '');
   return next ? copy.received() : copy.receivedDone();

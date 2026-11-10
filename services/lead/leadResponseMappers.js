@@ -52,6 +52,12 @@ function buildSpecificFacts(profileView, leadMatch) {
   if (q?.owns_investments) facts.push(`Owns other investments: ${q.owns_investments}`);
   if (q?.down_payment_readiness) facts.push(`Down payment / capital: ${q.down_payment_readiness}`);
   if (q?.via_company) facts.push(`Purchasing entity: ${q.via_company}`);
+  if (q?.investment_financing) facts.push(`Investment financing: ${String(q.investment_financing).replace(/_/g, ' ')}`);
+  if (q?.borrower_entity) facts.push(`Borrowing as: ${q.borrower_entity === 'company' ? 'company' : String(q.borrower_entity).replace(/_/g, ' ')}`);
+  if (q?.market_country) {
+    const country = String(q.market_country).toLowerCase() === 'other' ? (q.market_country_name || 'other country') : q.market_country;
+    facts.push(`Market: ${[q.market_city, q.market_region, country].filter(Boolean).join(', ')}`);
+  }
   return facts;
 }
 
@@ -170,6 +176,11 @@ function emptyAgentQualification() {
     investment_goal: null,
     owns_investments: null,
     down_payment_readiness: null,
+    buying_another: null,
+    market_country: null,
+    market_region: null,
+    market_city: null,
+    market_country_name: null,
   };
 }
 
@@ -319,6 +330,9 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,
     conversation_id: String(leadMatch.conversation_id || ''),
     source: leadSource,
+    // The client's own words from a storefront form or inquiry popup (shown as "Message").
+    inquiry_message: String(leadMatch?.compatibility_factors?.inquiry_message || '').trim() || null,
+    photos_note: String(leadMatch?.compatibility_factors?.photos_note || '').trim() || null,
     inquired_property: inquiredProperty,
     client_profile: leadMatch?.compatibility_factors?.client_profile || null,
     linked_seller_lead_match_id: linkedSellerLeadMatchId,

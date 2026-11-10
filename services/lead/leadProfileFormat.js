@@ -1,4 +1,5 @@
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+import { marketFromLeadProfile } from '../professionalAssistant/brokerInvestorMarket.js';
 
 function normPhoneDigits(value) {
   return String(value || '').replace(/\D/g, '');
@@ -108,6 +109,15 @@ export function mapLeadProfileForApi(profile, profType) {
             urgency_signal: p.qualification?.mortgage_broker?.urgency_signal || null,
             investment_type: p.qualification?.mortgage_broker?.investment_type || null,
             owns_investments: p.qualification?.mortgage_broker?.owns_investments || null,
+            investment_financing: p.qualification?.mortgage_broker?.investment_financing || null,
+            borrower_entity: p.qualification?.mortgage_broker?.borrower_entity || null,
+            // Saved market, else inferred at read time from the stored address / location (older leads).
+            market_country: marketFromLeadProfile(p, 'mortgage_broker').market_country || null,
+            market_region: marketFromLeadProfile(p, 'mortgage_broker').market_region || null,
+            market_city: marketFromLeadProfile(p, 'mortgage_broker').market_city || null,
+            market_country_name: marketFromLeadProfile(p, 'mortgage_broker').market_country_name || null,
+            // Amounts are USD on every market (older rows may still carry another code).
+            currency: p.budget_profile?.currency ? 'USD' : null,
           }
         : profType === PROFESSIONAL_TYPE.LAWYER
           ? {
@@ -120,6 +130,10 @@ export function mapLeadProfileForApi(profile, profType) {
               first_time_buyer: p.qualification?.lawyer?.first_time_buyer || null,
               legal_services_needed: p.qualification?.lawyer?.legal_services_needed || null,
               via_company: p.qualification?.lawyer?.via_company || null,
+              market_country: marketFromLeadProfile(p, 'lawyer').market_country || null,
+              market_region: marketFromLeadProfile(p, 'lawyer').market_region || null,
+              market_city: marketFromLeadProfile(p, 'lawyer').market_city || null,
+              market_country_name: marketFromLeadProfile(p, 'lawyer').market_country_name || null,
             }
           : {
               mortgage_status: p.qualification?.agent?.mortgage_status || null,
@@ -133,6 +147,12 @@ export function mapLeadProfileForApi(profile, profType) {
               investment_goal: p.qualification?.agent?.investment_goal || null,
               owns_investments: p.qualification?.agent?.owns_investments || null,
               down_payment_readiness: p.qualification?.agent?.down_payment_readiness || null,
+              buying_another: p.qualification?.agent?.buying_another || null,
+              // Older agent leads have no stored market: marketFromLeadProfile infers it from the address/area text.
+              market_country: marketFromLeadProfile(p, 'agent').market_country || null,
+              market_region: marketFromLeadProfile(p, 'agent').market_region || null,
+              market_city: marketFromLeadProfile(p, 'agent').market_city || null,
+              market_country_name: marketFromLeadProfile(p, 'agent').market_country_name || null,
             },
   };
 }

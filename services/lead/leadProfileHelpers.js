@@ -24,6 +24,7 @@ import {
   mergeConvoWithWorkspaceBooking,
 } from './leadAppointmentStatus.js';
 import { mapLeadMatchToDetail, mapLeadMatchToListRow, mapLeadMatchUnderProfile } from './leadResponseMappers.js';
+import { leadProfilePreviewFromMeta } from '../chat/handleChat/leadProfilePreview.js';
 import {
   buildNurtureConsultationBookedFromLeadMatches,
   enrichLeadDetailWithProfileConsultation,
@@ -630,6 +631,9 @@ export async function buildLeadConversationPayload(leadId, leadMatch, query = {}
           : {}),
         ...(Array.isArray(m.meta?.property_matches) && m.meta.property_matches.length
           ? { property_matches: m.meta.property_matches, property_matches_context: m.meta.property_matches_context || 'buy' }
+          : {}),
+        ...(m.role === 'user' && leadProfilePreviewFromMeta(m.meta)
+          ? { lead_profile_preview: leadProfilePreviewFromMeta(m.meta) }
           : {}),
       },
     })));

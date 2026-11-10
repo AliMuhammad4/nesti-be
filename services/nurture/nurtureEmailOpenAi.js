@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import logger from '../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { readQualificationAlias } from '../professionalAssistant/qualificationFieldAliases.js';
+import { marketFromLeadProfile } from '../professionalAssistant/brokerInvestorMarket.js';
 
 let _openaiClient = null;
 function getOpenAI() {
@@ -43,11 +44,24 @@ function qualificationSlice(profile, profType) {
       household_income: q.household_income || null,
       down_payment_readiness: q.down_payment_readiness || null,
       property_budget: q.property_budget || null,
+      investment_type: q.investment_type || null,
+      owns_investments: q.owns_investments || null,
+      investment_financing: q.investment_financing || null,
+      borrower_entity: q.borrower_entity || null,
+      // Saved market, else inferred from the stored address / location (older leads).
+      market_country: marketFromLeadProfile(p, 'mortgage_broker').market_country || null,
+      market_region: marketFromLeadProfile(p, 'mortgage_broker').market_region || null,
+      market_city: marketFromLeadProfile(p, 'mortgage_broker').market_city || null,
+      market_country_name: marketFromLeadProfile(p, 'mortgage_broker').market_country_name || null,
     };
   }
   if (profType === PROFESSIONAL_TYPE.LAWYER) {
     const q = p.qualification?.lawyer || {};
     return {
+      market_country: marketFromLeadProfile(p, 'lawyer').market_country || null,
+      market_region: marketFromLeadProfile(p, 'lawyer').market_region || null,
+      market_city: marketFromLeadProfile(p, 'lawyer').market_city || null,
+      market_country_name: marketFromLeadProfile(p, 'lawyer').market_country_name || null,
       transaction_stage: q.transaction_stage || null,
       closing_timeline: q.closing_timeline || null,
       transaction_type: q.transaction_type || null,
@@ -60,6 +74,10 @@ function qualificationSlice(profile, profType) {
   }
   const q = p.qualification?.agent || {};
   return {
+    market_country: marketFromLeadProfile(p, 'agent').market_country || null,
+    market_region: marketFromLeadProfile(p, 'agent').market_region || null,
+    market_city: marketFromLeadProfile(p, 'agent').market_city || null,
+    market_country_name: marketFromLeadProfile(p, 'agent').market_country_name || null,
     mortgage_status: q.mortgage_status || null,
     realtor_status: q.realtor_status || null,
     viewing_readiness: q.viewing_readiness || null,
@@ -71,6 +89,41 @@ function qualificationSlice(profile, profType) {
     owns_investments: q.owns_investments || null,
     down_payment_readiness: readQualificationAlias(q, 'down_payment') || null,
   };
+}
+
+/**
+ * Language + formality from the owner's APPLIED assistant settings, so nurture emails follow the same customization
+ * as the chat. With auto-detect on, the language comes from the lead's own chat messages (conversationId);
+ * without chat text it falls back to the selected language.
+ */
+export async function nurtureEmailStyle(ownerUserId, { conversationId = null } = {}) {
+  if (!ownerUserId) return null;
+  try {
+    const { loadAppliedAssistantSetting } = await import('../professionalAssistant/assistantStore.js');
+    const { replyLanguage } = await import('../professionalAssistant/replyStyle.js');
+    const setting = await loadAppliedAssistantSetting(ownerUserId);
+    if (!setting) return null;
+    let visitorText = '';
+    if (setting.auto_detect_language !== false && conversationId) {
+      const { default: ChatMessage } = await import('../../models/ChatMessage.js');
+      const rows = await ChatMessage.find({ conversation_id: conversationId, role: 'user' })
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .select('content')
+        .lean();
+      visitorText = (rows || []).map((row) => String(row?.content || '')).filter(Boolean).reverse().join('\n').slice(-2000);
+    }
+    const language = visitorText
+      ? replyLanguage(setting, visitorText)
+      : replyLanguage({ ...setting, auto_detect_language: false });
+    return {
+      language: language && language !== 'english' ? language : null,
+      formality: setting.formality || null,
+    };
+  } catch (err) {
+    logger.warn('nurture email style lookup failed', { error: err.message });
+    return null;
+  }
 }
 
 /** Marker before server-appended closing HTML (scheduling + signature). Email clients ignore HTML comments. */
@@ -223,6 +276,9 @@ export function buildLeadContext(leadMatch, profile, conversation, extras = {}) 
   const cf = leadMatch?.compatibility_factors?.contact || {};
   return {
     professional_type: profType,
+    // From the professional's applied assistant settings (null = English / default formality).
+    email_language: extras?.email_style?.language || null,
+    assistant_formality: extras?.email_style?.formality || null,
     lead_grade: grade,
     match_score: leadMatch?.match_score != null ? Number(leadMatch.match_score) : null,
     match_status: leadMatch?.match_status || null,
@@ -245,6 +301,7 @@ export function buildLeadContext(leadMatch, profile, conversation, extras = {}) 
       if (/investor/.test(lt)) return 'investor';
       const motivation = String(profile?.qualification?.agent?.motivation_reason || '').toLowerCase();
       if (motivation === 'investment') return 'investor';
+      if (String(profile?.qualification?.mortgage_broker?.purchase_purpose || '').toLowerCase() === 'investment') return 'investor';
       if (profile?.qualification?.agent?.investment_type || profile?.qualification?.agent?.investment_goal) {
         return 'investor';
       }
@@ -284,7 +341,7 @@ export function buildLeadContext(leadMatch, profile, conversation, extras = {}) 
         ? {
             min_budget: bp.min_budget != null ? Number(bp.min_budget) : null,
             max_budget: bp.max_budget != null ? Number(bp.max_budget) : null,
-            currency: bp.currency || null,
+            currency: bp.currency ? 'USD' : null,
             confidence: bp.confidence || null,
           }
         : null,
@@ -415,29 +472,48 @@ function buildMeetingPrepLines(profType, leadContext = {}) {
   const intent = String(leadContext?.intent || leadContext?.intent_summary?.primary_intent || '').toLowerCase();
 
   if (profType === PROFESSIONAL_TYPE.LAWYER) {
+    const market = String(qualification.market_country || '').toUpperCase();
     const lines = ['Government-issued photo ID'];
     const stage = String(qualification.transaction_stage || '').trim();
     if (stage === 'offer_accepted' || stage === 'actively_submitting') {
-      lines.push('Signed agreement of purchase and sale (if available)');
+      lines.push(market === 'US'
+        ? 'Signed purchase agreement (if available)'
+        : 'Signed agreement of purchase and sale (if available)');
     }
     const mortgage = String(qualification.mortgage_status || '').trim();
     if (mortgage && mortgage !== 'still_applying') {
-      lines.push('Mortgage commitment or approval letter');
+      lines.push(market === 'US' ? 'Loan commitment or approval letter' : 'Mortgage commitment or approval letter');
     } else {
       lines.push('Latest mortgage pre-approval or lender contact details (if applicable)');
     }
-    lines.push('Any title-related documents already received');
-    lines.push('Your target closing date and outstanding questions about adjustments or title insurance');
+    lines.push(market === 'US'
+      ? 'Any title commitment or deed documents already received'
+      : 'Any title-related documents already received');
+    lines.push(market === 'US'
+      ? 'Your target closing date and outstanding questions about the Closing Disclosure or title insurance'
+      : 'Your target closing date and outstanding questions about adjustments or title insurance');
     return lines.slice(0, 5);
   }
 
   if (profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
+    const market = String(qualification.market_country || '').toUpperCase();
+    const taxDocs = market === 'US'
+      ? 'Last two years of W-2s, 1099s, or tax returns'
+      : market === 'CA'
+        ? 'Last two years of Notices of Assessment (NOA) and T4 slips'
+        : 'Last two years of tax documents (T4/NOA in Canada, W-2s or tax returns in the U.S.)';
     const lines = [
       'Government-issued photo ID',
       'Recent pay stubs or employment confirmation letter',
-      'Last two years of tax documents (T4/NOA or equivalent)',
+      taxDocs,
       'Recent bank statements (typically 90 days)',
     ];
+    if (String(leadContext?.client_type || '').toLowerCase() === 'investor'
+      || String(qualification.purchase_purpose || '').toLowerCase() === 'investment') {
+      lines.splice(1, 1, market === 'US'
+        ? 'Lease agreements or rent roll for rentals you already own'
+        : 'Lease agreements and property tax bills for rentals you already own');
+    }
     const preApproval = String(qualification.pre_approval_status || qualification.mortgage_status || '').trim();
     if (!preApproval || preApproval === 'not_yet' || preApproval === 'in_progress') {
       lines.push('Estimated down payment source and amount');
@@ -493,28 +569,36 @@ function meetingPrepHtml(bodyText, profType, leadContext = {}) {
 }
 
 function buildFallbackDraft(leadContext) {
-  const firstName = compactSubjectPart(leadContext?.contact?.first_name) || 'there';
+  const firstName = compactSubjectPart(leadContext?.contact?.first_name) || '';
+  // No name on file: "Hello," instead of "Hi there,".
+  const greeting = firstName ? `Hi ${firstName},` : 'Hello,';
   const profType = String(leadContext?.professional_type || PROFESSIONAL_TYPE.AGENT).toLowerCase();
-  const location =
-    compactSubjectPart(leadContext?.property?.location || leadContext?.property?.address) ||
-    'your transaction';
-  const intent = compactSubjectPart(leadContext?.intent_summary?.primary_intent || leadContext?.intent);
-  const budget = compactSubjectPart(leadContext?.property?.budget);
-  const timeline = compactSubjectPart(leadContext?.property?.timeline);
   const qualification = leadContext?.qualification || {};
+  // Area text first, then the picked market city / region; null when nothing is known (no "in your transaction").
+  const place =
+    compactSubjectPart(leadContext?.property?.location || leadContext?.property?.address) ||
+    compactSubjectPart([qualification.market_city, qualification.market_region].filter(Boolean).join(', ')) ||
+    '';
+  const inPlace = place ? ` in ${place}` : '';
+  const intent = compactSubjectPart(leadContext?.intent_summary?.primary_intent || leadContext?.intent);
+  const rawBudget = compactSubjectPart(leadContext?.property?.budget);
+  const budget = /^\d+(\.\d+)?$/.test(String(rawBudget || '').replace(/,/g, ''))
+    ? `$${Number(String(rawBudget).replace(/,/g, '')).toLocaleString('en-US')}`
+    : rawBudget;
+  const timeline = compactSubjectPart(leadContext?.property?.timeline);
 
   if (profType === PROFESSIONAL_TYPE.LAWYER) {
     const stage = compactSubjectPart(qualification.transaction_stage);
     const closing = compactSubjectPart(qualification.closing_timeline);
     const subject = compactSubjectPart(
-      closing ? `Closing timeline: next steps for ${location}` : `Next steps for your transaction in ${location}`,
+      closing ? `Closing timeline: next steps for ${place || 'your closing'}` : `Next steps for your closing${inPlace}`,
     );
-    const contextParts = [`Following up regarding your transaction in ${location}`];
+    const contextParts = [`Following up regarding your closing${inPlace}`];
     if (stage) contextParts.push(`at the ${stage} stage`);
     if (closing) contextParts.push(`with a target closing window of ${closing}`);
     const body_text = appendMeetingPrepSection(
       [
-        `Hi ${firstName},`,
+        greeting,
         `${contextParts.join(' ')}.`,
         'I would like to confirm where things stand and outline the next steps on our side.',
         'Please reply with any updates to your closing date or outstanding documents, or let me know a convenient time to connect.',
@@ -527,7 +611,7 @@ function buildFallbackDraft(leadContext) {
       body_text,
       body_html: meetingPrepHtml(
         [
-          `Hi ${firstName},`,
+          greeting,
           `${contextParts.join(' ')}.`,
           'I would like to confirm where things stand and outline the next steps on our side.',
           'Please reply with any updates to your closing date or outstanding documents, or let me know a convenient time to connect.',
@@ -540,12 +624,12 @@ function buildFallbackDraft(leadContext) {
 
   if (profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     const preApproval = compactSubjectPart(qualification.pre_approval_status);
-    const subject = compactSubjectPart(`Financing next steps for ${location}`);
-    const contextParts = [`Following up on your financing plans for ${location}`];
+    const subject = compactSubjectPart(place ? `Financing next steps for ${place}` : 'Your financing next steps');
+    const contextParts = [`Following up on your financing plans${place ? ` for ${place}` : ''}`];
     if (preApproval) contextParts.push(`with pre-approval status noted as ${preApproval}`);
     if (timeline) contextParts.push(`and your ${timeline} timeline`);
     const bodyCore = [
-      `Hi ${firstName},`,
+      greeting,
       `${contextParts.join(' ')}.`,
       'I would like to confirm what remains on the financing checklist and schedule the appropriate next review.',
       'Reply with any updates, or let me know a convenient time to connect.',
@@ -561,17 +645,21 @@ function buildFallbackDraft(leadContext) {
   const isInvestorFollowUp = String(leadContext?.client_type || '').toLowerCase() === 'investor'
     || Boolean(qualification.investment_type || qualification.investment_goal);
   const subject = compactSubjectPart(
-    isInvestorFollowUp && location !== 'your transaction'
-      ? `${location}: next steps for your investment search`
-      : intent && location !== 'your transaction'
-        ? `${location}: next steps for your ${intent} plans`
-        : `Next steps for ${location}`,
+    isInvestorFollowUp && place
+      ? `${place}: next steps for your investment search`
+      : intent && place
+        ? `${place}: next steps for your ${intent} plans`
+        : place
+          ? `Next steps for ${place}`
+          : isInvestorFollowUp
+            ? 'Next steps for your investment search'
+            : 'Next steps for your property search',
   );
 
   const contextParts = [
     isInvestorFollowUp
-      ? `Following up on your investment search in ${location}`
-      : `Following up on your search in ${location}`,
+      ? `Following up on your investment search${inPlace}`
+      : `Following up on your search${inPlace}`,
   ];
   if (qualification.investment_type) {
     contextParts.push(`focused on ${String(qualification.investment_type).replace(/_/g, ' ')}`);
@@ -580,7 +668,7 @@ function buildFallbackDraft(leadContext) {
   if (timeline) contextParts.push(`on your ${timeline} timeline`);
 
   const bodyCore = [
-    `Hi ${firstName},`,
+    greeting,
     `${contextParts.join(' ')}.`,
     isInvestorFollowUp
       ? 'I would like to confirm your investment priorities and align the next opportunities we review.'
@@ -611,6 +699,11 @@ DATA DISCIPLINE:
 - Referral leads: acknowledge the referral in one natural clause; use referral_notes as directional guidance only — client-safe language.
 - Never copy internal labels verbatim ("Strong buyer match", match_headline, etc.).
 - No guaranteed outcomes; no invented facts, neighborhoods, or listing details.
+
+LANGUAGE AND FORMALITY:
+- If lead_context.contact has no first name, greet with "Hello," (never "Hi there" or a placeholder). If no location is known, do not invent one or write "your transaction"; name the goal instead (property search, financing, closing).
+- If lead_context.email_language is set (e.g. "urdu", "french"), write the subject and body in that language; otherwise English.
+- If lead_context.assistant_formality is "formal", keep a formal register; if "casual", stay professional but warmer and plainer.
 
 ROLE-SPECIFIC STYLE (use professional_type, or referral_context.action_professional_role / target_professional_role when present):
 
@@ -672,6 +765,7 @@ Refinement rules:
 - Remove stock openers, filler praise, and raw internal labels.
 - No "Matched options include:", property listing bullet rows, numbered listing lists, or markdown tables (| pipes) in the main message.
 - Enforce budget consistency language for agents when matches are referenced in prose.
+- Keep the language in lead_context.email_language when set (else the current draft's language) unless the instruction asks for another.
 
 Output only JSON: { "subject", "body_text", "body_html" } with p, br, strong only in body_html (no <a>).`;
 

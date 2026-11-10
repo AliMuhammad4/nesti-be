@@ -11,7 +11,7 @@ const setting = (use_emojis) => assistantSettingForPreview({
 
 const turns = [
   ['i want to invest in toronto', 'Toronto is a strong market. What type of investment are you considering? And what budget? \u{1F3E2}'],
-  ['long term rental', 'Long-term rentals suit steady cash flow. What is your approximate budget in CAD? \u{1F4C8}'],
+  ['long term rental', 'Long-term rentals suit steady cash flow. What is your approximate budget in USD? \u{1F4C8}'],
   ['but i dont want to go with those options', 'Understood, we can refine the search. Which criterion should we change first? \u{1F914}'],
 ];
 

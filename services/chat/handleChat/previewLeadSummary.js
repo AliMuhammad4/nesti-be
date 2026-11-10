@@ -4,6 +4,7 @@ import { getLawyerActionFlow } from '../config/lawyerActionFlow.js';
 import { questionLabel } from '../../professionalAssistant/assistantSettings.js';
 import { chatAnswersByQuestion, intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
 import { qualificationAliasKeys } from '../../professionalAssistant/qualificationFieldAliases.js';
+import { actionFlowContextFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 const DETAIL_KEYS = {
   location: ['property_address', 'location', 'buy_property_location', 'address'],
@@ -35,7 +36,7 @@ function fromDetails(details, id) {
   return '';
 }
 
-export function suggestedNextAction(role, leadGrade, intent, ctaLabel, questionsRemaining) {
+export function suggestedNextAction(role, leadGrade, intent, ctaLabel, questionsRemaining, { clientType = '', form = null } = {}) {
   if (questionsRemaining > 0) {
     return {
       action: 'continue_qualification',
@@ -43,11 +44,12 @@ export function suggestedNextAction(role, leadGrade, intent, ctaLabel, questions
       cta_label: ctaLabel,
     };
   }
+  const context = actionFlowContextFromForm(role, form || {}, clientType);
   const flow = role === 'mortgage_broker'
-    ? getMortgageBrokerActionFlow(leadGrade)
+    ? getMortgageBrokerActionFlow(leadGrade, context)
     : role === 'lawyer'
-      ? getLawyerActionFlow(leadGrade)
-      : getAgentActionFlow(leadGrade, intent);
+      ? getLawyerActionFlow(leadGrade, context)
+      : getAgentActionFlow(leadGrade, intent, context);
   return {
     action: 'book_consultation',
     label: ctaLabel || flow?.goal || 'Book a consultation',
@@ -68,7 +70,7 @@ export function leadClientTypeExtras({ role, setting, clientType, form, history,
   );
   return {
     client_type: clientType,
-    suggested_next_action: suggestedNextAction(role, String(leadGrade || 'unscored'), intent, setting.cta_label || '', remaining.length),
+    suggested_next_action: suggestedNextAction(role, String(leadGrade || 'unscored'), intent, setting.cta_label || '', remaining.length, { clientType, form }),
     template_answers: templateAnswers,
   };
 }
@@ -121,7 +123,7 @@ export function buildPreviewLeadSummary({
     timeline,
     collected: answered,
     remaining: remaining.map(({ id, label }) => ({ id, label })),
-    suggested_next_action: suggestedNextAction(role, grade, intent, ctaLabel, remaining.length),
+    suggested_next_action: suggestedNextAction(role, grade, intent, ctaLabel, remaining.length, { clientType, form }),
     test_mode: true,
   };
 }

@@ -69,6 +69,21 @@ export function buildBuyerScoringContext(leadProfile, signals = {}) {
   return { leadProfile, maxBudget, minBeds, leadLocation, isInvestor: investor };
 }
 
+const LAND_TYPE_RE = /\b(land|lot|acreage|vacant)\b/i;
+
+/** 'land', 'building', or '' when the type is unknown. Land and buildings never match each other. */
+export function propertyKind(propertyType) {
+  const type = String(propertyType || '').trim();
+  if (!type) return '';
+  return LAND_TYPE_RE.test(type) ? 'land' : 'building';
+}
+
+export function propertyKindsCompatible(typeA, typeB) {
+  const a = propertyKind(typeA);
+  const b = propertyKind(typeB);
+  return !a || !b || a === b;
+}
+
 export function buyerSpecifiedAnyPreference(ctx) {
   const { leadLocation, maxBudget, minBeds, leadProfile } = ctx;
   const loc = String(leadLocation || '').trim();

@@ -13,13 +13,18 @@ import {
   getApprovedPublicFeedback,
 } from '../controllers/publicProfileController.js';
 import { optionalAuth } from '../middleware/authMiddleware.js';
+import ChatbotEmbedUrl from '../models/ChatbotEmbedUrl.js';
+import User from '../models/User.js';
 import { validateBody } from '../middleware/validate.js';
 import { submitPublicFeedbackSchema, submitPublicLeadSchema } from '../schemas/publicProfileSchemas.js';
 import { publicLandingChatConfigService } from '../services/admin/adminLandingChatService.js';
 import { handleLandingChatTurn, loadLandingChatSession } from '../services/chat/nestiLanding/landingChatTurnService.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import { createDirectAdminInquiry, unsubscribeNewsletterAddress } from '../services/admin/directInquiryService.js';
-import { publicChatSessionLimiter } from '../middleware/rateLimit.js';
+import { optOutOfNurtureByToken } from '../services/nurture/nurtureUnsubscribe.js';
+import { publicChatSessionLimiter, publicLeadSubmitLimiter } from '../middleware/rateLimit.js';
+import { uploadPropertyImages } from '../middleware/uploadPropertyImages.js';
+import { postPublicProfilePropertyImagesUpload } from '../controllers/chatPropertyImageController.js';
 
 const router = express.Router();
 
@@ -67,9 +72,21 @@ router.post('/landing-chat/message', async (req, res, next) => {
   }
 });
 
+async function isProfessionalEmbed(embedToken) {
+  const token = String(embedToken || '').trim();
+  if (!token) return false;
+  const embed = await ChatbotEmbedUrl.findOne({ token }).select('user_id').lean();
+  if (!embed?.user_id) return false;
+  const owner = await User.findById(embed.user_id).select('role').lean();
+  return Boolean(owner) && owner.role !== 'admin';
+}
+
 router.post('/direct-inquiry', validateBody(enterpriseInquiryCreateSchema), async (req, res, next) => {
   try {
-    const body = req.body || {};
+    const { embed_token: embedToken, ...body } = req.body || {};
+    if (await isProfessionalEmbed(embedToken)) {
+      return res.json({ success: true, message: 'Inquiry received', admin_copy: false });
+    }
     const email = String(body.email || '').trim().toLowerCase();
     const message = String(body.message || '').trim();
     const newsletter = String(body.inquiry_topic || body.source || '').toLowerCase() === 'newsletter';
@@ -108,6 +125,16 @@ router.get('/newsletter/unsubscribe', async (req, res, next) => {
   }
 });
 
+router.get('/followups/unsubscribe', async (req, res, next) => {
+  try {
+    const removed = await optOutOfNurtureByToken(req.query.token);
+    if (!removed) return res.status(404).json({ success: false, message: 'That unsubscribe link is not valid' });
+    res.json({ success: true, message: 'You will not receive more follow-up emails from this professional.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/professionals', getPublicProfessionalsList);
 router.get('/professional-network', getPublicProfessionalNetwork);
 router.get('/professionals/:slug/properties', getSellerProperties);
@@ -115,11 +142,10 @@ router.get('/professionals/:slug/shell', getPublicProfileShellBySlug);
 router.get('/professionals/:slug/storefront', getPublishedStorefrontBySlug);
 router.get('/professionals/:slug/feedback', getApprovedPublicFeedback);
 router.get('/professionals/:slug', getPublicProfileBySlug);
-router.post('/professionals/:slug/lead', optionalAuth, validateBody(submitPublicLeadSchema), submitPublicLead);
+router.post('/professionals/:slug/property-images', publicLeadSubmitLimiter, uploadPropertyImages.array('images', 8), postPublicProfilePropertyImagesUpload);
+router.post('/professionals/:slug/lead', publicLeadSubmitLimiter, optionalAuth, validateBody(submitPublicLeadSchema), submitPublicLead);
 router.post('/professionals/:slug/feedback', validateBody(submitPublicFeedbackSchema), submitPublicFeedback);
-
 router.post('/professionals/:slug/analytics', optionalAuth, trackProfileView);
-
 router.post('/slug/check', optionalAuth, checkSlugAvailability);
 
 export default router;

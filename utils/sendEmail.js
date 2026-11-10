@@ -83,6 +83,7 @@ const sendEmail = async (options) => {
           subject: options.subject,
           text: options.message,
           html: options.htmlMessage || `<p>${options.message}</p>`,
+          ...(options.replyTo ? { replyTo: options.replyTo } : {}),
         };
         const request = idempotencyKey
           ? resend.emails.send(payload, {

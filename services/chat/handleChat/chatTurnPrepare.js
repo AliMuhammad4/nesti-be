@@ -41,6 +41,8 @@ import { clientTypeForForm, settingForClientType } from '../../professionalAssis
 import { propertyMatchesEnabledForPlan, readSavedPlan } from './chatPlan.js';
 import { prepareTurnDocuments } from './chatTurnDocuments.js';
 import { asFormContactRecord, conversationCreateFields, intakeSessionId } from './chatTurnConversation.js';
+import { sanitizeLeadProfilePreview } from './leadProfilePreview.js';
+import { previewIntakeSignals } from './previewSignals.js';
 
 const MAX_USER_MESSAGES_FOR_SCORING = 120;
 const MAX_MESSAGES_FOR_PROMPT = 20;
@@ -62,6 +64,7 @@ export async function prepareProfessionalChatTurn(input) {
     formContact,
     forceNewLead,
     attachmentIds,
+    leadProfilePreview,
     landingMode,
     landingSettings,
     embedToken,
@@ -171,6 +174,8 @@ export async function prepareProfessionalChatTurn(input) {
       sessionId,
       attachmentIds,
     });
+  // Only the opening (form) turn carries the intake summary card.
+  const userLeadProfilePreview = forceNewLead ? sanitizeLeadProfilePreview(leadProfilePreview) : null;
   await ChatMessage.create({
     conversation_id: conversation._id,
     session_id: sessionId,
@@ -191,6 +196,7 @@ export async function prepareProfessionalChatTurn(input) {
       ...(typeof formPatch?.selected_property_context === 'string' && formPatch.selected_property_context.trim()
         ? { selected_property_context: formPatch.selected_property_context.trim() }
         : {}),
+      ...(userLeadProfilePreview ? { lead_profile_preview: userLeadProfilePreview } : {}),
     },
   });
 
@@ -264,9 +270,11 @@ export async function prepareProfessionalChatTurn(input) {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,
     lead_grade: conversation?.lead_grade ?? null,
   };
+  // "Suggest a consultation" off: hold the booking link back from the prompt unless the visitor asks to meet.
+  const consultationSuggestOff = Boolean(appliedAssistantLoaded?.applied && appliedAssistantLoaded?.suggest_consultation === false);
   const deferCalendlyLink = userSignalsBookingIntent(trimmedMessage)
     ? false
-    : shouldDeferCalendlyLink(
+    : consultationSuggestOff || shouldDeferCalendlyLink(
       flow,
       isAutomatedBookingEnabled,
       calendlyLinkForVisitor,
@@ -310,6 +318,13 @@ export async function prepareProfessionalChatTurn(input) {
     systemPromptOptions.yearsExperience = savedYears;
     systemPromptOptions.previewConversation = Boolean(previewForOwner);
     systemPromptOptions.clientType = visitorClientType;
+    // Test My AI only: a filled test form, else persona + chat text, stand in for the intake form's
+    // investor / market fields (live chat keeps reading the real intake form only).
+    if (previewForOwner) {
+      systemPromptOptions.previewSignals = storedForm && typeof storedForm === 'object'
+        ? { ...storedForm, ...(previewPersona === 'investor' ? { client_type: 'investor' } : {}) }
+        : previewIntakeSignals(flow?.flowRole, `${conversationText} ${trimmedMessage}`, previewPersona);
+    }
   }
   const appliedAssistantSetting = systemPromptOptions.assistantSetting;
   const leadSyncEnabled = canCreateLeads && assistantAllowsLeadSaving(appliedAssistantSetting);

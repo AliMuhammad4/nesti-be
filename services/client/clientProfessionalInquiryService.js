@@ -26,11 +26,17 @@ import {
   scoreMortgageBrokerLead,
 } from '../chat/scoring/mortgageBrokerScoring.js';
 import { computeIcpFitForLead } from '../lead/icpScoringService.js';
-import { emitNewLeadCreatedNotification } from '../realtime/leadCreatedNotify.js';
+import { emitNewLeadCreatedNotification, sendNewLeadCreatedEmailIfEnabled } from '../realtime/leadCreatedNotify.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
 import { buildWorkspaceLeadConversionPreview } from '../conversion/buildLeadConversionPack.js';
 import { postThreadMessage } from '../proChat/messageService.js';
 import logger from '../../utils/logger.js';
+import {
+  marketChoiceFromForm,
+  marketCurrency,
+  marketRegionFromText,
+  normalizeMarketRegion,
+} from '../professionalAssistant/brokerInvestorMarket.js';
 
 function clientDisplayName(user = {}) {
   return [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim() || user?.email || 'Client';
@@ -146,6 +152,12 @@ export function normalizeLawyerInquiryBody(body = {}) {
     legal_services_needed: toText(body.legal_services_needed),
     property_address: toText(body.property_address || body.location),
     property_value: toText(body.property_value),
+    client_type: toText(body.client_type).toLowerCase() === 'investor' ? 'investor' : '',
+    via_company: ['personally', 'company', 'not_sure'].includes(toText(body.via_company)) ? toText(body.via_company) : '',
+    market_country: toText(body.market_country),
+    market_region: toText(body.market_region),
+    market_city: toText(body.market_city).slice(0, 120),
+    market_country_name: toText(body.market_country_name).slice(0, 80),
   };
 }
 
@@ -169,13 +181,25 @@ export function normalizeMortgageBrokerInquiryBody(body = {}) {
     purchase_purpose: toText(body.purchase_purpose),
     property_budget: toText(body.property_budget),
     property_address: toText(body.property_address || body.location),
+    budget: toText(body.budget),
+    investment_type: toText(body.investment_type),
+    owns_investments: toText(body.owns_investments),
+    investment_financing: toText(body.investment_financing),
+    borrower_entity: toText(body.borrower_entity),
+    market_country: toText(body.market_country),
+    market_region: toText(body.market_region),
+    market_city: toText(body.market_city).slice(0, 120),
+    market_country_name: toText(body.market_country_name).slice(0, 80),
   };
 }
 
 export function validateMortgageBrokerInquiryInput(payload = {}) {
   if (!payload.message) return 'Please enter your question.';
   if (!payload.mortgage_timeline) return 'Mortgage timeline is required.';
-  if (!payload.pre_approval_status) return 'Pre-approval status is required.';
+  // Cash investors do not need a pre-approval.
+  if (!payload.pre_approval_status && payload.investment_financing !== 'cash_purchase') {
+    return 'Pre-approval status is required.';
+  }
   if (!payload.purchase_purpose) return 'Financing purpose is required.';
   return '';
 }
@@ -191,6 +215,10 @@ export function normalizeAgentInquiryBody(body = {}) {
     inquiry_goal: derivedGoal,
     timeline: toText(body.timeline || body.purchase_timeline),
     preferred_location: toText(body.preferred_location || body.location || body.property_address),
+    market_country: toText(body.market_country),
+    market_region: toText(body.market_region),
+    market_city: toText(body.market_city).slice(0, 120),
+    market_country_name: toText(body.market_country_name).slice(0, 80),
     budget: toText(body.budget || body.property_budget),
     property_address: toText(body.property_address || body.preferred_location || body.location),
     property_type: toText(body.property_type),
@@ -266,8 +294,31 @@ export function resolveLawyerQualification(input, clientProfile = {}) {
     first_time_buyer:
       inferredFromMessage.first_time_buyer || deriveFirstTimeBuyerFromProfile(clientProfile),
     legal_services_needed: input.legal_services_needed || inferredFromMessage.legal_services_needed || 'full_closing',
+    client_type: input.client_type || inferredFromMessage.client_type || '',
+    via_company: input.via_company || inferredFromMessage.via_company || '',
+    ...resolveLawyerInquiryMarket(input, inferredFromMessage),
     preferred_contact_method: pickPreferredContactMethod(clientProfile),
     best_time_to_contact: toText(clientProfile?.best_time_to_contact) || 'anytime',
+  };
+}
+
+/** Lawyer inquiry market: explicit country / region, then the message, then the property address. */
+function resolveLawyerInquiryMarket(input = {}, inferred = {}) {
+  const marketCountry = marketChoiceFromForm({
+    market_country: input.market_country || inferred.market_country,
+    market_region: input.market_region,
+    address: input.property_address,
+  });
+  const marketRegion = normalizeMarketRegion(input.market_region, marketCountry)
+    || toText(input.market_region)
+    || marketRegionFromText(input.property_address, marketCountry);
+  const marketCity = toText(input.market_city);
+  const marketCountryName = toText(input.market_country_name);
+  return {
+    market_country: marketCountry,
+    market_region: marketRegion,
+    ...(marketCity ? { market_city: marketCity } : {}),
+    ...(marketCountry === 'other' && marketCountryName ? { market_country_name: marketCountryName } : {}),
   };
 }
 
@@ -336,6 +387,31 @@ export function resolveMortgageBrokerQualification(input, clientProfile = {}) {
     urgency_signal: inferred.urgency_signal || '',
     preferred_contact_method: pickPreferredContactMethod(clientProfile),
     best_time_to_contact: toText(clientProfile?.best_time_to_contact) || 'anytime',
+    ...resolveBrokerInvestorAndMarket(input, inferred),
+  };
+}
+
+/** Investor + market fields for a public broker inquiry: explicit body values, then what the message says. */
+function resolveBrokerInvestorAndMarket(input = {}, inferred = {}) {
+  const purpose = String(input.purchase_purpose || inferred.purchase_purpose || '').toLowerCase();
+  const investor = purpose === 'investment' || String(inferred.client_type || '').toLowerCase() === 'investor';
+  const marketCountry = marketChoiceFromForm({
+    market_country: input.market_country || inferred.market_country,
+    market_region: input.market_region,
+    address: input.property_address,
+  });
+  const marketRegion = normalizeMarketRegion(input.market_region, marketCountry) || toText(input.market_region);
+  return {
+    budget: input.budget || '',
+    market_country: marketCountry,
+    market_region: marketRegion,
+    market_city: toText(input.market_city),
+    market_country_name: toText(input.market_country_name),
+    client_type: investor ? 'investor' : '',
+    investment_type: investor ? (input.investment_type || inferred.investment_type || '') : '',
+    owns_investments: investor ? (input.owns_investments || inferred.owns_investments || '') : '',
+    investment_financing: investor ? (input.investment_financing || inferred.investment_financing || '') : '',
+    borrower_entity: investor ? (input.borrower_entity || inferred.borrower_entity || '') : '',
   };
 }
 
@@ -368,10 +444,14 @@ function buildLawyerInquiryNotificationDetails({
   normalizedInput,
   qualification,
   clientProfileSnapshot,
+  contactInfo = null,
 }) {
   return {
     type: 'lawyer_inquiry',
     client_name: clientName,
+    // Signed-in client's own contact details (Email / Phone rows in the new-lead email).
+    client_email: contactInfo?.email || '',
+    client_phone: contactInfo?.phone || '',
     inquiry_message: normalizedInput.message,
     transaction_type: qualification.transaction_type || '',
     closing_timeline: qualification.closing_timeline || '',
@@ -381,6 +461,12 @@ function buildLawyerInquiryNotificationDetails({
     mortgage_status: qualification.mortgage_status || '',
     realtor_involved: qualification.realtor_involved || '',
     first_time_buyer: qualification.first_time_buyer || '',
+    client_type: qualification.client_type || '',
+    via_company: qualification.via_company || '',
+    market_country: qualification.market_country || '',
+    market_region: qualification.market_region || '',
+    market_city: qualification.market_city || '',
+    market_country_name: qualification.market_country_name || '',
     preferred_contact_method: qualification.preferred_contact_method || '',
     best_time_to_contact: qualification.best_time_to_contact || '',
     client_profile: clientProfileSnapshot || {},
@@ -401,10 +487,14 @@ function buildMortgageBrokerInquiryNotificationDetails({
   normalizedInput,
   qualification,
   clientProfileSnapshot,
+  contactInfo = null,
 }) {
   return {
     type: 'mortgage_broker_inquiry',
     client_name: clientName,
+    // Signed-in client's own contact details (Email / Phone rows in the new-lead email).
+    client_email: contactInfo?.email || '',
+    client_phone: contactInfo?.phone || '',
     inquiry_message: normalizedInput.message,
     mortgage_timeline: qualification.mortgage_timeline || '',
     pre_approval_status: qualification.pre_approval_status || '',
@@ -415,6 +505,17 @@ function buildMortgageBrokerInquiryNotificationDetails({
     purchase_purpose: qualification.purchase_purpose || '',
     property_budget: qualification.property_budget || '',
     property_address: normalizedInput.property_address || '',
+    budget: qualification.budget || '',
+    client_type: qualification.client_type || '',
+    investment_type: qualification.investment_type || '',
+    owns_investments: qualification.owns_investments || '',
+    investment_financing: qualification.investment_financing || '',
+    borrower_entity: qualification.borrower_entity || '',
+    market_country: qualification.market_country || '',
+    market_region: qualification.market_region || '',
+    market_city: qualification.market_city || '',
+    market_country_name: qualification.market_country_name || '',
+    currency: marketCurrency(),
     preferred_contact_method: qualification.preferred_contact_method || '',
     best_time_to_contact: qualification.best_time_to_contact || '',
     client_profile: clientProfileSnapshot || {},
@@ -437,16 +538,24 @@ function buildAgentInquiryNotificationDetails({
   normalizedInput,
   qualification,
   clientProfileSnapshot,
+  contactInfo = null,
 }) {
   return {
     type: 'agent_inquiry',
     client_name: clientName,
+    // Signed-in client's own contact details (Email / Phone rows in the new-lead email).
+    client_email: contactInfo?.email || '',
+    client_phone: contactInfo?.phone || '',
     inquiry_message: normalizedInput.message,
     intent: qualification.intent || '',
     timeline: qualification.timeline || '',
     preferred_location: qualification.buy_property_location || '',
     budget: qualification.budget || '',
     property_address: qualification.property_address || '',
+    market_country: normalizedInput.market_country || qualification.market_country || '',
+    market_region: normalizedInput.market_region || qualification.market_region || '',
+    market_city: normalizedInput.market_city || qualification.market_city || '',
+    market_country_name: normalizedInput.market_country_name || qualification.market_country_name || '',
     property_type: qualification.property_type || '',
     bedrooms: qualification.bedrooms || '',
     bathrooms: qualification.bathrooms || '',
@@ -620,7 +729,8 @@ export async function submitClientAgentInquiry({
       email: contactInfo.email || '',
       phone: contactInfo.phone || '',
       canonical_email: contactInfo.email ? contactInfo.email.toLowerCase() : '',
-      canonical_phone: contactInfo.phone || '',
+      // Same canonical form as chat / public leads (leadPersistence normalizePhone), so phone dedupe matches.
+      canonical_phone: String(contactInfo.phone || '').replace(/[^\d+]/g, ''),
     },
     lifecycle: {
       status: 'new',
@@ -647,7 +757,7 @@ export async function submitClientAgentInquiry({
       bedrooms: qualification.bedrooms || '',
       bathrooms: qualification.bathrooms || '',
       property_type: qualification.property_type || '',
-      must_have_features: qualification.must_have_features || normalizedInput.message,
+      must_have_features: qualification.must_have_features || '',
       parking_required: qualification.parking_required || '',
       backyard_needed: qualification.backyard_needed || '',
       school_district_important: qualification.school_district_important || '',
@@ -662,6 +772,10 @@ export async function submitClientAgentInquiry({
         living_situation: qualification.living_situation || '',
         urgency_readiness: qualification.urgency_readiness || '',
         buy_property_location: qualification.buy_property_location || '',
+        market_country: normalizedInput.market_country || '',
+        market_region: normalizedInput.market_region || '',
+        market_city: normalizedInput.market_city || '',
+        market_country_name: normalizedInput.market_country_name || '',
         property_address: qualification.property_address || '',
         property_type: qualification.property_type || '',
         bedrooms: qualification.bedrooms || '',
@@ -813,6 +927,7 @@ export async function submitClientAgentInquiry({
     normalizedInput,
     qualification,
     clientProfileSnapshot,
+    contactInfo,
   });
 
   emitWorkspaceLeadEvent(professionalUserId, {
@@ -840,6 +955,13 @@ export async function submitClientAgentInquiry({
     conversion_preview: conversionPreview,
     details: agentInquiryDetails,
   });
+  // Agent inquiries get the same new-lead email as chat, lawyer and broker leads (same gates).
+  void sendNewLeadCreatedEmailIfEnabled(professionalUserId, {
+    newLeadMatch: leadMatch,
+    persistedGrade: leadGrade,
+    conversion_preview: conversionPreview,
+    details: agentInquiryDetails,
+  }).catch((error) => logger.warn('Agent inquiry lead email failed', { error: error?.message }));
 
   return {
     status: 201,
@@ -930,7 +1052,8 @@ export async function submitClientLawyerInquiry({
       email: contactInfo.email || '',
       phone: contactInfo.phone || '',
       canonical_email: contactInfo.email ? contactInfo.email.toLowerCase() : '',
-      canonical_phone: contactInfo.phone || '',
+      // Same canonical form as chat / public leads (leadPersistence normalizePhone), so phone dedupe matches.
+      canonical_phone: String(contactInfo.phone || '').replace(/[^\d+]/g, ''),
     },
     lifecycle: {
       status: 'new',
@@ -966,10 +1089,16 @@ export async function submitClientLawyerInquiry({
         property_value: qualification.property_value || '',
         mortgage_status: qualification.mortgage_status || '',
         realtor_involved: qualification.realtor_involved || '',
-        first_time_buyer: qualification.first_time_buyer || '',
+        first_time_buyer: qualification.client_type === 'investor' ? '' : (qualification.first_time_buyer || ''),
         legal_services_needed: qualification.legal_services_needed || '',
+        via_company: qualification.via_company || '',
+        market_country: qualification.market_country || '',
+        market_region: qualification.market_region || '',
+        market_city: qualification.market_city || '',
+        market_country_name: qualification.market_country_name || '',
       },
     },
+    ...(qualification.client_type === 'investor' ? { client_type: 'investor' } : {}),
     source: 'client_professional_inquiry',
     scoring: {
       current_score: leadScore,
@@ -1005,6 +1134,9 @@ export async function submitClientLawyerInquiry({
       scoring: profilePayload.scoring,
       total_score: profilePayload.total_score,
       source: 'client_professional_inquiry',
+      // Repeat inquiries keep the investor type / market currency the new inquiry carries.
+      ...(profilePayload.client_type ? { client_type: profilePayload.client_type } : {}),
+      ...(profilePayload.budget_profile ? { budget_profile: profilePayload.budget_profile } : {}),
     });
     leadProfile.stats = {
       ...(leadProfile.stats?.toObject?.() || leadProfile.stats || {}),
@@ -1028,7 +1160,7 @@ export async function submitClientLawyerInquiry({
   const leadMatchPayload = {
     user_id: professionalUserId,
     professional_profile_id: professionalProfile?._id || undefined,
-    lead_type: buildLawyerLeadType(leadGrade),
+    lead_type: buildLawyerLeadType(leadGrade, qualification.client_type),
     lead_profile_id: leadProfile._id,
     match_score: leadScore,
     match_status: 'new',
@@ -1044,6 +1176,12 @@ export async function submitClientLawyerInquiry({
       legal_services_needed: qualification.legal_services_needed || '',
       property_address: normalizedInput.property_address || '',
       property_value: qualification.property_value || '',
+      ...(qualification.client_type ? { client_type: qualification.client_type } : {}),
+      ...(qualification.via_company ? { via_company: qualification.via_company } : {}),
+      ...(qualification.market_country ? { market_country: qualification.market_country } : {}),
+      ...(qualification.market_region ? { market_region: qualification.market_region } : {}),
+      ...(qualification.market_city ? { market_city: qualification.market_city } : {}),
+      ...(qualification.market_country_name ? { market_country_name: qualification.market_country_name } : {}),
       client_user_id: String(clientUserId),
       client_profile: clientProfileSnapshot,
       contact_preference: qualification.preferred_contact_method || '',
@@ -1098,6 +1236,7 @@ export async function submitClientLawyerInquiry({
     normalizedInput,
     qualification,
     clientProfileSnapshot,
+    contactInfo,
   });
 
   emitWorkspaceLeadEvent(professionalUserId, {
@@ -1124,6 +1263,13 @@ export async function submitClientLawyerInquiry({
     conversion_preview: conversionPreview,
     details: lawyerInquiryDetails,
   });
+  // Inquiry email (same env / assistant-setting gates as chat leads) with investor, entity and market rows.
+  void sendNewLeadCreatedEmailIfEnabled(professionalUserId, {
+    newLeadMatch: leadMatch,
+    persistedGrade: leadGrade,
+    conversion_preview: conversionPreview,
+    details: lawyerInquiryDetails,
+  }).catch((error) => logger.warn('Inquiry lead email failed', { error: error?.message }));
 
   return {
     status: 201,
@@ -1215,7 +1361,8 @@ export async function submitClientMortgageBrokerInquiry({
       email: contactInfo.email || '',
       phone: contactInfo.phone || '',
       canonical_email: contactInfo.email ? contactInfo.email.toLowerCase() : '',
-      canonical_phone: contactInfo.phone || '',
+      // Same canonical form as chat / public leads (leadPersistence normalizePhone), so phone dedupe matches.
+      canonical_phone: String(contactInfo.phone || '').replace(/[^\d+]/g, ''),
     },
     lifecycle: {
       status: 'new',
@@ -1236,7 +1383,7 @@ export async function submitClientMortgageBrokerInquiry({
     property: {
       address: normalizedInput.property_address || '',
       location: normalizedInput.property_address || clientProfile?.preferred_location || '',
-      budget: clientProfile?.dream_home_price ? String(clientProfile.dream_home_price) : '',
+      budget: qualification.budget || (clientProfile?.dream_home_price ? String(clientProfile.dream_home_price) : ''),
       expected_price: '',
       timeline: qualification.mortgage_timeline || '',
       must_have_features: normalizedInput.message,
@@ -1255,9 +1402,23 @@ export async function submitClientMortgageBrokerInquiry({
         urgency_signal: qualification.urgency_signal || '',
         investment_type: qualification.investment_type || '',
         owns_investments: qualification.owns_investments || '',
+        investment_financing: qualification.investment_financing || '',
+        borrower_entity: qualification.borrower_entity || '',
+        market_country: qualification.market_country || '',
+        market_region: qualification.market_region || '',
+        market_city: qualification.market_city || '',
+        market_country_name: qualification.market_country_name || '',
       },
       lawyer: {},
     },
+    ...(qualification.market_country || qualification.budget
+      ? {
+          budget_profile: {
+            latest_budget_text: qualification.budget || '',
+            currency: marketCurrency(),
+          },
+        }
+      : {}),
     ...(String(qualification.purchase_purpose || '').toLowerCase() === 'investment'
       || String(qualification.client_type || '').toLowerCase() === 'investor'
       ? { client_type: 'investor' }
@@ -1297,6 +1458,9 @@ export async function submitClientMortgageBrokerInquiry({
       scoring: profilePayload.scoring,
       total_score: profilePayload.total_score,
       source: 'client_professional_inquiry',
+      // Repeat inquiries keep the investor type / market currency the new inquiry carries.
+      ...(profilePayload.client_type ? { client_type: profilePayload.client_type } : {}),
+      ...(profilePayload.budget_profile ? { budget_profile: profilePayload.budget_profile } : {}),
     });
     leadProfile.stats = {
       ...(leadProfile.stats?.toObject?.() || leadProfile.stats || {}),
@@ -1353,6 +1517,12 @@ export async function submitClientMortgageBrokerInquiry({
       ...(inquiryClientType ? { client_type: inquiryClientType } : {}),
       ...(qualification.investment_type ? { investment_type: qualification.investment_type } : {}),
       ...(qualification.owns_investments ? { owns_investments: qualification.owns_investments } : {}),
+      ...(qualification.investment_financing ? { investment_financing: qualification.investment_financing } : {}),
+      ...(qualification.borrower_entity ? { borrower_entity: qualification.borrower_entity } : {}),
+      ...(qualification.market_country ? { market_country: qualification.market_country } : {}),
+      ...(qualification.market_region ? { market_region: qualification.market_region } : {}),
+      ...(qualification.market_city ? { market_city: qualification.market_city } : {}),
+      ...(qualification.market_country_name ? { market_country_name: qualification.market_country_name } : {}),
     },
     icp_fit: icpFit
       ? {
@@ -1403,6 +1573,7 @@ export async function submitClientMortgageBrokerInquiry({
     normalizedInput,
     qualification,
     clientProfileSnapshot,
+    contactInfo,
   });
 
   emitWorkspaceLeadEvent(professionalUserId, {
@@ -1429,6 +1600,13 @@ export async function submitClientMortgageBrokerInquiry({
     conversion_preview: conversionPreview,
     details: mortgageInquiryDetails,
   });
+  // Inquiry email (same env / assistant-setting gates as chat leads) with investor, entity and market rows.
+  void sendNewLeadCreatedEmailIfEnabled(professionalUserId, {
+    newLeadMatch: leadMatch,
+    persistedGrade: leadGrade,
+    conversion_preview: conversionPreview,
+    details: mortgageInquiryDetails,
+  }).catch((error) => logger.warn('Inquiry lead email failed', { error: error?.message }));
 
   return {
     status: 201,

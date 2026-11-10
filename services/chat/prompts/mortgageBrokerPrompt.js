@@ -7,6 +7,7 @@ import {
 } from './mortgageBrokerPromptBlocks.js';
 import { appendAssistantOverlay } from '../../professionalAssistant/professionalAssistantService.js';
 import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
+import { isBrokerInvestorForm, marketCountryFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 export const buildMortgageBrokerSystemPrompt = (professionalProfile, options = {}) => {
   const name = professionalProfile?.full_name || 'a mortgage broker';
@@ -34,7 +35,12 @@ export const buildMortgageBrokerSystemPrompt = (professionalProfile, options = {
     && openBrokerFollowUps(options.assistantSetting, options.intakeFormContact, options.chatAnsweredQuestions).length,
   );
   const effectiveHasBookingLink = Boolean(hasBookingLink && !deferCalendlyLink && !holdForQuestions);
-  const actionFlow = getMortgageBrokerActionFlow(leadGrade);
+  const intake = options.intakeFormContact
+    || (options.previewConversation === true ? options.previewSignals || {} : {});
+  const actionFlow = getMortgageBrokerActionFlow(leadGrade, {
+    clientType: isBrokerInvestorForm(intake) ? 'investor' : '',
+    market: marketCountryFromForm(intake),
+  });
   const automationBlock = buildMortgageBrokerAutomationBlock({
     actionFlow,
     hasBookingLink: effectiveHasBookingLink,
@@ -61,8 +67,10 @@ export const buildMortgageBrokerSystemPrompt = (professionalProfile, options = {
     intakeFormContact: options.intakeFormContact,
     blockSchedule,
     chatAnsweredQuestions: options.chatAnsweredQuestions,
+    previewSignals: options.previewConversation === true ? options.previewSignals || null : null,
   }).trim(), options.assistantSetting, {
     preview: options.previewConversation === true,
+    contactKnown: options.contactKnown,
     intakeFormContact: options.intakeFormContact,
     openingTurn: options.openingTurn,
     chatAnsweredQuestions: options.chatAnsweredQuestions,

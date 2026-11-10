@@ -15,6 +15,112 @@ import {
   primaryNextActionFromPreview,
 } from '../lead/leadExperienceContract.js';
 import { EMAIL_BRAND, renderBrandedEmailShell } from '../email/emailTheme.js';
+import {
+  BROKER_INVESTMENT_TYPES,
+  borrowerEntityLabel,
+  investorFinancingLabel,
+  marketSummary,
+} from '../professionalAssistant/brokerInvestorMarket.js';
+
+function escapeEmailHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function humanizeToken(value) {
+  const text = String(value || '').trim().replace(/_/g, ' ');
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
+}
+function timelineLabel(value) {
+  const text = String(value || '').trim().replace(/(\d)_(\d)/g, '$1–$2').replace(/_/g, ' ');
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
+}
+
+function usdRangePart(part) {
+  const p = String(part || '').trim().toLowerCase();
+  if (/^\d+(\.\d+)?k$/.test(p)) return `$${p}`;
+  if (/^\d+(\.\d+)?m$/.test(p)) return `$${p.slice(0, -1)}M`;
+  if (/^\d+(\.\d+)?$/.test(p)) return `$${Number(p).toLocaleString('en-US')}`;
+  return '';
+}
+
+function usdLabel(value) {
+  const text = String(value ?? '').trim();
+  if (/^\d+(\.\d+)?$/.test(text.replace(/,/g, ''))) {
+    return `$${Number(text.replace(/,/g, '')).toLocaleString('en-US')}`;
+  }
+  const token = text.toLowerCase();
+  let m = token.match(/^([\d.]+[km]?)_(?:to_)?([\d.]+[km]?)$/);
+  if (m && usdRangePart(m[1]) && usdRangePart(m[2])) return `${usdRangePart(m[1])}–${usdRangePart(m[2])}`;
+  m = token.match(/^(?:under|below|less_than)_([\d.]+[km]?)$/);
+  if (m && usdRangePart(m[1])) return `Under ${usdRangePart(m[1])}`;
+  m = token.match(/^([\d.]+[km]?)_?(?:plus|\+)$/);
+  if (m && usdRangePart(m[1])) return `${usdRangePart(m[1])}+`;
+  return text;
+}
+
+const VIA_COMPANY_LABELS = { personally: 'Personally', company: 'Through a company', not_sure: 'Not sure yet' };
+const INQUIRY_EMAIL_TYPES = new Set(['lawyer_inquiry', 'mortgage_broker_inquiry', 'agent_inquiry', 'public_web_form', 'chat_lead']);
+const ROLE_LABELS = { agent: 'Agent', mortgage_broker: 'Mortgage broker', lawyer: 'Lawyer' };
+const DETAIL_ROLE_BY_TYPE = { lawyer_inquiry: 'lawyer', mortgage_broker_inquiry: 'mortgage_broker', agent_inquiry: 'agent' };
+
+export function newLeadEmailSubject({ newLeadMatch = null, persistedGrade = '', details = null } = {}) {
+  const d = details && typeof details === 'object' ? details : {};
+  const cf = newLeadMatch?.compatibility_factors || {};
+  const role = ROLE_LABELS[d.professional_type || DETAIL_ROLE_BY_TYPE[d.type] || cf.professional_type] || '';
+  const grade = humanizeToken(persistedGrade || 'interested');
+  const leadType = String(newLeadMatch?.lead_type || '').trim();
+  const kind = leadType && leadType !== 'unknown'
+    ? humanizeToken(leadType.toLowerCase())
+    : `${grade}${d.client_type === 'investor' ? ' investor' : ''}`;
+  const name = String(d.client_name || cf.contact?.name || '').trim().slice(0, 60);
+  return `New ${kind} lead${name ? `: ${name}` : ''}${role ? ` (${role})` : ''} — Nesti`;
+}
+const INTENT_LABELS = { buy: 'Buying', sell: 'Selling', client: 'Client' };
+
+export function inquiryEmailDetailRows(details = null) {
+  const d = details && typeof details === 'object' ? details : {};
+  if (!INQUIRY_EMAIL_TYPES.has(String(d.type || ''))) return [];
+  const country = String(d.market_country || '').toUpperCase();
+  const investor = String(d.client_type || '').toLowerCase() === 'investor'
+    || String(d.purchase_purpose || '').toLowerCase() === 'investment';
+  const ownsInvestments = String(d.owns_investments || '').toLowerCase();
+  const rows = [
+    ['Client', d.client_name],
+    ['Email', d.client_email],
+    ['Phone', d.client_phone],
+    ['Looking to', INTENT_LABELS[String(d.intent || '').toLowerCase()] || ''],
+    ['Client type', investor ? 'Investor' : ''],
+    ['Location', d.preferred_location || d.property_address || ''],
+    ['Timeline', timelineLabel(d.timeline || d.mortgage_timeline || d.closing_timeline)],
+    ['Purchasing as', VIA_COMPANY_LABELS[d.via_company] || humanizeToken(d.via_company)],
+    ['Investment type', BROKER_INVESTMENT_TYPES[d.investment_type] || humanizeToken(d.investment_type)],
+    ['Owns other investment properties', ownsInvestments === 'yes' ? 'Yes' : ownsInvestments === 'no' ? 'No' : humanizeToken(ownsInvestments)],
+    ['Financing path', investorFinancingLabel(d.investment_financing, country) || humanizeToken(d.investment_financing)],
+    ['Borrowing as', borrowerEntityLabel(d.borrower_entity, country) || humanizeToken(d.borrower_entity)],
+    ['Transaction type', humanizeToken(d.transaction_type)],
+    ['Legal service', humanizeToken(d.legal_services_needed)],
+    ['Market', marketSummary({ market_country: d.market_country, market_region: d.market_region, market_city: d.market_city, market_country_name: d.market_country_name })],
+    [d.professional_type === 'lawyer' || d.type === 'lawyer_inquiry' ? 'Property value (USD)' : 'Budget (USD)', usdLabel(d.budget || d.property_budget || d.property_value)],
+    ['Message', String(d.message || d.inquiry_message || '').trim().slice(0, 600)],
+    ['Photos', d.photos_note],
+  ];
+  return rows
+    .map(([label, value]) => [label, String(value ?? '').trim()])
+    .filter(([, value]) => value);
+}
+
+function inquiryEmailDetailsHtml(rows = []) {
+  if (!rows.length) return '';
+  const body = rows
+    .map(([label, value]) => `<tr><td style="padding:4px 12px 4px 0;font-size:12px;font-weight:700;color:#4A5568;white-space:nowrap;vertical-align:top;">${escapeEmailHtml(label)}</td><td style="padding:4px 0;font-size:13px;color:#1A202C;">${escapeEmailHtml(value)}</td></tr>`)
+    .join('');
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 14px;border-collapse:collapse;">${body}</table>`;
+}
 
 function envTruthy(value) {
   return ['1', 'true', 'yes'].includes(String(value ?? '').trim().toLowerCase());
@@ -136,8 +242,12 @@ export async function sendNewLeadCreatedEmailIfEnabled(ownerUserId, ctx) {
     return;
   }
 
-  const { newLeadMatch, persistedGrade, conversion_preview } = ctx;
+  const { newLeadMatch, persistedGrade, conversion_preview, details = null } = ctx;
   const summary = conversionPreviewBody(conversion_preview);
+  const detailRows = inquiryEmailDetailRows(details);
+  const detailText = detailRows.length
+    ? `\n\n${detailRows.map(([label, value]) => `${label}: ${value}`).join('\n')}`
+    : '';
 
   try {
     const user = await User.findById(ownerUserId).select('email first_name').lean();
@@ -145,14 +255,15 @@ export async function sendNewLeadCreatedEmailIfEnabled(ownerUserId, ctx) {
 
     const result = await sendEmail({
       email: user.email,
-      subject: `New ${persistedGrade} lead — Nesti`,
-      message: `${summary}\n\nOpen your dashboard to follow up.\nLead ID: ${String(newLeadMatch._id)}`,
+      subject: newLeadEmailSubject({ newLeadMatch, persistedGrade, details }),
+      message: `${summary}${detailText}\n\nOpen your dashboard to follow up.\nLead ID: ${String(newLeadMatch._id)}`,
       htmlMessage: renderBrandedEmailShell({
         kicker: 'Nesti Workspace',
         title: 'New lead alert',
         maxWidth: 560,
         innerHtml: `
-          <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#4A5568;">${summary}</p>
+          <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#4A5568;">${escapeEmailHtml(summary)}</p>
+          ${inquiryEmailDetailsHtml(detailRows)}
           <div style="margin:0 0 14px;padding:12px 14px;border:1px solid #bdecc8;background:#f2fff6;border-radius:10px;">
             <div style="font-size:12px;font-weight:700;color:${EMAIL_BRAND.primaryDark};letter-spacing:0.06em;text-transform:uppercase;">Lead ID</div>
             <div style="margin-top:4px;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;color:#1f8b3d;">${String(newLeadMatch._id)}</div>

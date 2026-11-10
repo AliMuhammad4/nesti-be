@@ -6,6 +6,7 @@ import { intakeValueFor } from '../../professionalAssistant/qualificationProgres
 import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
 import { communicationInstruction, formalityInstruction, voiceInstruction } from '../../professionalAssistant/professionalAssistantService.js';
 import { readQualificationAlias } from '../../professionalAssistant/qualificationFieldAliases.js';
+import { actionFlowContextFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 function appliedAssistant(options) {
   return options.assistantSetting?.applied ? options.assistantSetting : null;
@@ -142,7 +143,11 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     && !scheduleActions.includes('schedule'),
   );
   const hasBookingLink = !blockSchedule && isAutomatedBookingEnabled && calendlyLink;
-  const actionFlow = getAgentActionFlow(leadGrade, intent);
+  const actionFlow = getAgentActionFlow(
+    leadGrade,
+    intent,
+    actionFlowContextFromForm('agent', options.intakeFormContact || {}, options.assistantSetting?.client_type),
+  );
   const isBuyer = intent !== 'sell';
   const recommendedLine =
     actionFlow.recommendedAppointment?.length > 0
@@ -267,6 +272,11 @@ ${checklistPlain}
     || String(intakeForm.motivation_reason || '').toLowerCase() === 'investment'
     || Boolean(String(intakeForm.investment_type || '').trim())
     || Boolean(String(intakeForm.investment_goal || '').trim());
+  // Land has no bedrooms, bathrooms, parking, or backyard: never ask those for a land buyer or seller.
+  const intakeIsLand = /\b(land|lot|acreage|vacant)\b/i.test(String(intakeForm.property_type || ''));
+  const landLine = intakeIsLand
+    ? '\n- The property type is LAND: never ask bedrooms, bathrooms, parking, backyard, school district, or house features. If a detail is needed, ask one of lot size or acreage, zoning or intended use, or utilities and road access.'
+    : '';
   const defaultQuestions = [
     ['realtor_status', 'Are you currently working with a realtor? (No / Yes but open / Yes exclusively)'],
     ...(intakeIsInvestor
@@ -333,7 +343,7 @@ ${voiceOn
 1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back. A saved lead is not announced and does not skip this order.
 2) Ask one missing checked qualification question. A short answer such as "yes" closes only that question. Do not share a meeting link in that reply.
 3) ${optionsFlowInstruction} Do not ask a seller, and do not claim the cards are already visible.
-4) After they say yes or ask to see options, point at the cards in one short sentence. Then ask for the next requested document, one file at a time. If the visitor does not upload a file, stop asking and share the meeting link, unless they already asked to book.
+4) After they say yes or ask to see options, point at the cards in one short sentence. Then ask for the next requested document, one file at a time: name only that one document, never a list of several. If the visitor does not upload a file, stop asking and share the meeting link, unless they already asked to book.
 5) After they agree, share one Calendly link clearly and stop repeating booking CTAs unless they ask again.
 6) When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.`
       : `MEETING-FIRST EXECUTION ORDER:
@@ -402,7 +412,7 @@ ${previewChat
     ? `The intake form already has intent, location, budget, timeline, property type, and mortgage status${intakeIsInvestor ? ', plus investment type, investment goal, capital readiness, and related investor fields' : ''}. Do not ask for any of those again.
 - Ask only the next open saved qualification question, one at a time.
 - When no open qualification questions remain, your next reply must ask once whether they want to see available ${intakeIsInvestor ? 'investment ' : ''}options. Do not ask for documents or a booking link in that same reply. Wait for their answer. After they say yes, point at the cards. Only then request one document, then booking.
-- Do not invent extra preference questions such as beds, baths, parking, or must-haves unless a saved question still asks for them.
+- Do not invent extra preference questions such as beds, baths, parking, or must-haves unless a saved question still asks for them.${landLine}
 - Do not ask for a pre-approval letter when mortgage status is paying cash; proof of funds / photo ID may still apply.
 - For a seller, never offer property match cards.`
     : `The intake form already has intent, location, budget, timeline, property type, and mortgage status. Do not ask for any of those again.
@@ -424,7 +434,7 @@ For SELLERS (intent="sell"), collect these about the property they are listing:
 - Key features (e.g. pool, garage, backyard, open floor plan)
 - Parking? (yes / no — does the property have parking/garage?)
 - Backyard? (yes / no — does the property have a backyard?)
-- NEVER ask sellers "what are you looking for" or "how many bedrooms do you need" — those are buyer questions. Sellers are listing a property; ask about THAT property.`}
+- NEVER ask sellers "what are you looking for" or "how many bedrooms do you need" — those are buyer questions. Sellers are listing a property; ask about THAT property.${landLine}`}
 
 ${previewChat
   ? `QUESTION FLOW:
@@ -544,7 +554,7 @@ ${applied
 - If the user says "all good" / "looks correct" / "yes" — keep the data as is.
 - If the user asks to change something — acknowledge it, update META with the new value, and confirm only the changed line.`
     : `CONFIRMATION BEFORE FINALISING:
-- When you have collected most of the key details (contact, budget/price, timeline, address or location), recap in a scannable Markdown list: one fact per line, each line starting with "- " followed by a short bold label and the value (e.g. "- **Budget:** $400k–$700k", "- **Location:** Lahore"). Put a blank line between intro prose and the list if you use an intro sentence. Every list line MUST include the real value after the label — never empty labels. Then ask: "Is everything correct, or would you like to change any details?"
+- When you have collected most of the key details (contact, budget/price, timeline, address or location), recap in a scannable Markdown list: one fact per line, each line starting with "- " followed by a short bold label and the value (e.g. "- **Budget:** $400k–$700k", "- **Location:** Downtown Toronto"). Put a blank line between intro prose and the list if you use an intro sentence. Every list line MUST include the real value after the label — never empty labels. Then ask: "Is everything correct, or would you like to change any details?"
 - If the user says "all good" / "looks correct" / "yes" — keep the data as is.
 - If the user asks to change something (budget, address, timeline, bedrooms, etc.) — acknowledge it, update META with the new value, and confirm the change.`}
 
@@ -560,6 +570,6 @@ CONVERSATION STYLE:
 - Never make legal, tax, or financial promises; you can suggest that ${name} will review the details with them.
 - Out-of-scope guardrail: weather, sports, entertainment, coding, politics, trivia, jokes, recipes, loneliness, relationships, mood, and any other topic outside buying or selling a property get one short redirect back to real-estate buy/sell support. Do not counsel, comfort, or give life advice.
 `.trim();
-  return `${appendAssistantOverlay(prompt, options.assistantSetting, { preview: previewChat, openingTurn: options.openingTurn, intakeFormContact: options.intakeFormContact, chatAnsweredQuestions: options.chatAnsweredQuestions })}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
+  return `${appendAssistantOverlay(prompt, options.assistantSetting, { preview: previewChat, contactKnown: options.contactKnown, openingTurn: options.openingTurn, intakeFormContact: options.intakeFormContact, chatAnsweredQuestions: options.chatAnsweredQuestions, propertyMatchesEnabled })}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
 };
  

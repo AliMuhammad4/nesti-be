@@ -17,6 +17,7 @@ export {
   documentRequestIds,
   nextDocumentRequest,
   followUpSkipIds,
+  requestNamedInReply,
 } from './documentRequestFlow.js';
 
 export { isSameChatDocument, documentReviewReply } from './documentReviewReply.js';

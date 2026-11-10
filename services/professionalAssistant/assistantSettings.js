@@ -121,6 +121,33 @@ const LEGACY_FULL_QUALIFICATION_IDS = Object.freeze({
   }),
 });
 
+/**
+ * Exact prior full default document lists. A saved list equal to one of these (any order) is the untouched
+ * old default and receives newer optional documents; a curated subset or a custom list is left alone.
+ */
+const LEGACY_FULL_DOCUMENT_IDS = Object.freeze({
+  lawyer: Object.freeze([
+    Object.freeze(['purchase_agreement', 'title_deed', 'mortgage_commitment', 'photo_id', 'condo_status']),
+  ]),
+});
+
+/** Bumped when a catalog document is added. Saved settings stamped with it are never auto-upgraded again. */
+export const DOCUMENT_CATALOG_VERSION = 2;
+
+export function upgradeLegacyDocumentRequests(role, ids) {
+  const saved = Array.isArray(ids) ? ids : [];
+  const legacyLists = LEGACY_FULL_DOCUMENT_IDS[role] || [];
+  const savedSet = new Set(saved);
+  const isLegacyDefault = legacyLists.some((legacy) => (
+    savedSet.size === saved.length
+    && saved.length === legacy.length
+    && legacy.every((id) => savedSet.has(id))
+  ));
+  if (!isLegacyDefault) return saved;
+  const current = idsOf(DOCUMENT_REQUESTS[role] || []);
+  return [...saved, ...current.filter((id) => !savedSet.has(id))];
+}
+
 export function sanitizeQualificationTemplates(input, role) {
   const defaults = defaultQualificationTemplates(role);
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
@@ -383,17 +410,15 @@ export function sanitizeAssistant(input, role) {
     services_pricing: clip(source.services_pricing, 800),
     custom_guidance: clip(source.custom_guidance, 2000),
     qualification_questions: list(source.qualification_questions, idsOf(QUALIFICATION[role] || []), 8),
+    // Read-time upgrade: only settings saved before this catalog version (no stamp) receive newer documents.
     document_requests: Array.isArray(source.document_requests)
-      ? list(source.document_requests, idsOf(DOCUMENT_REQUESTS[role] || []), 8)
+      ? (Number(source.document_catalog_version) >= DOCUMENT_CATALOG_VERSION
+        ? list(source.document_requests, idsOf(DOCUMENT_REQUESTS[role] || []), 8)
+        : upgradeLegacyDocumentRequests(role, list(source.document_requests, idsOf(DOCUMENT_REQUESTS[role] || []), 8)))
       : base.document_requests,
+    document_catalog_version: DOCUMENT_CATALOG_VERSION,
     next_actions: Array.isArray(source.next_actions)
-      ? list(
-        source.next_actions,
-        role === 'agent'
-          ? ['schedule', 'notify', 'save_lead']
-          : idsOf(NEXT_ACTIONS),
-        8,
-      )
+      ? list(source.next_actions, idsOf(NEXT_ACTIONS), 8)
       : base.next_actions,
     hot_guidance: clip(source.hot_guidance, 300) || base.hot_guidance,
     warm_guidance: clip(source.warm_guidance, 300) || base.warm_guidance,
@@ -417,9 +442,7 @@ export function assistantCatalog(role) {
     languages: LANGUAGES,
     voice_languages: VOICE_LANGUAGES,
     differentiators: ROLE_DIFFERENTIATORS[role] || DIFFERENTIATORS,
-    next_actions: role === 'agent'
-      ? NEXT_ACTIONS.filter(([id]) => ['schedule', 'notify', 'save_lead'].includes(id))
-      : NEXT_ACTIONS,
+    next_actions: NEXT_ACTIONS,
     services: SERVICES[role] || [],
     qualification: QUALIFICATION[role] || [],
     client_types: CLIENT_TYPES,

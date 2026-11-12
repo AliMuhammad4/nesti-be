@@ -8,6 +8,7 @@ import {
   conversionPreviewBody,
   primaryNextActionFromPreview,
   buildCollectionEmptyState,
+  neutralLeadNotificationBody,
 } from '../lead/leadExperienceContract.js';
 
 export async function createLeadCreatedNotification(ownerUserId, ctx) {
@@ -100,11 +101,12 @@ export async function createLeadLifecycleNotification(ownerUserId, payload = {})
 function toDto(doc) {
   if (!doc) return null;
   const o = doc.toObject ? doc.toObject() : doc;
+  const body = o.notification_type === 'lead_created' ? neutralLeadNotificationBody(o.body) : o.body;
   return {
     id: String(o._id),
     notification_type: o.notification_type,
     title: o.title,
-    body: o.body,
+    body,
     severity: o.severity,
     read_at: o.read_at ? o.read_at.toISOString() : null,
     action: o.action ?? null,
@@ -124,7 +126,7 @@ function toDto(doc) {
     primary_next_action: o.primary_next_action ?? null,
     details: o.details ?? null,
     decision_support: {
-      why_this_match: o.body || null,
+      why_this_match: body || null,
       do_this_now: o.primary_next_action || null,
       urgency: {
         level: o.severity || null,

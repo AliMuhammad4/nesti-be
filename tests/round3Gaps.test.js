@@ -209,18 +209,31 @@ test('4: public form accepts an investor intent and stores an interested_investo
   assert.equal(resolveLeadTypeForSubmission('agent', 'sell', true), 'interested_seller');
   assert.equal(resolveLeadTypeForSubmission('agent', 'buy', false), 'interested_buyer');
   assert.equal(resolveLeadTypeForSubmission('mortgage_broker', 'unspecified', false), 'interested_client');
+  const form = { full_name: 'Ivy', via_company: 'company', first_time_buyer: 'yes', market_country: 'CA', market_region: 'ON' };
   const payload = buildLeadPayload({
-    payload: { full_name: 'Ivy', via_company: 'company', market_country: 'CA', market_region: 'ON' },
+    payload: form,
     intent: 'unspecified',
     message: '',
     propertyImages: [],
     investor: true,
+    professionalType: 'lawyer',
   });
   assert.equal(payload.client_type, 'investor');
   assert.equal(payload.qualification.lawyer.via_company, 'company');
+  assert.equal(payload.qualification.lawyer.first_time_buyer, '');
   assert.equal(payload.qualification.lawyer.market_country, 'CA');
-  assert.equal(payload.qualification.mortgage_broker.purchase_purpose, 'investment');
-  assert.equal(payload.qualification.agent.motivation_reason, 'investment');
+  // Only the professional's own role section is filled.
+  assert.deepEqual(payload.qualification.mortgage_broker, {});
+  assert.deepEqual(payload.qualification.agent, {});
+  const personal = buildLeadPayload({ payload: form, intent: 'unspecified', message: '', propertyImages: [], professionalType: 'lawyer' });
+  assert.equal(personal.qualification.lawyer.via_company, '');
+  assert.equal(personal.qualification.lawyer.first_time_buyer, 'yes');
+  const broker = buildLeadPayload({ payload: form, intent: 'unspecified', message: '', propertyImages: [], investor: true, professionalType: 'mortgage_broker' });
+  assert.equal(broker.qualification.mortgage_broker.purchase_purpose, 'investment');
+  assert.deepEqual(broker.qualification.lawyer, {});
+  const agent = buildLeadPayload({ payload: form, intent: 'buy', message: '', propertyImages: [], investor: true, professionalType: 'agent' });
+  assert.equal(agent.qualification.agent.motivation_reason, 'investment');
+  assert.deepEqual(agent.qualification.lawyer, {});
 });
 
 // 5. Old leads

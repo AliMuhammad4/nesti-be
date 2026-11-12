@@ -8,6 +8,7 @@ import {
   leadProfileCreateSchema,
 } from '../../../schemas/leadSchemas.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
+import { INVESTOR_ONLY_ANSWER_KEYS, PERSONAL_ONLY_ANSWER_KEYS } from '../../lead/leadOwnAnswers.js';
 
 const JOI_OPTIONS = {
   abortEarly: false,
@@ -354,6 +355,23 @@ function isLandPropertyType(value) {
   return /\b(land|lot|acreage|vacant)\b/i.test(String(value || ''));
 }
 
+/**
+ * Lawyer / broker answers of the person's other inquiry type that a reused profile must not carry over:
+ * an investor inquiry blanks personal-only answers (lawyer first-time buyer), a personal one blanks the
+ * investor-only answers (lawyer purchasing entity, broker investment fields).
+ */
+function clientTypeClearedQualificationPaths(professionalType, validated) {
+  const section = professionalType === PROFESSIONAL_TYPE.LAWYER
+    ? 'lawyer'
+    : professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER ? 'mortgage_broker' : '';
+  if (!section) return [];
+  const investor = String(validated?.client_type || '').toLowerCase() === 'investor'
+    || (section === 'mortgage_broker'
+      && String(validated?.qualification?.mortgage_broker?.purchase_purpose || '').toLowerCase() === 'investment');
+  const keys = investor ? PERSONAL_ONLY_ANSWER_KEYS[professionalType] : INVESTOR_ONLY_ANSWER_KEYS[professionalType];
+  return (keys || []).map((key) => `qualification.${section}.${key}`);
+}
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
 }
@@ -442,6 +460,7 @@ export async function createOrReuseLeadProfile({
   if (isLandPropertyType(validated.property?.property_type)) {
     for (const field of LAND_CLEARED_PROPERTY_FIELDS) patch[`property.${field}`] = '';
   }
+  for (const path of clientTypeClearedQualificationPaths(profType, validated)) patch[path] = '';
   const leadProfile = await LeadProfile.findByIdAndUpdate(
     existingProfile._id,
     { $set: patch, $unset: LEGACY_LEAD_PROFILE_UNSET },

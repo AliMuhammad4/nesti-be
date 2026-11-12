@@ -567,7 +567,7 @@ export function lawyerInvestorPromptBlock(form = {}, { fromChat = false } = {}) 
   const lines = ['INVESTOR CLIENT (this visitor is buying, selling, or refinancing an investment property):'];
   if (viaLabel) lines.push(`- Already ${fromChat ? 'said in this chat' : 'on the intake form'}: purchasing ${viaLabel}. Do not ask this again.`);
   lines.push('- Never ask first-time-buyer questions or treat this as a home they will live in.');
-  lines.push(`- Investment closing topics you can raise, one at a time and only when still missing: who takes title (personally or a ${entity}), existing tenants and leases to assume, deposits and rent adjustments on closing, and the lender's requirements for a rental property.`);
+  lines.push(`- Investment closing topics you can raise, one at a time and only when still missing: who takes title (personally or ${country === 'US' ? 'an' : 'a'} ${entity}), existing tenants and leases to assume, deposits and rent adjustments on closing, and the lender's requirements for a rental property.`);
   if (company) lines.push(`- They are buying through a company: the ${entity} documents and who signs for it are needed for the closing. Do not advise on how to structure the company or its tax treatment.`);
   lines.push('- Do not give tax, structuring, or investment advice, and do not state tax rates, fees, or amounts. Say the details are reviewed in the consultation.');
   return lines.join('\n');

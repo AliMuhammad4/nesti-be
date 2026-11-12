@@ -40,7 +40,7 @@ function buildWhyStrongMatch({ grade, intent, tier, score, strengths, signalBull
       one_liner =
         'Engaged lead — qualify quickly and offer times before interest cools.';
     } else if (signalBullets.length) {
-      one_liner = 'Signals from the chat support continued qualification; lead with relevance to what they already shared.';
+      one_liner = 'Lead signals support continued qualification; lead with relevance to what they already shared.';
     } else if (tier === 'low_match') {
       one_liner = 'Weaker ICP match — still worth a light triage: one message to confirm fit before investing deep time.';
     } else {
@@ -76,7 +76,7 @@ function buildWhyStrongMatch({ grade, intent, tier, score, strengths, signalBull
   } else if (g === 'warm') {
     one_liner = `Engaged ${i === 'sell' ? 'seller' : 'buyer'} — your job is to qualify quickly and offer times before interest cools.`;
   } else if (signalBullets.length) {
-    one_liner = 'Signals from the chat support continued qualification; lead with relevance to what they already shared.';
+    one_liner = 'Lead signals support continued qualification; lead with relevance to what they already shared.';
   } else if (tier === 'low_match') {
     one_liner = 'Weaker ICP match — still worth a light triage: one message to confirm fit before investing deep time.';
   } else {

@@ -18,6 +18,7 @@ import { linkConversationDocumentsToLead } from '../documents/chatDocumentServic
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
 import { maybeLandingSideEffects, notifyAdminsOfLandingLead } from '../nestiLanding/notifyAdminsOfLandingLead.js';
 import { withExclusiveKey } from '../../../utils/exclusiveKey.js';
+import { LEAD_ANSWER_KEYS } from '../../lead/leadOwnAnswers.js';
 
 function duplicateLeadSlot(error) {
   return error?.code === 11000 || error?.cause?.code === 11000;
@@ -153,6 +154,25 @@ function hasMeaningfulSellerListingUpdate(previousProfile = {}, mergedQual = {})
   return false;
 }
 
+/** `compatibility_factors.lead_answers.*` $set for the lawyer / broker answers in a profile qualification update. */
+export function leadAnswersUpdateFor(flowType, qualUpdate = {}) {
+  const section = flowType === PROFESSIONAL_TYPE.LAWYER
+    ? 'lawyer'
+    : flowType === PROFESSIONAL_TYPE.MORTGAGE_BROKER ? 'mortgage_broker' : '';
+  const keys = LEAD_ANSWER_KEYS[flowType];
+  if (!section || !keys) return {};
+  const prefix = `qualification.${section}.`;
+  const out = {};
+  for (const [path, value] of Object.entries(qualUpdate)) {
+    if (!path.startsWith(prefix)) continue;
+    const key = path.slice(prefix.length);
+    if (keys.includes(key) && String(value ?? '').trim()) {
+      out[`compatibility_factors.lead_answers.${key}`] = String(value).trim();
+    }
+  }
+  return out;
+}
+
 export async function applyLeadClientTypeExtras(leadMatch, extras) {
   if (!leadMatch?.lead_profile_id || !extras?.client_type) return;
   const set = {
@@ -163,6 +183,13 @@ export async function applyLeadClientTypeExtras(leadMatch, extras) {
     if (/^[a-z0-9_]+$/.test(id) && String(value || '').trim()) set[`template_answers.${id}`] = String(value).trim().slice(0, 160);
   });
   await LeadProfile.updateOne({ _id: leadMatch.lead_profile_id }, { $set: set });
+  // The same client type / answers on the lead itself, so the person's other leads keep their own.
+  if (!leadMatch?._id) return;
+  const own = { 'compatibility_factors.client_type': extras.client_type };
+  Object.entries(set).forEach(([path, value]) => {
+    if (path.startsWith('template_answers.')) own[`compatibility_factors.${path}`] = value;
+  });
+  await LeadMatch.updateOne({ _id: leadMatch._id }, { $set: own });
 }
 
 export async function syncLeadMatchAfterTurn(args) {
@@ -467,6 +494,11 @@ async function syncLeadMatchBody({
     await LeadProfile.findByIdAndUpdate(existingLeadMatch.lead_profile_id, {
       $set: { ...qualUpdate, ...scoringUpdate },
     });
+    // Keep this lawyer / broker lead's own answers current too (the shared profile serves all of the person's leads).
+    const answersUpdate = leadAnswersUpdateFor(flowType, qualUpdate);
+    if (Object.keys(answersUpdate).length) {
+      await LeadMatch.updateOne({ _id: existingLeadMatch._id }, { $set: answersUpdate });
+    }
 
     profileQualFieldCount = Object.keys(qualUpdate).length;
 

@@ -6,6 +6,7 @@ import { mapLeadProfileForApi } from './leadProfileFormat.js';
 import { extractInquiredPropertyContext, normalizeInquiredProperty } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
 import { resolveListIntent } from './leadQueryUtils.js';
+import { applyLeadOwnAnswers, resolveLeadOwnClientType, resolveLeadOwnTemplateAnswers } from './leadOwnAnswers.js';
 
 function professionalTypeFromMatch(leadMatch, profile = null) {
   return (
@@ -261,9 +262,12 @@ function applyListedPropertyInquiryView(core, leadMatch, profile) {
   };
 }
 
-/** Additive RAVI customization fields (client type + suggested next action); null when the assistant never set them. */
-function formatClientTypeExtras(leadProfile) {
-  const clientType = String(leadProfile?.client_type || '').trim().toLowerCase();
+/**
+ * Additive RAVI customization fields (client type + suggested next action); null when the assistant never set them.
+ * Lawyer / broker leads take the client type and answers from the lead itself (shared profile only as fallback).
+ */
+function formatClientTypeExtras(leadProfile, leadMatch = null, professionalType = null) {
+  const clientType = resolveLeadOwnClientType(leadMatch, leadProfile, professionalType);
   const raw = leadProfile?.suggested_next_action;
   const next = raw && typeof raw === 'object' && (raw.action || raw.label)
     ? {
@@ -275,15 +279,10 @@ function formatClientTypeExtras(leadProfile) {
         updated_at: raw.updated_at || null,
       }
     : null;
-  const answers = leadProfile?.template_answers && typeof leadProfile.template_answers === 'object'
-    ? Object.fromEntries(
-        Object.entries(leadProfile.template_answers).filter(([, value]) => value != null && String(value).trim() !== ''),
-      )
-    : null;
   return {
     client_type: ['buyer', 'seller', 'investor'].includes(clientType) ? clientType : null,
     suggested_next_action: next,
-    template_answers: answers && Object.keys(answers).length ? answers : null,
+    template_answers: resolveLeadOwnTemplateAnswers(leadMatch, leadProfile, professionalType),
   };
 }
 
@@ -301,6 +300,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     leadProfile: opts.leadProfile || null,
     leadMatch,
   });
+  const role = leadMatch?.compatibility_factors?.professional_type || opts?.leadProfile?.ownership?.professional_type || null;
   const profileStats = opts.leadProfile?.stats && typeof opts.leadProfile.stats === 'object'
     ? opts.leadProfile.stats
     : null;
@@ -313,7 +313,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     status: leadMatch.match_status,
     contact: profileView.contact,
     property: profileView.property,
-    qualification: profileView.qualification,
+    qualification: applyLeadOwnAnswers(profileView.qualification, leadMatch, opts.leadProfile || null, role),
     ...(profileStats
       ? {
           stats: profileStats,
@@ -344,7 +344,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     close_summary: formatCloseSummary(leadMatch.compatibility_factors),
     conversionChecklist,
     conversion_checklist: conversionChecklist,
-    ...formatClientTypeExtras(opts.leadProfile),
+    ...formatClientTypeExtras(opts.leadProfile, leadMatch, role),
   };
   if (includeIntentField) {
     core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);

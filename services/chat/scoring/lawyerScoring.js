@@ -8,6 +8,7 @@ import {
   createOrReuseLeadProfile,
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
+import { leadAnswersSnapshot } from '../../lead/leadOwnAnswers.js';
 import {
   isOtherMarket,
   marketCountryFromForm,
@@ -257,8 +258,32 @@ export const createLawyerLeadRecords = async ({
   const rawClientType = String(fq.client_type || ai.client_type || '').toLowerCase();
   const clientType = rawClientType === 'investor' ? 'investor' : '';
   const leadType = buildLawyerLeadType(leadGrade, clientType);
-  const viaCompany = ai.via_company || fq.via_company || '';
+  // Purchasing entity belongs to investor inquiries, first-time buyer to personal ones.
+  const viaCompany = clientType === 'investor' ? (ai.via_company || fq.via_company || '') : '';
   const market = resolveLawyerMarket(fq, ai, contactInfo);
+  const lawyerAnswers = {
+    transaction_stage: ai.transaction_stage || fq.transaction_stage || '',
+    closing_timeline: ai.closing_timeline || fq.closing_timeline || '',
+    transaction_type: ai.transaction_type || fq.transaction_type || '',
+    property_value: ai.property_value || fq.property_value || '',
+    mortgage_status: ai.mortgage_status || fq.mortgage_status || '',
+    realtor_involved: ai.realtor_involved || fq.realtor_involved || '',
+    first_time_buyer: clientType === 'investor' ? '' : (ai.first_time_buyer || fq.first_time_buyer || ''),
+    legal_services_needed: ai.legal_services_needed || fq.legal_services_needed || '',
+    via_company: viaCompany,
+    market_country: market.market_country,
+    market_region: market.market_region,
+    ...(market.market_city ? { market_city: market.market_city } : {}),
+    ...(market.market_country_name ? { market_country_name: market.market_country_name } : {}),
+  };
+  const lawyerTemplateAnswers = clientType === 'investor'
+    ? {
+        ...(viaCompany ? { via_company: viaCompany } : {}),
+        ...(fq.legal_services_needed || ai.legal_services_needed
+          ? { legal_service: fq.legal_services_needed || ai.legal_services_needed }
+          : {}),
+      }
+    : null;
 
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
@@ -280,32 +305,11 @@ export const createLawyerLeadRecords = async ({
         timeline: fq.closing_timeline || ai.closing_timeline || '',
       },
       qualification: {
-        lawyer: {
-          transaction_stage: ai.transaction_stage || fq.transaction_stage || '',
-          closing_timeline: ai.closing_timeline || fq.closing_timeline || '',
-          transaction_type: ai.transaction_type || fq.transaction_type || '',
-          property_value: ai.property_value || fq.property_value || '',
-          mortgage_status: ai.mortgage_status || fq.mortgage_status || '',
-          realtor_involved: ai.realtor_involved || fq.realtor_involved || '',
-          first_time_buyer: ai.first_time_buyer || fq.first_time_buyer || '',
-          legal_services_needed: ai.legal_services_needed || fq.legal_services_needed || '',
-          via_company: viaCompany,
-          market_country: market.market_country,
-          market_region: market.market_region,
-          ...(market.market_city ? { market_city: market.market_city } : {}),
-          ...(market.market_country_name ? { market_country_name: market.market_country_name } : {}),
-        },
+        lawyer: lawyerAnswers,
       },
       ...(clientType ? { client_type: clientType } : {}),
-      ...(clientType === 'investor' || viaCompany
-        ? {
-            template_answers: {
-              ...(viaCompany ? { via_company: viaCompany } : {}),
-              ...(fq.legal_services_needed || ai.legal_services_needed
-                ? { legal_service: fq.legal_services_needed || ai.legal_services_needed }
-                : {}),
-            },
-          }
+      ...(lawyerTemplateAnswers && Object.keys(lawyerTemplateAnswers).length
+        ? { template_answers: lawyerTemplateAnswers }
         : {}),
       source: 'chatbot',
       total_score: leadScore,
@@ -351,6 +355,11 @@ export const createLawyerLeadRecords = async ({
       ...(market.market_region ? { market_region: market.market_region } : {}),
       ...(market.market_city ? { market_city: market.market_city } : {}),
       ...(market.market_country_name ? { market_country_name: market.market_country_name } : {}),
+      // This lead's own answers, so the person's other inquiries never change what this lead shows.
+      lead_answers: leadAnswersSnapshot(PROFESSIONAL_TYPE.LAWYER, lawyerAnswers),
+      ...(lawyerTemplateAnswers && Object.keys(lawyerTemplateAnswers).length
+        ? { template_answers: lawyerTemplateAnswers }
+        : {}),
     },
     ...(icpFit
       ? {

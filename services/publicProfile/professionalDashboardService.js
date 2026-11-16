@@ -496,18 +496,25 @@ export const saveStorefrontDraftService = async (userId, draft, expected = {}) =
   };
 };
 
+function publishPlanRequired() {
+  return {
+    status: 403,
+    body: {
+      success: false,
+      message: 'Publishing a Nesti website is included with an active Standard or Enterprise plan.',
+    },
+  };
+}
+
 export const publishStorefrontService = async (userId, draft = null, expected = {}) => {
   const { canPublishWebsite } = await import('../billing/entitlements.js');
   const { getSubscriptionForRead } = await import('../billing/subscriptionReadService.js');
   const subscription = await getSubscriptionForRead({ _id: userId }, { refresh: false });
-  if (!canPublishWebsite(subscription)) {
-    return {
-      status: 403,
-      body: {
-        success: false,
-        message: 'Publishing a Nesti website is included with an active Standard or Enterprise plan.',
-      },
-    };
+  const planAllowsPublish = canPublishWebsite(subscription);
+  // An approved professional (subscription row exists) can always publish a free template,
+  // including after the trial ends. Paid templates still need the plan check below.
+  if (!planAllowsPublish && !subscription) {
+    return publishPlanRequired();
   }
   const [profile, professionalProfile] = await Promise.all([
     PublicProfile.findOne({ user_id: userId })
@@ -578,6 +585,9 @@ export const publishStorefrontService = async (userId, draft = null, expected = 
       status: 400,
       body: { success: false, message: 'This template is not available for your professional type.' },
     };
+  }
+  if (!planAllowsPublish && templateAccess.tier !== 'free') {
+    return publishPlanRequired();
   }
   if (!userHasStorefrontTemplateAccess(profile, templateAccess.template_id)) {
     return {

@@ -41,6 +41,8 @@ const calendarIntegrationSchema = new mongoose.Schema({
   calendly_webhook_register_error: { type: String },
   /** "calendly_plan" = plan/trial does not allow webhooks; "other" = technical or unknown. */
   calendly_webhook_error_kind: { type: String },
+  /** Last time Nesti re-checked the Calendly connection + booking-sync webhook. */
+  calendly_health_checked_at: { type: Date },
 }, { timestamps: true });
 
 export default mongoose.model('CalendarIntegration', calendarIntegrationSchema);

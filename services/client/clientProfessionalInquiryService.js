@@ -648,7 +648,7 @@ export async function submitClientAgentInquiry({
   }
 
   const [professionalUser, professionalProfile, clientProfile] = await Promise.all([
-    User.findById(professionalUserId).select('first_name last_name email role').lean(),
+    User.findById(professionalUserId).select('first_name last_name email role is_active').lean(),
     ProfessionalProfile.findOne({ user_id: professionalUserId })
       .select('_id professional_type active_icp_profile_id location')
       .lean(),
@@ -658,6 +658,9 @@ export async function submitClientAgentInquiry({
   const professionalType = professionalProfile?.professional_type || professionalUser?.role || '';
   if (!professionalUser || String(professionalType).toLowerCase() !== PROFESSIONAL_TYPE.AGENT) {
     return { status: 400, body: { success: false, message: 'Inquiry is only supported for agents' } };
+  }
+  if (professionalUser.is_active === false) {
+    return { status: 404, body: { success: false, message: 'This professional is not available right now.' } };
   }
 
   const normalizedInput = normalizeAgentInquiryBody(body);
@@ -997,7 +1000,7 @@ export async function submitClientLawyerInquiry({
   }
 
   const [professionalUser, professionalProfile, clientProfile] = await Promise.all([
-    User.findById(professionalUserId).select('first_name last_name email role').lean(),
+    User.findById(professionalUserId).select('first_name last_name email role is_active').lean(),
     ProfessionalProfile.findOne({ user_id: professionalUserId })
       .select('_id professional_type active_icp_profile_id location')
       .lean(),
@@ -1007,6 +1010,9 @@ export async function submitClientLawyerInquiry({
   const professionalType = professionalProfile?.professional_type || professionalUser?.role || '';
   if (!professionalUser || String(professionalType).toLowerCase() !== PROFESSIONAL_TYPE.LAWYER) {
     return { status: 400, body: { success: false, message: 'Inquiry is only supported for lawyers' } };
+  }
+  if (professionalUser.is_active === false) {
+    return { status: 404, body: { success: false, message: 'This professional is not available right now.' } };
   }
 
   const normalizedInput = normalizeLawyerInquiryBody(body);
@@ -1309,7 +1315,7 @@ export async function submitClientMortgageBrokerInquiry({
   }
 
   const [professionalUser, professionalProfile, clientProfile] = await Promise.all([
-    User.findById(professionalUserId).select('first_name last_name email role').lean(),
+    User.findById(professionalUserId).select('first_name last_name email role is_active').lean(),
     ProfessionalProfile.findOne({ user_id: professionalUserId })
       .select('_id professional_type active_icp_profile_id location')
       .lean(),
@@ -1319,6 +1325,9 @@ export async function submitClientMortgageBrokerInquiry({
   const professionalType = professionalProfile?.professional_type || professionalUser?.role || '';
   if (!professionalUser || String(professionalType).toLowerCase() !== PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return { status: 400, body: { success: false, message: 'Inquiry is only supported for mortgage brokers' } };
+  }
+  if (professionalUser.is_active === false) {
+    return { status: 404, body: { success: false, message: 'This professional is not available right now.' } };
   }
 
   const normalizedInput = normalizeMortgageBrokerInquiryBody(body);

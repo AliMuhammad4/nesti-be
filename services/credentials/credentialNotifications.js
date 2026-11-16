@@ -5,6 +5,7 @@ import { emitNotification } from '../realtime/workspaceSocket.js';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
 import { FREE_TRIAL_DAYS } from '../billing/subscriptionLocalService.js';
+import { displayNameOrFallback } from '../../utils/placeholderName.js';
 
 function appBaseUrl() {
   return String(process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
@@ -69,7 +70,7 @@ async function getAdminUsers() {
 
 export async function notifyAdminsProfessionalSignup({ user }) {
   const admins = await getAdminUsers();
-  const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email;
+  const name = displayNameOrFallback(user, user.email);
   const title = 'New professional awaiting credentials';
   const body = `${name} (${user.role}) signed up and needs to upload verification documents.`;
   const link = `${appBaseUrl()}/admin/verifications`;
@@ -101,7 +102,7 @@ export async function notifyAdminsProfessionalSignup({ user }) {
 
 export async function notifyAdminsCredentialSubmitted({ user, profile }) {
   const admins = await getAdminUsers();
-  const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email;
+  const name = displayNameOrFallback(user, user.email);
   const title = 'Credentials submitted for review';
   const body = `${name} (${profile.professional_type || user.role}) submitted verification documents (${profile.country || 'n/a'} / ${profile.jurisdiction || 'n/a'}).`;
   const link = `${appBaseUrl()}/admin/verifications/${String(user._id)}`;

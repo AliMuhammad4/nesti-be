@@ -10,7 +10,6 @@ import {
   forgotPasswordService,
   verifyResetOtpService,
   resetPasswordService,
-  checkEmailService,
   resendVerificationService,
 } from '../services/auth/authService.js';
 
@@ -127,13 +126,6 @@ const publicProfile = async (req, res, next) => {
     next(error);
   }
 };
-const checkEmail = async (req, res, next) => {
-  try {
-    send(res, await checkEmailService(req.body));
-  } catch (error) {
-    next(error);
-  }
-};
 
 const resendVerification = async (req, res, next) => {
   try {
@@ -161,6 +153,5 @@ export {
   forgotPassword,
   resetPassword,
   verifyResetOtp,
-  checkEmail,
   resendVerification,
 };

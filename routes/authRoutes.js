@@ -11,7 +11,6 @@ import {
   verifyEmailSchema,
   googleLoginSchema,
   googleSignupSchema,
-  emailOnlySchema,
   resendVerificationSchema,
 } from '../schemas/authSchemas.js';
 import {
@@ -26,7 +25,6 @@ import {
   forgotPassword,
   resetPassword,
   verifyResetOtp,
-  checkEmail,
   resendVerification,
 } from '../controllers/authController.js';
 import { protect } from '../middleware/authMiddleware.js';
@@ -43,12 +41,11 @@ router.post('/login', authGlobalLimiter, authSensitiveLimiter, validateBody(logi
 router.post('/google', authGlobalLimiter, authSensitiveLimiter, validateBody(googleLoginSchema), google);
 router.post('/google-signup', authGlobalLimiter, authSensitiveLimiter, validateBody(googleSignupSchema), googleSignup);
 router.get('/profile', protect, authUserLimiter, profile);
-router.get('/public-profile', authGlobalLimiter, publicProfile);
+router.get('/public-profile', authGlobalLimiter, protect, authUserLimiter, publicProfile);
 router.post('/change-password', protect, authUserLimiter, validateBody(changePasswordSchema), changePassword);
 router.post('/forgot-password', authGlobalLimiter, authSensitiveLimiter, validateBody(forgotPasswordSchema), forgotPassword);
 router.post('/reset-password', authGlobalLimiter, authSensitiveLimiter, validateBody(resetPasswordSchema), resetPassword);
 router.post('/verify-reset-otp', authGlobalLimiter, authSensitiveLimiter, validateBody(otpWithEmailSchema), verifyResetOtp);
-router.post('/check-email', authGlobalLimiter, authOtpVerifyLimiter, validateBody(emailOnlySchema), checkEmail);
 router.post('/resend-verification', authGlobalLimiter, authSensitiveLimiter, validateBody(resendVerificationSchema), resendVerification);
 
 export default router;

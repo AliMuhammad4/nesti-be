@@ -34,9 +34,9 @@ router.post('/agent-inquiry/property-images', protect, requireClientFeature(CLIE
 router.post('/professionals/:professionalId/agent-inquiry', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), submitClientAgentInquiryFromProfile);
 router.post('/professionals/:professionalId/lawyer-inquiry', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), submitClientLawyerInquiryFromProfile);
 router.post('/professionals/:professionalId/mortgage-broker-inquiry', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), submitClientMortgageBrokerInquiryFromProfile);
-router.post('/profile', protect, upsertClientProfile);
-router.put('/profile', protect, upsertClientProfile);
-router.put('/settings', protect, updateClientSettings);
+router.post('/profile', protect, requireClientRole, upsertClientProfile);
+router.put('/profile', protect, requireClientRole, upsertClientProfile);
+router.put('/settings', protect, requireClientRole, updateClientSettings);
 
 router.post('/subscription/checkout', protect, requireClientRole, createClientSubscriptionCheckout);
 router.get('/subscription/me', protect, requireClientRole, getClientSubscription);

@@ -95,6 +95,9 @@ function authKeyByUserOrIp(req) {
   return `ip:${resolveClientIp(req)}`;
 }
 
+// Auth limits are kept in the database in production, so every server instance shares the same counts.
+const SHARE_AUTH_LIMITS = process.env.NODE_ENV === 'production';
+
 const buildLimiter = ({
   windowMs,
   max,
@@ -118,6 +121,7 @@ export const authGlobalLimiter = buildLimiter({
   max: 300,
   message: 'Too many auth requests from this IP. Please try again later.',
   keyGenerator: authKeyByIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
 export const authSensitiveLimiter = buildLimiter({
@@ -125,6 +129,7 @@ export const authSensitiveLimiter = buildLimiter({
   max: 25,
   message: 'Too many attempts. Please wait a few minutes and try again.',
   keyGenerator: authKeyByEmailAndIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
 export const authOtpVerifyLimiter = buildLimiter({
@@ -132,6 +137,7 @@ export const authOtpVerifyLimiter = buildLimiter({
   max: 40,
   message: 'Too many OTP verification attempts. Please wait and retry.',
   keyGenerator: authKeyByEmailAndIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
 export const authUserLimiter = buildLimiter({
@@ -139,6 +145,7 @@ export const authUserLimiter = buildLimiter({
   max: 120,
   message: 'Too many account requests. Please wait and try again.',
   keyGenerator: authKeyByUserOrIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
 export const callTokenLimiter = buildLimiter({

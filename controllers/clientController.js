@@ -25,6 +25,26 @@ import {
   submitClientMortgageBrokerInquiry,
 } from '../services/client/clientProfessionalInquiryService.js';
 import { USER_ROLE } from '../constants/roles.js';
+import { PHONE_INVALID_MESSAGE, PHONE_TAKEN_MESSAGE, isPhoneDuplicateError, normalizePhoneE164 } from '../utils/phone.js';
+
+/** Fields the client may never set directly: ownership, ids and server-computed metrics. */
+const PROTECTED_CLIENT_PROFILE_FIELDS = [
+  'user_id',
+  '_id',
+  'id',
+  '__v',
+  'createdAt',
+  'updatedAt',
+  'down_payment_goal',
+  'homeownership_progress_score',
+  'months_to_goal',
+];
+
+function withoutProtectedClientProfileFields(body = {}) {
+  const out = body && typeof body === 'object' && !Array.isArray(body) ? { ...body } : {};
+  for (const key of PROTECTED_CLIENT_PROFILE_FIELDS) delete out[key];
+  return out;
+}
 import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
 
 function safeUploadId(bytes = 6) {
@@ -72,7 +92,7 @@ export async function getClientProfile(req, res) {
 export async function upsertClientProfile(req, res) {
   try {
     const userId = req.user._id;
-    const profileData = sanitizeClientProfileData(req.body || {});
+    const profileData = sanitizeClientProfileData(withoutProtectedClientProfileFields(req.body || {}));
 
     const validation = validateClientProfileData(profileData);
     if (!validation.valid) {
@@ -157,7 +177,16 @@ export async function updateClientSettings(req, res) {
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = String(first_name || '').trim();
     if (last_name !== undefined) userUpdates.last_name = String(last_name || '').trim();
-    if (phone !== undefined) userUpdates.phone = String(phone || '').trim();
+    if (phone !== undefined) {
+      const normalizedPhone = normalizePhoneE164(phone);
+      if (!normalizedPhone) {
+        return res.status(400).json({ success: false, message: PHONE_INVALID_MESSAGE });
+      }
+      if (await User.exists({ phone: normalizedPhone, _id: { $ne: userId } })) {
+        return res.status(400).json({ success: false, message: PHONE_TAKEN_MESSAGE });
+      }
+      userUpdates.phone = normalizedPhone;
+    }
 
     if (!userUpdates.first_name && first_name !== undefined) {
       return res.status(400).json({ success: false, message: 'First name is required' });
@@ -238,6 +267,10 @@ export async function updateClientSettings(req, res) {
       },
     });
   } catch (error) {
+    // The unique phone index caught a number another account saved at the same moment.
+    if (isPhoneDuplicateError(error)) {
+      return res.status(400).json({ success: false, message: PHONE_TAKEN_MESSAGE });
+    }
     console.error('Error saving client settings:', error);
     return res.status(500).json({
       success: false,

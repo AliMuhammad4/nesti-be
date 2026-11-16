@@ -79,6 +79,47 @@ const userSchema = new mongoose.Schema({
   reset_password_expires: {
     type: Date,
   },
+  /** Wrong reset codes entered for the current code; the code is dropped after the limit. */
+  reset_password_attempts: {
+    type: Number,
+    default: 0,
+  },
+  /** Reset-code budget per hour window (codes requested and wrong codes), shared across codes. */
+  reset_window_started_at: {
+    type: Date,
+    default: null,
+  },
+  reset_requests_in_window: {
+    type: Number,
+    default: 0,
+  },
+  reset_failures_in_window: {
+    type: Number,
+    default: 0,
+  },
+  /** Wrong passwords in a row (any IP); the login locks briefly at the limit. */
+  failed_login_count: {
+    type: Number,
+    default: 0,
+  },
+  login_locked_until: {
+    type: Date,
+    default: null,
+  },
+  /** Bumped on password reset/change so older session tokens stop working. */
+  token_version: {
+    type: Number,
+    default: 0,
+  },
+  /** Client signup trial (one per client account; set once at account creation). */
+  client_trial_started_at: {
+    type: Date,
+    default: null,
+  },
+  client_trial_ends_at: {
+    type: Date,
+    default: null,
+  },
   /** Public HTTPS URL (e.g. Cloudinary) for avatar in app shell / dashboard. */
   profile_image: {
     type: String,
@@ -101,8 +142,19 @@ const userSchema = new mongoose.Schema({
     max: 3,
   },
 }, { timestamps: true });
+
+// One account per mobile number; accounts without a number are not indexed.
+userSchema.index(
+  { phone: 1 },
+  { unique: true, partialFilterExpression: { phone: { $type: 'string', $gt: '' } } },
+);
+
 userSchema.pre('save', async function () {
   if (!this.password || !this.isModified('password')) {
+    return;
+  }
+  // Pending email signups store a bcrypt hash already; do not hash it twice.
+  if (this.$locals?.passwordAlreadyHashed) {
     return;
   }
   const salt = await bcrypt.genSalt(10);

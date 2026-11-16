@@ -1,3 +1,5 @@
+import { isPlaceholderName } from './placeholderName.js';
+
 function trimStr(value) {
   if (value == null) return '';
   return String(value).trim();
@@ -23,8 +25,10 @@ function phoneSatisfies(value) {
  */
 export function evaluateProfessionalProfileSetup(user, professionalProfile) {
   const p = professionalProfile || {};
-  const first = trimStr(user?.first_name);
-  const last = trimStr(user?.last_name);
+  // The signup stand-in name ("New User") still counts as missing, so Settings asks for the real one.
+  const placeholderName = isPlaceholderName(user?.first_name, user?.last_name);
+  const first = placeholderName ? '' : trimStr(user?.first_name);
+  const last = placeholderName ? '' : trimStr(user?.last_name);
   const email = trimStr(user?.email);
   const phoneRaw = trimStr(p.phone);
   const company = trimStr(p.company_name);

@@ -7,6 +7,7 @@ import {
   notifyUserAccountReinstated,
   notifyUserAccountSuspended,
 } from './accountStatusNotifications.js';
+import { disconnectUserSessions } from '../realtime/sessionSockets.js';
 
 export async function suspendAdminUserService(actor, userId, { reason = '' } = {}) {
   if (!mongoose.Types.ObjectId.isValid(userId)) return fail(400, 'Invalid user id');
@@ -24,6 +25,8 @@ export async function suspendAdminUserService(actor, userId, { reason = '' } = {
   user.suspended_at = new Date();
   user.suspended_reason = reasonText;
   await user.save();
+  // Live sockets end now; HTTP requests are refused on the next call (is_active check).
+  disconnectUserSessions(user._id);
 
   const recipient = {
     email: String(user.email || '').trim().toLowerCase(),

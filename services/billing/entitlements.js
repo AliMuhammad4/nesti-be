@@ -146,18 +146,15 @@ export function hasFeature(subscription, featureKey) {
   const feature = String(featureKey || '').trim();
   if (!feature) return false;
   if (feature === FEATURES.SETTINGS_SUBSCRIPTION) return true;
+  // The free web page (public profile + free storefront templates) stays available to every
+  // approved professional, including after the trial ends or a plan lapses. A subscription row
+  // exists only after credential approval. Publishing and paid templates keep their own checks.
+  if (feature === FEATURES.PUBLIC_PROFILE) return Boolean(subscription);
 
   const accountStatus = accountStatusFromSubscription(subscription);
   if (accountStatus === ACCOUNT_STATUS.EXPIRED) return false;
 
   const planKey = getEffectivePlan(subscription);
-  if (
-    accountStatus === ACCOUNT_STATUS.FREE_TRIAL
-    && feature === FEATURES.PUBLIC_PROFILE
-    && planKey === SUBSCRIPTION_PLAN.BASIC
-  ) {
-    return true;
-  }
   return Boolean(PLAN_FEATURES[planKey]?.has(feature));
 }
 

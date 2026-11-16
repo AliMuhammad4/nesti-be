@@ -1,9 +1,12 @@
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import User from '../models/User.js';
-import { isValidProfessionalType, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
+import { isValidProfessionalType, PROFESSIONAL_TYPE_VALUES, USER_ROLE } from '../constants/roles.js';
+import { CREDENTIAL_STATUS } from '../constants/credentialDocuments.js';
+import { PHONE_INVALID_MESSAGE, PHONE_TAKEN_MESSAGE, isPhoneDuplicateError, normalizePhoneE164 } from '../utils/phone.js';
 import { refreshCalendlySlugMismatchForUser } from '../services/calendly/calendlyAlignmentService.js';
 import { scoreLeadAgainstIcp } from '../services/lead/icpScoringService.js';
 import { evaluateProfessionalProfileSetup } from '../utils/professionalProfileSetup.js';
+import { isPlaceholderName, presentableNames } from '../utils/placeholderName.js';
 import { awardInviterMilestoneForUser } from '../services/referral/inviteService.js';
 import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
@@ -225,8 +228,50 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+    if (user.role === USER_ROLE.CLIENT) {
+      return res.status(403).json({ success: false, message: 'Client details are saved from client settings.' });
+    }
+
+    // Mobile number: one normalized value shared by the account and the professional profile.
+    let normalizedPhone;
+    if (phone !== undefined) {
+      normalizedPhone = normalizePhoneE164(phone);
+      if (!normalizedPhone) {
+        return res.status(400).json({ success: false, message: PHONE_INVALID_MESSAGE });
+      }
+      if (await User.exists({ phone: normalizedPhone, _id: { $ne: user._id } })) {
+        return res.status(400).json({ success: false, message: PHONE_TAKEN_MESSAGE });
+      }
+    }
+
+    // Credential details are locked while under review and after approval.
+    const existingProfile = await ProfessionalProfile.findOne({ user_id: userId })
+      .select('credential_status license_number country jurisdiction nmls_id full_name')
+      .lean();
+    const credentialStatus = String(existingProfile?.credential_status || '').toLowerCase();
+    const credentialsLocked = credentialStatus === CREDENTIAL_STATUS.APPROVED
+      || credentialStatus === CREDENTIAL_STATUS.PENDING_REVIEW;
+    if (credentialsLocked) {
+      const lockedFields = { license_number, country, jurisdiction, nmls_id };
+      const changed = Object.entries(lockedFields).some(([key, value]) => (
+        value !== undefined
+        && String(value ?? '').trim().toUpperCase() !== String(existingProfile?.[key] ?? '').trim().toUpperCase()
+      ));
+      if (changed) {
+        return res.status(400).json({
+          success: false,
+          message: credentialStatus === CREDENTIAL_STATUS.APPROVED
+            ? 'License details are locked after approval. Contact support to change them.'
+            : 'License details are under review and cannot be changed until a decision is made.',
+        });
+      }
+    }
 
     let userSaved = false;
+    if (normalizedPhone !== undefined && user.phone !== normalizedPhone) {
+      user.phone = normalizedPhone;
+      userSaved = true;
+    }
     if (Object.prototype.hasOwnProperty.call(body, 'first_name')) {
       const s = body.first_name == null ? '' : String(body.first_name).trim();
       if (!s) {
@@ -261,23 +306,31 @@ export const upsertProfessionalProfile = async (req, res, next) => {
 
     const trimmedDisplayOverride =
       full_name != null && String(full_name).trim() !== '' ? String(full_name).trim() : null;
-    const displayFullName = trimmedDisplayOverride ?? `${user.first_name} ${user.last_name}`.trim();
+    const storedFullName = String(existingProfile?.full_name || '').trim();
+    const storedNameIsPlaceholder = isPlaceholderName(...storedFullName.split(/\s+/, 2));
+    const displayFullName = trimmedDisplayOverride
+      ?? (isPlaceholderName(user.first_name, user.last_name)
+        ? (storedNameIsPlaceholder ? '' : storedFullName)
+        : presentableNames(user).name);
     const update = {};
     /** Single source of truth: `User.role` (not the request body). */
     if (isValidProfessionalType(req.user.role)) {
       update.professional_type = req.user.role;
     }
-    if (phone !== undefined) update.phone = phone;
+    if (normalizedPhone !== undefined) update.phone = normalizedPhone;
     if (location !== undefined) update.location = location;
     if (target_neighborhoods !== undefined) update.target_neighborhoods = target_neighborhoods;
     if (experience !== undefined) update.experience = experience;
-    if (license_number !== undefined) update.license_number = license_number;
-    if (country !== undefined) {
-      const normalized = String(country || '').trim().toUpperCase();
-      update.country = normalized === 'CA' || normalized === 'US' ? normalized : null;
+    // Locked credential fields were checked above as unchanged; keep the stored values.
+    if (!credentialsLocked) {
+      if (license_number !== undefined) update.license_number = license_number;
+      if (country !== undefined) {
+        const normalized = String(country || '').trim().toUpperCase();
+        update.country = normalized === 'CA' || normalized === 'US' ? normalized : null;
+      }
+      if (jurisdiction !== undefined) update.jurisdiction = String(jurisdiction || '').trim().toUpperCase().slice(0, 12);
+      if (nmls_id !== undefined) update.nmls_id = String(nmls_id || '').trim().slice(0, 40);
     }
-    if (jurisdiction !== undefined) update.jurisdiction = String(jurisdiction || '').trim().toUpperCase().slice(0, 12);
-    if (nmls_id !== undefined) update.nmls_id = String(nmls_id || '').trim().slice(0, 40);
     if (social_media !== undefined) update.social_media = social_media;
     if (company_name !== undefined) update.company_name = company_name;
     if (transaction_volume !== undefined) update.transaction_volume = transaction_volume;
@@ -364,6 +417,7 @@ export const upsertProfessionalProfile = async (req, res, next) => {
         first_name: user.first_name,
         last_name: user.last_name,
         email: user.email,
+        phone: user.phone || '',
         role: user.role,
         profile_image: user.profile_image || null,
         cover_image: user.cover_image || null,
@@ -371,6 +425,10 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       profile: normalizeProfessionalProfile(profile),
     });
   } catch (error) {
+    // The unique phone index caught a number another account saved at the same moment.
+    if (isPhoneDuplicateError(error)) {
+      return res.status(400).json({ success: false, message: PHONE_TAKEN_MESSAGE });
+    }
     next(error);
   }
 };

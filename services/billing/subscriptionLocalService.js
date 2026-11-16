@@ -210,7 +210,24 @@ export async function startProfessionalTrialFromApproval(userId) {
   );
 }
 
-export async function getOrCreateSubscriptionForUser(user) {
+/**
+ * Callers sometimes pass only { _id }. Load the role so the admin, client, and
+ * awaiting-approval rules below still apply (no trial before credential approval).
+ */
+async function withKnownRole(user) {
+  if (!user?._id || String(user?.role || '').trim()) return user;
+  const { default: User } = await import('../../models/User.js');
+  const doc = await User.findById(user._id).select('role').lean();
+  return doc ? { ...user, role: doc.role } : null;
+}
+
+export async function getOrCreateSubscriptionForUser(inputUser) {
+  const user = await withKnownRole(inputUser);
+  if (!user) {
+    // Unknown account: read an existing row, never create a trial.
+    const orphan = inputUser?._id ? await Subscription.findOne({ user_id: inputUser._id }) : null;
+    return orphan ? expireTrialIfNeeded(orphan) : null;
+  }
   if (String(user?.role || '') === USER_ROLE.ADMIN) return null;
 
   if (String(user?.role || '') === USER_ROLE.CLIENT) {

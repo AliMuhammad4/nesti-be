@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import LeadMatch from '../models/LeadMatch.js';
 import NurtureLog from '../models/NurtureLog.js';
+import ChatConversation from '../models/ChatConversation.js';
 import {
   assertWithinPlanQuota,
   getPlanVisibleLeadMatchIds,
@@ -149,6 +150,52 @@ test('enterprise bypasses finite quota checks', async () => {
       limitKey: 'followup_actions',
     });
     assert.equal(result.max, null);
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('assertWithinPlanQuota enforces basic chatbot_conversations cap', async () => {
+  const bag = createRestoreBag();
+  bag.stub(ChatConversation, 'countDocuments', async () => 200);
+  try {
+    await assert.rejects(
+      () =>
+        assertWithinPlanQuota({
+          userId: 'user1',
+          subscription: { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'active' },
+          limitKey: 'chatbot_conversations',
+        }),
+      (err) => {
+        assert.ok(err instanceof PlanQuotaError);
+        assert.equal(err.limitKey, 'chatbot_conversations');
+        assert.equal(err.used, 200);
+        assert.equal(err.max, 200);
+        return true;
+      },
+    );
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('assertWithinPlanQuota allows chatbot conversations under the cap and unlimited enterprise', async () => {
+  const bag = createRestoreBag();
+  bag.stub(ChatConversation, 'countDocuments', async () => 199);
+  try {
+    const under = await assertWithinPlanQuota({
+      userId: 'user1',
+      subscription: { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'active' },
+      limitKey: 'chatbot_conversations',
+    });
+    assert.equal(under.used, 199);
+    assert.equal(under.max, 200);
+    const unlimited = await assertWithinPlanQuota({
+      userId: 'user1',
+      subscription: { plan_key: SUBSCRIPTION_PLAN.ENTERPRISE, status: 'active' },
+      limitKey: 'chatbot_conversations',
+    });
+    assert.equal(unlimited.max, null);
   } finally {
     bag.restoreAll();
   }

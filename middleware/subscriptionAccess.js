@@ -3,6 +3,7 @@ import {
   getFreshSubscriptionForUser,
   getOrCreateSubscriptionForUser,
 } from '../services/billing/subscriptionService.js';
+import { subscriptionNeedsStripeRefresh } from '../services/billing/subscriptionShared.js';
 import {
   ACCOUNT_STATUS,
   accountStatusFromSubscription,
@@ -15,9 +16,12 @@ import { evaluateCredentialAccess } from './authMiddleware.js';
 
 async function loadSubscription(req, { refresh = false } = {}) {
   if (req.subscription && !refresh) return req.subscription;
-  const subscription = refresh
+  let subscription = refresh
     ? await getFreshSubscriptionForUser(req.user)
     : await getOrCreateSubscriptionForUser(req.user);
+  if (!refresh && subscriptionNeedsStripeRefresh(subscription)) {
+    subscription = await getFreshSubscriptionForUser(req.user);
+  }
   req.subscription = subscription;
   req.subscriptionAccountStatus = accountStatusFromSubscription(subscription);
   req.subscriptionPlanKey = getEffectivePlan(subscription);

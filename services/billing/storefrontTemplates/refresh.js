@@ -38,9 +38,11 @@ function isPaidTemplatePurchase(purchase) {
   return Boolean(template) && Number(template.amount || 0) > 0;
 }
 
-function purchaseNeedsStripe(purchase, now = Date.now()) {
+export function purchaseNeedsStripe(purchase, now = Date.now()) {
   if (!isPaidTemplatePurchase(purchase)) return false;
   if (!String(purchase.stripe_subscription_id || '').trim()) return true;
+  const status = String(purchase.subscription_status || '').trim().toLowerCase();
+  if (status === 'past_due' || status === 'unpaid') return true;
   const periodEnd = purchase.current_period_end ? new Date(purchase.current_period_end).getTime() : NaN;
   if (!Number.isFinite(periodEnd) || periodEnd <= now) return true;
   const syncedAt = purchase.last_synced_at ? new Date(purchase.last_synced_at).getTime() : NaN;

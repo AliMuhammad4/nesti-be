@@ -7,7 +7,7 @@ import {
   uniqueTemplateIds,
   userHasStorefrontTemplateAccess,
 } from './access.js';
-import { getStripeSubscriptionPeriodEnd } from '../subscriptionShared.js';
+import { getStripeSubscriptionPeriodEnd, incomingStripeSnapshotIsStale } from '../subscriptionShared.js';
 
 export function normalizeStripeId(value) {
   if (!value) return '';
@@ -30,7 +30,33 @@ function buildTemplatePurchaseRecord(template, purchase = {}) {
     cancel_at_period_end: purchase.cancel_at_period_end === true,
     current_period_end: purchase.current_period_end || null,
     purchased_at: purchase.purchased_at || new Date(),
+    stripe_last_event_created: Number(purchase.stripe_last_event_created || 0) || 0,
   };
+}
+
+export function templateStripeSnapshotIsStale(existingPurchase, incoming = {}, extra = {}) {
+  if (!existingPurchase) return false;
+  return incomingStripeSnapshotIsStale(
+    {
+      current_period_end: existingPurchase.current_period_end,
+      metadata: {
+        stripe_last_event_created: existingPurchase.stripe_last_event_created,
+      },
+    },
+    incoming,
+    extra,
+  );
+}
+
+export function invoiceIsStorefrontTemplate(invoice = {}) {
+  const sources = [
+    invoice.metadata,
+    invoice.subscription_details?.metadata,
+    invoice.parent?.subscription_details?.metadata,
+    ...(invoice.lines?.data || []).map((line) => line.metadata),
+    ...(invoice.lines?.data || []).map((line) => line.parent?.subscription_item_details?.metadata),
+  ];
+  return sources.some((source) => isStorefrontTemplateStripeMetadata(source));
 }
 
 async function reconcileUnlockedTemplateIds(profileFilter, templateId) {
@@ -73,6 +99,25 @@ export async function unlockStorefrontTemplateForUser(userId, templateId, purcha
   });
 
   if (subscriptionId) {
+    const existingProfile = await PublicProfile.findOne({
+      ...profileFilter,
+      'storefront.template_purchases.stripe_subscription_id': subscriptionId,
+    })
+      .select('storefront.template_purchases')
+      .lean();
+    const existingPurchase = (existingProfile?.storefront?.template_purchases || []).find(
+      (row) => String(row.stripe_subscription_id || '').trim() === subscriptionId,
+    );
+    const eventCreated = Number(purchase.stripe_last_event_created || 0);
+    if (templateStripeSnapshotIsStale(existingPurchase, {
+      status: purchaseRecord.subscription_status,
+      current_period_end: purchaseRecord.current_period_end instanceof Date
+        ? Math.floor(purchaseRecord.current_period_end.getTime() / 1000)
+        : purchaseRecord.current_period_end,
+    }, { eventCreated })) {
+      return reconcileUnlockedTemplateIds(profileFilter, template.template_id);
+    }
+
     const setFields = {
       'storefront.template_purchases.$.template_id': purchaseRecord.template_id,
       'storefront.template_purchases.$.tier': purchaseRecord.tier,
@@ -85,6 +130,9 @@ export async function unlockStorefrontTemplateForUser(userId, templateId, purcha
       'storefront.template_purchases.$.cancel_at_period_end': purchaseRecord.cancel_at_period_end,
       'storefront.template_purchases.$.current_period_end': purchaseRecord.current_period_end,
     };
+    if (eventCreated > 0) {
+      setFields['storefront.template_purchases.$.stripe_last_event_created'] = eventCreated;
+    }
     if (purchaseRecord.stripe_checkout_session_id) {
       setFields['storefront.template_purchases.$.stripe_checkout_session_id'] = (
         purchaseRecord.stripe_checkout_session_id
@@ -139,7 +187,7 @@ export async function stripeSubscriptionBelongsToStorefrontTemplate(
   return Boolean(profile);
 }
 
-export async function syncStorefrontTemplateSubscription(stripeSubscription) {
+export async function syncStorefrontTemplateSubscription(stripeSubscription, extra = {}) {
   const metadata = stripeSubscription?.metadata || {};
   const subscriptionId = normalizeStripeId(stripeSubscription);
   let userId = String(metadata.user_id || '').trim();
@@ -176,5 +224,6 @@ export async function syncStorefrontTemplateSubscription(stripeSubscription) {
     subscription_status: status,
     cancel_at_period_end: stripeSubscription.cancel_at_period_end === true,
     current_period_end: periodEnd,
+    stripe_last_event_created: Number(extra?.eventCreated || extra?.event_created || 0) || 0,
   });
 }

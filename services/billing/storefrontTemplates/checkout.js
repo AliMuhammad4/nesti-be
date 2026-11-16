@@ -2,7 +2,15 @@ import PublicProfile from '../../../models/PublicProfile.js';
 import Subscription from '../../../models/Subscription.js';
 import { getStripeClient } from '../stripeClient.js';
 import { ensureStripeCustomerForUser } from '../subscriptionService.js';
-import { getStripeSubscriptionPeriodEnd } from '../subscriptionShared.js';
+import {
+  buildCheckoutIdempotencyKey,
+  cancelIncompleteStripeSubscriptions,
+  checkoutAlreadyOpenMessage,
+  deduplicateNewCheckoutSession,
+  getBillingFrontendOrigin,
+  getStripeSubscriptionPeriodEnd,
+  STRIPE_BLOCKING_STATUSES,
+} from '../subscriptionShared.js';
 import {
   getStorefrontTemplateTier,
   normalizeTemplateId,
@@ -114,6 +122,32 @@ export async function syncStorefrontTemplateCheckoutSession(session) {
   });
 }
 
+
+export function isStorefrontTemplateStripeSubscription(sub, templateId) {
+  const meta = sub?.metadata || {};
+  const isTemplate =
+    String(meta.purchase_type || '').trim().toLowerCase() === 'storefront_template'
+    || String(meta.subscription_type || '').trim().toLowerCase() === 'storefront_template';
+  if (!isTemplate) return false;
+  return normalizeTemplateId(meta.template_id) === normalizeTemplateId(templateId);
+}
+
+export function isBlockingStorefrontTemplateStripeSubscription(sub, templateId) {
+  if (!isStorefrontTemplateStripeSubscription(sub, templateId)) return false;
+  return STRIPE_BLOCKING_STATUSES.has(String(sub.status || '').trim().toLowerCase());
+}
+
+async function listBlockingStorefrontTemplateStripeSubscriptions(stripe, customerId, templateId) {
+  const normalizedCustomerId = String(customerId || '').trim();
+  if (!stripe || !normalizedCustomerId) return [];
+  const result = await stripe.subscriptions.list({
+    customer: normalizedCustomerId,
+    status: 'all',
+    limit: 20,
+  });
+  return (result.data || []).filter((sub) => isBlockingStorefrontTemplateStripeSubscription(sub, templateId));
+}
+
 export async function createStorefrontTemplateCheckoutSession(user, templateId) {
   const template = getStorefrontTemplateTier(templateId);
   if (!template) {
@@ -135,7 +169,7 @@ export async function createStorefrontTemplateCheckoutSession(user, templateId) 
 
   const subscription = await Subscription.findOne({ user_id: user._id });
   const customerId = await ensureStripeCustomerForUser(user, subscription, { planKey: 'template' });
-  const frontendUrl = String(process.env.FRONTEND_URL || process.env.CLIENT_URL || '').replace(/\/+$/, '');
+  const frontendUrl = getBillingFrontendOrigin();
   if (!frontendUrl) {
     return { ok: false, code: 503, message: 'FRONTEND_URL is not configured.' };
   }
@@ -166,6 +200,39 @@ export async function createStorefrontTemplateCheckoutSession(user, templateId) 
 
   if (reusableCheckout.open) {
     return { ok: true, session: reusableCheckout.open, template, reused: true };
+  }
+
+  const cancelledSubscriptionIds = await cancelIncompleteStripeSubscriptions(
+    stripe,
+    customerId,
+    (sub) => isStorefrontTemplateStripeSubscription(sub, template.template_id),
+  );
+
+  const blocking = await listBlockingStorefrontTemplateStripeSubscriptions(
+    stripe,
+    customerId,
+    template.template_id,
+  );
+  if (blocking.length) {
+    return {
+      ok: false,
+      code: 409,
+      message: checkoutAlreadyOpenMessage(blocking[0]?.status),
+    };
+  }
+
+  const sessionsAfterCancel = await stripe.checkout.sessions.list({
+    customer: customerId,
+    status: 'open',
+    limit: 100,
+  });
+  const openedWhileCancelling = selectReusableStorefrontTemplateCheckout(
+    sessionsAfterCancel.data || [],
+    user._id,
+    template.template_id,
+  );
+  if (openedWhileCancelling.open) {
+    return { ok: true, session: openedWhileCancelling.open, template, reused: true };
   }
 
   const sharedMetadata = {
@@ -201,12 +268,24 @@ export async function createStorefrontTemplateCheckoutSession(user, templateId) 
       metadata: sharedMetadata,
     },
   }, {
-    // Concurrent requests receive the same Stripe session. Stripe prunes
-    // idempotency records after ~24h; v2-monthly separates prior one-time keys.
-    idempotencyKey: ['storefront-template', 'v2-monthly', String(user._id), template.template_id].join(':'),
+    // Concurrent requests receive the same Stripe session within the 15-minute window.
+    // Leftover cancelled subscription ids change the key so Stripe does not replay an expired session.
+    idempotencyKey: buildCheckoutIdempotencyKey({
+      kind: 'storefront-template',
+      userId: user._id,
+      planKey: template.template_id,
+      billingPeriod: template.interval || 'month',
+      leftoverSubscriptionIds: cancelledSubscriptionIds,
+    }),
   });
 
-  return { ok: true, session, template };
+  const deduped = await deduplicateNewCheckoutSession(stripe, customerId, session, {
+    userId: String(user._id),
+    subscriptionType: 'storefront_template',
+    planKey: template.template_id,
+    billingPeriod: template.interval || 'month',
+  });
+  return { ok: true, session: deduped, template };
 }
 
 export async function confirmStorefrontTemplateCheckoutSession(user, sessionId, templateId) {

@@ -18,24 +18,31 @@ import {
   cancelClientSubscriptionEndpoint,
   changeClientSubscriptionPlanEndpoint,
   resumeClientSubscriptionEndpoint,
+  listPublicClientPlans,
 } from '../controllers/clientController.js';
+import {
+  requireClientFeature,
+  requireClientRole,
+} from '../middleware/clientSubscriptionAccess.js';
+import { CLIENT_FEATURE } from '../services/client/plans.js';
 
+router.get('/subscription/plans', listPublicClientPlans);
 router.get('/profile/me', protect, getClientProfile);
-router.get('/inquiries', protect, getClientInquiries);
-router.get('/recommendations', protect, getClientRecommendations);
-router.post('/agent-inquiry/property-images', protect, uploadPropertyImages.array('images', 8), uploadClientAgentInquiryPropertyImages);
-router.post('/professionals/:professionalId/agent-inquiry', protect, submitClientAgentInquiryFromProfile);
-router.post('/professionals/:professionalId/lawyer-inquiry', protect, submitClientLawyerInquiryFromProfile);
-router.post('/professionals/:professionalId/mortgage-broker-inquiry', protect, submitClientMortgageBrokerInquiryFromProfile);
+router.get('/inquiries', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), getClientInquiries);
+router.get('/recommendations', protect, requireClientFeature(CLIENT_FEATURE.PROPERTY_MATCHING), getClientRecommendations);
+router.post('/agent-inquiry/property-images', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), uploadPropertyImages.array('images', 8), uploadClientAgentInquiryPropertyImages);
+router.post('/professionals/:professionalId/agent-inquiry', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), submitClientAgentInquiryFromProfile);
+router.post('/professionals/:professionalId/lawyer-inquiry', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), submitClientLawyerInquiryFromProfile);
+router.post('/professionals/:professionalId/mortgage-broker-inquiry', protect, requireClientFeature(CLIENT_FEATURE.PROFESSIONAL_CONNECTIONS), submitClientMortgageBrokerInquiryFromProfile);
 router.post('/profile', protect, upsertClientProfile);
 router.put('/profile', protect, upsertClientProfile);
 router.put('/settings', protect, updateClientSettings);
 
-router.post('/subscription/checkout', protect, createClientSubscriptionCheckout);
-router.get('/subscription/me', protect, getClientSubscription);
-router.get('/subscription/invoices', protect, getClientSubscriptionInvoices);
-router.post('/subscription/cancel', protect, cancelClientSubscriptionEndpoint);
-router.post('/subscription/resume', protect, resumeClientSubscriptionEndpoint);
-router.post('/subscription/change-plan', protect, changeClientSubscriptionPlanEndpoint);
+router.post('/subscription/checkout', protect, requireClientRole, createClientSubscriptionCheckout);
+router.get('/subscription/me', protect, requireClientRole, getClientSubscription);
+router.get('/subscription/invoices', protect, requireClientRole, getClientSubscriptionInvoices);
+router.post('/subscription/cancel', protect, requireClientRole, cancelClientSubscriptionEndpoint);
+router.post('/subscription/resume', protect, requireClientRole, resumeClientSubscriptionEndpoint);
+router.post('/subscription/change-plan', protect, requireClientRole, changeClientSubscriptionPlanEndpoint);
 
 export default router;

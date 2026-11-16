@@ -13,6 +13,7 @@ import {
   getClientSubscriptionForUser,
   isClientSubscriptionActive,
 } from '../client/clientSubscriptionService.js';
+import { canonicalClientTier } from '../client/plans.js';
 import { disposableEmailErrorResponse, isDisposableEmail } from './disposableEmailGuard.js';
 import { getJwtSecret } from '../../utils/jwtSecret.js';
 import { CREDENTIAL_STATUS } from '../../constants/credentialDocuments.js';
@@ -438,7 +439,7 @@ async function resolveUserLoginPresentation(user) {
       subscription = {
         ...subscription,
         accountStatus: 'subscribed',
-        subscriptionPlan: String(clientSubscription.tier || '').trim().toLowerCase(),
+        subscriptionPlan: canonicalClientTier(clientSubscription.tier) || String(clientSubscription.tier || '').trim().toLowerCase(),
       };
     } else {
       subscription = {
@@ -679,7 +680,7 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
       subscription = {
         ...subscription,
         accountStatus: 'subscribed',
-        subscriptionPlan: String(clientSubscription.tier || '').trim().toLowerCase(),
+        subscriptionPlan: canonicalClientTier(clientSubscription.tier) || String(clientSubscription.tier || '').trim().toLowerCase(),
         subscriptionStatus: clientStatus || 'active',
         subscriptionEndsAt: clientSubscription.current_period_end || null,
         cancelAtPeriodEnd: Boolean(clientSubscription.cancel_at_period_end),
@@ -688,7 +689,7 @@ export const profileService = async (user, { refreshFromStripe = false } = {}) =
       subscription = {
         ...subscription,
         accountStatus: 'expired',
-        subscriptionPlan: String(clientSubscription?.tier || subscription.subscriptionPlan || '').trim().toLowerCase(),
+        subscriptionPlan: canonicalClientTier(clientSubscription?.tier || subscription.subscriptionPlan) || String(clientSubscription?.tier || subscription.subscriptionPlan || '').trim().toLowerCase(),
         subscriptionStatus: clientStatus || 'expired',
         subscriptionEndsAt: clientSubscription?.current_period_end || subscription.subscriptionEndsAt || null,
         cancelAtPeriodEnd: Boolean(clientSubscription?.cancel_at_period_end),

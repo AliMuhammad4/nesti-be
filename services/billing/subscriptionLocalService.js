@@ -3,7 +3,13 @@ import { USER_ROLE } from '../../constants/roles.js';
 import {
   ACTIVE_ACCESS_STATUSES,
   accountStatusFromSubscription,
+  getProfessionalAccessState,
+  getProfessionalPastDueGraceEndsAt,
+  getProfessionalPaymentMessage,
+  hasPaidProfessionalAccess,
+  isProfessionalSubscriptionActive,
   isSubscriptionPeriodEnded,
+  professionalHasUsedTrial,
   toIsoDate,
 } from './subscriptionShared.js';
 
@@ -62,18 +68,19 @@ export function serializeSubscription(subscription) {
           confirmedAt: toIsoDate(subscription.last_purchase.confirmed_at),
         }
       : null,
-    canPublishWebsite: ['standard', 'enterprise'].includes(String(subscription.plan_key || ''))
-      && ['active', 'past_due'].includes(String(subscription.status || '')),
-    canRunVoiceAgent: String(subscription.plan_key || '') === 'enterprise'
-      && ['active', 'past_due'].includes(String(subscription.status || '')),
+    canPublishWebsite: hasPaidProfessionalAccess(subscription)
+      && ['standard', 'enterprise'].includes(String(subscription.plan_key || '')),
+    canRunVoiceAgent: hasPaidProfessionalAccess(subscription)
+      && String(subscription.plan_key || '') === 'enterprise',
     subscriptionEndsAt: toIsoDate(subscription.current_period_end),
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
     pendingPlanKey: subscription.pending_plan_key || '',
     pendingPlanEffectiveAt: toIsoDate(subscription.pending_plan_effective_at),
-    stripeSubscriptionScheduleId: subscription.stripe_subscription_schedule_id || '',
-    stripeCustomerId: subscription.stripe_customer_id || '',
-    stripeSubscriptionId: subscription.stripe_subscription_id || '',
-    stripePriceId: subscription.stripe_price_id || '',
+    accessState: getProfessionalAccessState(subscription),
+    paymentMessage: getProfessionalPaymentMessage(subscription),
+    pastDueGraceEndsAt: toIsoDate(getProfessionalPastDueGraceEndsAt(subscription)),
+    paymentActionUrl: '',
+    paymentActionLabel: '',
   };
 }
 
@@ -119,9 +126,15 @@ export async function expireCanceledSubscriptionIfNeeded(subscription) {
   const periodEnded = isSubscriptionPeriodEnded(subscription);
   const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
   const terminalStatus = ['canceled', 'cancelled', 'incomplete_expired'].includes(status);
+  const missedRenewalExpired =
+    (status === 'active' || status === 'trialing')
+    && periodEnded
+    && !cancelAtPeriodEnd
+    && !isProfessionalSubscriptionActive(subscription);
   const shouldExpire =
     terminalStatus
-    || (cancelAtPeriodEnd && periodEnded && ACTIVE_ACCESS_STATUSES.has(status));
+    || (cancelAtPeriodEnd && periodEnded && ACTIVE_ACCESS_STATUSES.has(status))
+    || missedRenewalExpired;
   if (!shouldExpire) return subscription;
 
   if (status === 'expired' || status === 'canceled') {
@@ -149,6 +162,8 @@ export async function createFreeTrialSubscription(userId, trialEndsAt) {
         status: 'free_trial',
         trial_start: now,
         trial_end: trialEnd,
+        trial_used: true,
+        metadata: { trial_used: true },
       },
     },
     { returnDocument: 'after', upsert: true },
@@ -160,11 +175,19 @@ export async function startProfessionalTrialFromApproval(userId) {
   const now = new Date();
   const trialEnd = new Date(now.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
-  // Do not reset an existing free_trial or active paid subscription on re-approve races.
+  // One trial per professional ever. Do not reset a used trial or a live paid plan.
   const existing = await Subscription.findOne({ user_id: userId });
   if (existing) {
     const status = String(existing.status || '').trim().toLowerCase();
     if (status === 'free_trial' || status === 'active' || status === 'past_due') {
+      if (!professionalHasUsedTrial(existing)) {
+        existing.trial_used = true;
+        existing.metadata = { ...(existing.metadata || {}), trial_used: true };
+        await existing.save();
+      }
+      return existing;
+    }
+    if (professionalHasUsedTrial(existing)) {
       return existing;
     }
   }
@@ -178,7 +201,9 @@ export async function startProfessionalTrialFromApproval(userId) {
         status: 'free_trial',
         trial_start: now,
         trial_end: trialEnd,
+        trial_used: true,
         cancel_at_period_end: false,
+        'metadata.trial_used': true,
       },
     },
     { returnDocument: 'after', upsert: true },
@@ -192,10 +217,21 @@ export async function getOrCreateSubscriptionForUser(user) {
     const existing = await Subscription.findOne({ user_id: user._id });
     if (!existing) return null;
     const status = String(existing.status || '').trim().toLowerCase();
-    if (status === 'free_trial' || ACTIVE_ACCESS_STATUSES.has(status)) {
-      existing.status = 'expired';
-      existing.cancel_at_period_end = false;
-      await existing.save();
+    const hasStripe = Boolean(String(existing.stripe_subscription_id || '').trim());
+    if (hasStripe || status === 'free_trial' || ACTIVE_ACCESS_STATUSES.has(status)) {
+      const { cancelProfessionalBillingForConvertedClient } = await import(
+        './subscriptionLifecycleService.js'
+      );
+      const canceled = await cancelProfessionalBillingForConvertedClient(user);
+      if (!canceled?.ok) {
+        console.warn('Professional Stripe cancel on role change was unsafe or failed', {
+          user_id: String(user._id),
+          flags: canceled?.flags || [],
+        });
+      }
+      return Subscription.findOne({ user_id: user._id }).then((row) =>
+        expireCanceledSubscriptionIfNeeded(row),
+      );
     }
     return expireCanceledSubscriptionIfNeeded(existing);
   }
@@ -214,9 +250,8 @@ export async function getOrCreateSubscriptionForUser(user) {
         return null;
       }
     }
-    const createdAt = user.createdAt ? new Date(user.createdAt) : new Date();
-    const trialEnd = new Date(createdAt.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
-    subscription = await createFreeTrialSubscription(user._id, trialEnd);
+    // First trial starts from approval time (now), not the account createdAt.
+    subscription = await createFreeTrialSubscription(user._id);
   }
   return expireTrialIfNeeded(subscription);
 }

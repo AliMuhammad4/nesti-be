@@ -10,8 +10,13 @@ import ProfessionalCall from '../../models/ProfessionalCall.js';
 import EnterpriseInquiry from '../../models/EnterpriseInquiry.js';
 import { USER_ROLE } from '../../constants/roles.js';
 import { CREDENTIAL_STATUS } from '../../constants/credentialDocuments.js';
-import { BILLING_PLANS } from '../billing/plans.js';
-import { CLIENT_PLANS } from '../client/plans.js';
+import { monthlyMrrCentsForProfessionalSub } from '../billing/plans.js';
+import { isProfessionalSubscriptionActive } from '../billing/subscriptionShared.js';
+import {
+  canonicalClientTier,
+  monthlyMrrCentsForClientSub,
+} from '../client/plans.js';
+import { isClientSubscriptionActive } from '../client/clientSubscriptionService.js';
 
 function startOfDay(date) {
   const d = new Date(date);
@@ -197,12 +202,11 @@ export async function getAdminOverviewService() {
     ProfessionalProfile.countDocuments({ credential_status: CREDENTIAL_STATUS.PENDING_REVIEW }),
     ProfessionalProfile.countDocuments({ credential_status: CREDENTIAL_STATUS.APPROVED }),
     ProfessionalProfile.countDocuments({ credential_status: CREDENTIAL_STATUS.REJECTED }),
-    Subscription.aggregate([
-      { $match: { status: 'active' } },
-      { $group: { _id: '$plan_key', count: { $sum: 1 } } },
-    ]),
+    Subscription.find({ status: { $in: ['active', 'trialing'] } })
+      .select('plan_key billing_period status cancel_at_period_end current_period_end last_synced_at metadata trial_end')
+      .lean(),
     ClientSubscription.aggregate([
-      { $match: { status: 'active' } },
+      { $match: { status: { $in: ['active', 'trialing'] } } },
       { $group: { _id: '$tier', count: { $sum: 1 } } },
     ]),
   ]);
@@ -215,19 +219,51 @@ export async function getAdminOverviewService() {
   const activeProSubs = (proSubMap.active || 0) + (proSubMap.trialing || 0);
   const trialProSubs = proSubMap.free_trial || 0;
   const expiredProSubs = (proSubMap.expired || 0) + (proSubMap.canceled || 0);
-  const activeClientSubs = (clientSubMap.active || 0) + (clientSubMap.trialing || 0);
 
   let estimatedMrrCents = 0;
+  let countedPaidPro = 0;
   for (const row of activePaidProByPlan || []) {
-    const plan = BILLING_PLANS[String(row._id || '').toLowerCase()];
-    if (plan?.amount) estimatedMrrCents += Number(plan.amount) * Number(row.count || 0);
+    const status = String(row.status || '').trim().toLowerCase();
+    if (status === 'trialing' || status === 'free_trial') continue;
+    if (!isProfessionalSubscriptionActive(row)) continue;
+    countedPaidPro += 1;
+    estimatedMrrCents += monthlyMrrCentsForProfessionalSub(row);
   }
-  for (const row of activePaidClientByTier || []) {
-    const plan = CLIENT_PLANS[String(row._id || '').toLowerCase()];
-    if (plan?.amount) estimatedMrrCents += Number(plan.amount) * Number(row.count || 0);
+  const paidClientRows = await ClientSubscription.find({
+    status: { $in: ['active', 'trialing'] },
+  })
+    .select('tier billing_period pending_tier cancel_at_period_end metadata status current_period_end last_synced_at')
+    .lean();
+  const clientByTier = { essential: 0, plus: 0, premium: 0 };
+  let clientMrrCents = 0;
+  let essentialToPlusUpgrades = 0;
+  let plusToPremiumUpgrades = 0;
+  let scheduledClientUpgrades = 0;
+  let pendingCancellations = 0;
+  let countedActiveClientSubs = 0;
+  for (const row of paidClientRows) {
+    const countsTowardMrr = isClientSubscriptionActive(row);
+    if (!countsTowardMrr) continue;
+    countedActiveClientSubs += 1;
+    const tier = canonicalClientTier(row.tier);
+    if (tier && Object.prototype.hasOwnProperty.call(clientByTier, tier)) {
+      clientByTier[tier] += 1;
+    }
+    clientMrrCents += monthlyMrrCentsForClientSub(row);
+    const pending = canonicalClientTier(row.pending_tier);
+    if (pending && tier && pending !== tier) scheduledClientUpgrades += 1;
+    if (row.cancel_at_period_end) pendingCancellations += 1;
+    for (const change of Array.isArray(row.metadata?.plan_changes) ? row.metadata.plan_changes : []) {
+      const from = canonicalClientTier(change.from);
+      const to = canonicalClientTier(change.to);
+      if (from === 'essential' && to === 'plus') essentialToPlusUpgrades += 1;
+      if (from === 'plus' && to === 'premium') plusToPremiumUpgrades += 1;
+    }
   }
+  const activeClientSubs = countedActiveClientSubs;
+  estimatedMrrCents += clientMrrCents;
 
-  const paidProCount = proSubMap.active || 0;
+  const paidProCount = countedPaidPro;
   const conversionDenom = paidProCount + trialProSubs;
   const trialToPaidConversion =
     conversionDenom > 0 ? Math.round((paidProCount / conversionDenom) * 1000) / 10 : 0;
@@ -279,7 +315,20 @@ export async function getAdminOverviewService() {
           },
           client: {
             by_status: clientSubMap,
+            by_tier: clientByTier,
             active: activeClientSubs,
+            paid: clientSubMap.active || 0,
+            estimated_mrr_cents: clientMrrCents,
+            estimated_mrr: clientMrrCents / 100,
+            upgrades: {
+              essential_to_plus: essentialToPlusUpgrades,
+              plus_to_premium: plusToPremiumUpgrades,
+              scheduled: scheduledClientUpgrades,
+            },
+            cancellations: {
+              canceled: clientSubMap.canceled || 0,
+              pending_period_end: pendingCancellations,
+            },
           },
           estimated_mrr_cents: estimatedMrrCents,
           estimated_mrr: estimatedMrrCents / 100,

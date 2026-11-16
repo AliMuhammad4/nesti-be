@@ -43,6 +43,9 @@ import { prepareTurnDocuments } from './chatTurnDocuments.js';
 import { asFormContactRecord, conversationCreateFields, intakeSessionId } from './chatTurnConversation.js';
 import { sanitizeLeadProfilePreview } from './leadProfilePreview.js';
 import { previewIntakeSignals } from './previewSignals.js';
+import { getOrCreateSubscriptionForUser } from '../../billing/subscriptionLocalService.js';
+import { PlanQuotaError, assertWithinPlanQuota } from '../../billing/planQuota.js';
+import { notifyPlanLimitReachedIfNeeded } from '../../billing/planLimitNotifications.js';
 
 const MAX_USER_MESSAGES_FOR_SCORING = 120;
 const MAX_MESSAGES_FOR_PROMPT = 20;
@@ -129,6 +132,37 @@ export async function prepareProfessionalChatTurn(input) {
     channel: normalizedChannel,
     intent,
   };
+
+  const existingConversation = forceNewLead
+    ? null
+    : await ChatConversation.findOne({ session_id: sessionId }).select('_id').lean();
+  if (!landingMode && !previewForOwner && !existingConversation) {
+    try {
+      const quotaSubscription = subscription || await getOrCreateSubscriptionForUser({ _id: userId });
+      await assertWithinPlanQuota({
+        userId,
+        subscription: quotaSubscription,
+        limitKey: 'chatbot_conversations',
+      });
+    } catch (error) {
+      if (error instanceof PlanQuotaError) {
+        void notifyPlanLimitReachedIfNeeded(userId, error);
+        return {
+          response: {
+            status: 200,
+            body: {
+              success: true,
+              reply: "Thanks for your message. The assistant isn't available right now. Please try again later.",
+              session_id: sessionId,
+              visitor_id: visitor?.uuid || '',
+              meta: { conversation_limit_reached: true },
+            },
+          },
+        };
+      }
+      throw error;
+    }
+  }
 
   let conversation;
   if (forceNewLead) {

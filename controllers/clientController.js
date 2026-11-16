@@ -16,6 +16,7 @@ import {
   changeClientSubscriptionPlan,
   resumeClientSubscription,
 } from '../services/client/clientSubscriptionService.js';
+import { canonicalClientTier, publicClientPlans } from '../services/client/plans.js';
 import { getClientRecommendationsForUser } from '../services/matching/matchRankingService.js';
 import { getClientInquiriesForUser } from '../services/client/clientInquiryService.js';
 import {
@@ -435,11 +436,17 @@ export async function submitClientMortgageBrokerInquiryFromProfile(req, res) {
   }
 }
 
+export async function listPublicClientPlans(_req, res) {
+  return res.json({
+    success: true,
+    data: publicClientPlans(),
+  });
+}
+
 export async function createClientSubscriptionCheckout(req, res) {
   try {
     const userId = req.user._id;
     const { tier, billing_period: billingPeriod } = req.body;
-    const { canonicalClientTier } = await import('../services/client/plans.js');
     if (!canonicalClientTier(tier)) {
       return res.status(400).json({
         success: false,
@@ -455,8 +462,10 @@ export async function createClientSubscriptionCheckout(req, res) {
     });
   } catch (error) {
     console.error('Error creating client checkout session:', error);
-    return res.status(500).json({
+    const status = Number(error.statusCode) || 500;
+    return res.status(status).json({
       success: false,
+      ...(error.code ? { code: error.code } : {}),
       message: error.message || 'Failed to create checkout session',
     });
   }
@@ -521,8 +530,10 @@ export async function cancelClientSubscriptionEndpoint(req, res) {
     });
   } catch (error) {
     console.error('Error canceling client subscription:', error);
-    return res.status(500).json({
+    const status = Number(error.statusCode) || 500;
+    return res.status(status).json({
       success: false,
+      ...(error.code ? { code: error.code } : {}),
       message: error.message || 'Failed to cancel subscription',
     });
   }
@@ -553,10 +564,10 @@ export async function changeClientSubscriptionPlanEndpoint(req, res) {
     const userId = req.user._id;
     const { tier } = req.body;
 
-    if (!tier || !['basic', 'standard', 'pro'].includes(tier)) {
+    if (!canonicalClientTier(tier)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid tier. Must be basic, standard, or pro',
+        message: 'Invalid tier. Must be essential, plus, or premium',
       });
     }
 

@@ -1,3 +1,10 @@
+import {
+  accountStatusFromSubscription,
+  hasPaidProfessionalAccess,
+} from './subscriptionShared.js';
+
+export { accountStatusFromSubscription } from './subscriptionShared.js';
+
 export const ACCOUNT_STATUS = Object.freeze({
   FREE_TRIAL: 'free_trial',
   EXPIRED: 'expired',
@@ -44,7 +51,6 @@ export const FEATURES = Object.freeze({
   CALL_HISTORY: 'voice.call_history',
 });
 
-const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
 export const BASIC_FEATURES = new Set([
   FEATURES.CHATBOT_BASIC,
@@ -119,41 +125,6 @@ export const PLAN_LIMITS = Object.freeze({
 
 const FREE_TRIAL_LIMIT_OVERRIDES = Object.freeze({});
 
-function isSubscriptionPeriodEnded(subscription) {
-  if (!subscription?.current_period_end) return false;
-  const periodEnd = new Date(subscription.current_period_end);
-  return !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() <= Date.now();
-}
-
-export function accountStatusFromSubscription(subscription) {
-  if (!subscription) return ACCOUNT_STATUS.EXPIRED;
-
-  const status = String(subscription.status || '').trim().toLowerCase();
-  if (status === ACCOUNT_STATUS.FREE_TRIAL) {
-    if (subscription.trial_end && new Date(subscription.trial_end) <= new Date()) {
-      return ACCOUNT_STATUS.EXPIRED;
-    }
-    return ACCOUNT_STATUS.FREE_TRIAL;
-  }
-
-  if (
-    status === 'canceled' ||
-    status === 'cancelled' ||
-    status === 'incomplete_expired' ||
-    status === ACCOUNT_STATUS.EXPIRED
-  ) {
-    return ACCOUNT_STATUS.EXPIRED;
-  }
-
-  // cancel_at_period_end keeps access only until the paid period ends
-  if (Boolean(subscription.cancel_at_period_end) && isSubscriptionPeriodEnded(subscription)) {
-    return ACCOUNT_STATUS.EXPIRED;
-  }
-
-  if (ACTIVE_ACCESS_STATUSES.has(status)) return ACCOUNT_STATUS.SUBSCRIBED;
-  return ACCOUNT_STATUS.EXPIRED;
-}
-
 export function getEffectivePlan(subscription) {
   const planKey = String(subscription?.plan_key || '').trim().toLowerCase();
   if (PLAN_FEATURES[planKey]) return planKey;
@@ -161,15 +132,13 @@ export function getEffectivePlan(subscription) {
 }
 
 export function canPublishWebsite(subscription) {
-  const status = String(subscription?.status || '').trim().toLowerCase();
-  if (!['active', 'past_due'].includes(status)) return false;
+  if (!hasPaidProfessionalAccess(subscription)) return false;
   const plan = getEffectivePlan(subscription);
   return plan === SUBSCRIPTION_PLAN.STANDARD || plan === SUBSCRIPTION_PLAN.ENTERPRISE;
 }
 
 export function canRunVoiceAgent(subscription) {
-  const status = String(subscription?.status || '').trim().toLowerCase();
-  if (!['active', 'past_due'].includes(status)) return false;
+  if (!hasPaidProfessionalAccess(subscription)) return false;
   return getEffectivePlan(subscription) === SUBSCRIPTION_PLAN.ENTERPRISE;
 }
 

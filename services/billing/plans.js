@@ -66,6 +66,15 @@ export function getPlanTier(planKey) {
   return PLAN_TIER_ORDER[String(planKey || '').trim().toLowerCase()] || 0;
 }
 
+export function monthlyMrrCentsForProfessionalSub({ plan_key: planKey, billing_period: billingPeriod } = {}) {
+  const plan = getPlan(planKey);
+  if (!plan) return 0;
+  if (String(billingPeriod || '').trim().toLowerCase() === 'year') {
+    return Math.round(Number(plan.annual_amount || 0) / 12);
+  }
+  return Number(plan.amount || 0);
+}
+
 export function getPlacementPriority(planKey) {
   const plan = getPlan(planKey);
   return plan?.placement_priority || 0;

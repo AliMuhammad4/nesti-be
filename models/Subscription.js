@@ -93,6 +93,10 @@ const subscriptionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    trial_used: {
+      type: Boolean,
+      default: false,
+    },
     latest_invoice_id: {
       type: String,
       default: '',

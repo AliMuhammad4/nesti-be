@@ -45,12 +45,22 @@ export function severityFromConversionPreview(preview) {
   return 'info';
 }
 
+/** Lead toasts and in-app notifications never name the source (chat, form, ...). */
+export const NEW_LEAD_NOTIFICATION_BODY = 'A new lead was captured.';
+const LEGACY_SOURCE_LEAD_BODY = /^A new lead was captured from [a-z ]+\.?$/i;
+
+/** Older stored notifications said "captured from chat" even for form leads; show them neutrally. */
+export function neutralLeadNotificationBody(body) {
+  const text = String(body ?? '');
+  return LEGACY_SOURCE_LEAD_BODY.test(text.trim()) ? NEW_LEAD_NOTIFICATION_BODY : body;
+}
+
 export function conversionPreviewBody(conversion_preview) {
   return (
     conversion_preview?.why_match_one_liner ||
     conversion_preview?.why_one_liner ||
     conversion_preview?.headline ||
-    'A new lead was captured from chat.'
+    NEW_LEAD_NOTIFICATION_BODY
   );
 }
 

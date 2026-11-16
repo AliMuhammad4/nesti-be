@@ -19,10 +19,12 @@ import {
   getStripeSubscriptionPeriodEnd,
   getStripeSubscriptionPeriodStart,
   invoiceRequiresPayment,
+  isProfessionalPlatformStripeSubscription,
   isStripeResourceMissing,
   isSubscriptionPeriodEnded,
   normalizeStripeId,
   stripeTimestampFromDate,
+  TERMINAL_PROFESSIONAL_STRIPE_STATUSES,
   toIsoDate,
   userHasActiveSubscriptionAccess,
 } from './subscriptionShared.js';
@@ -156,6 +158,14 @@ export async function changeSubscriptionPlanForUser(user, planKey, billingPeriod
       message: 'No active subscription to change. Subscribe to a plan first.',
     };
   }
+  const currentStatus = String(subscription.status || '').trim().toLowerCase();
+  if (currentStatus === 'past_due' || currentStatus === 'unpaid') {
+    return {
+      ok: false,
+      code: 409,
+      message: 'Update your payment method before changing plans.',
+    };
+  }
   if (!subscription?.stripe_subscription_id) {
     return { ok: false, code: 404, message: 'No Stripe subscription found for this account.' };
   }
@@ -215,6 +225,7 @@ export async function changeSubscriptionPlanForUser(user, planKey, billingPeriod
       items: [{ id: subscriptionItemId, price: priceId }],
       proration_behavior: 'always_invoice',
       payment_behavior: 'pending_if_incomplete',
+      cancel_at_period_end: false,
       expand: ['latest_invoice'],
       metadata: {
         user_id: String(user._id),
@@ -358,3 +369,91 @@ export async function changeSubscriptionPlanForUser(user, planKey, billingPeriod
     effectiveAt: toIsoDate(currentPeriodEnd),
   };
 }
+
+async function cancelStripeSubscriptionQuietly(stripe, subscriptionId, flags, flagName) {
+  const id = String(subscriptionId || '').trim();
+  if (!id) return false;
+  try {
+    await stripe.subscriptions.cancel(id);
+    return true;
+  } catch (error) {
+    if (isStripeResourceMissing(error)) return false;
+    flags.push(flagName);
+    console.warn('Stripe cancel failed during professional-to-client role change', {
+      subscription_id: id,
+      message: error?.message || error,
+    });
+    return false;
+  }
+}
+
+/**
+ * When a professional account is converted to a client, cancel leftover Stripe
+ * professional (and storefront template) subscriptions instead of only expiring locally.
+ */
+export async function cancelProfessionalBillingForConvertedClient(user) {
+  const flags = [];
+  const subscription = await Subscription.findOne({ user_id: user._id });
+  if (!subscription) return { ok: true, canceled: false, flags };
+
+  let canceled = false;
+  const stripeId = String(subscription.stripe_subscription_id || '').trim();
+  const customerId = String(subscription.stripe_customer_id || '').trim();
+
+  try {
+    if (stripeId || customerId) {
+      const stripe = getStripeClient();
+      if (stripeId) {
+        canceled = await cancelStripeSubscriptionQuietly(
+          stripe,
+          stripeId,
+          flags,
+          'platform_subscription_cancel_failed',
+        ) || canceled;
+      }
+      if (customerId) {
+        const listed = await stripe.subscriptions.list({
+          customer: customerId,
+          status: 'all',
+          limit: 20,
+        });
+        for (const sub of listed.data || []) {
+          const status = String(sub.status || '').trim().toLowerCase();
+          if (TERMINAL_PROFESSIONAL_STRIPE_STATUSES.has(status)) continue;
+          const type = String(sub?.metadata?.subscription_type || '').trim().toLowerCase();
+          const purchaseType = String(sub?.metadata?.purchase_type || '').trim().toLowerCase();
+          const isStorefront = type === 'storefront_template' || purchaseType === 'storefront_template';
+          if (!isProfessionalPlatformStripeSubscription(sub) && !isStorefront) continue;
+          if (String(sub.id) === stripeId && canceled) continue;
+          const ok = await cancelStripeSubscriptionQuietly(
+            stripe,
+            sub.id,
+            flags,
+            isStorefront ? 'storefront_subscription_cancel_failed' : 'platform_subscription_cancel_failed',
+          );
+          canceled = ok || canceled;
+        }
+      }
+    }
+  } catch (error) {
+    flags.push('stripe_unavailable');
+    console.warn('Unable to reach Stripe while converting a professional to a client', {
+      user_id: String(user._id),
+      message: error?.message || error,
+    });
+  }
+
+  if (flags.length) {
+    subscription.metadata = {
+      ...(subscription.metadata || {}),
+      role_change_cancel_failed: true,
+      role_change_cancel_flags: flags,
+      role_change_cancel_at: new Date().toISOString(),
+    };
+    await subscription.save();
+  }
+
+  await markSubscriptionStripeStateExpired(user._id);
+  return { ok: flags.length === 0, canceled, flags };
+}
+

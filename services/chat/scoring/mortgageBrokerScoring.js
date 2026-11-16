@@ -9,6 +9,7 @@ import {
   createOrReuseLeadProfile,
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
+import { leadAnswersSnapshot } from '../../lead/leadOwnAnswers.js';
 import { marketChoiceFromForm, marketCountryFromForm, marketCurrency, normalizeMarketRegion } from '../../professionalAssistant/brokerInvestorMarket.js';
 const MORTGAGE_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestMortgageGrade = (a, b) =>
@@ -307,6 +308,35 @@ export const createMortgageLeadRecords = async ({
 
   const { budgetStr: mbBudgetStr } = partitionBuyerBudgetInputs(fq.budget, ai.budget);
 
+  const brokerTemplateAnswers = clientType === 'investor' || investmentType || ownsInvestments
+    ? {
+        ...(investmentType ? { investment_type: investmentType } : {}),
+        ...(ownsInvestments ? { owns_investments: ownsInvestments } : {}),
+        ...(purchasePurpose ? { purpose: purchasePurpose } : {}),
+        ...(investmentFinancing ? { investment_financing: investmentFinancing } : {}),
+        ...(borrowerEntity ? { borrower_entity: borrowerEntity } : {}),
+      }
+    : null;
+  const brokerAnswers = {
+    mortgage_timeline: ai.mortgage_timeline || fq.mortgage_timeline || '',
+    pre_approval_status: ai.pre_approval_status || fq.pre_approval_status || '',
+    credit_score_range: ai.credit_score_range || fq.credit_score_range || '',
+    employment_status: ai.employment_status || fq.employment_status || '',
+    household_income: ai.household_income || fq.household_income || '',
+    down_payment_readiness: ai.down_payment_readiness || fq.down_payment_readiness || '',
+    purchase_purpose: purchasePurpose,
+    urgency_signal: ai.urgency_signal || fq.urgency_signal || '',
+    property_budget: fq.property_budget || ai.property_budget || '',
+    investment_type: investmentType,
+    owns_investments: ownsInvestments,
+    investment_financing: investmentFinancing,
+    borrower_entity: borrowerEntity,
+    market_country: marketCountry,
+    market_region: marketRegion,
+    ...(marketCity ? { market_city: marketCity } : {}),
+    ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
+  };
+
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
       intent: 'unspecified',
@@ -330,39 +360,11 @@ export const createMortgageLeadRecords = async ({
         square_footage: areaVal,
       },
       qualification: {
-        mortgage_broker: {
-          mortgage_timeline: ai.mortgage_timeline || fq.mortgage_timeline || '',
-          pre_approval_status: ai.pre_approval_status || fq.pre_approval_status || '',
-          credit_score_range: ai.credit_score_range || fq.credit_score_range || '',
-          employment_status: ai.employment_status || fq.employment_status || '',
-          household_income: ai.household_income || fq.household_income || '',
-          down_payment_readiness: ai.down_payment_readiness || fq.down_payment_readiness || '',
-          purchase_purpose: purchasePurpose,
-          urgency_signal: ai.urgency_signal || fq.urgency_signal || '',
-          property_budget: fq.property_budget || ai.property_budget || '',
-          investment_type: investmentType,
-          owns_investments: ownsInvestments,
-          investment_financing: investmentFinancing,
-          borrower_entity: borrowerEntity,
-          market_country: marketCountry,
-          market_region: marketRegion,
-          ...(marketCity ? { market_city: marketCity } : {}),
-          ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
-        },
+        mortgage_broker: brokerAnswers,
       },
       ...(marketCountry ? { budget_profile: { currency: marketCurrency() } } : {}),
       ...(clientType ? { client_type: clientType } : {}),
-      ...(clientType === 'investor' || investmentType || ownsInvestments
-        ? {
-            template_answers: {
-              ...(investmentType ? { investment_type: investmentType } : {}),
-              ...(ownsInvestments ? { owns_investments: ownsInvestments } : {}),
-              ...(purchasePurpose ? { purpose: purchasePurpose } : {}),
-              ...(investmentFinancing ? { investment_financing: investmentFinancing } : {}),
-              ...(borrowerEntity ? { borrower_entity: borrowerEntity } : {}),
-            },
-          }
-        : {}),
+      ...(brokerTemplateAnswers ? { template_answers: brokerTemplateAnswers } : {}),
       source: 'chatbot',
       total_score: leadScore,
     },
@@ -407,6 +409,9 @@ export const createMortgageLeadRecords = async ({
       ...(ownsInvestments ? { owns_investments: ownsInvestments } : {}),
       ...(investmentFinancing ? { investment_financing: investmentFinancing } : {}),
       ...(marketCountry ? { market_country: marketCountry } : {}),
+      // This lead's own answers, so the person's other inquiries never change what this lead shows.
+      lead_answers: leadAnswersSnapshot(PROFESSIONAL_TYPE.MORTGAGE_BROKER, brokerAnswers),
+      ...(brokerTemplateAnswers ? { template_answers: brokerTemplateAnswers } : {}),
     },
     ...(icpFit
       ? {

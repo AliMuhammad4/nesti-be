@@ -371,7 +371,7 @@ export function appliedQualificationBlock(setting) {
 - No extra qualification questions are turned on. Do not walk the older default list.`;
   }
   const clientLine = setting?.client_type
-    ? ` This visitor is a ${setting.client_type}; these are the ${setting.client_type} questions in the saved order.`
+    ? ` This visitor is ${/^[aeiou]/i.test(String(setting.client_type)) ? 'an' : 'a'} ${setting.client_type}; these are the ${setting.client_type} questions in the saved order.`
     : '';
   return `SELECTED QUALIFICATION QUESTIONS (ask only these, one at a time, in this order, and skip any the client already answered):${clientLine}
 ${labels.map((question, index) => `${index + 1}. "${question}"`).join('\n')}

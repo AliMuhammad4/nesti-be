@@ -19,6 +19,7 @@ import {
 } from '../lead/inquiredProperty.js';
 import { notifyClientsOfNewPropertyForSale } from '../property/propertyClientNotifications.js';
 import { createSupportRequestFromContactPage } from '../supportRequest/supportRequestService.js';
+import { leadAnswersSnapshot } from '../lead/leadOwnAnswers.js';
 import {
   publicProfileUnavailableResponse,
   userCanServePublicProfile,
@@ -173,7 +174,7 @@ function sanitizePropertyImages(input) {
     .slice(0, 8);
 }
 
-export function buildLeadPayload({ payload, intent, message, propertyImages, investor = false }) {
+export function buildLeadPayload({ payload, intent, message, propertyImages, investor = false, professionalType = '' }) {
   const marketCountry = marketChoiceFromForm({
     market_country: payload?.market_country,
     market_region: payload?.market_region,
@@ -195,6 +196,62 @@ export function buildLeadPayload({ payload, intent, message, propertyImages, inv
         ...(inv.downPayment ? { [questionIdForStoredField('down_payment_readiness')]: inv.downPayment } : {}),
       }
     : null;
+  // Only the professional's own role section is filled (all three when the type is not given).
+  const fillRole = (role) => !professionalType || professionalType === role;
+  const agentSection = fillRole('agent') ? {
+    mortgage_status: payload?.mortgage_status || '',
+    realtor_status: payload?.realtor_status || '',
+    motivation_reason: payload?.motivation_reason || (investor ? 'investment' : ''),
+    viewing_readiness: payload?.viewing_readiness || '',
+    living_situation: payload?.living_situation || '',
+    urgency_readiness: payload?.urgency_readiness || '',
+    buy_property_location: intent === 'buy' ? payload?.buy_property_location || payload?.location || '' : '',
+    investment_type: agentIntent ? inv.investmentType : payload?.investment_type || '',
+    investment_goal: agentIntent ? inv.investmentGoal : payload?.investment_goal || '',
+    owns_investments: payload?.owns_investments || '',
+    // Investor "Capital ready" answer (the chat saves it on the agent qualification too).
+    down_payment_readiness: agentIntent ? inv.downPayment : '',
+    buying_another: payload?.buying_another || '',
+    market_country: marketCountry,
+    market_region: marketRegion,
+    ...(marketCity ? { market_city: marketCity } : {}),
+    ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
+  } : {};
+  const brokerSection = fillRole('mortgage_broker') ? {
+    mortgage_timeline: payload?.mortgage_timeline || '',
+    pre_approval_status: payload?.pre_approval_status || '',
+    credit_score_range: payload?.credit_score_range || '',
+    employment_status: payload?.employment_status || '',
+    household_income: payload?.household_income || '',
+    down_payment_readiness: payload?.down_payment_readiness || '',
+    purchase_purpose: payload?.purchase_purpose || (investor ? 'investment' : ''),
+    urgency_signal: payload?.urgency_signal || '',
+    property_budget: payload?.property_budget || payload?.budget || '',
+    investment_type: payload?.investment_type || '',
+    owns_investments: payload?.owns_investments || '',
+    investment_financing: payload?.investment_financing || '',
+    borrower_entity: payload?.borrower_entity || '',
+    market_country: marketCountry,
+    market_region: marketRegion,
+    ...(marketCity ? { market_city: marketCity } : {}),
+    ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
+  } : {};
+  const lawyerSection = fillRole('lawyer') ? {
+    transaction_stage: payload?.transaction_stage || '',
+    closing_timeline: payload?.closing_timeline || '',
+    transaction_type: payload?.transaction_type || '',
+    property_value: payload?.property_value || payload?.budget || '',
+    mortgage_status: payload?.mortgage_status || '',
+    realtor_involved: payload?.realtor_involved || '',
+    // First-time buyer belongs to personal inquiries, the purchasing entity to investor ones.
+    first_time_buyer: investor ? '' : payload?.first_time_buyer || '',
+    legal_services_needed: payload?.legal_services_needed || '',
+    via_company: investor ? payload?.via_company || '' : '',
+    market_country: marketCountry,
+    market_region: marketRegion,
+    ...(marketCity ? { market_city: marketCity } : {}),
+    ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
+  } : {};
   return {
     intent,
     source: 'public_web_form',
@@ -228,59 +285,9 @@ export function buildLeadPayload({ payload, intent, message, propertyImages, inv
       images: propertyImages,
     },
     qualification: {
-      agent: {
-        mortgage_status: payload?.mortgage_status || '',
-        realtor_status: payload?.realtor_status || '',
-        motivation_reason: payload?.motivation_reason || (investor ? 'investment' : ''),
-        viewing_readiness: payload?.viewing_readiness || '',
-        living_situation: payload?.living_situation || '',
-        urgency_readiness: payload?.urgency_readiness || '',
-        buy_property_location: intent === 'buy' ? payload?.buy_property_location || payload?.location || '' : '',
-        investment_type: agentIntent ? inv.investmentType : payload?.investment_type || '',
-        investment_goal: agentIntent ? inv.investmentGoal : payload?.investment_goal || '',
-        owns_investments: payload?.owns_investments || '',
-        // Investor "Capital ready" answer (the chat saves it on the agent qualification too).
-        down_payment_readiness: agentIntent ? inv.downPayment : '',
-        buying_another: payload?.buying_another || '',
-        market_country: marketCountry,
-        market_region: marketRegion,
-        ...(marketCity ? { market_city: marketCity } : {}),
-        ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
-      },
-      mortgage_broker: {
-        mortgage_timeline: payload?.mortgage_timeline || '',
-        pre_approval_status: payload?.pre_approval_status || '',
-        credit_score_range: payload?.credit_score_range || '',
-        employment_status: payload?.employment_status || '',
-        household_income: payload?.household_income || '',
-        down_payment_readiness: payload?.down_payment_readiness || '',
-        purchase_purpose: payload?.purchase_purpose || (investor ? 'investment' : ''),
-        urgency_signal: payload?.urgency_signal || '',
-        property_budget: payload?.property_budget || payload?.budget || '',
-        investment_type: payload?.investment_type || '',
-        owns_investments: payload?.owns_investments || '',
-        investment_financing: payload?.investment_financing || '',
-        borrower_entity: payload?.borrower_entity || '',
-        market_country: marketCountry,
-        market_region: marketRegion,
-        ...(marketCity ? { market_city: marketCity } : {}),
-        ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
-      },
-      lawyer: {
-        transaction_stage: payload?.transaction_stage || '',
-        closing_timeline: payload?.closing_timeline || '',
-        transaction_type: payload?.transaction_type || '',
-        property_value: payload?.property_value || payload?.budget || '',
-        mortgage_status: payload?.mortgage_status || '',
-        realtor_involved: payload?.realtor_involved || '',
-        first_time_buyer: payload?.first_time_buyer || '',
-        legal_services_needed: payload?.legal_services_needed || '',
-        via_company: payload?.via_company || '',
-        market_country: marketCountry,
-        market_region: marketRegion,
-        ...(marketCity ? { market_city: marketCity } : {}),
-        ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
-      },
+      agent: agentSection,
+      mortgage_broker: brokerSection,
+      lawyer: lawyerSection,
     },
   };
 }
@@ -368,7 +375,7 @@ async function submitPublicLeadServiceOnce({ slug, payload, requestMeta = {} }) 
   const formScore = scorePublicFormLead(
     professionalType,
     intent,
-    buildLeadPayload({ payload, intent, message, propertyImages: [], investor }),
+    buildLeadPayload({ payload, intent, message, propertyImages: [], investor, professionalType }),
     { message, contactInfo, investor },
   );
   const leadGrade = formScore.grade;
@@ -387,8 +394,14 @@ async function submitPublicLeadServiceOnce({ slug, payload, requestMeta = {} }) 
       })
     : null;
 
+  const leadPayload = buildLeadPayload({ payload, intent, message, propertyImages, investor, professionalType });
+  // Lawyer / broker answers of this inquiry, kept on the lead itself (the profile is shared by the person's leads).
+  const leadAnswers = leadAnswersSnapshot(
+    professionalType,
+    leadPayload.qualification?.[professionalType === 'lawyer' ? 'lawyer' : 'mortgage_broker'],
+  );
   const { leadProfile } = await createOrReuseLeadProfile({
-    payload: buildLeadPayload({ payload, intent, message, propertyImages, investor }),
+    payload: leadPayload,
     userId: profile.user_id,
     professionalType,
     contactInfo,
@@ -414,6 +427,9 @@ async function submitPublicLeadServiceOnce({ slug, payload, requestMeta = {} }) 
           'compatibility_factors.inquiry_message': message,
           'compatibility_factors.last_inquiry_at': new Date(),
           ...(photosNote ? { 'compatibility_factors.photos_note': photosNote } : {}),
+          ...Object.fromEntries(
+            Object.entries(leadAnswers).map(([key, value]) => [`compatibility_factors.lead_answers.${key}`, value]),
+          ),
           ...(formScore.score > Number(existingMatch.match_score || 0)
             ? { match_score: formScore.score, lead_type: leadType }
             : {}),
@@ -436,6 +452,7 @@ async function submitPublicLeadServiceOnce({ slug, payload, requestMeta = {} }) 
       inquiry_message: message,
       ...(photosNote ? { photos_note: photosNote } : {}),
       ...(investor ? { client_type: 'investor' } : {}),
+      ...(Object.keys(leadAnswers).length ? { lead_answers: leadAnswers } : {}),
       // Same investor factors the chat lead create puts on the match.
       ...(investor && intent !== 'unspecified' ? investorMatchFactors(payload) : {}),
       ...(inquiredProperty

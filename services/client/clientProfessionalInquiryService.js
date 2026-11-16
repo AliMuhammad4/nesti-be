@@ -26,6 +26,7 @@ import {
   scoreMortgageBrokerLead,
 } from '../chat/scoring/mortgageBrokerScoring.js';
 import { computeIcpFitForLead } from '../lead/icpScoringService.js';
+import { leadAnswersSnapshot } from '../lead/leadOwnAnswers.js';
 import { emitNewLeadCreatedNotification, sendNewLeadCreatedEmailIfEnabled } from '../realtime/leadCreatedNotify.js';
 import { emitWorkspaceLeadEvent } from '../realtime/workspaceSocket.js';
 import { buildWorkspaceLeadConversionPreview } from '../conversion/buildLeadConversionPack.js';
@@ -148,6 +149,7 @@ export function normalizeLawyerInquiryBody(body = {}) {
   return {
     message: toText(body.message),
     transaction_type: toText(body.transaction_type),
+    transaction_stage: toText(body.transaction_stage),
     closing_timeline: toText(body.closing_timeline),
     legal_services_needed: toText(body.legal_services_needed),
     property_address: toText(body.property_address || body.location),
@@ -283,7 +285,8 @@ export function resolveLawyerQualification(input, clientProfile = {}) {
     mapBudgetToLawyerPropertyValue(clientProfile?.dream_home_price);
 
   return {
-    transaction_stage: inferredFromMessage.transaction_stage || 'pre_approval_stage',
+    // Only a stage the client gave (or wrote in the message); no assumed default.
+    transaction_stage: input.transaction_stage || inferredFromMessage.transaction_stage || '',
     closing_timeline: closingTimeline,
     transaction_type: transactionType,
     property_value: propertyValue,
@@ -1091,7 +1094,7 @@ export async function submitClientLawyerInquiry({
         realtor_involved: qualification.realtor_involved || '',
         first_time_buyer: qualification.client_type === 'investor' ? '' : (qualification.first_time_buyer || ''),
         legal_services_needed: qualification.legal_services_needed || '',
-        via_company: qualification.via_company || '',
+        via_company: qualification.client_type === 'investor' ? (qualification.via_company || '') : '',
         market_country: qualification.market_country || '',
         market_region: qualification.market_region || '',
         market_city: qualification.market_city || '',
@@ -1177,7 +1180,11 @@ export async function submitClientLawyerInquiry({
       property_address: normalizedInput.property_address || '',
       property_value: qualification.property_value || '',
       ...(qualification.client_type ? { client_type: qualification.client_type } : {}),
-      ...(qualification.via_company ? { via_company: qualification.via_company } : {}),
+      ...(qualification.client_type === 'investor' && qualification.via_company
+        ? { via_company: qualification.via_company }
+        : {}),
+      // This inquiry's own answers (the profile is shared by the client's inquiries to this lawyer).
+      lead_answers: leadAnswersSnapshot(PROFESSIONAL_TYPE.LAWYER, profilePayload.qualification.lawyer),
       ...(qualification.market_country ? { market_country: qualification.market_country } : {}),
       ...(qualification.market_region ? { market_region: qualification.market_region } : {}),
       ...(qualification.market_city ? { market_city: qualification.market_city } : {}),
@@ -1523,6 +1530,8 @@ export async function submitClientMortgageBrokerInquiry({
       ...(qualification.market_region ? { market_region: qualification.market_region } : {}),
       ...(qualification.market_city ? { market_city: qualification.market_city } : {}),
       ...(qualification.market_country_name ? { market_country_name: qualification.market_country_name } : {}),
+      // This inquiry's own answers (the profile is shared by the client's inquiries to this broker).
+      lead_answers: leadAnswersSnapshot(PROFESSIONAL_TYPE.MORTGAGE_BROKER, profilePayload.qualification.mortgage_broker),
     },
     icp_fit: icpFit
       ? {

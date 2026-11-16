@@ -35,8 +35,11 @@ export function recurringPriceData({ name, amount, currency, interval, descripti
 export function trialEndUnix(trialEnd) {
   const end = trialEnd ? new Date(trialEnd) : null;
   if (!end || Number.isNaN(end.getTime()) || end.getTime() <= Date.now()) return null;
+  const unix = Math.floor(end.getTime() / 1000);
+  // Stripe rejects trial_end values sooner than 48 hours. Do not extend a short
+  // remaining trial; convert to paid immediately instead.
   const minimum = Math.floor(Date.now() / 1000) + 48 * 60 * 60;
-  return Math.max(Math.floor(end.getTime() / 1000), minimum);
+  return unix >= minimum ? unix : null;
 }
 
 export async function createRecurringPrice(stripe, { name, amount, currency, interval, metadata }) {

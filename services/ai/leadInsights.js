@@ -7,6 +7,7 @@ import LeadProfile from '../../models/LeadProfile.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { mapLeadProfileForApi } from '../lead/leadProfileFormat.js';
+import { applyLeadOwnAnswers, resolveLeadOwnClientType } from '../lead/leadOwnAnswers.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from '../lead/leadExperienceContract.js';
 import { getLeadKpiEventsForLead } from '../analytics/leadKpiService.js';
 import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
@@ -40,10 +41,13 @@ const KPI_EVENT_LABELS = {
 function norm(s) {
   return String(s || '').toLowerCase().trim();
 }
+/** Lawyer / broker: this lead's own client type (the shared profile only when the lead says nothing). */
 function isProfessionalInvestorLead(profile, leadMatch) {
-  return norm(profile?.client_type || leadMatch?.compatibility_factors?.client_type) === 'investor'
-    || /_investor$/.test(norm(leadMatch?.lead_type))
-    || norm(profile?.qualification?.mortgage_broker?.purchase_purpose) === 'investment';
+  if (resolveLeadOwnClientType(leadMatch, profile) === 'investor') return true;
+  const cf = leadMatch?.compatibility_factors || {};
+  const ownPurpose = cf.lead_answers?.purchase_purpose || cf.purchase_purpose;
+  if (ownPurpose) return norm(ownPurpose) === 'investment';
+  return !leadMatch?.lead_type && norm(profile?.qualification?.mortgage_broker?.purchase_purpose) === 'investment';
 }
 
 export function resolveLeadType(profile, leadMatch, conversation, professionalType = PROFESSIONAL_TYPE.AGENT) {
@@ -515,7 +519,11 @@ export async function buildLeadIntelligence({
 
   const professionalType =
     leadMatch?.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
-  const profileView = mapLeadProfileForApi(profile || {}, professionalType);
+  const sharedProfileView = mapLeadProfileForApi(profile || {}, professionalType);
+  const profileView = {
+    ...sharedProfileView,
+    qualification: applyLeadOwnAnswers(sharedProfileView.qualification, leadMatch, profile, professionalType),
+  };
   const grade = leadMatch?.lead_type?.split('_')[0] ?? conversation?.lead_grade ?? 'unscored';
   const score = Math.round(Number(leadMatch?.match_score ?? conversation?.lead_score ?? 0));
   const conversion = buildLeadConversionPack({
@@ -629,7 +637,7 @@ export const getLeadInsights = async ({ userId, conversationId }) => {
     });
   }
 
-  const qual = buildQualificationData(profile, professionalType);
+  const qual = applyLeadOwnAnswers(buildQualificationData(profile, professionalType), leadMatch, profile, professionalType);
   if (qual) {
     insights.push({
       type: 'qualification',

@@ -97,7 +97,7 @@ async function processStripeEvent(event) {
       if (String(event.data.object?.metadata?.purchase_type || '') === 'storefront_template') {
         result = await syncStorefrontTemplateCheckoutSession(event.data.object);
       } else {
-        result = await syncCheckoutSession(event.data.object, event.id);
+        result = await syncCheckoutSession(event.data.object, event.id, event.created);
       }
       break;
     case 'customer.subscription.created':
@@ -109,7 +109,10 @@ async function processStripeEvent(event) {
         String(stripeSub?.metadata?.purchase_type || '').trim() === 'storefront_template'
         || String(stripeSub?.metadata?.subscription_type || '').trim() === 'storefront_template'
       ) {
-        result = await syncStorefrontTemplateSubscription(stripeSub);
+        result = await syncStorefrontTemplateSubscription(stripeSub, {
+          last_stripe_event_id: event.id,
+          eventCreated: event.created,
+        });
         break;
       }
       const subscriptionType = String(stripeSub?.metadata?.subscription_type || '')
@@ -129,9 +132,9 @@ async function processStripeEvent(event) {
       }
 
       if (routeToClient) {
-        result = await syncClientStripeSubscription(stripeSub);
+        result = await syncClientStripeSubscription(stripeSub, { last_stripe_event_id: event.id, eventCreated: event.created });
       } else {
-        result = await syncStripeSubscription(stripeSub, { last_stripe_event_id: event.id });
+        result = await syncStripeSubscription(stripeSub, { last_stripe_event_id: event.id, eventCreated: event.created });
       }
       break;
     }
@@ -141,7 +144,7 @@ async function processStripeEvent(event) {
     case 'subscription_schedule.released':
     case 'subscription_schedule.canceled':
       try {
-        result = await syncSubscriptionSchedule(event.data.object, event.id);
+        result = await syncSubscriptionSchedule(event.data.object, event.id, event.created);
       } catch (err) {
         logger.warn('Stripe subscription schedule sync skipped', {
           event_id: event.id,
@@ -152,10 +155,10 @@ async function processStripeEvent(event) {
       }
       break;
     case 'invoice.paid':
-      result = await updateInvoicePaymentState(event.data.object, 'paid', event.id);
+      result = await updateInvoicePaymentState(event.data.object, 'paid', event.id, event.created);
       break;
     case 'invoice.payment_failed':
-      result = await updateInvoicePaymentState(event.data.object, 'failed', event.id);
+      result = await updateInvoicePaymentState(event.data.object, 'failed', event.id, event.created);
       break;
     default:
       return null;

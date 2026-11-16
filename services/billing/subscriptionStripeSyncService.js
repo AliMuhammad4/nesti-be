@@ -12,20 +12,24 @@ import {
   voidOrDeleteUnpaidInvoice,
 } from './subscriptionScheduleService.js';
 import {
-  ACTIVE_ACCESS_STATUSES,
   STRIPE_BLOCKING_STATUSES,
+  canReuseLocalProfessionalStripeSnapshot,
   firstSubscriptionPriceId,
   getInvoiceSubscriptionId,
   getStripeSubscriptionPeriodEnd,
   getStripeSubscriptionPeriodStart,
   invoiceLinePriceId,
   invoiceRequiresPayment,
+  isProfessionalPlatformStripeSubscription,
   isStripeResourceMissing,
   normalizeStripeId,
+  professionalHasUsedTrial,
+  shouldApplyIncomingProfessionalStripeSubscription,
   toDateFromUnix,
 } from './subscriptionShared.js';
 import { syncClientStripeSubscription } from '../client/clientSubscriptionService.js';
 import {
+  invoiceIsStorefrontTemplate,
   isStorefrontTemplateStripeMetadata,
   stripeSubscriptionBelongsToStorefrontTemplate,
   syncStorefrontTemplateSubscription,
@@ -43,7 +47,10 @@ export async function findBlockingStripeSubscription(customerId) {
     status: 'all',
     limit: 20,
   });
-  return result.data.find((sub) => STRIPE_BLOCKING_STATUSES.has(String(sub.status || ''))) || null;
+  return result.data.find((sub) => (
+    isProfessionalPlatformStripeSubscription(sub)
+    && STRIPE_BLOCKING_STATUSES.has(String(sub.status || ''))
+  )) || null;
 }
 
 function planFromInvoice(invoice = {}) {
@@ -204,6 +211,28 @@ async function repairPaidPlanMismatchIfNeeded(stripe, user, localSubscription, s
   return { repaired: true, stripeSubscription: restored, subscription };
 }
 
+async function markProfessionalStripeRefreshAttempt(subscription) {
+  if (!subscription?._id) return;
+  const metadata = {
+    ...(subscription.metadata && typeof subscription.metadata === 'object' ? subscription.metadata : {}),
+    stripe_refresh_attempted_at: new Date().toISOString(),
+  };
+  await Subscription.updateOne({ _id: subscription._id }, { $set: { metadata } });
+}
+
+async function fallbackProfessionalSubscriptionAfterStripeError(user, subscription, error, context) {
+  if (isStripeResourceMissing(error)) {
+    return markSubscriptionStripeStateExpired(user._id);
+  }
+  console.warn('Professional subscription refresh from Stripe failed; using local plan.', {
+    user_id: String(user?._id || ''),
+    context,
+    error: error?.message || error,
+  });
+  await markProfessionalStripeRefreshAttempt(subscription);
+  return expireCanceledSubscriptionIfNeeded(subscription);
+}
+
 export async function refreshSubscriptionFromStripeForUser(user) {
   const subscription = await Subscription.findOne({ user_id: user._id });
   const customerId = String(subscription?.stripe_customer_id || '').trim();
@@ -213,10 +242,7 @@ export async function refreshSubscriptionFromStripeForUser(user) {
   try {
     activeStripeSubscription = await findBlockingStripeSubscription(customerId);
   } catch (error) {
-    if (isStripeResourceMissing(error)) {
-      return markSubscriptionStripeStateExpired(user._id);
-    }
-    throw error;
+    return fallbackProfessionalSubscriptionAfterStripeError(user, subscription, error, 'list');
   }
   const stripe = getStripeClient();
   if (!activeStripeSubscription) {
@@ -229,10 +255,7 @@ export async function refreshSubscriptionFromStripeForUser(user) {
         });
         return expireCanceledSubscriptionIfNeeded(synced);
       } catch (error) {
-        if (isStripeResourceMissing(error)) {
-          return markSubscriptionStripeStateExpired(user._id);
-        }
-        throw error;
+        return fallbackProfessionalSubscriptionAfterStripeError(user, subscription, error, 'retrieve-local');
       }
     }
     return expireCanceledSubscriptionIfNeeded(subscription);
@@ -244,10 +267,7 @@ export async function refreshSubscriptionFromStripeForUser(user) {
       expand: ['latest_invoice'],
     });
   } catch (error) {
-    if (isStripeResourceMissing(error)) {
-      return markSubscriptionStripeStateExpired(user._id);
-    }
-    throw error;
+    return fallbackProfessionalSubscriptionAfterStripeError(user, subscription, error, 'retrieve-active');
   }
   const repairResult = await repairUnpaidUpgradeIfNeeded(
     stripe,
@@ -264,30 +284,7 @@ export async function refreshSubscriptionFromStripeForUser(user) {
   );
   if (paidPlanRepairResult.repaired) return paidPlanRepairResult.subscription;
 
-  const localSubscriptionId = String(subscription?.stripe_subscription_id || '').trim();
-  const localStatus = String(subscription?.status || '').trim();
-  const localPriceId = String(subscription?.stripe_price_id || '').trim();
-  const stripePriceId = firstSubscriptionPriceId(detailedStripeSubscription);
-  const stripePeriodEnd = getStripeSubscriptionPeriodEnd(detailedStripeSubscription);
-  const localPeriodEndMs = subscription?.current_period_end
-    ? new Date(subscription.current_period_end).getTime()
-    : null;
-  const stripePeriodEndMs = stripePeriodEnd ? stripePeriodEnd.getTime() : null;
-  const periodEndMatches =
-    localPeriodEndMs != null
-    && stripePeriodEndMs != null
-    && localPeriodEndMs === stripePeriodEndMs;
-  const cancelFlagMatches =
-    Boolean(subscription?.cancel_at_period_end)
-    === Boolean(detailedStripeSubscription.cancel_at_period_end);
-  if (
-    localSubscriptionId === String(detailedStripeSubscription.id || '').trim()
-    && ACTIVE_ACCESS_STATUSES.has(localStatus)
-    && Boolean(subscription?.current_period_end)
-    && localPriceId === stripePriceId
-    && periodEndMatches
-    && cancelFlagMatches
-  ) {
+  if (canReuseLocalProfessionalStripeSnapshot(subscription, detailedStripeSubscription)) {
     return expireCanceledSubscriptionIfNeeded(subscription);
   }
   return syncStripeSubscription(detailedStripeSubscription, { user_id: String(user._id) });
@@ -297,7 +294,7 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
   const subscriptionId = normalizeStripeId(stripeSubscription?.id);
   if (!subscriptionId) return null;
   if (await stripeSubscriptionBelongsToStorefrontTemplate(subscriptionId, stripeSubscription)) {
-    return syncStorefrontTemplateSubscription(stripeSubscription);
+    return syncStorefrontTemplateSubscription(stripeSubscription, extra);
   }
   const priceId = firstSubscriptionPriceId(stripeSubscription);
   const plan = getPlanByPriceId(priceId);
@@ -314,25 +311,48 @@ export async function syncStripeSubscription(stripeSubscription, extra = {}) {
   const filter = userId
     ? { user_id: userId }
     : { stripe_subscription_id: subscriptionId };
+  const existing = await Subscription.findOne(filter).lean();
+  if (existing && !shouldApplyIncomingProfessionalStripeSubscription(existing, stripeSubscription, extra)) {
+    return existing;
+  }
+
+  const stripeStatus = String(stripeSubscription.status || 'incomplete').trim().toLowerCase();
+  const existingMeta = existing?.metadata && typeof existing.metadata === 'object' ? existing.metadata : {};
+  const trialUsed = professionalHasUsedTrial(existing) || Boolean(toDateFromUnix(stripeSubscription.trial_start));
+  const pastDueSince = stripeStatus === 'past_due'
+    ? (existingMeta.past_due_since || new Date().toISOString())
+    : undefined;
   const update = {
     stripe_customer_id: customerId,
     stripe_subscription_id: subscriptionId,
     stripe_price_id: priceId,
-    status: String(stripeSubscription.status || 'incomplete'),
+    status: stripeStatus || 'incomplete',
     current_period_start: getStripeSubscriptionPeriodStart(stripeSubscription),
     current_period_end: getStripeSubscriptionPeriodEnd(stripeSubscription),
     cancel_at_period_end: Boolean(stripeSubscription.cancel_at_period_end),
-    trial_start: toDateFromUnix(stripeSubscription.trial_start),
+    trial_start: toDateFromUnix(stripeSubscription.trial_start) || existing?.trial_start || null,
     trial_end: toDateFromUnix(stripeSubscription.trial_end),
     latest_invoice_id: normalizeStripeId(stripeSubscription.latest_invoice),
     last_synced_at: new Date(),
-    metadata: { ...(stripeSubscription.metadata || {}) },
+    trial_used: trialUsed || Boolean(existing?.trial_used),
+    metadata: {
+      ...existingMeta,
+      ...(stripeSubscription.metadata || {}),
+      trial_used: trialUsed || Boolean(existingMeta.trial_used),
+      stripe_subscription_created:
+        Number(stripeSubscription.created || 0)
+        || existingMeta.stripe_subscription_created
+        || undefined,
+      past_due_since: stripeStatus === 'past_due' ? pastDueSince : undefined,
+    },
   };
+  const eventCreated = Number(extra.eventCreated || extra.event_created || 0);
+  if (eventCreated > 0) update.metadata.stripe_last_event_created = eventCreated;
+  if (stripeStatus !== 'past_due') delete update.metadata.past_due_since;
   if (planKey && getPlan(planKey)) update.plan_key = planKey;
   if (billingPeriod === 'year' || billingPeriod === 'month') update.billing_period = billingPeriod;
   if (extra.last_stripe_event_id) update.last_stripe_event_id = extra.last_stripe_event_id;
 
-  const existing = await Subscription.findOne(filter).select('pending_plan_key').lean();
   const shouldClearPendingPlan = Boolean(
     extra.clearPendingPlan
     || (existing?.pending_plan_key && planKey && existing.pending_plan_key === planKey),
@@ -405,7 +425,7 @@ export async function repairPlatformSubscriptionIfTemplateCollision(userId) {
   }
 }
 
-export async function syncCheckoutSession(session, eventId = '') {
+export async function syncCheckoutSession(session, eventId = '', eventCreated = 0) {
   const stripe = getStripeClient();
   const subscriptionId = normalizeStripeId(session.subscription);
   if (!subscriptionId) return null;
@@ -419,13 +439,17 @@ export async function syncCheckoutSession(session, eventId = '') {
   const amountPaid = Number(session?.amount_total ?? session?.amount_subtotal ?? 0);
   let synced;
   if (subscriptionType === 'client') {
-    synced = await syncClientStripeSubscription(stripeSubscription);
+    synced = await syncClientStripeSubscription(stripeSubscription, {
+      last_stripe_event_id: eventId,
+      eventCreated,
+    });
   } else {
     synced = await syncStripeSubscription(stripeSubscription, {
       user_id: session?.metadata?.user_id,
       plan_key: session?.metadata?.plan_key,
       billing_period: billingPeriod,
       last_stripe_event_id: eventId,
+      eventCreated,
     });
   }
   if (amountPaid > 0 && synced) {
@@ -454,39 +478,109 @@ export async function syncCheckoutSession(session, eventId = '') {
   return synced;
 }
 
-export async function updateInvoicePaymentState(invoice, paymentStatus, eventId = '') {
-  let subscriptionId = getInvoiceSubscriptionId(invoice);
+export async function updateInvoicePaymentState(invoice, paymentStatus, eventId = '', eventCreated = 0) {
+  const invoiceId = normalizeStripeId(invoice?.id);
   const customerId = normalizeStripeId(invoice?.customer);
+  let resolvedInvoice = invoice;
+  let subscriptionId = getInvoiceSubscriptionId(resolvedInvoice);
+  let isTemplateInvoice = invoiceIsStorefrontTemplate(resolvedInvoice);
+  let invoiceRetrieveError = null;
 
-  // Webhook payloads on newer Stripe API versions may omit legacy invoice.subscription.
-  // Fall back to customer → local subscription, then a live Stripe retrieve if needed.
-  if (!subscriptionId && customerId && !isStorefrontTemplateStripeMetadata(invoice?.metadata)) {
-    const local = await Subscription.findOne({ stripe_customer_id: customerId })
-      .select('stripe_subscription_id')
-      .lean();
-    subscriptionId = String(local?.stripe_subscription_id || '').trim();
-  }
-  if (!subscriptionId && normalizeStripeId(invoice?.id)) {
+  if (!subscriptionId && invoiceId) {
     try {
-      const liveInvoice = await getStripeClient().invoices.retrieve(normalizeStripeId(invoice.id), {
+      const liveInvoice = await getStripeClient().invoices.retrieve(invoiceId, {
         expand: ['parent.subscription_details.subscription'],
       });
-      subscriptionId = getInvoiceSubscriptionId(liveInvoice);
+      resolvedInvoice = liveInvoice || resolvedInvoice;
+      subscriptionId = getInvoiceSubscriptionId(resolvedInvoice);
+      isTemplateInvoice = isTemplateInvoice || invoiceIsStorefrontTemplate(resolvedInvoice);
     } catch (error) {
+      invoiceRetrieveError = error;
       console.warn('invoice subscription resolve via Stripe retrieve failed:', error?.message || error);
     }
   }
-  if (!subscriptionId) {
-    console.warn('invoice payment sync skipped: missing subscription id', {
-      invoiceId: normalizeStripeId(invoice?.id),
+  if (!subscriptionId && invoiceId && !isTemplateInvoice) {
+    const templateProfile = await PublicProfile.findOne({
+      'storefront.template_purchases.stripe_invoice_id': invoiceId,
+    })
+      .select('storefront.template_purchases')
+      .lean();
+    const templatePurchase = (templateProfile?.storefront?.template_purchases || []).find(
+      (row) => String(row.stripe_invoice_id || '').trim() === invoiceId,
+    );
+    if (templatePurchase) {
+      isTemplateInvoice = true;
+      subscriptionId = String(templatePurchase.stripe_subscription_id || '').trim();
+    }
+  }
+  if (!subscriptionId && customerId && !isTemplateInvoice) {
+    const localProfessional = await Subscription.findOne({ stripe_customer_id: customerId })
+      .select('user_id stripe_subscription_id')
+      .lean();
+    const localClient = await ClientSubscription.findOne({ stripe_customer_id: customerId })
+      .select('stripe_subscription_id')
+      .lean();
+    const professionalSubId = String(localProfessional?.stripe_subscription_id || '').trim();
+    const clientSubId = String(localClient?.stripe_subscription_id || '').trim();
+
+    let thisUserHasTemplateSubs = false;
+    if (localProfessional?.user_id) {
+      const profile = await PublicProfile.findOne({ user_id: localProfessional.user_id })
+        .select('storefront.template_purchases')
+        .lean();
+      const purchases = Array.isArray(profile?.storefront?.template_purchases)
+        ? profile.storefront.template_purchases
+        : [];
+      if (invoiceId) {
+        const byInvoice = purchases.find(
+          (row) => String(row.stripe_invoice_id || '').trim() === invoiceId,
+        );
+        if (byInvoice) {
+          isTemplateInvoice = true;
+          subscriptionId = String(byInvoice.stripe_subscription_id || '').trim();
+        }
+      }
+      thisUserHasTemplateSubs = purchases.some(
+        (row) => String(row.stripe_subscription_id || '').trim(),
+      );
+    }
+
+    if (!subscriptionId && !isTemplateInvoice) {
+      const onlyProfessional = Boolean(professionalSubId) && !clientSubId && !thisUserHasTemplateSubs;
+      const onlyClient = Boolean(clientSubId) && !professionalSubId && !thisUserHasTemplateSubs;
+      if (onlyProfessional) {
+        subscriptionId = professionalSubId;
+      } else if (onlyClient) {
+        subscriptionId = clientSubId;
+      }
+    }
+  }
+  if (isTemplateInvoice && !subscriptionId) {
+    console.warn('template invoice payment sync skipped: missing subscription id', {
+      invoiceId,
       customerId,
       paymentStatus,
       eventId,
     });
+    if (invoiceRetrieveError && !isStripeResourceMissing(invoiceRetrieveError)) {
+      throw invoiceRetrieveError;
+    }
+    return null;
+  }
+  if (!subscriptionId) {
+    console.warn('invoice payment sync skipped: missing subscription id', {
+      invoiceId,
+      customerId,
+      paymentStatus,
+      eventId,
+    });
+    if (invoiceRetrieveError && !isStripeResourceMissing(invoiceRetrieveError)) {
+      throw invoiceRetrieveError;
+    }
     return null;
   }
   let synced = null;
-  let isTemplateInvoice = isStorefrontTemplateStripeMetadata(invoice?.metadata);
+  let clientInvoice = false;
   try {
     const stripeSubscription = await getStripeClient().subscriptions.retrieve(subscriptionId);
     isTemplateInvoice = isTemplateInvoice
@@ -494,20 +588,21 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
     const subscriptionType = String(
       stripeSubscription?.metadata?.subscription_type || '',
     ).trim().toLowerCase();
+    const eventExtra = { last_stripe_event_id: eventId, eventCreated };
     if (isTemplateInvoice) {
-      synced = await syncStorefrontTemplateSubscription(stripeSubscription);
+      synced = await syncStorefrontTemplateSubscription(stripeSubscription, eventExtra);
     } else if (subscriptionType === 'client') {
-      synced = await syncClientStripeSubscription(stripeSubscription);
+      clientInvoice = true;
+      synced = await syncClientStripeSubscription(stripeSubscription, eventExtra);
     } else {
       const existingClient = await ClientSubscription.findOne({
         stripe_subscription_id: subscriptionId,
       }).select('_id').lean();
+      clientInvoice = Boolean(existingClient);
       if (existingClient) {
-        synced = await syncClientStripeSubscription(stripeSubscription);
+        synced = await syncClientStripeSubscription(stripeSubscription, eventExtra);
       } else {
-        synced = await syncStripeSubscription(stripeSubscription, {
-          last_stripe_event_id: eventId,
-        });
+        synced = await syncStripeSubscription(stripeSubscription, eventExtra);
       }
     }
   } catch (error) {
@@ -516,19 +611,34 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
 
   if (isTemplateInvoice) return synced;
 
+  const existingEventCreated = Number(synced?.metadata?.stripe_last_event_created || 0);
+  if (eventCreated > 0 && existingEventCreated > 0 && eventCreated < existingEventCreated) {
+    return synced;
+  }
+
   const update = {
-    latest_invoice_id: normalizeStripeId(invoice.id),
+    latest_invoice_id: invoiceId,
     last_payment_status: paymentStatus,
     last_stripe_event_id: eventId,
     last_synced_at: new Date(),
   };
+  if (eventCreated > 0) update['metadata.stripe_last_event_created'] = eventCreated;
   if (paymentStatus === 'failed') update.status = 'past_due';
-  const paymentSynced = await Subscription.findOneAndUpdate(
-    { stripe_subscription_id: subscriptionId },
-    { $set: update },
-    { returnDocument: 'after' },
-  );
-  if (paymentSynced) synced = paymentSynced;
+  if (clientInvoice || synced?.tier) {
+    const paymentSynced = await ClientSubscription.findOneAndUpdate(
+      { stripe_subscription_id: subscriptionId },
+      { $set: update },
+      { returnDocument: 'after' },
+    );
+    if (paymentSynced) synced = paymentSynced;
+  } else {
+    const paymentSynced = await Subscription.findOneAndUpdate(
+      { stripe_subscription_id: subscriptionId },
+      { $set: update },
+      { returnDocument: 'after' },
+    );
+    if (paymentSynced) synced = paymentSynced;
+  }
 
   const amountPaid = Number(invoice?.amount_paid ?? invoice?.total ?? 0);
   if (paymentStatus === 'paid' && amountPaid > 0 && synced?.user_id) {
@@ -584,7 +694,7 @@ export async function updateInvoicePaymentState(invoice, paymentStatus, eventId 
   return synced;
 }
 
-export async function syncSubscriptionSchedule(schedule, eventId = '') {
+export async function syncSubscriptionSchedule(schedule, eventId = '', eventCreated = 0) {
   const scheduleId = normalizeStripeId(schedule?.id);
   if (!scheduleId) return null;
   const subscriptionId =
@@ -628,6 +738,7 @@ export async function syncSubscriptionSchedule(schedule, eventId = '') {
       const stripeSubscription = await getStripeClient().subscriptions.retrieve(subscriptionId);
       return syncStripeSubscription(stripeSubscription, {
         last_stripe_event_id: eventId,
+        eventCreated,
         clearPendingPlan: true,
       });
     } catch {

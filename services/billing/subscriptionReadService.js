@@ -13,6 +13,7 @@ import { refreshSubscriptionFromStripeForUser } from './subscriptionStripeSyncSe
 import { subscriptionNeedsStripeRefresh } from './subscriptionShared.js';
 import { serializePaidTemplateSubscriptions } from './storefrontTemplates/access.js';
 import { refreshStorefrontTemplateSubscriptionsForUser } from './storefrontTemplates/refresh.js';
+import { paymentActionForOpenInvoice } from './subscriptionInvoiceService.js';
 
 export async function getFreshSubscriptionForUser(user) {
   await getOrCreateSubscriptionForUser(user);
@@ -60,6 +61,19 @@ export async function getSubscriptionPresentationForUser(
     };
   }
   const usage = await getPlanUsageForUser(user._id);
+  const status = String(subscription.status || '').trim().toLowerCase();
+  if (status === 'past_due' || status === 'unpaid') {
+    const paymentAction = await paymentActionForOpenInvoice({
+      customerId: subscription.stripe_customer_id,
+      subscriptionId: subscription.stripe_subscription_id,
+      latestInvoiceId: subscription.latest_invoice_id,
+    });
+    if (paymentAction) {
+      serialized.paymentActionUrl = paymentAction.paymentActionUrl;
+      serialized.paymentActionLabel = paymentAction.paymentActionLabel;
+      serialized.openInvoice = paymentAction.openInvoice;
+    }
+  }
   return {
     ...serialized,
     templateSubscriptions,
@@ -80,5 +94,25 @@ async function loadTemplateSubscriptionsForUser(user, { refresh = false } = {}) 
     ? await refreshStorefrontTemplateSubscriptionsForUser(user._id).catch(() => null)
     : await PublicProfile.findOne({ user_id: user._id }).select(TEMPLATE_PROFILE_SELECT).lean();
   if (!profile) return [];
-  return serializePaidTemplateSubscriptions(profile);
+  const rows = serializePaidTemplateSubscriptions(profile);
+  const platform = await Subscription.findOne({ user_id: user._id })
+    .select('stripe_customer_id')
+    .lean();
+  const customerId = String(platform?.stripe_customer_id || '').trim();
+  if (!customerId) return rows;
+  return Promise.all(rows.map(async (row) => {
+    const status = String(row.status || '').trim().toLowerCase();
+    if (status !== 'past_due' && status !== 'unpaid') return row;
+    const paymentAction = await paymentActionForOpenInvoice({
+      customerId,
+      subscriptionId: row.stripe_subscription_id,
+      latestInvoiceId: row.stripe_invoice_id,
+    });
+    if (!paymentAction) return row;
+    return {
+      ...row,
+      paymentActionUrl: paymentAction.paymentActionUrl,
+      paymentActionLabel: paymentAction.paymentActionLabel,
+    };
+  }));
 }

@@ -1,6 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import { protect, optionalAuth, evaluateCredentialAccess } from '../middleware/authMiddleware.js';
+import { isProfessionalRole } from '../constants/roles.js';
 import { validateBody } from '../middleware/validate.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import {
@@ -39,6 +40,20 @@ async function requireCredentialApproved(req, res) {
   if (!denied) return true;
   res.status(denied.status).json(denied.body);
   return false;
+}
+
+function requireProfessionalRole(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authenticated' });
+  }
+  if (!isProfessionalRole(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      code: 'PROFESSIONAL_ROLE_REQUIRED',
+      message: 'This billing action is only available for professional accounts.',
+    });
+  }
+  return next();
 }
 
 const setupIntent = async (req, res) => {
@@ -332,65 +347,73 @@ const getEnterpriseStatus = async (req, res) => {
 
 // Note: Stripe webhook is handled separately without protect middleware or JSON parsing
 router.get('/plans', listPlans);
-router.post('/setup-intent', protect, setupIntent);
-router.get('/storefront-templates', protect, getStorefrontTemplateEntitlements);
+router.post('/setup-intent', protect, requireProfessionalRole, setupIntent);
+router.get('/storefront-templates', protect, requireProfessionalRole, getStorefrontTemplateEntitlements);
 router.post(
   '/storefront-templates/checkout-session',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateCheckoutSessionSchema),
   createStorefrontTemplateCheckout
 );
 router.post(
   '/storefront-templates/checkout-session/confirm',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateCheckoutConfirmSchema),
   confirmStorefrontTemplateCheckout,
 );
 router.post(
   '/storefront-templates/cancel',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateSubscriptionActionSchema),
   cancelStorefrontTemplateSubscription,
 );
 router.post(
   '/storefront-templates/resume',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateSubscriptionActionSchema),
   resumeStorefrontTemplateSubscription,
 );
 router.post(
   '/checkout-session',
   protect,
+  requireProfessionalRole,
   validateBody(checkoutSessionSchema),
   createCheckoutSession
 );
-router.get('/subscription/me', protect, getCurrentSubscription);
-router.get('/invoices', protect, getBillingInvoices);
+router.get('/subscription/me', protect, requireProfessionalRole, getCurrentSubscription);
+router.get('/invoices', protect, requireProfessionalRole, getBillingInvoices);
 router.post(
   '/subscription/cancel',
   protect,
+  requireProfessionalRole,
   validateBody(cancelSubscriptionSchema),
   cancelCurrentSubscription
 );
 router.post(
   '/subscription/resume',
   protect,
+  requireProfessionalRole,
   validateBody(resumeSubscriptionSchema),
   resumeCurrentSubscription
 );
 router.post(
   '/subscription/change-plan',
   protect,
+  requireProfessionalRole,
   validateBody(changePlanSchema),
   changeCurrentSubscriptionPlan
 );
-router.get('/payment-methods', protect, getPaymentMethods);
+router.get('/payment-methods', protect, requireProfessionalRole, getPaymentMethods);
 router.post(
   '/enterprise-inquiry',
   optionalAuth,
   validateBody(enterpriseInquiryCreateSchema),
   handleEnterpriseInquiry
 );
-router.get('/enterprise-status', protect, getEnterpriseStatus);
+router.get('/enterprise-status', protect, requireProfessionalRole, getEnterpriseStatus);
 
 export default router;

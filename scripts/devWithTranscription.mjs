@@ -64,14 +64,14 @@ async function startWorker({ reuseHealthy = true } = {}) {
 
   const ready = await waitForTranscriptionWorkerHealth(workerPort);
   if (!ready) {
-    console.error('[dev] Transcription worker failed to become ready.');
+    console.error('[dev] Transcription worker failed to become ready. The API will keep running and the worker will be retried.');
     console.error(readTranscriptionWorkerLogTail());
     try {
       child.kill('SIGTERM');
     } catch {
       // ignore
     }
-    process.exit(1);
+    return null;
   }
 
   console.log(`[dev] Transcription worker ready (pid ${child.pid})`);

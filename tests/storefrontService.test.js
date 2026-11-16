@@ -179,6 +179,32 @@ test('storefront draft validation accepts element editing metadata', () => {
   assert.deepEqual(value.draft.blocks[0].data.layout.hiddenFields, ['content.body']);
 });
 
+test('storefront draft validation accepts navigator names and visibility', () => {
+  const { error, value } = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'hero',
+        type: 'hero',
+        data: {
+          content: { heading: 'Know your payment' },
+          layout: {
+            navigator: {
+              labels: { 'content.heading': 'Hero title' },
+              hidden: ['content.heading'],
+              devices: { 'content.heading': ['mobile'] },
+            },
+          },
+        },
+      }],
+    },
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(value.draft.blocks[0].data.layout.navigator.labels['content.heading'], 'Hero title');
+  assert.deepEqual(value.draft.blocks[0].data.layout.navigator.hidden, ['content.heading']);
+  assert.deepEqual(value.draft.blocks[0].data.layout.navigator.devices['content.heading'], ['mobile']);
+});
+
 test('storefront draft validation accepts page background in brand kit', () => {
   const { error, value } = saveStorefrontDraftSchema.validate({
     draft: {
@@ -484,6 +510,43 @@ test('mortgage broker classic AI blocks use the focused lead template policy', (
   assert.equal(blocks[0].content.broker_design_version, 16);
 });
 
+test('mortgage broker renewal AI blocks match the free template allowlist', () => {
+  const blocks = generateDefaultStorefrontBlocks('mortgage_broker', 'mortgage_broker-renewal', {
+    headline: 'Renew with clarity',
+    tagline: 'Rate options without the runaround.',
+    about: 'A renewal-focused mortgage practice.',
+    services: [{ title: 'Renewal review', description: 'Compare terms before your maturity date.' }],
+  });
+
+  assert.deepEqual(blocks.map((block) => block.type), [
+    'hero',
+    'practice-snapshot',
+    'mortgage-programs',
+    'services',
+    'about',
+    'guidance',
+    'testimonials',
+    'faq',
+    'cta',
+    'footer',
+  ]);
+
+  const revision = createGeneratedDraftRevision({
+    template_key: 'mortgage_broker-renewal',
+    storefront_blocks: blocks,
+    brand_kit: {},
+  }, {});
+
+  assert.equal(
+    validateStorefrontDraftForRole({
+      blocks: revision.blocks,
+      brandKit: revision.brandKit,
+      template: revision.template,
+    }, 'mortgage_broker').error,
+    undefined,
+  );
+});
+
 test('storefront block types are constrained by professional role', () => {
   assert.deepEqual(
     allowedStorefrontBlockTypes('mortgage_broker'),
@@ -541,6 +604,17 @@ test('storefront block types are constrained by professional role', () => {
   }, 'lawyer');
   assert.match(classicLawyerUsingSnapshot.error.message, /Unsupported storefront block type/);
 
+  const commercialLawyerDraft = validateStorefrontDraftForRole({
+    template: { id: 'lawyer-commercial' },
+    blocks: [
+      { id: 'hero', type: 'hero', data: { content: {} } },
+      { id: 'snapshot', type: 'practice-snapshot', data: { content: {} } },
+      { id: 'services', type: 'services', data: { content: {} } },
+      { id: 'footer', type: 'footer', data: { content: {} } },
+    ],
+  }, 'lawyer');
+  assert.equal(commercialLawyerDraft.error, undefined);
+
   const agentOnlyBlock = validateStorefrontDraftForRole({
     blocks: [{ id: 'properties', type: 'properties', data: { content: {} } }],
   }, 'lawyer');
@@ -567,6 +641,7 @@ test('storefront block types are constrained by professional role', () => {
     'agent-luxury-advisor',
     'agent-first-home',
     'agent-community-expert',
+    'agent-newcomer',
   ].forEach((templateId) => {
     const sellerProofDraft = validateStorefrontDraftForRole({
       template: { id: templateId },

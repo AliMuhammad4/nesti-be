@@ -217,7 +217,7 @@ router.post(
 router.patch(
   '/professionals/:id/chatbot/embeds/:embedId',
   requirePermission(P.PROFESSIONALS_WRITE),
-  validateBody(embedPatchBodySchema),
+  validateBody(embedPatchBodySchema, { noDefaults: true }),
   patchAdminProfessionalChatbotEmbed,
 );
 router.delete(

@@ -30,11 +30,6 @@ export const invalidSignupSessionResponse = () => ({
   },
 });
 
-export const tooManyCodesResponse = (message = 'Too many incorrect codes. Please request a new code.') => ({
-  status: 429,
-  body: { success: false, message },
-});
-
 export const loginLockedResponse = () => ({
   status: 429,
   body: {

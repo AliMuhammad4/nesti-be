@@ -137,9 +137,29 @@ app.use((err, req, res, next) => {
     const payload = planQuotaErrorResponse(err);
     if (payload) return res.status(403).json(payload);
   }
-  logger.error(`${err.status || 500} - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
-  logger.error(err.stack);
-  res.status(err.status || 500).json({ success: false, message: err.message || 'Server Error' });
+  const declared = Number(err?.status ?? err?.statusCode);
+  const status = Number.isInteger(declared) && declared >= 400 && declared < 600 ? declared : 500;
+  logger.error(`${status} - ${err?.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
+  logger.error(err?.stack);
+  // Body parser errors (bad JSON, too large) carry a `type` like "entity.parse.failed".
+  const bodyError = typeof err?.type === 'string' && err.type.startsWith('entity.');
+  let message;
+  let code;
+  if (bodyError) {
+    message = status === 413 ? 'This request is too large.' : 'Invalid request body.';
+    code = 'INVALID_BODY';
+  } else if (status === 502 || status === 503 || status === 504) {
+    message = 'This service is temporarily unavailable. Please try again in a moment.';
+    code = 'SERVICE_UNAVAILABLE';
+  } else if (status >= 500) {
+    // Unexpected errors (database, library) are logged above and shown as a neutral message.
+    message = 'Something went wrong on our side. Please try again in a moment.';
+    code = 'SERVER_ERROR';
+  } else {
+    // Errors raised on purpose with a 4xx status keep their message.
+    message = err?.message || 'Request failed';
+  }
+  res.status(status).json({ success: false, message, ...(code ? { code } : {}) });
 });
 
 export default app;

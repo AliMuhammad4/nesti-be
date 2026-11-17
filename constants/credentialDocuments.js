@@ -15,6 +15,21 @@ export const CREDENTIAL_COUNTRY = Object.freeze({
 
 export const CREDENTIAL_COUNTRY_VALUES = Object.freeze(Object.values(CREDENTIAL_COUNTRY));
 
+// Same lists as the verification form (frontend/src/lib/credentialJurisdictions.js).
+export const CREDENTIAL_JURISDICTIONS = Object.freeze({
+  CA: Object.freeze(['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT']),
+  US: Object.freeze([
+    'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY',
+    'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND',
+    'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC',
+  ]),
+});
+
+export function isValidCredentialJurisdiction(country, jurisdiction) {
+  const list = CREDENTIAL_JURISDICTIONS[String(country || '').trim().toUpperCase()];
+  return Boolean(list && list.includes(String(jurisdiction || '').trim().toUpperCase()));
+}
+
 export const CREDENTIAL_DOC_TYPE = Object.freeze({
   GOV_ID_FRONT: 'gov_id_front',
   GOV_ID_BACK: 'gov_id_back',

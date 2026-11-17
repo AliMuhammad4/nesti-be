@@ -1,6 +1,43 @@
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { CREDENTIAL_STATUS } from '../../constants/credentialDocuments.js';
 import logger from '../../utils/logger.js';
+import { dropDuplicateCredentialDocuments } from './credentialDocumentService.js';
+
+let dedupeRan = false;
+
+/**
+ * One-time cleanup: profiles saved before uploads replaced by type could hold two documents of
+ * the same type. Keeps the newest of each. Safe to run on every boot (a no-op once clean).
+ * Disable with CREDENTIAL_DOC_DEDUPE=0|false|off.
+ */
+export async function dedupeCredentialDocuments({ batchSize = 200 } = {}) {
+  const flag = String(process.env.CREDENTIAL_DOC_DEDUPE || '1').trim().toLowerCase();
+  if (['0', 'false', 'off', 'no'].includes(flag)) return { removed: 0, skipped: true };
+  if (dedupeRan) return { removed: 0 };
+  dedupeRan = true;
+  let removed = 0;
+  try {
+    const duplicates = await ProfessionalProfile.aggregate([
+      { $match: { 'credential_documents.1': { $exists: true } } },
+      { $project: { types: '$credential_documents.type' } },
+      { $match: { $expr: { $lt: [{ $size: { $setUnion: ['$types', []] } }, { $size: '$types' }] } } },
+      { $project: { _id: 1 } },
+    ]);
+    for (let i = 0; i < duplicates.length; i += batchSize) {
+      const ids = duplicates.slice(i, i + batchSize).map((row) => row._id);
+      const profiles = await ProfessionalProfile.find({ _id: { $in: ids } })
+        .select('_id user_id credential_documents')
+        .lean();
+      for (const profile of profiles) removed += await dropDuplicateCredentialDocuments(profile);
+    }
+    if (removed) logger.info('Credential duplicate cleanup applied', { removed });
+    return { removed };
+  } catch (error) {
+    dedupeRan = false;
+    logger.error('Credential duplicate cleanup failed', { error: error?.message });
+    throw error;
+  }
+}
 
 let grandfatherRan = false;
 

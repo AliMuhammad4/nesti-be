@@ -7,14 +7,34 @@ export const PASSWORD_RESET_TOKEN_PURPOSE = 'password_reset';
 
 export const OTP_TTL_MS = 10 * 60 * 1000;
 export const PENDING_SIGNUP_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long one person's waiting signup is protected: while its code is live and for at most
+ * this long after the details were submitted, the email (and its mobile number) can't be taken
+ * by another signup. Resending codes can't stretch it, so nobody can hold an email or number
+ * forever by asking for a new code every minute.
+ */
+export const SIGNUP_HOLD_MS = 15 * 60 * 1000;
 export const SIGNUP_CODE_WINDOW_MS = 60 * 60 * 1000;
 export const MAX_OTP_ATTEMPTS = 5;
 export const MAX_TOTAL_SIGNUP_ATTEMPTS = 15;
 export const MAX_SIGNUP_CODES_PER_WINDOW = 6;
+/** Wrong tries allowed on one reset code before it stops working. */
 export const MAX_RESET_ATTEMPTS = 5;
 export const RESET_WINDOW_MS = 60 * 60 * 1000;
-export const MAX_RESET_CODES_PER_WINDOW = 5;
-export const MAX_RESET_FAILURES_PER_WINDOW = 10;
+/** Wait between reset codes for the same email from the same connection. */
+export const RESET_RESEND_COOLDOWN_MS = 60 * 1000;
+/** Reset codes per hour for one email from one connection, and from all connections together. */
+export const MAX_RESET_CODES_PER_REQUESTER = 5;
+export const MAX_RESET_CODES_PER_EMAIL = 10;
+/**
+ * Wrong reset codes per hour: one connection is stopped after 10, so a stranger can't lock the
+ * owner out from their own device; the account as a whole stops after 15 (brute-force ceiling).
+ */
+export const MAX_RESET_FAILURES_PER_REQUESTER = 10;
+export const MAX_RESET_FAILURES_PER_WINDOW = 15;
+/** Wrong current passwords on Change Password before every session is signed out. */
+export const MAX_PASSWORD_CHANGE_FAILURES = 5;
+export const PASSWORD_CHANGE_WINDOW_MS = 15 * 60 * 1000;
 
 export const randomOtp = () => String(crypto.randomInt(10000, 100000));
 

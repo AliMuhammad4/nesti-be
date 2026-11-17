@@ -119,8 +119,10 @@ router.post('/icp', protect, requireActiveSubscriptionAccess, ensureCredentialAp
 router.put('/icp', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
 
 router.get('/:id', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, getProfessionalById);
-router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.patch('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+// Partial saves: only the fields sent are changed (no schema defaults filled in).
+const validateProfileUpsert = validateBody(professionalUpsertBodySchema, { noDefaults: true });
+router.post('/', protect, validateProfileUpsert, upsertProfessionalProfile);
+router.put('/', protect, validateProfileUpsert, upsertProfessionalProfile);
+router.patch('/', protect, validateProfileUpsert, upsertProfessionalProfile);
 
 export default router;

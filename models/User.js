@@ -84,18 +84,23 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
-  /** Reset-code budget per hour window (codes requested and wrong codes), shared across codes. */
+  /** Wrong reset codes across all codes in the current hour window (account-wide ceiling). */
   reset_window_started_at: {
     type: Date,
     default: null,
   },
-  reset_requests_in_window: {
-    type: Number,
-    default: 0,
-  },
   reset_failures_in_window: {
     type: Number,
     default: 0,
+  },
+  /** Wrong current passwords on Change Password; every session is signed out at the limit. */
+  password_change_failures: {
+    type: Number,
+    default: 0,
+  },
+  password_change_window_started_at: {
+    type: Date,
+    default: null,
   },
   /** Wrong passwords in a row (any IP); the login locks briefly at the limit. */
   failed_login_count: {

@@ -31,6 +31,7 @@ export async function suspendAdminUserService(actor, userId, { reason = '' } = {
   const recipient = {
     email: String(user.email || '').trim().toLowerCase(),
     first_name: user.first_name,
+    role: user.role,
     suspended_reason: reasonText,
   };
   logger.info('Account suspended; sending notice', {
@@ -65,6 +66,7 @@ export async function unsuspendAdminUserService(userId) {
   const recipient = {
     email: String(user.email || '').trim().toLowerCase(),
     first_name: user.first_name,
+    role: user.role,
   };
   logger.info('Account reinstated; sending notice', {
     user_id: String(user._id),

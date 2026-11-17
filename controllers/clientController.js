@@ -26,6 +26,7 @@ import {
 } from '../services/client/clientProfessionalInquiryService.js';
 import { USER_ROLE } from '../constants/roles.js';
 import { PHONE_INVALID_MESSAGE, PHONE_TAKEN_MESSAGE, isPhoneDuplicateError, normalizePhoneE164 } from '../utils/phone.js';
+import { PERSON_NAME_MESSAGE, isValidPersonName } from '../utils/personName.js';
 
 /** Fields the client may never set directly: ownership, ids and server-computed metrics. */
 const PROTECTED_CLIENT_PROFILE_FIELDS = [
@@ -194,6 +195,12 @@ export async function updateClientSettings(req, res) {
     if (!userUpdates.last_name && last_name !== undefined) {
       return res.status(400).json({ success: false, message: 'Last name is required' });
     }
+    if (
+      (userUpdates.first_name && !isValidPersonName(userUpdates.first_name))
+      || (userUpdates.last_name && !isValidPersonName(userUpdates.last_name))
+    ) {
+      return res.status(400).json({ success: false, message: PERSON_NAME_MESSAGE });
+    }
 
     const profileData = {
       annual_income,
@@ -221,6 +228,10 @@ export async function updateClientSettings(req, res) {
       preferred_experience,
       comfort_preferences,
     };
+    // Only the fields that were sent are saved; anything left out keeps its stored value.
+    Object.keys(profileData).forEach((key) => {
+      if (profileData[key] === undefined) delete profileData[key];
+    });
 
     const sanitizedProfileData = sanitizeClientProfileData(profileData);
 

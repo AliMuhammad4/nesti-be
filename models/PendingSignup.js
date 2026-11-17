@@ -24,6 +24,8 @@ const pendingSignupSchema = new mongoose.Schema(
     /** Codes sent (signup + resends) in the current hour window, and when that window began. */
     codes_in_window: { type: Number, default: 0 },
     window_started_at: { type: Date, default: null },
+    /** When the current details were submitted (first signup or a replacement); resends keep it. */
+    started_at: { type: Date, default: null },
     /** Removed by Mongo once this passes. */
     expires_at: { type: Date, required: true },
   },

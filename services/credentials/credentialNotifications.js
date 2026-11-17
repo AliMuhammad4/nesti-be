@@ -6,6 +6,23 @@ import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
 import { FREE_TRIAL_DAYS } from '../billing/subscriptionLocalService.js';
 import { displayNameOrFallback } from '../../utils/placeholderName.js';
+import { CREDENTIAL_DOC_LABELS } from '../../constants/credentialDocuments.js';
+import { renderCredentialsApprovedEmail, renderCredentialsNeedUpdatesEmail } from '../email/userLifecycleEmails.js';
+import { BILLING_PLANS } from '../billing/plans.js';
+import { FEATURES, hasFeature } from '../billing/entitlements.js';
+import PublicProfile from '../../models/PublicProfile.js';
+import { supportEmail } from '../../constants/support.js';
+import { listStorefrontTemplateTiers } from '../billing/storefrontTemplates/tiers.js';
+
+/** Web Page templates offered to this role: total and free (from the template catalog). */
+function templateCountsForRole(role) {
+  try {
+    const list = (listStorefrontTemplateTiers() || []).filter((t) => t?.professional_type === role);
+    return { total: list.length, free: list.filter((t) => t?.tier === 'free').length };
+  } catch {
+    return null;
+  }
+}
 
 function appBaseUrl() {
   return String(process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
@@ -34,7 +51,7 @@ async function persistAndEmit(userId, payload) {
 }
 
 /** Returns { email_status, provider_id?, error? } for audit meta. */
-async function safeEmail({ to, subject, html }) {
+async function safeEmail({ to, subject, html, text = '', replyTo = '' }) {
   const email = String(to || '').trim();
   if (!email) {
     logger.warn('Credential notification email skipped: missing recipient');
@@ -44,8 +61,9 @@ async function safeEmail({ to, subject, html }) {
     const result = await sendEmail({
       email,
       subject,
-      message: String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+      message: String(text || '').trim() || String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
       htmlMessage: html,
+      ...(replyTo ? { replyTo } : {}),
     });
     if (result && result.success === false) {
       const error = result.error?.message || 'unknown';
@@ -134,10 +152,10 @@ export async function notifyAdminsCredentialSubmitted({ user, profile }) {
 
 export async function notifyProfessionalCredentialApproved({ user, subscription }) {
   const trialEnd = subscription?.trial_end
-    ? new Date(subscription.trial_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : `${FREE_TRIAL_DAYS} days`;
+    ? new Date(subscription.trial_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+    : '';
   const title = 'Credentials approved';
-  const body = `Your professional verification was approved. Your ${FREE_TRIAL_DAYS}-day free trial has started${trialEnd ? ` (ends ${trialEnd})` : ''}.`;
+  const body = `Your license and credentials were approved. Your ${FREE_TRIAL_DAYS}-day free trial has started${trialEnd ? ` (ends ${trialEnd})` : ''}.`;
   await persistAndEmit(user._id, {
     notification_type: 'credential_approved',
     title,
@@ -147,33 +165,56 @@ export async function notifyProfessionalCredentialApproved({ user, subscription 
   });
   let emailMeta = { email_status: 'skipped' };
   if (user.email) {
-    emailMeta = await safeEmail({
-      to: user.email,
-      subject: title,
-      html: `<p>${body}</p><p><a href="${appBaseUrl()}/dashboard">Open dashboard</a></p>`,
+    let publicUrl = '';
+    try {
+      const page = await PublicProfile.findOne({ user_id: user._id }).select('slug').lean();
+      if (page?.slug) publicUrl = `${appBaseUrl()}/p/${encodeURIComponent(page.slug)}`;
+    } catch {
+      /* the email still goes out without the page link */
+    }
+    const email = renderCredentialsApprovedEmail({
+      firstName: user.first_name,
+      role: user.role,
+      templates: templateCountsForRole(user.role),
+      trialDays: FREE_TRIAL_DAYS,
+      trialEnd: subscription?.trial_end || null,
+      trialStart: subscription?.trial_start || null,
+      planKey: subscription?.plan_key || 'basic',
+      status: subscription?.status || 'free_trial',
+      publicUrl,
+      features: {
+        chatbot: hasFeature(subscription, FEATURES.CHATBOT_BASIC),
+        assistant: hasFeature(subscription, FEATURES.ASSISTANT_PROFESSIONAL),
+        leads: hasFeature(subscription, FEATURES.LEADS_CAPTURE),
+        referrals: hasFeature(subscription, FEATURES.REFERRALS_MANUAL),
+        propertyMatches: hasFeature(subscription, FEATURES.LEADS_INSIGHTS_ADVANCED),
+        calendar: hasFeature(subscription, FEATURES.CALENDAR_INTEGRATION),
+        voice: hasFeature(subscription, FEATURES.VOICE_AGENT),
+      },
+      plans: Object.values(BILLING_PLANS),
     });
+    emailMeta = await safeEmail({ to: user.email, subject: email.subject, html: email.html, text: email.text, replyTo: supportEmail() });
   }
   return { email_meta: emailMeta };
 }
 
-export async function notifyProfessionalCredentialRejected({ user, reason }) {
+export async function notifyProfessionalCredentialRejected({ user, reason, documentTypes = [] }) {
   const title = 'Credentials need updates';
-  const body = `Your verification was rejected. Reason: ${reason}. Please update your documents in Settings → Verification and resubmit.`;
+  const fileLabels = [...new Set((documentTypes || []).map((type) => CREDENTIAL_DOC_LABELS[type] || String(type || '')))].filter(Boolean);
+  const filesText = fileLabels.length ? ` Upload again: ${fileLabels.join(', ')}.` : ' Upload your documents again.';
+  const body = `Your license and credentials need updates. Reviewer's note: ${reason || 'none'}.${filesText} Then resubmit from License & Credentials.`;
   await persistAndEmit(user._id, {
     notification_type: 'credential_rejected',
     title,
     body,
     severity: 'high',
     action: { type: 'open_url', url: '/settings?tab=verification' },
-    details: { reason },
+    details: { reason, ...(fileLabels.length ? { needs_update: fileLabels } : {}) },
   });
   let emailMeta = { email_status: 'skipped' };
   if (user.email) {
-    emailMeta = await safeEmail({
-      to: user.email,
-      subject: title,
-      html: `<p>${body}</p><p><a href="${appBaseUrl()}/settings?tab=verification">Update verification</a></p>`,
-    });
+    const email = renderCredentialsNeedUpdatesEmail({ firstName: user.first_name, reason, fileLabels, role: user.role });
+    emailMeta = await safeEmail({ to: user.email, subject: email.subject, html: email.html, text: email.text, replyTo: supportEmail() });
   }
   return { email_meta: emailMeta };
 }

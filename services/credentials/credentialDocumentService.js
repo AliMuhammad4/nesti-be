@@ -1,4 +1,8 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
+import { isProfessionalRole } from '../../constants/roles.js';
+import { contentDispositionHeader, safeDownloadName } from '../../utils/fileResponse.js';
+import { detectFileType } from '../../utils/fileSignature.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import {
   CREDENTIAL_DOC_TYPE_VALUES,
@@ -12,7 +16,7 @@ import {
   isR2Configured,
   uploadBufferToR2,
 } from '../media/r2Client.js';
-import { pushCredentialEvent } from './credentialEvents.js';
+import { credentialEventPushOp } from './credentialEvents.js';
 import { serializeCredentialStateAsync } from './credentialSerialize.js';
 import logger from '../../utils/logger.js';
 
@@ -30,7 +34,7 @@ export function ownedCredentialObjectKey(userId, doc) {
   return key;
 }
 
-async function removeStoredCredentialObject(userId, doc) {
+export async function removeStoredCredentialObject(userId, doc) {
   const key = ownedCredentialObjectKey(userId, doc);
   if (!key) return;
   try {
@@ -40,8 +44,148 @@ async function removeStoredCredentialObject(userId, doc) {
   }
 }
 
+const CREDENTIAL_FILE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+
+// The file itself decides its type; the browser-sent type and name are not trusted.
+export function detectCredentialFileType(buffer) {
+  const detected = detectFileType(buffer);
+  return detected && CREDENTIAL_FILE_TYPES.has(detected.mime) ? detected : null;
+}
+
+const notProfessionalResponse = () => ({
+  status: 403,
+  body: { success: false, message: 'Verification is only for professional accounts.' },
+});
+
+/*
+ * Document list updates use plain $set / $push / $pull operators. Mongoose 9 rejects array
+ * ("pipeline") updates unless `updatePipeline: true` is passed, and a pipeline would also read
+ * any user text that starts with "$" (a file name, for example) as a field path.
+ * Each update returns the profile as it was before, so the caller can delete replaced files.
+ */
+
+/** Adds the document, or replaces the existing one of the same type, in one atomic update. */
+async function putCredentialDocument(profileId, { statusFilter, newDoc, event, preferReplace }) {
+  const base = { _id: profileId, credential_status: statusFilter };
+  const eventPush = credentialEventPushOp(event);
+  const add = () =>
+    ProfessionalProfile.findOneAndUpdate(
+      { ...base, 'credential_documents.type': { $ne: newDoc.type } },
+      { $push: { credential_documents: newDoc, credential_events: eventPush } },
+      { returnDocument: 'before' },
+    );
+  const replace = () =>
+    ProfessionalProfile.findOneAndUpdate(
+      { ...base, 'credential_documents.type': newDoc.type },
+      {
+        $set: { 'credential_documents.$[same]': newDoc },
+        $push: { credential_events: eventPush },
+      },
+      { returnDocument: 'before', arrayFilters: [{ 'same.type': newDoc.type }] },
+    );
+  // Try the likely case first; if another request changed the list meanwhile, try the other.
+  const [first, second] = preferReplace ? [replace, add] : [add, replace];
+  return (await first()) || (await second());
+}
+
+/** Drops one document by id. */
+function pullCredentialDocument(profileId, { statusFilter, docId, event }) {
+  return ProfessionalProfile.findOneAndUpdate(
+    { _id: profileId, credential_status: statusFilter, 'credential_documents._id': docId },
+    {
+      $pull: { credential_documents: { _id: docId } },
+      $push: { credential_events: credentialEventPushOp(event) },
+    },
+    { returnDocument: 'before' },
+  );
+}
+
+const docTime = (doc) => {
+  const uploaded = doc?.uploaded_at ? new Date(doc.uploaded_at).getTime() : NaN;
+  if (Number.isFinite(uploaded)) return uploaded;
+  try {
+    return new mongoose.Types.ObjectId(String(doc?._id)).getTimestamp().getTime();
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * Older profiles can hold two documents of the same type. Keeps the newest of each type and
+ * drops the rest (and their stored files). Only applies if the list is still exactly as read.
+ */
+export async function dropDuplicateCredentialDocuments(profile) {
+  const docs = profile?.credential_documents || [];
+  const newestByType = new Map();
+  for (const doc of docs) {
+    const type = String(doc?.type || '');
+    const kept = newestByType.get(type);
+    if (!kept || docTime(doc) > docTime(kept)) newestByType.set(type, doc);
+  }
+  const dropped = docs.filter((doc) => newestByType.get(String(doc?.type || '')) !== doc);
+  if (!dropped.length) return 0;
+  const result = await ProfessionalProfile.updateOne(
+    {
+      _id: profile._id,
+      credential_documents: { $size: docs.length },
+      'credential_documents._id': { $all: docs.map((doc) => doc._id) },
+    },
+    { $pull: { credential_documents: { _id: { $in: dropped.map((doc) => doc._id) } } } },
+  );
+  if (!result.modifiedCount) return 0;
+  await Promise.all(dropped.map((doc) => removeStoredCredentialObject(profile.user_id, doc)));
+  logger.info('Removed duplicate credential documents', { profileId: String(profile._id), count: dropped.length });
+  return dropped.length;
+}
+
+/** A first upload moves a not-started profile to "documents needed"; other statuses stay. */
+async function promoteToPendingDocs(profileId) {
+  await ProfessionalProfile.updateOne(
+    { _id: profileId, credential_status: { $in: [null, '', CREDENTIAL_STATUS.NOT_STARTED] } },
+    { $set: { credential_status: CREDENTIAL_STATUS.PENDING_DOCS } },
+  );
+}
+
+// Card previews ask for ?thumb=1: a small WebP instead of the full phone photo (often 3-8 MB).
+const THUMB_MAX_PX = 640;
+const THUMB_CACHE_MAX = 200;
+const thumbCache = new Map();
+
+function thumbCacheKey(doc) {
+  const at = doc?.uploaded_at ? new Date(doc.uploaded_at).getTime() : 0;
+  return `${String(doc?._id || '')}|${at}|${String(doc?.file_key || '')}`;
+}
+
+function isImageDocument(doc) {
+  const mime = String(doc?.mime_type || '').toLowerCase();
+  return mime.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(String(doc?.file_name || ''));
+}
+
+async function makeThumbnail(buffer) {
+  const sharp = (await import('sharp')).default;
+  return sharp(buffer, { failOn: 'none', limitInputPixels: 80_000_000 })
+    .rotate()
+    .resize({ width: THUMB_MAX_PX, height: THUMB_MAX_PX, fit: 'inside', withoutEnlargement: true })
+    .webp({ quality: 72 })
+    .toBuffer();
+}
+
+function sendThumbnail(doc, buffer) {
+  return {
+    status: 200,
+    file: {
+      buffer,
+      contentType: 'image/webp',
+      fileName: `${safeDownloadName(doc.file_name, 'preview').replace(/\.[^.]+$/, '')}-preview.webp`,
+      contentLength: buffer.length,
+      // The URL carries the upload time, so a replaced file gets a new URL.
+      cacheControl: 'private, max-age=86400',
+    },
+  };
+}
+
 function sendCredentialFile(doc, object) {
-  const fileName = String(doc.file_name || `${doc.type || 'document'}.bin`).replace(/"/g, '');
+  const fileName = safeDownloadName(doc.file_name, `${doc.type || 'document'}`);
   const contentType =
     doc.mime_type
     || object.contentType
@@ -57,7 +201,7 @@ function sendCredentialFile(doc, object) {
   };
 }
 
-export async function loadCredentialDocumentFile({ userId, docId }) {
+export async function loadCredentialDocumentFile({ userId, docId, thumb = false }) {
   if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(docId)) {
     return { status: 400, body: { success: false, message: 'Invalid id' } };
   }
@@ -81,22 +225,45 @@ export async function loadCredentialDocumentFile({ userId, docId }) {
     return { status: 404, body: { success: false, message: 'Document storage key not found' } };
   }
 
+  const wantThumb = Boolean(thumb) && isImageDocument(doc);
+  const cacheKey = wantThumb ? thumbCacheKey(doc) : '';
+  if (wantThumb && thumbCache.has(cacheKey)) {
+    const cached = thumbCache.get(cacheKey);
+    thumbCache.delete(cacheKey);
+    thumbCache.set(cacheKey, cached);
+    return sendThumbnail(doc, cached);
+  }
+
   try {
     const object = await getObjectFromR2(objectKey);
+    if (wantThumb) {
+      try {
+        const small = await makeThumbnail(object.buffer);
+        thumbCache.set(cacheKey, small);
+        while (thumbCache.size > THUMB_CACHE_MAX) thumbCache.delete(thumbCache.keys().next().value);
+        return sendThumbnail(doc, small);
+      } catch (error) {
+        // An image sharp can't read still shows, just at full size.
+        logger.warn('Credential thumbnail failed; sending original', { error: error?.message, docId: String(docId) });
+      }
+    }
     return sendCredentialFile(doc, object);
   } catch (error) {
+    logger.warn('Credential document read failed', { error: error?.message, docId: String(docId) });
     return {
       status: 502,
-      body: { success: false, message: error?.message || 'Failed to load document from storage' },
+      body: { success: false, message: 'Could not load this document. Please try again.' },
     };
   }
 }
 
-export async function getMyCredentialDocumentService(user, docId) {
-  return loadCredentialDocumentFile({ userId: user._id, docId });
+export async function getMyCredentialDocumentService(user, docId, { thumb = false } = {}) {
+  if (!isProfessionalRole(user?.role)) return notProfessionalResponse();
+  return loadCredentialDocumentFile({ userId: user._id, docId, thumb });
 }
 
 export async function uploadCredentialDocumentService(user, { type, file }) {
+  if (!isProfessionalRole(user?.role)) return notProfessionalResponse();
   if (!isR2Configured()) {
     return {
       status: 503,
@@ -109,6 +276,13 @@ export async function uploadCredentialDocumentService(user, { type, file }) {
   }
   if (!file?.buffer) {
     return { status: 400, body: { success: false, message: 'Missing file (field name: file)' } };
+  }
+  const detected = detectCredentialFileType(file.buffer);
+  if (!detected) {
+    return {
+      status: 400,
+      body: { success: false, message: 'This file is not a real JPEG, PNG, WEBP or PDF. Please upload the original file.' },
+    };
   }
 
   const profile = await ProfessionalProfile.findOne({ user_id: user._id });
@@ -125,67 +299,81 @@ export async function uploadCredentialDocumentService(user, { type, file }) {
     return { status: 400, body: { success: false, message: 'Credentials are already approved.' } };
   }
 
-  const previous = (profile.credential_documents || []).filter(
-    (doc) => String(doc.type) === docType,
-  );
-
-  const uploadVersion = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const objectKey = `${credentialKeyPrefix(user._id)}${docType}-${uploadVersion}`;
-  const isPdf = String(file.mimetype || '').toLowerCase().includes('pdf')
-    || /\.pdf$/i.test(String(file.originalname || ''));
+  // Unguessable key: ID documents must not be reachable by guessing a storage address.
+  const objectKey = `${credentialKeyPrefix(user._id)}${docType}-${crypto.randomBytes(16).toString('hex')}.${detected.ext}`;
+  const fileName = safeDownloadName(file.originalname, `${docType}.${detected.ext}`);
   const result = await uploadBufferToR2(file.buffer, {
     key: objectKey,
-    mimeType: file.mimetype || (isPdf ? 'application/pdf' : undefined),
-    cacheControl: 'private, max-age=3600',
-    contentDisposition: isPdf
-      ? `inline; filename="${String(file.originalname || `${docType}.pdf`).replace(/"/g, '')}"`
-      : undefined,
+    mimeType: detected.mime,
+    cacheControl: 'private, no-store',
+    contentDisposition: contentDispositionHeader('inline', fileName),
   });
+  const newDocKey = result.key || objectKey;
 
-  profile.credential_documents = (profile.credential_documents || []).filter(
-    (doc) => String(doc.type) !== docType,
-  );
-  profile.credential_documents.push({
+  const newDoc = {
+    _id: new mongoose.Types.ObjectId(),
     type: docType,
-    file_url: result.secure_url || result.url,
-    file_key: result.key || objectKey,
-    file_name: file.originalname || `${docType}.bin`,
-    mime_type: file.mimetype || '',
+    file_url: result.secure_url || result.url || newDocKey,
+    file_key: newDocKey,
+    file_name: fileName,
+    mime_type: detected.mime,
     uploaded_at: new Date(),
     status: 'uploaded',
-  });
+  };
 
-  // A rejected profile stays rejected until it is resubmitted, so the professional
-  // keeps seeing the reject reason while swapping files and the resubmission is
-  // still recorded as a resubmit rather than a first-time submit.
-  if (
-    !profile.credential_status
-    || profile.credential_status === CREDENTIAL_STATUS.NOT_STARTED
-  ) {
-    profile.credential_status = CREDENTIAL_STATUS.PENDING_DOCS;
+  const sameType = (profile.credential_documents || []).filter((doc) => String(doc.type) === docType);
+  if (sameType.length > 1) await dropDuplicateCredentialDocuments(profile);
+
+  let before;
+  try {
+    before = await putCredentialDocument(profile._id, {
+      statusFilter: { $nin: [CREDENTIAL_STATUS.PENDING_REVIEW, CREDENTIAL_STATUS.APPROVED] },
+      newDoc,
+      preferReplace: (profile.credential_documents || []).some((doc) => String(doc.type) === docType),
+      event: {
+        type: CREDENTIAL_EVENT_TYPE.DOC_UPLOADED,
+        actor_user_id: user._id,
+        actor_role: user.role,
+        meta: { doc_type: docType, file_name: fileName },
+      },
+    });
+    if (before) await promoteToPendingDocs(profile._id);
+  } catch (error) {
+    await removeStoredCredentialObject(user._id, { file_key: newDocKey });
+    throw error;
   }
 
-  pushCredentialEvent(profile, {
-    type: CREDENTIAL_EVENT_TYPE.DOC_UPLOADED,
-    actor_user_id: user._id,
-    actor_role: user.role,
-    meta: { doc_type: docType, file_name: file.originalname || '' },
-  });
+  if (!before) {
+    await removeStoredCredentialObject(user._id, { file_key: newDocKey });
+    const current = await ProfessionalProfile.findById(profile._id).select('credential_status');
+    if (current?.credential_status === CREDENTIAL_STATUS.PENDING_REVIEW) {
+      return {
+        status: 400,
+        body: { success: false, message: 'Credentials are under review. Wait for a decision before uploading.' },
+      };
+    }
+    if (current?.credential_status === CREDENTIAL_STATUS.APPROVED) {
+      return { status: 400, body: { success: false, message: 'Credentials are already approved.' } };
+    }
+    return { status: 409, body: { success: false, message: 'Your documents changed at the same time. Please try again.' } };
+  }
 
-  await profile.save();
-  await Promise.all(previous.map((doc) => removeStoredCredentialObject(user._id, doc)));
+  const replaced = (before.credential_documents || []).filter((doc) => String(doc.type) === docType);
+  await Promise.all(replaced.map((doc) => removeStoredCredentialObject(user._id, doc)));
 
+  const saved = await ProfessionalProfile.findById(profile._id);
   return {
     status: 200,
     body: {
       success: true,
       message: 'Document uploaded',
-      ...(await serializeCredentialStateAsync(profile, user.role)),
+      ...(await serializeCredentialStateAsync(saved, user.role)),
     },
   };
 }
 
 export async function deleteCredentialDocumentService(user, docId) {
+  if (!isProfessionalRole(user?.role)) return notProfessionalResponse();
   const profile = await ProfessionalProfile.findOne({ user_id: user._id });
   if (!profile) {
     return { status: 404, body: { success: false, message: 'Professional profile not found' } };
@@ -197,25 +385,39 @@ export async function deleteCredentialDocumentService(user, docId) {
     };
   }
 
-  const documents = profile.credential_documents || [];
-  const removed = documents.find((doc) => String(doc._id) === String(docId));
+  const removed = (profile.credential_documents || []).find((doc) => String(doc._id) === String(docId));
   if (!removed) {
     return { status: 404, body: { success: false, message: 'Document not found' } };
   }
-  profile.credential_documents = documents.filter((doc) => String(doc._id) !== String(docId));
 
-  pushCredentialEvent(profile, {
-    type: CREDENTIAL_EVENT_TYPE.DOC_DELETED,
-    actor_user_id: user._id,
-    actor_role: user.role,
-    meta: { doc_type: removed?.type || null, doc_id: String(docId) },
+  const before = await pullCredentialDocument(profile._id, {
+    statusFilter: { $nin: [CREDENTIAL_STATUS.PENDING_REVIEW, CREDENTIAL_STATUS.APPROVED] },
+    docId: removed._id,
+    event: {
+      type: CREDENTIAL_EVENT_TYPE.DOC_DELETED,
+      actor_user_id: user._id,
+      actor_role: user.role,
+      meta: { doc_type: removed?.type || null, doc_id: String(docId) },
+    },
   });
+  if (!before) {
+    const current = await ProfessionalProfile.findById(profile._id).select('credential_status').lean();
+    if (![CREDENTIAL_STATUS.PENDING_REVIEW, CREDENTIAL_STATUS.APPROVED].includes(current?.credential_status)) {
+      // Removed by another request (another tab) in the meantime.
+      return { status: 404, body: { success: false, message: 'Document not found' } };
+    }
+    return {
+      status: 400,
+      body: { success: false, message: 'Documents cannot be deleted in the current verification state.' },
+    };
+  }
 
-  await profile.save();
-  await removeStoredCredentialObject(user._id, removed);
+  const deleted = (before.credential_documents || []).find((doc) => String(doc._id) === String(docId));
+  if (deleted) await removeStoredCredentialObject(user._id, deleted);
 
+  const saved = await ProfessionalProfile.findById(profile._id);
   return {
     status: 200,
-    body: { success: true, ...(await serializeCredentialStateAsync(profile, user.role)) },
+    body: { success: true, ...(await serializeCredentialStateAsync(saved, user.role)) },
   };
 }

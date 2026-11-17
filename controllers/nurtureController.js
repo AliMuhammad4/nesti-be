@@ -546,6 +546,8 @@ export async function postNurtureSend(req, res, next) {
       subject,
       message: withOptOut.message,
       htmlMessage: withOptOut.htmlMessage || htmlForSend,
+      // Sent on the professional's behalf: replies go to them, not the unmonitored From inbox.
+      ...(req.user?.email ? { replyTo: String(req.user.email).trim() } : {}),
     });
 
     const baseLog = nurtureLogPayload({

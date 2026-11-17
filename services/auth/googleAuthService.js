@@ -1,4 +1,5 @@
 import User from '../../models/User.js';
+import { sendWelcomeEmail } from '../email/userLifecycleEmails.js';
 import PendingSignup from '../../models/PendingSignup.js';
 import { USER_ROLE, isSignupRole } from '../../constants/roles.js';
 import {
@@ -80,19 +81,6 @@ export const googleSignupService = async ({ token, token_type, role, phone, invi
   if (isDisposableEmail(googleProfile.email)) {
     return disposableEmailErrorResponse();
   }
-  const waitingSignup = await PendingSignup.findOne({ email: googleProfile.email })
-    .select('expires_at')
-    .lean();
-  if (waitingSignup && new Date(waitingSignup.expires_at) > new Date()) {
-    return {
-      status: 409,
-      body: {
-        success: false,
-        code: 'SIGNUP_ALREADY_PENDING',
-        message: 'This email is already waiting for a verification code. Finish that code, or wait until it expires, before continuing with Google.',
-      },
-    };
-  }
   if (
     (await phoneBelongsToAnotherUser(normalizedPhone))
     || (await phoneHeldByOtherPending(normalizedPhone, googleProfile.email))
@@ -134,6 +122,12 @@ export const googleSignupService = async ({ token, token_type, role, phone, invi
     throw error;
   }
 
+  // Sent in the background; a failed send never blocks sign-up or verification.
+  void sendWelcomeEmail(user);
+
+  // Google has proven the inbox is theirs, so an unfinished email signup for it (possibly
+  // started by someone else) is dropped instead of blocking them.
+  await PendingSignup.deleteOne({ email: user.email });
   await bootstrapProfessionalProfile(user);
   finalizeInviteForUser({
     invite_token,

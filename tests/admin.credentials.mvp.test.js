@@ -145,16 +145,23 @@ test('approveCredentialsService marks docs accepted and starts once', async () =
     credential_status: CREDENTIAL_STATUS.APPROVED,
     credential_documents: [{ type: 'selfie', status: 'uploaded' }],
     credential_events: [],
-    save: async function save() {
-      this.credential_documents.forEach((d) => {
-        d.status = 'accepted';
-      });
-      return this;
-    },
   };
 
   try {
-    bag.stub(ProfessionalProfile, 'findOneAndUpdate', async () => profileDoc);
+    bag.stub(ProfessionalProfile, 'findOne', () => ({
+      select: () => ({
+        lean: async () => ({ credential_documents: [{ _id: 'doc1', type: 'selfie' }] }),
+      }),
+    }));
+    // File statuses change in the same atomic update as the decision (no whole-profile save).
+    bag.stub(ProfessionalProfile, 'findOneAndUpdate', async (_filter, update) => {
+      if (update?.$set?.['credential_documents.$[].status'] === 'accepted') {
+        profileDoc.credential_documents.forEach((d) => {
+          d.status = 'accepted';
+        });
+      }
+      return profileDoc;
+    });
     bag.stub(ProfessionalProfile, 'updateOne', async () => ({ acknowledged: true }));
     bag.stub(User, 'findById', async () => ({
       _id: '507f1f77bcf86cd799439011',

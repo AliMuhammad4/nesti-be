@@ -8,14 +8,20 @@ function text(value) {
   return String(value || '').trim();
 }
 
+// A blank variable (KEY=) counts as unset; Number('') is 0, which would turn the filter off.
+function envNumber(name) {
+  const raw = String(process.env[name] ?? '').trim();
+  return raw ? Number(raw) : NaN;
+}
+
 export function readTranscriptionMinConfidence() {
-  const parsed = Number(process.env.CALL_TRANSCRIPTION_MIN_CONFIDENCE);
+  const parsed = envNumber('CALL_TRANSCRIPTION_MIN_CONFIDENCE');
   if (!Number.isFinite(parsed)) return 0.55;
   return Math.min(1, Math.max(0, parsed));
 }
 
 export function readTranscriptionVadOptions() {
-  const threshold = Number(process.env.CALL_TRANSCRIPTION_VAD_THRESHOLD);
+  const threshold = envNumber('CALL_TRANSCRIPTION_VAD_THRESHOLD');
   const silenceMs = Number.parseInt(process.env.CALL_TRANSCRIPTION_VAD_SILENCE_MS, 10);
   return {
     threshold: Number.isFinite(threshold)

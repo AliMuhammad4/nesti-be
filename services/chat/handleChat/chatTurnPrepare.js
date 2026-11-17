@@ -37,6 +37,7 @@ import {
 } from '../../professionalAssistant/professionalAssistantService.js';
 import { nestiLandingFlow } from '../nestiLanding/nestiLandingFlow.js';
 import { attachDocumentsToTurn } from '../documents/chatDocumentService.js';
+import { isEmbedPaused } from '../embedSettings.js';
 import { chatAnsweredQuestionIds, openQualificationQuestionIds } from '../../professionalAssistant/qualificationProgress.js';
 import { clientTypeForForm, settingForClientType } from '../../professionalAssistant/assistantSettings.js';
 import { propertyMatchesEnabledForPlan, readSavedPlan } from './chatPlan.js';
@@ -110,9 +111,9 @@ export async function prepareProfessionalChatTurn(input) {
     };
   }
   if (!landingMode && !previewForOwner) {
-    // A suspended professional's widget does not take new chats or leads.
+    // A suspended professional's widget, or a paused widget, does not take new chats or leads.
     const owner = await User.findById(userId).select('is_active').lean();
-    if (owner && owner.is_active === false) {
+    if ((owner && owner.is_active === false) || isEmbedPaused(embed)) {
       return {
         response: {
           status: 200,

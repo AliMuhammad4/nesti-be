@@ -108,6 +108,8 @@ export const adminPatchReferralSchema = Joi.object({
 
 export const adminRejectVerificationSchema = Joi.object({
   reason: Joi.string().trim().min(3).max(500).required(),
+  /** Files that need a new upload; leave out to ask for every file again. */
+  document_ids: Joi.array().items(objectId).max(20).unique().default([]),
 });
 
 /** Admin-as-professional: acting user may be sent in body or query. */

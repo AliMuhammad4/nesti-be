@@ -10,7 +10,7 @@ import { startCallMinutesReconciliation } from './services/proChat/callMinutesSe
 import { startRecordingIngestion } from './services/proChat/recordingIngestionService.js';
 import { ensureTranscriptionWorkerRunning, ensureRaviWorkerRunning } from './services/proChat/callTranscriptionDispatchService.js';
 import { assertJwtSecretConfigured } from './utils/jwtSecret.js';
-import { grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
+import { dedupeCredentialDocuments, grandfatherExistingCredentials } from './services/credentials/credentialMigration.js';
 import { resumePendingAdminLeadFollowUps } from './services/admin/adminLeadGuideEmailService.js';
 import { ensureDefaultAdmin } from './scripts/ensureDefaultAdmin.js';
 import './models/index.js';
@@ -35,6 +35,10 @@ async function startServer() {
   } catch (error) {
     logger.warn('Credential grandfather skipped', { message: error?.message });
   }
+  // Runs in the background so a large collection never delays startup.
+  void dedupeCredentialDocuments().catch((error) => {
+    logger.warn('Credential duplicate cleanup skipped', { message: error?.message });
+  });
   await initWorkspaceSocket(httpServer);
   httpServer.listen(PORT, () => {
     logger.info(`Server running on port ${PORT} (HTTP + WebSocket)`);

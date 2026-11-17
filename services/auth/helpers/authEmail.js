@@ -1,6 +1,6 @@
 import sendEmail, { isResendConfigured } from '../../../utils/sendEmail.js';
 import logger from '../../../utils/logger.js';
-import { EMAIL_BRAND, renderBrandedEmailShell } from '../../email/emailTheme.js';
+import { EMAIL_BRAND, EMAIL_GREEN_CTA_STYLE, renderBrandedEmailShell } from '../../email/emailTheme.js';
 import { isPlaceholderName } from '../../../utils/placeholderName.js';
 
 const escapeHtml = (value) => String(value ?? '')
@@ -58,14 +58,85 @@ export const sendSignupOtpEmail = async ({ email, first_name, last_name, otp }) 
   return true;
 };
 
+function frontendOrigin() {
+  const raw = String(process.env.FRONTEND_URL || process.env.CLIENT_URL || '').trim().replace(/\/+$/, '');
+  return /^https?:\/\//i.test(raw) ? raw : '';
+}
+
+/** Account-security notice: a title, short paragraphs and an optional button. */
+function brandNoticeEmailHtml({ title, paragraphs = [], ctaLabel = '', ctaUrl = '' }) {
+  const body = paragraphs
+    .map((text) => `<p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:#4A5568;">${escapeHtml(text)}</p>`)
+    .join('');
+  const cta = ctaLabel && ctaUrl
+    ? `<p style="margin:6px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="${EMAIL_GREEN_CTA_STYLE}">${escapeHtml(ctaLabel)}</a></p>`
+    : '';
+  return renderBrandedEmailShell({
+    kicker: 'Nesti AI',
+    title: 'Account security',
+    innerHtml: `<h1 style="margin:0 0 12px;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:22px;line-height:1.3;color:#2D3748;">${escapeHtml(title)}</h1>${body}${cta}`,
+    maxWidth: 560,
+  });
+}
+
+/** Sends a notice in the background; skipped (logged) when email isn't set up outside production. */
+function queueNoticeEmail({ email, subject, message, htmlMessage, label }) {
+  if (process.env.NODE_ENV !== 'production' && !isResendConfigured()) {
+    logger.warn(`Email is not configured; skipped ${label} email to ${email}`);
+    return;
+  }
+  sendEmail({ email, subject, message, htmlMessage })
+    .then((result) => {
+      if (!result?.success) logger.error(`${label} email failed to send to ${email}`);
+    })
+    .catch((error) => logger.error(`${label} email failed to send to ${email}: ${error?.message || error}`));
+}
+
+/** Forgot password on a Google sign-in account: there is no password, so point to Google. */
+export const queueGoogleSignInReminderEmail = (email) => {
+  const origin = frontendOrigin();
+  const loginUrl = origin ? `${origin}/log-in` : '';
+  const paragraphs = [
+    'Someone asked to reset the password for this email address.',
+    'This account signs in with Google, so it has no Nesti AI password to reset. Use "Continue with Google" on the login page instead.',
+    'If you did not ask for this, you can ignore this email.',
+  ];
+  queueNoticeEmail({
+    email,
+    label: 'Google sign-in reminder',
+    subject: 'Nesti AI - Sign in with Google',
+    message: `${paragraphs.join(' ')}${loginUrl ? ` Log in: ${loginUrl}` : ''}`,
+    htmlMessage: brandNoticeEmailHtml({ title: 'Sign in with Google', paragraphs, ctaLabel: 'Go to login', ctaUrl: loginUrl }),
+  });
+};
+
+/** Sent to the account owner after a password reset or change, so an unexpected change is noticed. */
+export const queuePasswordChangedEmail = (email, { via = 'change', at = new Date() } = {}) => {
+  const origin = frontendOrigin();
+  const resetUrl = origin ? `${origin}/forgot-password` : '';
+  const when = `${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  const paragraphs = [
+    `The password for your Nesti AI account (${email}) was ${via === 'reset' ? 'reset with an emailed code' : 'changed from account settings'} on ${when}.`,
+    'Other devices that were signed in have been signed out.',
+    'If you made this change, no action is needed. If you did not, reset your password right away and contact support.',
+  ];
+  queueNoticeEmail({
+    email,
+    label: 'Password changed notice',
+    subject: 'Nesti AI - Your password was changed',
+    message: `${paragraphs.join(' ')}${resetUrl ? ` Reset your password: ${resetUrl}` : ''}`,
+    htmlMessage: brandNoticeEmailHtml({ title: 'Your password was changed', paragraphs, ctaLabel: 'Reset password', ctaUrl: resetUrl }),
+  });
+};
+
 export const queuePasswordResetEmail = (email, otp) => {
   sendEmail({
     email,
-    subject: 'Nesti AI - Password Reset OTP',
-    message: `You requested a password reset. Your OTP is: ${otp}. It will expire in 10 minutes.`,
+    subject: 'Nesti AI - Password Reset Code',
+    message: `You requested a password reset. Your code is: ${otp}. It will expire in 10 minutes.`,
     htmlMessage: brandOtpEmailHtml({
       title: 'Password reset request',
-      subtitle: 'Use this OTP to continue resetting your password.',
+      subtitle: 'Use this code to continue resetting your password.',
       otp,
       footerNote: 'If you did not request this, you can safely ignore this email.',
     }),

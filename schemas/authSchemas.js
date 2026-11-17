@@ -2,6 +2,8 @@ import { Joi } from './common.js';
 import { SIGNUP_ROLE_VALUES } from '../constants/roles.js';
 import { PASSWORD_POLICY_MESSAGE, isStrongPassword } from '../utils/passwordPolicy.js';
 import { PHONE_INVALID_MESSAGE, normalizePhoneE164 } from '../utils/phone.js';
+import { DISPOSABLE_EMAIL_MESSAGE, isDisposableEmail } from '../services/auth/disposableEmailGuard.js';
+import { PERSON_NAME_MAX, PERSON_NAME_MESSAGE, PERSON_NAME_PATTERN } from '../utils/personName.js';
 
 const strongPassword = Joi.string()
   .max(128)
@@ -17,16 +19,21 @@ const mobilePhone = Joi.string()
 
 const emailField = Joi.string().trim().lowercase().email();
 
+/** New accounts only: a disposable address is reported as an email error, like a bad format. */
+const signupEmailField = emailField
+  .messages({ 'string.email': 'Please enter a valid email address' })
+  .custom((value, helpers) => (isDisposableEmail(value) ? helpers.message(DISPOSABLE_EMAIL_MESSAGE) : value));
+
 const personName = Joi.string()
   .trim()
-  .max(60)
-  .pattern(/^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u)
+  .max(PERSON_NAME_MAX)
+  .pattern(PERSON_NAME_PATTERN)
   .allow('')
   .optional()
-  .messages({ 'string.pattern.base': 'Names can only use letters, spaces, apostrophes, hyphens and periods' });
+  .messages({ 'string.pattern.base': PERSON_NAME_MESSAGE });
 
 export const signupSchema = Joi.object({
-  email: emailField.required(),
+  email: signupEmailField.required(),
   password: strongPassword.required(),
   first_name: personName,
   last_name: personName,

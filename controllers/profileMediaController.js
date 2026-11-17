@@ -1,6 +1,7 @@
 import User from '../models/User.js';
 import { isR2Configured, uploadBufferToR2 } from '../services/media/r2Client.js';
 import logger from '../utils/logger.js';
+import { detectFileType } from '../utils/fileSignature.js';
 
 const KINDS = new Set(['profile', 'cover', 'logo', 'gallery']);
 
@@ -38,6 +39,11 @@ export async function uploadProfileImageForUser({ userId, file, kind: rawKind, s
     };
   }
 
+  const detected = detectFileType(file.buffer);
+  if (!detected || !detected.mime.startsWith('image/')) {
+    return { status: 400, body: { success: false, message: 'Only JPEG, PNG, WEBP, or GIF images are allowed.' } };
+  }
+
   const scope = String(rawScope || '').trim().toLowerCase();
   const storefrontOnly = scope === 'storefront';
   const targetUserId = String(userId);
@@ -49,11 +55,15 @@ export async function uploadProfileImageForUser({ userId, file, kind: rawKind, s
     : `nesti/users/${targetUserId}/${kind}`;
   const result = await uploadBufferToR2(file.buffer, {
     key: objectKey,
-    mimeType: file.mimetype,
+    mimeType: detected.mime,
     cacheControl: 'public, max-age=3600',
   });
 
-  const secureUrl = result.secure_url;
+  // The account photo keeps one storage key, so the link changes per upload; otherwise
+  // browsers keep showing the old photo for up to an hour.
+  const secureUrl = result.secure_url && !storefrontOnly
+    ? `${result.secure_url}?v=${uploadVersion}`
+    : result.secure_url;
   if (!secureUrl) {
     return { status: 502, body: { success: false, message: 'Upload failed: no URL returned.' } };
   }

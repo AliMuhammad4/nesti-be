@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { sendWelcomeEmail } from '../email/userLifecycleEmails.js';
 import bcrypt from 'bcryptjs';
 import User from '../../models/User.js';
 import PendingSignup from '../../models/PendingSignup.js';
@@ -37,7 +38,12 @@ import {
 
 import { sendSignupOtpEmail } from './helpers/authEmail.js';
 import { isGoogleAuthUser } from './helpers/googleAuth.js';
-import { phoneBelongsToAnotherUser, phoneHeldByOtherPending } from './helpers/phoneChecks.js';
+import {
+  heldSignupFilter,
+  phoneBelongsToAnotherUser,
+  phoneHeldByOtherPending,
+  signupIsHeld,
+} from './helpers/phoneChecks.js';
 import { loadPendingSignupFromToken } from './helpers/pendingSignupLookup.js';
 import {
   signupNames,
@@ -72,11 +78,12 @@ export const signupService = async (payload) => {
   const firstName = String(first_name || '').trim();
   const lastName = String(last_name || '').trim();
 
+  // The email is checked first, so an email problem is never hidden behind another field's error.
+  if (normalizedEmail && isDisposableEmail(normalizedEmail)) {
+    return disposableEmailErrorResponse();
+  }
   if (!normalizedEmail || !password || !phone) {
     return { status: 400, body: { success: false, message: 'Please provide all required fields' } };
-  }
-  if (isDisposableEmail(normalizedEmail)) {
-    return disposableEmailErrorResponse();
   }
 
   const existingUser = await User.findOne({ email: normalizedEmail }).select('_id role auth_provider is_verified').lean();
@@ -106,8 +113,9 @@ export const signupService = async (payload) => {
   const now = new Date();
   const existingPending = await PendingSignup.findOne({ email: normalizedEmail }).lean();
   const pendingStillOpen = Boolean(existingPending && new Date(existingPending.expires_at) > now);
-  const codeStillValid = pendingStillOpen && new Date(existingPending.otp_expires_at) > now;
-  if (codeStillValid) {
+  // The person who signed up keeps the email while their code is live, but only for a limited
+  // time (SIGNUP_HOLD_MS); after that a new signup may replace it even if codes were resent.
+  if (pendingStillOpen && signupIsHeld(existingPending, now)) {
     return {
       status: 400,
       body: {
@@ -135,16 +143,15 @@ export const signupService = async (payload) => {
     return { status: 400, body: { success: false, code: 'PHONE_TAKEN', message: PHONE_TAKEN_MESSAGE } };
   }
 
-  // The code has expired, but the signup row is still here. A new signup may replace it.
-  // The hourly code limit carries over, so this does not start the budget again.
+  // The waiting signup is no longer held, so a new signup may replace it. Each replacement
+  // starts a new hold, so replacements can't come faster than one per hold window; the resend
+  // wait and hourly code limit (which an outsider could use up) don't block it. Counts carry
+  // over, and the wrong-code limit still applies so codes can't be guessed by replacing.
   const replacing = pendingStillOpen;
   let window = null;
   if (replacing) {
     window = signupCodeWindow(existingPending, now);
     if (window.wrong >= MAX_TOTAL_SIGNUP_ATTEMPTS) return signupCodeLimitResponse(window.retryMinutes, 'wrong');
-    if (window.codes >= MAX_SIGNUP_CODES_PER_WINDOW) return signupCodeLimitResponse(window.retryMinutes);
-    const cooldown = resendCooldownResponse(existingPending, now);
-    if (cooldown) return cooldown;
   }
 
   const names = signupNames({ firstName, lastName });
@@ -160,6 +167,7 @@ export const signupService = async (payload) => {
     otp_hash: hashCode(signupCodeScope(normalizedEmail), otp),
     otp_expires_at: new Date(now.getTime() + OTP_TTL_MS),
     otp_attempts: 0,
+    started_at: now,
     expires_at: new Date(now.getTime() + PENDING_SIGNUP_TTL_MS),
   };
 
@@ -175,6 +183,7 @@ export const signupService = async (payload) => {
         otp_hash: existingPending.otp_hash,
         otp_expires_at: existingPending.otp_expires_at,
         otp_attempts: Number(existingPending.otp_attempts || 0),
+        started_at: existingPending.started_at || existingPending.createdAt || null,
         expires_at: existingPending.expires_at,
         codes_in_window: Number(existingPending.codes_in_window ?? 0),
         window_started_at: existingPending.window_started_at || existingPending.createdAt || null,
@@ -328,7 +337,7 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
       && (await PendingSignup.exists({
         phone: pending.phone,
         email: { $ne: pending.email },
-        expires_at: { $gt: new Date() },
+        ...heldSignupFilter(),
         _id: { $lt: pending._id },
       })))
   ) {
@@ -430,6 +439,9 @@ export const verifyEmailService = async ({ verificationToken, otp, invite_token 
     }
     throw error;
   }
+
+  // Sent in the background; a failed send never blocks sign-up or verification.
+  void sendWelcomeEmail(user);
 
   if (isProfessionalRole(user.role)) {
     const existingProfile = await ProfessionalProfile.findOne({ user_id: user._id });

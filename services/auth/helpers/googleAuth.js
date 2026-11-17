@@ -55,6 +55,14 @@ export const verifyGoogleToken = async ({ token, token_type }) => {
     .split(',')
     .map((id) => id.trim())
     .filter(Boolean);
+  // Without a client id the token's app can't be checked, so a token issued to any other app
+  // would be accepted. Production refuses Google sign-in until GOOGLE_CLIENT_ID is set.
+  if (!configuredClientIds.length && String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+    logger.error('GOOGLE_CLIENT_ID is not set; Google sign-in is refused in production.');
+    const error = new Error('Google sign-in is not available right now. Please sign in with email and password.');
+    error.status = 503;
+    throw error;
+  }
   const needsAccessTokenInfo = configuredClientIds.length > 0 && normalizedType === 'access_token';
 
   let payload;

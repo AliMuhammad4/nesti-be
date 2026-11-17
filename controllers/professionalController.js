@@ -1,7 +1,7 @@
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
 import User from '../models/User.js';
-import { isValidProfessionalType, PROFESSIONAL_TYPE_VALUES, USER_ROLE } from '../constants/roles.js';
-import { CREDENTIAL_STATUS } from '../constants/credentialDocuments.js';
+import { isProfessionalRole, isValidProfessionalType, PROFESSIONAL_TYPE_VALUES, USER_ROLE } from '../constants/roles.js';
+import { CREDENTIAL_STATUS, isValidCredentialJurisdiction } from '../constants/credentialDocuments.js';
 import { PHONE_INVALID_MESSAGE, PHONE_TAKEN_MESSAGE, isPhoneDuplicateError, normalizePhoneE164 } from '../utils/phone.js';
 import { refreshCalendlySlugMismatchForUser } from '../services/calendly/calendlyAlignmentService.js';
 import { scoreLeadAgainstIcp } from '../services/lead/icpScoringService.js';
@@ -12,6 +12,7 @@ import LeadMatch from '../models/LeadMatch.js';
 import LeadProfile from '../models/LeadProfile.js';
 import IcpProfile from '../models/IcpProfile.js';
 import ClientProfile from '../models/ClientProfile.js';
+import { unknownNewServiceAreas } from '../utils/serviceAreaNames.js';
 import { calculateClientProfessionalAiMatch } from '../services/matching/matchRankingService.js';
 
 function toCleanArray(value, limit = 0) {
@@ -162,8 +163,8 @@ export const getMyProfessionalProfile = async (req, res, next) => {
     res.json({
       success: true,
       user: {
-        first_name: user.first_name,
-        last_name: user.last_name,
+        first_name: presentableNames(user).first_name,
+        last_name: presentableNames(user).last_name,
         email: user.email,
         role: user.role,
         profile_image: user.profile_image || null,
@@ -231,23 +232,45 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (user.role === USER_ROLE.CLIENT) {
       return res.status(403).json({ success: false, message: 'Client details are saved from client settings.' });
     }
+    if (!isProfessionalRole(user.role)) {
+      return res.status(403).json({ success: false, message: 'Only professional accounts have a professional profile.' });
+    }
 
     // Mobile number: one normalized value shared by the account and the professional profile.
     let normalizedPhone;
     if (phone !== undefined) {
       normalizedPhone = normalizePhoneE164(phone);
       if (!normalizedPhone) {
-        return res.status(400).json({ success: false, message: PHONE_INVALID_MESSAGE });
+        return res.status(400).json({ success: false, code: 'PHONE_INVALID', field: 'phone', message: PHONE_INVALID_MESSAGE });
       }
       if (await User.exists({ phone: normalizedPhone, _id: { $ne: user._id } })) {
-        return res.status(400).json({ success: false, message: PHONE_TAKEN_MESSAGE });
+        return res.status(400).json({ success: false, code: 'PHONE_TAKEN', field: 'phone', message: PHONE_TAKEN_MESSAGE });
       }
+    }
+
+    // The same link in both places adds nothing for clients; ask for the company site or a profile.
+    if (website && social_media && String(website).toLowerCase() === String(social_media).toLowerCase()) {
+      return res.status(400).json({
+        success: false,
+        code: 'LINK_DUPLICATED',
+        field: 'social_media',
+        message: 'Website and social media are the same link. Use your company website for one of them.',
+      });
     }
 
     // Credential details are locked while under review and after approval.
     const existingProfile = await ProfessionalProfile.findOne({ user_id: userId })
-      .select('credential_status license_number country jurisdiction nmls_id full_name')
+      .select('credential_status license_number country jurisdiction nmls_id full_name service_area_cities service_area_regions service_area_primary_zones service_area_secondary_zones')
       .lean();
+    const areaErrors = unknownNewServiceAreas(body, existingProfile || {});
+    if (Object.keys(areaErrors).length) {
+      return res.status(400).json({
+        success: false,
+        code: 'VALIDATION_FAILED',
+        message: Object.values(areaErrors)[0],
+        fields: areaErrors,
+      });
+    }
     const credentialStatus = String(existingProfile?.credential_status || '').toLowerCase();
     const credentialsLocked = credentialStatus === CREDENTIAL_STATUS.APPROVED
       || credentialStatus === CREDENTIAL_STATUS.PENDING_REVIEW;
@@ -260,9 +283,27 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       if (changed) {
         return res.status(400).json({
           success: false,
+          code: 'LICENSE_LOCKED',
+          field: 'license_number',
           message: credentialStatus === CREDENTIAL_STATUS.APPROVED
             ? 'License details are locked after approval. Contact support to change them.'
             : 'License details are under review and cannot be changed until a decision is made.',
+        });
+      }
+    }
+
+    // Checked before anything is saved, so a bad province never leaves a half-saved profile.
+    if (!credentialsLocked && (country !== undefined || jurisdiction !== undefined)) {
+      const nextCountry = country !== undefined ? String(country || '').trim().toUpperCase() : existingProfile?.country;
+      const nextJurisdiction = jurisdiction !== undefined
+        ? String(jurisdiction || '').trim().toUpperCase()
+        : existingProfile?.jurisdiction;
+      if (nextJurisdiction && !isValidCredentialJurisdiction(nextCountry, nextJurisdiction)) {
+        return res.status(400).json({
+          success: false,
+          code: 'JURISDICTION_MISMATCH',
+          field: 'jurisdiction',
+          message: 'Select a province or state that matches the country.',
         });
       }
     }
@@ -275,7 +316,7 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (Object.prototype.hasOwnProperty.call(body, 'first_name')) {
       const s = body.first_name == null ? '' : String(body.first_name).trim();
       if (!s) {
-        return res.status(400).json({ success: false, message: 'first_name cannot be empty' });
+        return res.status(400).json({ success: false, field: 'first_name', message: 'First name is required' });
       }
       user.first_name = s;
       userSaved = true;
@@ -283,7 +324,7 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (Object.prototype.hasOwnProperty.call(body, 'last_name')) {
       const s = body.last_name == null ? '' : String(body.last_name).trim();
       if (!s) {
-        return res.status(400).json({ success: false, message: 'last_name cannot be empty' });
+        return res.status(400).json({ success: false, field: 'last_name', message: 'Last name is required' });
       }
       user.last_name = s;
       userSaved = true;
@@ -414,8 +455,8 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       success: true,
       message: 'Professional profile saved successfully',
       user: {
-        first_name: user.first_name,
-        last_name: user.last_name,
+        first_name: presentableNames(user).first_name,
+        last_name: presentableNames(user).last_name,
         email: user.email,
         phone: user.phone || '',
         role: user.role,
@@ -427,7 +468,7 @@ export const upsertProfessionalProfile = async (req, res, next) => {
   } catch (error) {
     // The unique phone index caught a number another account saved at the same moment.
     if (isPhoneDuplicateError(error)) {
-      return res.status(400).json({ success: false, message: PHONE_TAKEN_MESSAGE });
+      return res.status(400).json({ success: false, code: 'PHONE_TAKEN', field: 'phone', message: PHONE_TAKEN_MESSAGE });
     }
     next(error);
   }

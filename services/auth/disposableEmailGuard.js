@@ -52,13 +52,17 @@ export function isDisposableEmail(email) {
   return BLOCKED_DOMAIN_KEYWORDS.some((keyword) => domain.includes(keyword));
 }
 
+export const DISPOSABLE_EMAIL_MESSAGE =
+  'Temporary or disposable email addresses are not allowed. Please use a permanent business or personal email address.';
+
 export function disposableEmailErrorResponse() {
   return {
     status: 400,
     body: {
       success: false,
       code: 'DISPOSABLE_EMAIL_BLOCKED',
-      message: 'Temporary or disposable email addresses are not allowed. Please use a permanent business or personal email address.',
+      field: 'email',
+      message: DISPOSABLE_EMAIL_MESSAGE,
     },
   };
 }

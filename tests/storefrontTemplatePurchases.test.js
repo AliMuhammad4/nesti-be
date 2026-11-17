@@ -118,6 +118,51 @@ test('template access enforces professional type and monthly subscription status
   assert.equal(userHasStorefrontTemplateAccess(brokerProfile, 'mortgage_broker-commercial'), false);
 });
 
+test('specialty templates added in the latest catalog are paid and role-scoped', () => {
+  assert.deepEqual(
+    [
+      'agent-newcomer',
+      'agent-commercial',
+      'agent-premium-estate',
+      'agent-neighborhood',
+      'agent-realest-prime',
+      'agent-realest-path',
+      'mortgage_broker-investor',
+      'mortgage_broker-newcomer',
+      'mortgage_broker-clarity',
+      'mortgage_broker-beacon',
+      'mortgage_broker-ember',
+      'mortgage_broker-spotlight',
+      'lawyer-commercial',
+      'lawyer-seller-refinance',
+    ].map((templateId) => {
+      const template = getStorefrontTemplateTier(templateId);
+      return {
+        id: template?.template_id,
+        tier: template?.tier,
+        amount: template?.amount,
+        professional_type: template?.professional_type,
+      };
+    }),
+    [
+      { id: 'agent-newcomer', tier: 'standard', amount: 7500, professional_type: 'agent' },
+      { id: 'agent-commercial', tier: 'premium', amount: 9900, professional_type: 'agent' },
+      { id: 'agent-premium-estate', tier: 'premium', amount: 9900, professional_type: 'agent' },
+      { id: 'agent-neighborhood', tier: 'premium', amount: 9900, professional_type: 'agent' },
+      { id: 'agent-realest-prime', tier: 'premium', amount: 9900, professional_type: 'agent' },
+      { id: 'agent-realest-path', tier: 'premium', amount: 9900, professional_type: 'agent' },
+      { id: 'mortgage_broker-investor', tier: 'standard', amount: 7500, professional_type: 'mortgage_broker' },
+      { id: 'mortgage_broker-newcomer', tier: 'standard', amount: 7500, professional_type: 'mortgage_broker' },
+      { id: 'mortgage_broker-clarity', tier: 'standard', amount: 7500, professional_type: 'mortgage_broker' },
+      { id: 'mortgage_broker-beacon', tier: 'standard', amount: 7500, professional_type: 'mortgage_broker' },
+      { id: 'mortgage_broker-ember', tier: 'standard', amount: 7500, professional_type: 'mortgage_broker' },
+      { id: 'mortgage_broker-spotlight', tier: 'standard', amount: 7500, professional_type: 'mortgage_broker' },
+      { id: 'lawyer-commercial', tier: 'premium', amount: 9900, professional_type: 'lawyer' },
+      { id: 'lawyer-seller-refinance', tier: 'standard', amount: 7500, professional_type: 'lawyer' },
+    ],
+  );
+});
+
 test('lawyer template tiers match free newcomer and paid investor classic first-home', () => {
   assert.deepEqual(
     [

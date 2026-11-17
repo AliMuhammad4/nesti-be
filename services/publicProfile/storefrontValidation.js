@@ -62,9 +62,11 @@ const AGENT_SHARED_PROOF_TEMPLATE_IDS = new Set([
   'agent-luxury-advisor',
   'agent-first-home',
   'agent-community-expert',
+  'agent-newcomer',
 ]);
 
 const LAWYER_FIRST_HOME_TEMPLATE_ID = 'lawyer-first-home-closing';
+const LAWYER_COMMERCIAL_TEMPLATE_ID = 'lawyer-commercial';
 const LAWYER_FIRST_HOME_BLOCK_TYPES = Object.freeze([
   'engagement-scope',
   'practice-snapshot',
@@ -135,6 +137,72 @@ const BROKER_COMMERCIAL_BLOCK_TYPES = Object.freeze([
   'credentials',
   'testimonials',
   'faq',
+  'cta',
+  'footer',
+]);
+const BROKER_CLARITY_TEMPLATE_ID = 'mortgage_broker-clarity';
+const BROKER_CLARITY_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'mortgage-calculator',
+  'about',
+  'mortgage-programs',
+  'services',
+  'guidance',
+  'credentials',
+  'testimonials',
+  'faq',
+  'cta',
+  'footer',
+]);
+const BROKER_BEACON_TEMPLATE_ID = 'mortgage_broker-beacon';
+const BROKER_BEACON_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'about',
+  'mortgage-programs',
+  'services',
+  'guidance',
+  'mortgage-calculator',
+  'testimonials',
+  'faq',
+  'cta',
+  'footer',
+]);
+const BROKER_EMBER_TEMPLATE_ID = 'mortgage_broker-ember';
+const BROKER_EMBER_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'about',
+  'mortgage-programs',
+  'services',
+  'credentials',
+  'guidance',
+  'testimonials',
+  'faq',
+  'cta',
+  'footer',
+]);
+const AGENT_REALEST_PRIME_TEMPLATE_ID = 'agent-realest-prime';
+const AGENT_REALEST_PRIME_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'role-details',
+  'about',
+  'services',
+  'featured-listings',
+  'expertise',
+  'testimonials',
+  'guidance',
+  'cta',
+  'footer',
+]);
+const AGENT_REALEST_PATH_TEMPLATE_ID = 'agent-realest-path';
+const AGENT_REALEST_PATH_BLOCK_TYPES = Object.freeze([
+  'hero',
+  'about',
+  'expertise',
+  'guidance',
+  'services',
+  'featured-listings',
+  'testimonials',
+  'role-details',
   'cta',
   'footer',
 ]);
@@ -287,6 +355,24 @@ const storefrontLayoutSchema = Joi.object({
   ).optional(),
   animationIntensity: Joi.string().valid('subtle', 'medium', 'strong').optional(),
   buttonLayout: Joi.string().valid('inline', 'stacked').optional(),
+  navigator: Joi.object({
+    labels: Joi.object()
+      .pattern(/^[A-Za-z0-9_.:-]{1,80}$/, Joi.string().trim().max(80))
+      .max(48)
+      .optional(),
+    hidden: Joi.array()
+      .items(Joi.string().pattern(/^[A-Za-z0-9_.:-]{1,80}$/))
+      .unique()
+      .max(48)
+      .optional(),
+    devices: Joi.object()
+      .pattern(
+        /^[A-Za-z0-9_.:-]{1,80}$/,
+        Joi.array().items(Joi.string().valid('desktop', 'tablet', 'mobile')).unique().max(3),
+      )
+      .max(48)
+      .optional(),
+  }).optional(),
 }).unknown(false);
 
 const storefrontStyleSchema = Joi.object({
@@ -391,6 +477,36 @@ export function allowedStorefrontBlockTypes(role, templateId = '') {
   ) {
     return [...BROKER_COMMERCIAL_BLOCK_TYPES];
   }
+  if (
+    role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+    && templateId === BROKER_CLARITY_TEMPLATE_ID
+  ) {
+    return [...BROKER_CLARITY_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+    && templateId === BROKER_BEACON_TEMPLATE_ID
+  ) {
+    return [...BROKER_BEACON_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.MORTGAGE_BROKER
+    && templateId === BROKER_EMBER_TEMPLATE_ID
+  ) {
+    return [...BROKER_EMBER_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.AGENT
+    && templateId === AGENT_REALEST_PRIME_TEMPLATE_ID
+  ) {
+    return [...AGENT_REALEST_PRIME_BLOCK_TYPES];
+  }
+  if (
+    role === PROFESSIONAL_TYPE.AGENT
+    && templateId === AGENT_REALEST_PATH_TEMPLATE_ID
+  ) {
+    return [...AGENT_REALEST_PATH_BLOCK_TYPES];
+  }
   return [
     ...SHARED_BLOCK_TYPES,
     ...(ROLE_BLOCK_TYPES[role] || []),
@@ -399,6 +515,9 @@ export function allowedStorefrontBlockTypes(role, templateId = '') {
       : []),
     ...(role === PROFESSIONAL_TYPE.LAWYER && templateId === LAWYER_FIRST_HOME_TEMPLATE_ID
       ? LAWYER_FIRST_HOME_BLOCK_TYPES
+      : []),
+    ...(role === PROFESSIONAL_TYPE.LAWYER && templateId === LAWYER_COMMERCIAL_TEMPLATE_ID
+      ? ['practice-snapshot']
       : []),
   ];
 }

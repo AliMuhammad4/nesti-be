@@ -67,6 +67,8 @@ export async function getSubscriptionPresentationForUser(
       customerId: subscription.stripe_customer_id,
       subscriptionId: subscription.stripe_subscription_id,
       latestInvoiceId: subscription.latest_invoice_id,
+      // No open invoice to pay: send them to the plans page, not the Customer Portal.
+      fallbackUrl: '/checkout',
     });
     if (paymentAction) {
       serialized.paymentActionUrl = paymentAction.paymentActionUrl;

@@ -52,6 +52,12 @@ export const FEATURES = Object.freeze({
 });
 
 
+export const TRIAL_STUDIO_FEATURES = new Set([
+  FEATURES.ASSISTANT_PROFESSIONAL,
+  FEATURES.ASSISTANT_PROFESSIONAL_CLOSING,
+  FEATURES.ASSISTANT_PROFESSIONAL_FOLLOWUP,
+]);
+
 export const BASIC_FEATURES = new Set([
   FEATURES.CHATBOT_BASIC,
   FEATURES.LEADS_CAPTURE,
@@ -153,6 +159,12 @@ export function hasFeature(subscription, featureKey) {
 
   const accountStatus = accountStatusFromSubscription(subscription);
   if (accountStatus === ACCOUNT_STATUS.EXPIRED) return false;
+
+  // Free trial includes RAVI studio even though the trial row is stored as Basic.
+  // Paid Basic stays on the embed link only. Voice stays off until a paid Enterprise plan.
+  if (accountStatus === ACCOUNT_STATUS.FREE_TRIAL && TRIAL_STUDIO_FEATURES.has(feature)) {
+    return true;
+  }
 
   const planKey = getEffectivePlan(subscription);
   return Boolean(PLAN_FEATURES[planKey]?.has(feature));

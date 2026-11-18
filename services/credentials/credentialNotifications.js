@@ -63,7 +63,8 @@ async function safeEmail({ to, subject, html, text = '', replyTo = '' }) {
       subject,
       message: String(text || '').trim() || String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
       htmlMessage: html,
-      ...(replyTo ? { replyTo } : {}),
+      // Admin notices keep no Reply-To (sendEmail would otherwise default it to support).
+      replyTo: replyTo || null,
     });
     if (result && result.success === false) {
       const error = result.error?.message || 'unknown';
@@ -150,12 +151,35 @@ export async function notifyAdminsCredentialSubmitted({ user, profile }) {
   return { email_results: emailResults };
 }
 
+/**
+ * The plan line for the approval notice, from the subscription's real state: a trial that just
+ * started, a paid plan that is active, or a trial that was already used (re-approval).
+ */
+export function approvalPlanSentence(subscription, trialEndLabel = '') {
+  const status = String(subscription?.status || '').trim().toLowerCase();
+  const startedAt = subscription?.trial_start ? new Date(subscription.trial_start).getTime() : 0;
+  const trialEnd = subscription?.trial_end ? new Date(subscription.trial_end).getTime() : 0;
+  if (status === 'free_trial' && trialEnd > Date.now() && startedAt && Date.now() - startedAt < 10 * 60 * 1000) {
+    return `Your ${FREE_TRIAL_DAYS}-day free trial has started${trialEndLabel ? ` (ends ${trialEndLabel})` : ''}.`;
+  }
+  if (status === 'free_trial' && trialEnd > Date.now()) {
+    return `Your free trial continues${trialEndLabel ? ` until ${trialEndLabel}` : ''}.`;
+  }
+  if (status === 'active' || status === 'trialing') {
+    return 'Your paid plan is active, so you have full access again.';
+  }
+  if (status === 'past_due' || status === 'unpaid') {
+    return 'Your plan has an unpaid invoice. Pay it from Settings > Subscription to unlock your workspace.';
+  }
+  return 'Your free trial was already used. Choose a plan from Settings > Subscription to unlock your workspace.';
+}
+
 export async function notifyProfessionalCredentialApproved({ user, subscription }) {
   const trialEnd = subscription?.trial_end
     ? new Date(subscription.trial_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
     : '';
   const title = 'Credentials approved';
-  const body = `Your license and credentials were approved. Your ${FREE_TRIAL_DAYS}-day free trial has started${trialEnd ? ` (ends ${trialEnd})` : ''}.`;
+  const body = `Your license and credentials were approved. ${approvalPlanSentence(subscription, trialEnd)}`;
   await persistAndEmit(user._id, {
     notification_type: 'credential_approved',
     title,

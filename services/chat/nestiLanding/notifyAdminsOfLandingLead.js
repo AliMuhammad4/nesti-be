@@ -1,3 +1,4 @@
+import { supportEmail } from '../../../constants/support.js';
 import User from '../../../models/User.js';
 import ProfessionalNotification from '../../../models/ProfessionalNotification.js';
 import EnterpriseInquiry from '../../../models/EnterpriseInquiry.js';
@@ -247,6 +248,8 @@ export async function sendLandingThanksEmail({ email, name, idempotencyKey }) {
     htmlMessage: landingWelcomeHtml({ subject, message, joinUrl, botName }),
     idempotencyKey: idempotencyKey || `landing_welcome:${to}`,
     source: 'landing_welcome',
+    // The sending inbox is not monitored: visitor replies go to support.
+    replyTo: supportEmail(),
   });
   return { sent: Boolean(result?.success), duplicate: Boolean(result?.duplicate), subject, message, to };
 }

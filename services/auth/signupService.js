@@ -56,7 +56,33 @@ import {
 
 const SIGNUP_RESEND_COOLDOWN_MS = 60 * 1000;
 
+// Signup and Resend wait this long for the code email; a slower send finishes in the background.
+const SIGNUP_OTP_WAIT_MS = Math.max(500, Number(process.env.SIGNUP_OTP_WAIT_MS) || 2500);
+
+/**
+ * Waits briefly for the code email. Returns 'sent', 'failed' (known quickly, so the caller can
+ * roll back and say so), or 'sending' (still going; a late failure is recorded so Resend works at once).
+ */
+async function sendOtpQuickly(sendPromise, { pendingId, otpHash }) {
+  const settled = sendPromise.then((ok) => (ok ? 'sent' : 'failed'), () => 'failed');
+  let timer;
+  const outcome = await Promise.race([
+    settled,
+    new Promise((resolve) => { timer = setTimeout(() => resolve('sending'), SIGNUP_OTP_WAIT_MS); }),
+  ]);
+  clearTimeout(timer);
+  if (outcome === 'sending') {
+    settled.then((late) => {
+      if (late !== 'failed') return null;
+      return PendingSignup.updateOne({ _id: pendingId, otp_hash: otpHash }, { $set: { otp_send_failed_hash: otpHash } });
+    }).catch(() => {});
+  }
+  return outcome;
+}
+
 function resendCooldownResponse(pending, now) {
+  // The last code's email failed to send: let them ask for a new one right away.
+  if (pending.otp_send_failed_hash && pending.otp_send_failed_hash === pending.otp_hash) return null;
   const lastSentAt = pending.otp_expires_at ? new Date(pending.otp_expires_at).getTime() - OTP_TTL_MS : 0;
   const waitMs = lastSentAt + SIGNUP_RESEND_COOLDOWN_MS - now.getTime();
   if (waitMs <= 0) return null;
@@ -237,13 +263,16 @@ export const signupService = async (payload) => {
     }
   }
 
-  const sent = await sendSignupOtpEmail({
-    email: normalizedEmail,
-    first_name: names.firstName,
-    last_name: names.lastName,
-    otp,
-  });
-  if (!sent) {
+  const sendState = await sendOtpQuickly(
+    sendSignupOtpEmail({
+      email: normalizedEmail,
+      first_name: names.firstName,
+      last_name: names.lastName,
+      otp,
+    }),
+    { pendingId: pending._id, otpHash: fields.otp_hash },
+  );
+  if (sendState === 'failed') {
     if (replacing) {
       await PendingSignup.updateOne(
         { _id: pending._id, otp_hash: fields.otp_hash },
@@ -259,7 +288,10 @@ export const signupService = async (payload) => {
     status: 201,
     body: {
       success: true,
-      message: 'We sent a 5-digit code to your email. Enter it to create your account.',
+      message: sendState === 'sending'
+        ? 'We are sending a 5-digit code to your email. If it does not arrive in a minute, tap Resend.'
+        : 'We sent a 5-digit code to your email. Enter it to create your account.',
+      email_status: sendState,
       verificationToken: signSignupToken(pending),
     },
   };
@@ -542,14 +574,18 @@ export const resendVerificationService = async ({ email, verification_token }) =
     };
   }
 
-  const sent = await sendSignupOtpEmail({
-    email: normalizedEmail,
-    first_name: pending.first_name || '',
-    last_name: pending.last_name || '',
-    otp,
-  });
-  if (!sent) {
-    const newHash = hashCode(signupCodeScope(pending.email), otp);
+  const newOtpHash = hashCode(signupCodeScope(pending.email), otp);
+  const sendState = await sendOtpQuickly(
+    sendSignupOtpEmail({
+      email: normalizedEmail,
+      first_name: pending.first_name || '',
+      last_name: pending.last_name || '',
+      otp,
+    }),
+    { pendingId: pending._id, otpHash: newOtpHash },
+  );
+  if (sendState === 'failed') {
+    const newHash = newOtpHash;
     await PendingSignup.updateOne(
       { _id: pending._id, otp_hash: newHash },
       {
@@ -571,7 +607,10 @@ export const resendVerificationService = async ({ email, verification_token }) =
     status: 200,
     body: {
       success: true,
-      message: 'A new code has been sent to your email.',
+      message: sendState === 'sending'
+        ? 'We are sending a new code to your email. If it does not arrive in a minute, tap Resend.'
+        : 'A new code has been sent to your email.',
+      email_status: sendState,
       verificationToken: signSignupToken(updated),
     },
   };

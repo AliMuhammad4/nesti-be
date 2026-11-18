@@ -37,6 +37,32 @@ function isSubscriptionScheduleEvent(event) {
   return String(event?.type || '').startsWith('subscription_schedule.');
 }
 
+function webhookSecrets() {
+  const secret = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+  return secret ? [secret] : [];
+}
+
+function constructStripeEvent(rawBody, signature) {
+  const secrets = webhookSecrets();
+  if (!secrets.length) {
+    const error = new Error('Stripe webhook secret is not configured');
+    error.statusCode = 503;
+    throw error;
+  }
+  const stripe = getStripeClient();
+  let lastError = null;
+  for (const secret of secrets) {
+    try {
+      return stripe.webhooks.constructEvent(rawBody, signature, secret);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  const error = new Error(lastError?.message || 'Invalid Stripe signature');
+  error.statusCode = 400;
+  throw error;
+}
+
 async function claimStripeEvent(event) {
   const eventId = String(event?.id || '').trim();
   if (!eventId) return { shouldProcess: true, eventId: '' };
@@ -170,19 +196,18 @@ async function processStripeEvent(event) {
 
 router.post('/', async (req, res) => {
   const signature = req.get('stripe-signature');
-  const webhookSecret = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
-
-  if (!webhookSecret) {
-    logger.error('Stripe webhook secret is not configured');
-    return res.status(503).json({ success: false, message: 'Stripe webhook not configured' });
-  }
 
   let event;
   try {
-    event = getStripeClient().webhooks.constructEvent(req.body, signature, webhookSecret);
+    event = constructStripeEvent(req.body, signature);
   } catch (err) {
-    logger.warn('Stripe webhook signature verification failed', { error: err.message });
-    return res.status(400).json({ success: false, message: 'Invalid Stripe signature' });
+    const status = err.statusCode === 503 ? 503 : 400;
+    if (status === 503) logger.error('Stripe webhook secret is not configured');
+    else logger.warn('Stripe webhook signature verification failed', { error: err.message });
+    return res.status(status).json({
+      success: false,
+      message: status === 503 ? 'Stripe webhook not configured' : 'Invalid Stripe signature',
+    });
   }
 
   let eventId = '';

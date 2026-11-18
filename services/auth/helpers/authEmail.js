@@ -1,6 +1,7 @@
 import sendEmail, { isResendConfigured } from '../../../utils/sendEmail.js';
 import logger from '../../../utils/logger.js';
-import { EMAIL_BRAND, EMAIL_GREEN_CTA_STYLE, renderBrandedEmailShell } from '../../email/emailTheme.js';
+import { EMAIL_BRAND, EMAIL_GREEN_CTA_STYLE, EMAIL_LINK_STYLE, renderBrandedEmailShell } from '../../email/emailTheme.js';
+import { supportContactUrl, supportEmail } from '../../../constants/support.js';
 import { isPlaceholderName } from '../../../utils/placeholderName.js';
 
 const escapeHtml = (value) => String(value ?? '')
@@ -9,6 +10,17 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
+
+/** Support line for account emails; the sending inbox is not monitored. */
+function supportNoteHtml() {
+  const url = escapeHtml(supportContactUrl());
+  const email = escapeHtml(supportEmail());
+  return `<p style="margin:14px 0 0;font-size:13px;line-height:1.6;color:#718096;">Need help? Contact Nesti support through the <a href="${url}" style="${EMAIL_LINK_STYLE}">support form</a> or at <a href="mailto:${email}" style="${EMAIL_LINK_STYLE}">${email}</a>.</p>`;
+}
+
+function supportNoteText() {
+  return `Need help? Contact Nesti support at ${supportEmail()} or through the support form: ${supportContactUrl()}`;
+}
 
 export function brandOtpEmailHtml({ title, subtitle, otp, footerNote = '' }) {
   const safeTitle = escapeHtml(String(title || '').trim());
@@ -24,7 +36,8 @@ export function brandOtpEmailHtml({ title, subtitle, otp, footerNote = '' }) {
     </div>
     <p style="margin:0;font-size:13px;line-height:1.6;color:#718096;">
       This code expires in <strong style="color:#2D3748;">10 minutes</strong>. ${safeFooter}
-    </p>`;
+    </p>
+    ${supportNoteHtml()}`;
   return renderBrandedEmailShell({
     kicker: 'Nesti AI',
     title: 'Account security',
@@ -42,13 +55,14 @@ export const sendSignupOtpEmail = async ({ email, first_name, last_name, otp }) 
   const result = await sendEmail({
     email,
     subject: 'Nesti AI - Verify Your Email',
-    message: `Welcome to Nesti AI! Your email verification code is: ${otp}. It will expire in 10 minutes.`,
+    message: `Welcome to Nesti AI! Your email verification code is: ${otp}. It will expire in 10 minutes.\n\n${supportNoteText()}`,
     htmlMessage: brandOtpEmailHtml({
       title: `Welcome to Nesti AI${greetingName ? `, ${greetingName}` : ''}!`,
       subtitle: 'Use this code to verify your email address and complete your signup.',
       otp,
     }),
-    timeoutMs: 8000,
+    // Signup waits on this send, so keep it short; the user can resend if it times out.
+    timeoutMs: 5000,
     maxAttempts: 2,
   });
   if (!result?.success) {
@@ -74,7 +88,7 @@ function brandNoticeEmailHtml({ title, paragraphs = [], ctaLabel = '', ctaUrl = 
   return renderBrandedEmailShell({
     kicker: 'Nesti AI',
     title: 'Account security',
-    innerHtml: `<h1 style="margin:0 0 12px;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:22px;line-height:1.3;color:#2D3748;">${escapeHtml(title)}</h1>${body}${cta}`,
+    innerHtml: `<h1 style="margin:0 0 12px;font-family:Inter,Segoe UI,Arial,sans-serif;font-size:22px;line-height:1.3;color:#2D3748;">${escapeHtml(title)}</h1>${body}${cta}${supportNoteHtml()}`,
     maxWidth: 560,
   });
 }
@@ -105,7 +119,7 @@ export const queueGoogleSignInReminderEmail = (email) => {
     email,
     label: 'Google sign-in reminder',
     subject: 'Nesti AI - Sign in with Google',
-    message: `${paragraphs.join(' ')}${loginUrl ? ` Log in: ${loginUrl}` : ''}`,
+    message: `${paragraphs.join(' ')}${loginUrl ? ` Log in: ${loginUrl}` : ''}\n\n${supportNoteText()}`,
     htmlMessage: brandNoticeEmailHtml({ title: 'Sign in with Google', paragraphs, ctaLabel: 'Go to login', ctaUrl: loginUrl }),
   });
 };
@@ -124,7 +138,7 @@ export const queuePasswordChangedEmail = (email, { via = 'change', at = new Date
     email,
     label: 'Password changed notice',
     subject: 'Nesti AI - Your password was changed',
-    message: `${paragraphs.join(' ')}${resetUrl ? ` Reset your password: ${resetUrl}` : ''}`,
+    message: `${paragraphs.join(' ')}${resetUrl ? ` Reset your password: ${resetUrl}` : ''}\n\n${supportNoteText()}`,
     htmlMessage: brandNoticeEmailHtml({ title: 'Your password was changed', paragraphs, ctaLabel: 'Reset password', ctaUrl: resetUrl }),
   });
 };
@@ -133,7 +147,7 @@ export const queuePasswordResetEmail = (email, otp) => {
   sendEmail({
     email,
     subject: 'Nesti AI - Password Reset Code',
-    message: `You requested a password reset. Your code is: ${otp}. It will expire in 10 minutes.`,
+    message: `You requested a password reset. Your code is: ${otp}. It will expire in 10 minutes.\n\n${supportNoteText()}`,
     htmlMessage: brandOtpEmailHtml({
       title: 'Password reset request',
       subtitle: 'Use this code to continue resetting your password.',

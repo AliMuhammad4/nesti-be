@@ -24,7 +24,7 @@ import {
   uploadCredentialDocument,
 } from '../controllers/credentialController.js';
 import { runProfileUpload } from '../middleware/uploadProfileImage.js';
-import { uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
+import { limitCredentialUploads, uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
 import { MAX_IMAGE_UPLOAD_MB } from '../constants/mediaLimits.js';
 import {
   deleteMyAssistant,
@@ -105,7 +105,7 @@ router.post('/me/assistant/knowledge', protect, requireFeature(FEATURES.ASSISTAN
 
 router.get('/me/credentials', protect, getMyCredentials);
 router.patch('/me/credentials', protect, patchCredentialMeta);
-router.post('/me/credentials/documents', protect, runCredentialUpload, uploadCredentialDocument);
+router.post('/me/credentials/documents', protect, limitCredentialUploads, runCredentialUpload, uploadCredentialDocument);
 router.get('/me/credentials/documents/:docId', protect, getCredentialDocument);
 router.delete('/me/credentials/documents/:docId', protect, deleteCredentialDocument);
 router.post('/me/credentials/submit', protect, submitCredentials);

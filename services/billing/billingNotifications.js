@@ -4,9 +4,11 @@ import Subscription from '../../models/Subscription.js';
 import ClientSubscription from '../../models/ClientSubscription.js';
 import logger from '../../utils/logger.js';
 import { emitNotification } from '../realtime/workspaceSocket.js';
-import { getPlanByPriceId } from './plans.js';
+import { getPlan, getPlanByPriceId } from './plans.js';
 import { getStorefrontTemplateTier } from './storefrontTemplatePurchases.js';
 import { getInvoiceSubscriptionId, normalizeStripeId } from './subscriptionShared.js';
+import { sendBillingEmailInBackground, sendPaymentFailedEmail, sendPaymentRestoredEmail } from './billingEmails.js';
+import { clearPaymentActionCache } from './subscriptionInvoiceService.js';
 
 function formatAmount(amount, currency = 'usd') {
   const value = Number(amount || 0) / 100;
@@ -27,12 +29,52 @@ function invoicePricePlans(invoice = {}) {
     const priceId =
       normalizeStripeId(line.price) ||
       String(line.pricing?.price_details?.price || '').trim();
-    const plan = getPlanByPriceId(priceId);
+    const plan = getPlanByPriceId(priceId) || getPlan(line.metadata?.plan_key);
     if (plan && !plans.some((p) => p.plan_key === plan.plan_key)) {
       plans.push(plan);
     }
   }
   return plans;
+}
+
+function invoiceMetadataSources(invoice = {}) {
+  return [
+    invoice.metadata,
+    invoice.subscription_details?.metadata,
+    invoice.parent?.subscription_details?.metadata,
+    ...(invoice.lines?.data || []).map((line) => line.metadata),
+    ...(invoice.lines?.data || []).map((line) => line.parent?.subscription_item_details?.metadata),
+  ].filter(Boolean);
+}
+
+function invoicePlanName(invoice = {}) {
+  const priced = invoicePricePlans(invoice).at(-1)?.name;
+  if (priced) return priced;
+  for (const source of invoiceMetadataSources(invoice)) {
+    const plan = getPlan(source.plan_key);
+    if (plan?.name) return plan.name;
+  }
+  const description = (invoice.lines?.data || []).map((line) => String(line.description || '')).join(' ');
+  const named = description.match(/Nesti\s+(Basic|Standard|Enterprise)/i);
+  if (named) return named[1].charAt(0).toUpperCase() + named[1].slice(1).toLowerCase();
+  return 'subscription';
+}
+
+function invoiceIsAnnual(invoice = {}) {
+  const period = invoiceMetadataSources(invoice)
+    .map((source) => String(source.billing_period || '').toLowerCase())
+    .find(Boolean);
+  if (period === 'year' || period === 'annual' || period === 'yearly') return true;
+  const description = (invoice.lines?.data || []).map((line) => String(line.description || '')).join(' ');
+  if (/\/\s*year/i.test(description)) return true;
+  return (invoice.lines?.data || []).some((line) => {
+    const interval = String(
+      line.price?.recurring?.interval
+      || line.pricing?.price_details?.recurring?.interval
+      || '',
+    ).toLowerCase();
+    return interval === 'year';
+  });
 }
 
 function isStorefrontTemplateMetadata(source = {}) {
@@ -156,22 +198,25 @@ async function notifyInvoicePaid(event) {
     });
   }
 
+  // Only sends when this invoice earlier triggered a payment-failed email.
+  sendBillingEmailInBackground('Payment restored', () => sendPaymentRestoredEmail(userId, invoice));
+
   const reason = String(invoice.billing_reason || '');
-  const plans = invoicePricePlans(invoice);
-  const planName = plans.at(-1)?.name || 'subscription';
+  const planName = invoicePlanName(invoice);
+  const periodLabel = invoiceIsAnnual(invoice) ? ' for the year' : '';
 
   let title = 'Payment paid';
-  let body = `Your ${planName} payment of ${amount} was paid.`;
+  let body = `Your ${planName} payment of ${amount}${periodLabel} was paid.`;
 
   if (reason === 'subscription_create') {
     title = 'Subscription started';
-    body = `Your ${planName} subscription is active. Amount paid: ${amount}.`;
+    body = `Your ${planName} subscription is active. Amount paid: ${amount}${periodLabel}.`;
   } else if (reason === 'subscription_cycle') {
     title = 'Subscription renewed';
-    body = `Your ${planName} subscription renewed successfully. Amount paid: ${amount}.`;
+    body = `Your ${planName} subscription renewed successfully. Amount paid: ${amount}${periodLabel}.`;
   } else if (reason === 'subscription_update') {
     title = 'Plan change payment paid';
-    body = `Your plan change payment of ${amount} was paid.`;
+    body = `Your plan change payment of ${amount}${periodLabel} was paid.`;
   }
 
   return persistAndEmit(userId, event.id, {
@@ -208,6 +253,9 @@ async function notifyInvoicePaymentFailed(event) {
       },
     });
   }
+
+  // Access locks on past_due: email the Pay now link once per invoice, without holding the webhook.
+  sendBillingEmailInBackground('Payment failed', () => sendPaymentFailedEmail(userId, invoice));
 
   return persistAndEmit(userId, event.id, {
     notification_type: 'billing_payment_failed',
@@ -295,6 +343,8 @@ async function notifySubscriptionSchedule(event) {
 }
 
 export async function notifyBillingStripeEvent(event) {
+  // Invoice changes make cached "Pay now" lookups stale.
+  if (String(event?.type || '').startsWith('invoice.')) clearPaymentActionCache();
   try {
     switch (event.type) {
       case 'invoice.paid':

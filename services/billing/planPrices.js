@@ -46,6 +46,7 @@ export async function createRecurringPrice(stripe, { name, amount, currency, int
   return stripe.prices.create({
     currency: currency || 'usd',
     unit_amount: amount,
+    active: true,
     recurring: { interval: interval === 'year' ? 'year' : 'month' },
     product_data: { name },
     metadata: metadata || {},

@@ -21,6 +21,8 @@ const pendingSignupSchema = new mongoose.Schema(
     /** Wrong codes across every code sent for this email while the record lives. */
     total_attempts: { type: Number, default: 0 },
     resend_count: { type: Number, default: 0 },
+    /** otp_hash of a code whose email failed after the reply went out; Resend skips the cooldown for it. */
+    otp_send_failed_hash: { type: String, default: '' },
     /** Codes sent (signup + resends) in the current hour window, and when that window began. */
     codes_in_window: { type: Number, default: 0 },
     window_started_at: { type: Date, default: null },

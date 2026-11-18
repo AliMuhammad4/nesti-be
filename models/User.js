@@ -67,6 +67,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
+  /** Result of the last suspend/reinstate notice email (sent in the background). */
+  account_status_email: {
+    kind: { type: String, default: '' },
+    status: { type: String, default: '' },
+    at: { type: Date, default: null },
+  },
   otp: {
     type: String,
   },
@@ -124,6 +130,11 @@ const userSchema = new mongoose.Schema({
   client_trial_ends_at: {
     type: Date,
     default: null,
+  },
+  /** Trial reminder emails already sent (the daily trial job skips these). */
+  trial_notices: {
+    ending_sent_at: { type: Date, default: null },
+    ended_sent_at: { type: Date, default: null },
   },
   /** Public HTTPS URL (e.g. Cloudinary) for avatar in app shell / dashboard. */
   profile_image: {

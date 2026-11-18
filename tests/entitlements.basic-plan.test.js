@@ -86,7 +86,9 @@ test('a basic trial can preview the website builder without publishing it', () =
   };
   assert.equal(getEffectivePlan(trialSub), SUBSCRIPTION_PLAN.BASIC);
   assert.equal(hasFeature(trialSub, FEATURES.PUBLIC_PROFILE), true);
+  assert.equal(hasFeature(trialSub, FEATURES.ASSISTANT_PROFESSIONAL), true);
   assert.equal(hasFeature(trialSub, FEATURES.VOICE_AGENT), false);
+  assert.equal(hasFeature(mockSubscription('basic'), FEATURES.ASSISTANT_PROFESSIONAL), false);
   const trialLimits = getPlanLimitsForSubscription(trialSub);
   assert.equal(trialLimits.captured_leads, 150);
 });

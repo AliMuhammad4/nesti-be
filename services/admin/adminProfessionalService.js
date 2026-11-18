@@ -669,9 +669,11 @@ export async function patchAdminProfessionalService(id, patch = {}) {
   // profile from the account, so both are updated or the edit would be undone.
   if (patch.full_name !== undefined) {
     const parts = String(patch.full_name || '').trim().split(/\s+/).filter(Boolean);
-    if (parts.length < 2) return fail(400, 'Enter a first and last name.');
+    if (!parts.length) return fail(400, 'Enter a first and last name.');
     const firstName = parts[0];
-    const lastName = parts.slice(1).join(' ');
+    // A single word edits the first name and keeps the last name already on the account.
+    const lastName = parts.length > 1 ? parts.slice(1).join(' ') : String(user.last_name || '').trim();
+    if (!lastName) return fail(400, 'Enter a first and last name.');
     if (!isValidPersonName(firstName) || !isValidPersonName(lastName)) return fail(400, PERSON_NAME_MESSAGE);
     user.first_name = firstName;
     user.last_name = lastName;

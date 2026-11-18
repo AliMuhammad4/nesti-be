@@ -229,7 +229,7 @@ function servicesList(services) {
         <td style="width:44px;vertical-align:top;padding:10px 0;"><div style="height:34px;width:34px;border-radius:9px;background:#f2fff6;border:1px solid #bdecc8;font-size:17px;line-height:34px;text-align:center;">${svc.icon}</div></td>
         <td style="vertical-align:top;padding:10px 0 10px 10px;border-bottom:1px solid #edf2f7;">
           <div style="font-size:14px;font-weight:700;color:${EMAIL_BRAND.heading};">${escapeHtml(svc.name)}
-            <span style="display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700;vertical-align:1px;${svc.included ? `background:#e8f6ec;color:${EMAIL_BRAND.primaryDark};` : `background:#f1f5f9;color:${EMAIL_BRAND.muted};`}">${escapeHtml(svc.included ? 'Included' : svc.planNote || 'Upgrade')}</span>
+            <span style="display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700;vertical-align:1px;${svc.included ? `background:#e8f6ec;color:${EMAIL_BRAND.primaryDark};` : `background:#f1f5f9;color:${EMAIL_BRAND.muted};`}">${escapeHtml(svc.included ? 'Included' : svc.planNote || 'Needs a plan')}</span>
           </div>
           <div style="margin-top:3px;font-size:13px;line-height:1.5;color:${EMAIL_BRAND.body};">${escapeHtml(svc.detail)}</div>
           <div style="margin-top:4px;font-size:13px;"><a href="${escapeHtml(svc.href)}" style="${EMAIL_LINK_STYLE}">${escapeHtml(svc.linkLabel)}</a></div>
@@ -260,15 +260,21 @@ export function renderCredentialsApprovedEmail({
   const copy = roleCopy(role);
   const ends = formatEmailDate(trialEnd);
   const starts = formatEmailDate(trialStart);
-  const onTrial = String(status || '').toLowerCase() === 'free_trial';
+  const rawStatus = String(status || '').toLowerCase();
+  // A free_trial row whose end date has passed is an expired trial (expiry is applied lazily).
+  const trialOver = rawStatus === 'free_trial' && trialEnd && new Date(trialEnd).getTime() <= Date.now();
+  const statusKey = trialOver ? 'expired' : rawStatus;
+  const onTrial = statusKey === 'free_trial';
+  // Re-approval after the trial was used (or with an unpaid plan): no paid access yet.
+  const lapsed = !onTrial && !['active', 'trialing'].includes(statusKey);
   const planName = PLAN_LABELS[String(planKey || '').toLowerCase()] || 'Basic';
   const subscriptionHref = `${base}/settings?tab=subscription`;
 
   const detailRows = [
-    ['Plan', onTrial ? `Free trial (${planName} features)` : planName],
+    ['Plan', onTrial ? `Free trial (${planName} features)` : lapsed ? (statusKey === 'past_due' || statusKey === 'unpaid' ? `${planName} (payment due)` : 'No active plan (free trial used)') : planName],
     ...(onTrial ? [['Trial length', `${trialDays} days`]] : []),
-    ...(starts ? [['Started', starts]] : []),
-    ...(ends ? [[onTrial ? 'Trial ends' : 'Renews', ends]] : []),
+    ...(starts && !lapsed ? [['Started', starts]] : []),
+    ...(ends && !lapsed ? [[onTrial ? 'Trial ends' : 'Renews', ends]] : []),
     ...plans
       .filter((plan) => plan?.name && plan?.display_amount)
       .map((plan) => [`${plan.name} plan`, `${plan.display_amount} USD / month`]),
@@ -365,31 +371,50 @@ export function renderCredentialsApprovedEmail({
 
   const trialSentence = onTrial
     ? `Your ${trialDays}-day free trial has started${ends ? ` and runs until ${ends}` : ''}.`
-    : `Your ${planName} plan is active.`;
+    : lapsed
+      ? (statusKey === 'past_due' || statusKey === 'unpaid'
+        ? 'Your plan has an unpaid invoice; pay it from Settings > Subscription to unlock every service.'
+        : 'Your free trial was already used, so choose a plan to unlock the paid services.')
+      : `Your ${planName} plan is active.`;
+  const paymentDue = statusKey === 'past_due' || statusKey === 'unpaid';
+  // Unlocked only with a running trial or an active paid plan; otherwise the profile is
+  // verified and a plan (or payment) unlocks the workspace tools.
+  const intro = lapsed
+    ? `Your license and credentials have been approved, so your ${copy.label} profile is verified. ${paymentDue
+      ? 'Your plan has an unpaid invoice: pay it to unlock your workspace tools.'
+      : 'Your free trial was already used: choose a plan to unlock your workspace tools.'}`
+    : `Your license and credentials have been approved, and your ${copy.label} workspace is unlocked. ${copy.intro} ${trialSentence}`;
+  const cta = lapsed
+    ? (paymentDue ? { href: subscriptionHref, label: 'Pay your invoice' } : { href: `${base}/checkout`, label: 'Choose a plan' })
+    : { href: `${base}/dashboard`, label: 'Open your dashboard' };
   const innerHtml = `${greeting(firstName)}
-    <p style="${P}">Your license and credentials have been approved, and your ${escapeHtml(copy.label)} workspace is unlocked. ${escapeHtml(copy.intro)} ${escapeHtml(trialSentence)}</p>
+    <p style="${P}">${escapeHtml(intro)}</p>
     ${detailsPanel('Your subscription', detailRows)}
     <p style="margin:10px 0 0;font-size:13px;line-height:1.6;color:${EMAIL_BRAND.body};">${onTrial ? 'Choose a plan any time before the trial ends to keep every service running. ' : ''}Your Web Page stays available, and you can keep editing and republishing it on a free template even without a paid plan.</p>
     <p style="margin:8px 0 0;font-size:13px;"><a href="${escapeHtml(subscriptionHref)}" style="${EMAIL_LINK_STYLE}">Manage your subscription</a></p>
     <p style="${LABEL}">Your services</p>
     ${servicesList(services)}
-    ${button(`${base}/dashboard`, 'Open your dashboard')}
+    ${button(cta.href, cta.label)}
     ${supportNote()}`;
 
   const text = plainText([
     firstName ? `Hi ${String(firstName).trim()},` : 'Hi,',
-    `Your license and credentials have been approved, and your ${copy.label} workspace is unlocked. ${copy.intro} ${trialSentence}`,
+    intro,
     `Your subscription\n${detailRows.map(([label, value]) => `- ${label}: ${value}`).join('\n')}`,
     `${onTrial ? 'Choose a plan any time before the trial ends to keep every service running. ' : ''}Your Web Page stays available, and you can keep editing and republishing it on a free template. Manage your subscription: ${subscriptionHref}`,
     `Your services\n${services
-      .map((svc) => `- ${svc.name} (${svc.included ? 'Included' : svc.planNote || 'Upgrade'}): ${svc.detail} ${svc.href}`)
+      .map((svc) => `- ${svc.name} (${svc.included ? 'Included' : svc.planNote || 'Needs a plan'}): ${svc.detail} ${svc.href}`)
       .join('\n')}`,
-    `Open your dashboard: ${base}/dashboard`,
+    `${cta.label}: ${cta.href}`,
     supportText(),
   ]);
 
   return {
-    subject: onTrial ? 'You\'re approved: your Nesti free trial has started' : 'Your credentials are approved',
+    subject: onTrial
+      ? 'You\'re approved: your Nesti free trial has started'
+      : lapsed
+        ? (paymentDue ? 'Your credentials are approved: pay your invoice to unlock your workspace' : 'Your credentials are approved: choose a plan to unlock your workspace')
+        : 'Your credentials are approved',
     html: shell({ title: 'License & Credentials', headline: 'Credentials approved', innerHtml }),
     text,
   };
@@ -542,4 +567,171 @@ export async function sendWelcomeEmail(user) {
     logger.warn('Welcome email failed', { error: error?.message });
     return { email_status: 'failed' };
   }
+}
+
+
+/** What a past-due account loses until it is paid (role-aware; only what the access checks really lock). */
+const PRO_PAYMENT_LOCKED = [
+  { title: 'Workspace tools are locked', detail: 'Leads, conversations, chatbot settings, calendar booking and AI tools stay locked until the payment goes through.' },
+  { title: 'Your free Web Page stays live', detail: 'Your public page remains online and you can still edit and republish it.' },
+  { title: 'Your data is kept', detail: 'Your leads, conversations and settings are not deleted.' },
+];
+const CLIENT_PAYMENT_LOCKED = [
+  { title: 'Plan features are locked', detail: 'Matches, messages with professionals and other plan features stay locked until the payment goes through.' },
+  { title: 'Your data is kept', detail: 'Your profile, matches and messages are not deleted.' },
+];
+
+function billingPageUrl(role) {
+  return PROFESSIONAL_ROLES.has(String(role || '').toLowerCase())
+    ? `${appBaseUrl()}/settings?tab=subscription`
+    : `${appBaseUrl()}/client-dashboard/billing`;
+}
+
+/**
+ * Sent once per unpaid invoice when a subscription payment fails and access locks.
+ * `payUrl` is Stripe's hosted invoice page (Pay now); amounts are already formatted in USD.
+ */
+export function renderPaymentFailedEmail({
+  firstName = '',
+  role = '',
+  planName = '',
+  amount = '',
+  dueDate = null,
+  nextAttempt = null,
+  payUrl = '',
+} = {}) {
+  const key = String(role || '').toLowerCase();
+  const isPro = PROFESSIONAL_ROLES.has(key);
+  const effects = isPro ? PRO_PAYMENT_LOCKED : CLIENT_PAYMENT_LOCKED;
+  const link = String(payUrl || '').trim() || billingPageUrl(key);
+  const due = formatEmailDate(dueDate);
+  const retry = formatEmailDate(nextAttempt);
+  const plan = String(planName || '').trim();
+  const rows = [
+    ...(plan ? [['Plan', plan]] : []),
+    ...(amount ? [['Amount due', `${amount} USD`]] : []),
+    ...(due ? [['Due', due]] : []),
+    ...(retry ? [['Next automatic retry', retry]] : []),
+  ];
+  const lead = `We could not collect the payment for your Nesti ${plan ? `${plan} ` : ''}subscription${amount ? ` (${amount} USD)` : ''}, so your ${isPro ? `${roleCopy(key).label} workspace` : 'account'} is locked until it is paid.`;
+  const innerHtml = `${greeting(firstName)}
+    <p style="${P}">${escapeHtml(lead)}</p>
+    ${rows.length ? detailsPanel('Invoice', rows) : ''}
+    <p style="${LABEL}">What is locked</p>
+    ${stepsPanel(effects)}
+    <p style="${LABEL}">How to restore access</p>
+    <p style="${P}">Pay the open invoice with the button below. You can use a different card on the payment page. Access comes back automatically once the payment goes through.</p>
+    ${button(link, 'Pay now')}
+    ${supportNote('Questions about this invoice?')}`;
+  return {
+    subject: 'Payment failed: your Nesti access is locked',
+    html: renderBrandedEmailShell({
+      kicker: 'Nesti AI',
+      title: 'Billing',
+      innerHtml: `<h1 style="${H1}">Your payment did not go through</h1>${innerHtml}`,
+      maxWidth: 560,
+      headerBgColor: EMAIL_BRAND.primaryDark,
+    }),
+    text: plainText([
+      firstName ? `Hi ${String(firstName).trim()},` : 'Hi,',
+      lead,
+      rows.length ? rows.map(([k, v]) => `${k}: ${v}`).join('\n') : '',
+      `What is locked:\n${effects.map((e) => `- ${e.title}: ${e.detail}`).join('\n')}`,
+      `Pay now: ${link}`,
+      'Access comes back automatically once the payment goes through.',
+      supportText('Questions about this invoice?'),
+    ]),
+  };
+}
+
+/** Sent after a previously failed invoice is paid. */
+export function renderPaymentRestoredEmail({ firstName = '', role = '', planName = '', amount = '' } = {}) {
+  const key = String(role || '').toLowerCase();
+  const isPro = PROFESSIONAL_ROLES.has(key);
+  const plan = String(planName || '').trim();
+  const lead = `Thanks, we received your payment${amount ? ` of ${amount} USD` : ''}${plan ? ` for your ${plan} plan` : ''}. Your access is restored.`;
+  const back = isPro
+    ? 'Your leads, conversations, chatbot settings and other workspace tools are unlocked again.'
+    : 'Your plan features are unlocked again.';
+  const href = isPro ? `${appBaseUrl()}/dashboard` : `${appBaseUrl()}/client-dashboard`;
+  const innerHtml = `${greeting(firstName)}
+    <p style="${P}">${escapeHtml(lead)}</p>
+    <p style="${P}">${escapeHtml(back)}</p>
+    ${button(href, 'Open your dashboard')}
+    ${supportNote()}`;
+  return {
+    subject: 'Payment received: your Nesti access is restored',
+    html: renderBrandedEmailShell({
+      kicker: 'Nesti AI',
+      title: 'Billing',
+      innerHtml: `<h1 style="${H1}">Your access is restored</h1>${innerHtml}`,
+      maxWidth: 560,
+      headerBgColor: EMAIL_BRAND.primaryDark,
+    }),
+    text: plainText([
+      firstName ? `Hi ${String(firstName).trim()},` : 'Hi,',
+      `${lead} ${back}`,
+      `Open your dashboard: ${href}`,
+      supportText(),
+    ]),
+  };
+}
+
+
+/** Plan price rows for the trial emails (USD, from the real plan config passed in). */
+function planPriceRows(plans = []) {
+  return plans
+    .filter((plan) => plan?.name && plan?.display_amount)
+    .map((plan) => [`${plan.name} plan`, `${plan.display_amount} USD / month`]);
+}
+
+/**
+ * Trial reminder: `ended=false` is the "ends within a day" notice, `ended=true` the "trial ended" one.
+ * Role-aware: professionals keep their free Web Page; clients lose plan features.
+ */
+export function renderTrialNoticeEmail({ firstName = '', role = '', endsAt = null, ended = false, plans = [], subscribeUrl = '' } = {}) {
+  const key = String(role || '').toLowerCase();
+  const isPro = PROFESSIONAL_ROLES.has(key);
+  const when = formatEmailDate(endsAt);
+  const link = String(subscribeUrl || '').trim() || (isPro ? `${appBaseUrl()}/checkout` : `${appBaseUrl()}/client-dashboard/subscription`);
+  const lead = ended
+    ? `Your Nesti free trial ended${when ? ` on ${when}` : ''}. Choose a plan to keep using your ${isPro ? `${roleCopy(key).label} workspace` : 'account'}.`
+    : `Your Nesti free trial ends within the next day${when ? ` (${when})` : ''}. Choose a plan now so nothing is interrupted.`;
+  const effects = isPro
+    ? [
+      { title: ended ? 'Workspace tools are locked' : 'Workspace tools lock when the trial ends', detail: 'Leads, conversations, chatbot settings, calendar booking and AI tools need a plan.' },
+      { title: 'Your free Web Page stays live', detail: 'Your public page remains online and you can still edit and republish it.' },
+      { title: 'Your data is kept', detail: 'Your leads, conversations and settings are not deleted.' },
+    ]
+    : [
+      { title: ended ? 'Plan features are locked' : 'Plan features lock when the trial ends', detail: 'Matches, messages with professionals and other plan features need a plan.' },
+      { title: 'Your data is kept', detail: 'Your profile, matches and messages are not deleted.' },
+    ];
+  const rows = planPriceRows(plans);
+  const innerHtml = `${greeting(firstName)}
+    <p style="${P}">${escapeHtml(lead)}</p>
+    <p style="${LABEL}">${ended ? 'What changed' : 'What happens next'}</p>
+    ${stepsPanel(effects)}
+    ${rows.length ? `<p style="${LABEL}">Plans</p>${detailsPanel('Monthly prices', rows)}` : ''}
+    ${button(link, 'Choose a plan')}
+    ${supportNote('Questions about plans?')}`;
+  const headline = ended ? 'Your free trial has ended' : 'Your free trial ends soon';
+  return {
+    subject: ended ? 'Your Nesti free trial has ended' : 'Your Nesti free trial ends tomorrow',
+    html: renderBrandedEmailShell({
+      kicker: 'Nesti AI',
+      title: 'Free trial',
+      innerHtml: `<h1 style="${H1}">${headline}</h1>${innerHtml}`,
+      maxWidth: 560,
+      headerBgColor: EMAIL_BRAND.primaryDark,
+    }),
+    text: plainText([
+      firstName ? `Hi ${String(firstName).trim()},` : 'Hi,',
+      lead,
+      effects.map((e) => `- ${e.title}: ${e.detail}`).join('\n'),
+      rows.length ? rows.map(([k, v]) => `${k}: ${v}`).join('\n') : '',
+      `Choose a plan: ${link}`,
+      supportText('Questions about plans?'),
+    ]),
+  };
 }

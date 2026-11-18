@@ -5,6 +5,7 @@ import logger from './utils/logger.js';
 import { initWorkspaceSocket } from './services/realtime/workspaceSocket.js';
 import { scheduleMonthlyRewardJob } from './jobs/rewardMonthlyJob.js';
 import { scheduleNurtureFollowupJob } from './jobs/nurtureFollowupJob.js';
+import { scheduleTrialNoticeJob } from './jobs/trialNoticeJob.js';
 import { scheduleCalendlyWebhookRetryJob } from './services/calendly/calendlyWebhookQueue.js';
 import { startCallMinutesReconciliation } from './services/proChat/callMinutesService.js';
 import { startRecordingIngestion } from './services/proChat/recordingIngestionService.js';
@@ -44,6 +45,7 @@ async function startServer() {
     logger.info(`Server running on port ${PORT} (HTTP + WebSocket)`);
     scheduleMonthlyRewardJob();
     scheduleNurtureFollowupJob();
+    scheduleTrialNoticeJob();
     scheduleCalendlyWebhookRetryJob();
     void resumePendingAdminLeadFollowUps().catch((error) => {
       logger.warn('Pending admin lead follow-ups were not resumed', { message: error?.message });

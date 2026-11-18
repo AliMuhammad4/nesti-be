@@ -35,13 +35,17 @@ export function ownedCredentialObjectKey(userId, doc) {
 }
 
 export async function removeStoredCredentialObject(userId, doc) {
-  const key = ownedCredentialObjectKey(userId, doc);
-  if (!key) return;
-  try {
-    await deleteObjectFromR2(key);
-  } catch (error) {
-    logger.warn('Credential object cleanup failed', { error: error?.message, key });
-  }
+  const keys = [
+    ownedCredentialObjectKey(userId, doc),
+    ownedCredentialObjectKey(userId, { file_key: doc?.thumb_key }),
+  ].filter(Boolean);
+  await Promise.all(keys.map(async (key) => {
+    try {
+      await deleteObjectFromR2(key);
+    } catch (error) {
+      logger.warn('Credential object cleanup failed', { error: error?.message, key });
+    }
+  }));
 }
 
 const CREDENTIAL_FILE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
@@ -147,9 +151,10 @@ async function promoteToPendingDocs(profileId) {
 }
 
 // Card previews ask for ?thumb=1: a small WebP instead of the full phone photo (often 3-8 MB).
-const THUMB_MAX_PX = 640;
+const THUMB_MAX_PX = 360;
 const THUMB_CACHE_MAX = 200;
 const thumbCache = new Map();
+const thumbJobs = new Map();
 
 function thumbCacheKey(doc) {
   const at = doc?.uploaded_at ? new Date(doc.uploaded_at).getTime() : 0;
@@ -163,11 +168,60 @@ function isImageDocument(doc) {
 
 async function makeThumbnail(buffer) {
   const sharp = (await import('sharp')).default;
-  return sharp(buffer, { failOn: 'none', limitInputPixels: 80_000_000 })
+  return sharp(buffer, { failOn: 'none', sequentialRead: true, limitInputPixels: 40_000_000 })
     .rotate()
-    .resize({ width: THUMB_MAX_PX, height: THUMB_MAX_PX, fit: 'inside', withoutEnlargement: true })
-    .webp({ quality: 72 })
+    .resize({
+      width: THUMB_MAX_PX,
+      height: THUMB_MAX_PX,
+      fit: 'inside',
+      withoutEnlargement: true,
+      fastShrinkOnLoad: true,
+    })
+    .webp({ quality: 60, effort: 1 })
     .toBuffer();
+}
+
+function rememberThumbnail(cacheKey, buffer) {
+  if (!cacheKey || !buffer) return;
+  thumbCache.delete(cacheKey);
+  thumbCache.set(cacheKey, buffer);
+  while (thumbCache.size > THUMB_CACHE_MAX) thumbCache.delete(thumbCache.keys().next().value);
+}
+
+function previewObjectKey(objectKey) {
+  return `${objectKey}.preview.webp`;
+}
+
+async function persistCredentialThumbnail({ userId, profileId, docId, objectKey, buffer, cacheKey }) {
+  const small = await makeThumbnail(buffer);
+  rememberThumbnail(cacheKey, small);
+  const thumbKey = previewObjectKey(objectKey);
+  if (!ownedCredentialObjectKey(userId, { file_key: thumbKey })) return small;
+  await uploadBufferToR2(small, {
+    key: thumbKey,
+    mimeType: 'image/webp',
+    cacheControl: 'private, max-age=86400',
+  });
+  if (profileId && docId) {
+    await ProfessionalProfile.updateOne(
+      { _id: profileId, 'credential_documents._id': docId },
+      { $set: { 'credential_documents.$.thumb_key': thumbKey } },
+    );
+  }
+  return small;
+}
+
+function scheduleCredentialThumbnail(args) {
+  const cacheKey = args.cacheKey || thumbCacheKey({ _id: args.docId, file_key: args.objectKey });
+  if (thumbJobs.has(cacheKey)) return thumbJobs.get(cacheKey);
+  const job = persistCredentialThumbnail({ ...args, cacheKey })
+    .catch((error) => {
+      logger.warn('Credential thumbnail save failed', { error: error?.message, docId: String(args.docId || '') });
+      return null;
+    })
+    .finally(() => thumbJobs.delete(cacheKey));
+  thumbJobs.set(cacheKey, job);
+  return job;
 }
 
 function sendThumbnail(doc, buffer) {
@@ -234,14 +288,35 @@ export async function loadCredentialDocumentFile({ userId, docId, thumb = false 
     return sendThumbnail(doc, cached);
   }
 
+  const storedThumbKey = wantThumb ? String(doc.thumb_key || '').trim() : '';
+  if (storedThumbKey && ownedCredentialObjectKey(userId, { file_key: storedThumbKey })) {
+    try {
+      const stored = await getObjectFromR2(storedThumbKey);
+      if (stored?.buffer?.length) {
+        rememberThumbnail(cacheKey, stored.buffer);
+        return sendThumbnail(doc, stored.buffer);
+      }
+    } catch (error) {
+      logger.warn('Stored credential thumbnail missing; rebuilding', { error: error?.message, docId: String(docId) });
+    }
+  }
+
   try {
     const object = await getObjectFromR2(objectKey);
     if (wantThumb) {
       try {
-        const small = await makeThumbnail(object.buffer);
-        thumbCache.set(cacheKey, small);
-        while (thumbCache.size > THUMB_CACHE_MAX) thumbCache.delete(thumbCache.keys().next().value);
-        return sendThumbnail(doc, small);
+        const pending = thumbJobs.get(cacheKey);
+        const small = pending
+          ? await pending
+          : await scheduleCredentialThumbnail({
+            userId,
+            profileId: profile._id,
+            docId: doc._id,
+            objectKey,
+            buffer: object.buffer,
+            cacheKey,
+          });
+        if (small?.length) return sendThumbnail(doc, small);
       } catch (error) {
         // An image sharp can't read still shows, just at full size.
         logger.warn('Credential thumbnail failed; sending original', { error: error?.message, docId: String(docId) });
@@ -360,6 +435,17 @@ export async function uploadCredentialDocumentService(user, { type, file }) {
 
   const replaced = (before.credential_documents || []).filter((doc) => String(doc.type) === docType);
   await Promise.all(replaced.map((doc) => removeStoredCredentialObject(user._id, doc)));
+
+  if (detected.mime.startsWith('image/')) {
+    scheduleCredentialThumbnail({
+      userId: user._id,
+      profileId: profile._id,
+      docId: newDoc._id,
+      objectKey: newDocKey,
+      buffer: file.buffer,
+      cacheKey: thumbCacheKey(newDoc),
+    });
+  }
 
   const saved = await ProfessionalProfile.findById(profile._id);
   return {

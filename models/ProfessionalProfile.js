@@ -17,6 +17,7 @@ const credentialDocumentSchema = new mongoose.Schema(
     },
     file_url: { type: String, required: true },
     file_key: { type: String, default: '' },
+    thumb_key: { type: String, default: '' },
     file_name: { type: String, default: '' },
     mime_type: { type: String, default: '' },
     uploaded_at: { type: Date, default: Date.now },

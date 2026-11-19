@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
+import { experienceLabel } from '../../utils/experienceYears.js';
 
 let openaiClient = null;
 
@@ -34,7 +35,7 @@ function buildProfileContext({ user, professionalProfile }) {
     company_name: profile.company_name || '',
     location: profile.location || '',
     target_neighborhoods: profile.target_neighborhoods || '',
-    experience: profile.experience || '',
+    experience: experienceLabel(profile),
     license_number: profile.license_number || '',
     website: profile.website || '',
     transaction_volume: profile.transaction_volume || '',

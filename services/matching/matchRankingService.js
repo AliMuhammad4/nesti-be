@@ -21,6 +21,7 @@ import {
   toText,
   tokenOverlapScore,
 } from './matchScoringUtils.js';
+import { experienceLabel, experienceYearsOf } from '../../utils/experienceYears.js';
 
 const ROLE_WEIGHTS = Object.freeze({
   [PROFESSIONAL_TYPE.AGENT]: {
@@ -62,6 +63,7 @@ const RECOMMENDATION_PROFILE_FIELDS = [
   'target_neighborhoods',
   'experience',
   'experience_level',
+  'experience_years',
   'specializations',
   'languages_spoken',
   'active_icp_profile_id',
@@ -581,6 +583,7 @@ export function sanitizeRecommendationItem(item = {}) {
     target_neighborhoods: toSafeText(item.target_neighborhoods),
     experience: toSafeText(item.experience),
     experience_level: toSafeText(item.experience_level),
+    experience_years: item.experience_years === null || item.experience_years === undefined || item.experience_years === '' || !Number.isFinite(Number(item.experience_years)) ? null : Number(item.experience_years),
     specializations: toSafeStringArray(item.specializations),
     languages_spoken: toSafeStringArray(item.languages_spoken),
     profile_image: toSafeNullableText(item.profile_image),
@@ -741,8 +744,10 @@ export async function getClientRecommendationsForUser(userId, { role, limit = 24
         company_name: profile.company_name || '',
         location: profile.location || '',
         target_neighborhoods: profile.target_neighborhoods || '',
-        experience: profile.experience || '',
+        // Display text only; scoring above already ran on the stored level.
+        experience: experienceLabel(profile),
         experience_level: profile.experience_level || '',
+        experience_years: experienceYearsOf(profile),
         specializations: Array.isArray(profile.specializations) ? profile.specializations : [],
         languages_spoken: Array.isArray(profile.languages_spoken) ? profile.languages_spoken : [],
         profile_image: publicProfile?.profile_photo_url || user.profile_image || null,

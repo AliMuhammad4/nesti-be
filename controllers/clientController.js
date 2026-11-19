@@ -16,6 +16,11 @@ import {
   changeClientSubscriptionPlan,
   resumeClientSubscription,
 } from '../services/client/clientSubscriptionService.js';
+import {
+  confirmCardUpdateForUser,
+  createCardUpdateSessionForUser,
+  listPaymentMethodsForUser,
+} from '../services/billing/paymentMethodService.js';
 import { canonicalClientTier, publicClientPlans } from '../services/client/plans.js';
 import { getClientRecommendationsForUser } from '../services/matching/matchRankingService.js';
 import { getClientInquiriesForUser } from '../services/client/clientInquiryService.js';
@@ -641,5 +646,36 @@ export async function changeClientSubscriptionPlanEndpoint(req, res) {
       success: false,
       message: error.message || 'Failed to change subscription plan',
     });
+  }
+}
+
+// Card on file (Stripe-hosted setup page; no Customer Portal). Scoped to the
+// client's own ClientSubscription customer inside paymentMethodService.
+export async function getClientPaymentMethods(req, res) {
+  try {
+    const data = await listPaymentMethodsForUser(req.user);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(502).json({ success: false, message: error?.message || 'Unable to load payment methods.' });
+  }
+}
+
+export async function createClientCardUpdateSession(req, res) {
+  try {
+    const result = await createCardUpdateSessionForUser(req.user);
+    if (!result.ok) return res.status(result.code || 400).json({ success: false, message: result.message });
+    return res.json({ success: true, url: result.url });
+  } catch (error) {
+    return res.status(502).json({ success: false, message: error?.message || 'Unable to start the card update.' });
+  }
+}
+
+export async function confirmClientCardUpdate(req, res) {
+  try {
+    const result = await confirmCardUpdateForUser(req.user, req.body?.session_id);
+    if (!result.ok) return res.status(result.code || 400).json({ success: false, message: result.message });
+    return res.json({ success: true, message: 'Your card on file was updated.' });
+  } catch (error) {
+    return res.status(502).json({ success: false, message: error?.message || 'Unable to confirm the card update.' });
   }
 }

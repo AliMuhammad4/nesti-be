@@ -149,11 +149,7 @@ export function isSubscriptionPeriodEnded(subscription, graceMs = 0) {
   return !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() + graceMs <= Date.now();
 }
 
-export const PROFESSIONAL_PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
-export const PROFESSIONAL_PERIOD_END_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
 const PROFESSIONAL_STRIPE_REFRESH_STALE_MS = 15 * 60 * 1000;
-
-export const CLEANABLE_PROFESSIONAL_STRIPE_STATUSES = new Set(['incomplete']);
 
 export const TERMINAL_PROFESSIONAL_STRIPE_STATUSES = new Set([
   'canceled',
@@ -205,10 +201,6 @@ export function unixSecondsFromDate(value) {
 
 export function getProfessionalPastDueGraceEndsAt() {
   return null;
-}
-
-export function isProfessionalPastDueWithinGrace() {
-  return false;
 }
 
 export function isProfessionalSubscriptionActive(subscription) {

@@ -36,6 +36,7 @@ import {
   getRecentClosedSellerLeadOutcomes,
   getSellerCredentialMetrics,
 } from '../analytics/leadKpiService.js';
+import { experienceLabel, experienceYearsEstimate, experienceYearsOf } from '../../utils/experienceYears.js';
 
 export function toProfessionalProfileSummary(profile) {
   if (!profile) return null;
@@ -47,7 +48,10 @@ export function toProfessionalProfileSummary(profile) {
     calendly_link: profile.calendly_link || '',
     location: profile.location || '',
     target_neighborhoods: profile.target_neighborhoods || '',
-    experience: profile.experience || '',
+    experience: experienceLabel(profile),
+    experience_years: experienceYearsOf(profile),
+    // Numeric years for storefront metrics (legacy levels give an estimate).
+    years_experience: experienceYearsEstimate(profile),
     license_number: profile.license_number || '',
     website: profile.website || '',
     transaction_volume: profile.transaction_volume || '',

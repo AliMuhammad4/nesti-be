@@ -28,6 +28,7 @@ import {
   toDateFromUnix,
 } from './subscriptionShared.js';
 import { syncClientStripeSubscription } from '../client/clientSubscriptionService.js';
+import { clearPaymentActionCache } from './subscriptionInvoiceService.js';
 import {
   invoiceIsStorefrontTemplate,
   isStorefrontTemplateStripeMetadata,
@@ -267,6 +268,70 @@ async function fallbackProfessionalSubscriptionAfterStripeError(user, subscripti
   return expireCanceledSubscriptionIfNeeded(subscription);
 }
 
+// Before c78, checkout carried the app trial into Stripe, so a completed (paid-plan) checkout
+// sat in "trialing" with a saved card. Paying must end the trial: finish it now so Stripe
+// charges the plan and issues the real invoice. App-only trials have no Stripe subscription
+// and never reach this. If the card needs extra action, the sub goes past_due and the usual
+// hosted-invoice Pay link is shown.
+const endingCarriedTrials = new Set();
+
+export function isCarriedOverCheckoutTrial(stripeSubscription) {
+  return String(stripeSubscription?.status || '').toLowerCase() === 'trialing'
+    && isProfessionalPlatformStripeSubscription(stripeSubscription)
+    // A trial the user already asked to cancel must never be charged.
+    && !stripeSubscription.cancel_at_period_end
+    && !stripeSubscription.cancel_at
+    && !stripeSubscription.canceled_at;
+}
+
+async function hasSavedPaymentMethod(stripe, stripeSubscription) {
+  if (normalizeStripeId(stripeSubscription.default_payment_method)) return true;
+  const customerId = normalizeStripeId(stripeSubscription.customer);
+  if (!customerId) return false;
+  try {
+    const customer = await stripe.customers.retrieve(customerId);
+    return Boolean(normalizeStripeId(customer?.invoice_settings?.default_payment_method));
+  } catch {
+    return false;
+  }
+}
+
+export async function endCarriedOverTrialIfNeeded(stripe, user, stripeSubscription) {
+  if (!isCarriedOverCheckoutTrial(stripeSubscription)) return null;
+  // Without a saved card, ending the trial would only create an unpaid invoice and lock access.
+  if (!(await hasSavedPaymentMethod(stripe, stripeSubscription))) return null;
+  const subscriptionId = normalizeStripeId(stripeSubscription.id);
+  if (!subscriptionId || endingCarriedTrials.has(subscriptionId)) return null;
+  endingCarriedTrials.add(subscriptionId);
+  try {
+    const updated = await stripe.subscriptions.update(subscriptionId, {
+      trial_end: 'now',
+      proration_behavior: 'none',
+      payment_behavior: 'allow_incomplete',
+      expand: ['latest_invoice'],
+    }, { idempotencyKey: `end-carried-trial-${subscriptionId}` });
+    clearPaymentActionCache();
+    const invoice = updated?.latest_invoice && typeof updated.latest_invoice === 'object' ? updated.latest_invoice : null;
+    console.info('Ended carried-over checkout trial', {
+      user_id: String(user?._id || ''),
+      subscription_id: subscriptionId,
+      status: updated?.status,
+      invoice_id: invoice?.id || normalizeStripeId(updated?.latest_invoice),
+      invoice_status: invoice?.status,
+    });
+    return updated;
+  } catch (error) {
+    console.warn('Could not end carried-over checkout trial', {
+      user_id: String(user?._id || ''),
+      subscription_id: subscriptionId,
+      error: error?.message || error,
+    });
+    return null;
+  } finally {
+    endingCarriedTrials.delete(subscriptionId);
+  }
+}
+
 export async function refreshSubscriptionFromStripeForUser(user) {
   const subscription = await Subscription.findOne({ user_id: user._id });
   const customerId = String(subscription?.stripe_customer_id || '').trim();
@@ -302,6 +367,10 @@ export async function refreshSubscriptionFromStripeForUser(user) {
     });
   } catch (error) {
     return fallbackProfessionalSubscriptionAfterStripeError(user, subscription, error, 'retrieve-active');
+  }
+  const trialEnded = await endCarriedOverTrialIfNeeded(stripe, user, detailedStripeSubscription);
+  if (trialEnded) {
+    return syncStripeSubscription(trialEnded, { user_id: String(user._id) });
   }
   let repairResult = { repaired: false };
   try {

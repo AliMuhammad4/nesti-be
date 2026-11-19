@@ -52,6 +52,18 @@ export function isDisposableEmail(email) {
   return BLOCKED_DOMAIN_KEYWORDS.some((keyword) => domain.includes(keyword));
 }
 
+/**
+ * Single source of truth for the signup form: the frontend fetches these rules
+ * from GET /auth/disposable-email-rules instead of keeping its own copy.
+ */
+export function disposableEmailRules() {
+  return {
+    domains: [...EXACT_DISPOSABLE_DOMAINS],
+    keywords: [...BLOCKED_DOMAIN_KEYWORDS],
+    message: DISPOSABLE_EMAIL_MESSAGE,
+  };
+}
+
 export const DISPOSABLE_EMAIL_MESSAGE =
   'Temporary or disposable email addresses are not allowed. Please use a permanent business or personal email address.';
 

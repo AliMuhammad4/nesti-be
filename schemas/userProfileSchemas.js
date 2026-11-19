@@ -170,6 +170,7 @@ const professionalProfileCreateSchema = Joi.object({
     .allow('', null),
   working_style_tags: Joi.array().items(Joi.string()).max(5).default([]),
   experience_level: Joi.string().valid(...EXPERIENCE_LEVEL_VALUES).allow('', null),
+  experience_years: Joi.number().integer().min(0).max(20).allow(null).optional(),
   core_specialization_tags: Joi.array().items(Joi.string()).max(5).default([]),
   specialty_strength_tags: Joi.array().items(Joi.string()).max(5).default([]),
   personality_style_tags: Joi.array().items(Joi.string()).max(5).default([]),

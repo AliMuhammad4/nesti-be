@@ -10,6 +10,7 @@ import {
   LAWYER_NEWCOMER_TEMPLATE_ID,
 } from './lawyerNewcomerStorefrontContract.js';
 import { defaultStorefrontTemplateIdForRole } from './storefrontTemplateDefaults.js';
+import { experienceLabel } from '../../utils/experienceYears.js';
 
 const MODEL = 'gpt-4o-mini';
 let client;
@@ -446,7 +447,7 @@ export async function generateStorefrontDraft({ user, professionalProfile, onboa
     full_name: professionalProfile?.full_name || [user?.first_name, user?.last_name].filter(Boolean).join(' '),
     company_name: professionalProfile?.company_name || '',
     location: professionalProfile?.location || '',
-    experience: professionalProfile?.experience || '',
+    experience: experienceLabel(professionalProfile),
     specializations: professionalProfile?.specializations || [],
     languages_spoken: professionalProfile?.languages_spoken || [],
     cities: professionalProfile?.service_area_cities || [],

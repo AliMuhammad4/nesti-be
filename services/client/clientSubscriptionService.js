@@ -378,7 +378,10 @@ export async function listClientPaidInvoicesForUser(userId, limit = 24) {
     limit: Math.min(Math.max(Number(limit) || 24, 1), 100),
   });
 
-  return result.data.map((invoice) => presentPaidClientInvoice(invoice, subscription));
+  // $0 trial invoices are not payments; keep them out of the paid history.
+  return result.data
+    .filter((invoice) => Number(invoice.amount_paid || 0) > 0)
+    .map((invoice) => presentPaidClientInvoice(invoice, subscription));
 }
 
 async function recordImmediatePlanChange(synced, subscription, { currentTier, targetTier, type }) {

@@ -25,7 +25,6 @@ export {
 } from './subscriptionStripeSyncService.js';
 
 export {
-  cancelProfessionalBillingForConvertedClient,
   cancelSubscriptionForUser,
   changeSubscriptionPlanForUser,
   resumeSubscriptionForUser,

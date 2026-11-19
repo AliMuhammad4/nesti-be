@@ -33,6 +33,7 @@ import { listPaidInvoicesForUser } from '../billing/subscriptionInvoiceService.j
 import { deriveLeadInquirySource } from './adminLeadService.js';
 import { PHONE_INVALID_MESSAGE, PHONE_TAKEN_MESSAGE, isPhoneDuplicateError, normalizePhoneE164 } from '../../utils/phone.js';
 import { PERSON_NAME_MESSAGE, isValidPersonName } from '../../utils/personName.js';
+import { experienceLabel, experienceYearsEstimate } from '../../utils/experienceYears.js';
 
 const OPEN_LEAD_STATUSES = ['new', 'consult_booked', 'showing_booked', 'nurturing'];
 const TRAFFIC_DAYS = 30; // unique visitors use this window; lead counts are all-time
@@ -602,6 +603,9 @@ export async function getAdminProfessionalService(id) {
   return ok({
     professional: {
       ...professionalFields,
+      // Admin sees the same "N years" text as the profile and web page.
+      experience: experienceLabel(profile),
+      experience_years: experienceYearsEstimate(profile),
       id: String(profile._id),
       user: serializeUser(profile.user_id),
     },

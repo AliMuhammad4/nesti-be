@@ -16,6 +16,7 @@ import { USER_ROLE, isProfessionalRole } from '../../../constants/roles.js';
 import ProfessionalProfile from '../../../models/ProfessionalProfile.js';
 import logger from '../../../utils/logger.js';
 import { presentableNames, PLACEHOLDER_FIRST_NAME, PLACEHOLDER_LAST_NAME } from '../../../utils/placeholderName.js';
+import { experienceLabel, experienceYearsOf } from '../../../utils/experienceYears.js';
 
 export { newClientTrialFields, clientTrialEndsAt, isClientTrialActive };
 
@@ -148,7 +149,8 @@ function normalizeProfessionalProfile(profileDoc) {
     phone: p.phone || '',
     location: p.location || '',
     target_neighborhoods: p.target_neighborhoods || '',
-    experience: p.experience || '',
+    experience: experienceLabel(p),
+    experience_years: experienceYearsOf(p),
     license_number: p.license_number || '',
     country: p.country || null,
     jurisdiction: p.jurisdiction || '',
@@ -201,7 +203,7 @@ export { normalizeProfessionalProfile };
 
 const SHARED_PROFILE_FIELDS = [
   'full_name', 'professional_type', 'company_name', 'website', 'location',
-  'target_neighborhoods', 'experience', 'experience_level', 'social_media',
+  'target_neighborhoods', 'experience', 'experience_level', 'experience_years', 'social_media',
   'transaction_volume', 'avg_sale_price', 'response_time', 'availability',
   'support_level', 'negotiation_style', 'sales_approach', 'energy_style',
   'personality_tag', 'awards', 'bio', 'specializations', 'communication_channels',

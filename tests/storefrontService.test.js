@@ -73,6 +73,77 @@ test('storefront draft validation accepts bounded structured content', () => {
   assert.equal(value.draft.blocks[0].data.layout.animationType, 'slide-up');
 });
 
+test('storefront draft validation accepts safe element editing data on site and page blocks', () => {
+  const block = {
+    id: 'hero',
+    type: 'hero',
+    data: {
+      layout: {
+        elementStyles: {
+          'block:text': {
+            fontSize: '32px',
+            fontWeight: '700',
+            color: '#112233',
+            linkHref: '/contact',
+          },
+        },
+        richText: { 'block:text': '<p><strong>A local business</strong></p>' },
+        chrome: { background: '#ffffff', radius: '16px', marginY: '24px' },
+      },
+    },
+  };
+  const result = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [block],
+      template: { id: 'agent-atelier' },
+      website: {
+        pages: [{
+          id: 'home',
+          name: 'Home',
+          slug: 'home',
+          type: 'home',
+          blocks: [block],
+        }],
+      },
+    },
+  });
+
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.value.draft.blocks[0].data.layout.elementStyles, block.data.layout.elementStyles);
+  assert.deepEqual(
+    result.value.draft.website.pages[0].blocks[0].data.layout.chrome,
+    block.data.layout.chrome,
+  );
+});
+
+test('storefront element editing validation rejects unsafe and unsupported style data', () => {
+  const draftWithStyle = (style) => ({
+    draft: {
+      blocks: [{
+        id: 'hero',
+        type: 'hero',
+        data: { layout: { elementStyles: { 'block:text': style } } },
+      }],
+    },
+  });
+
+  assert.ok(saveStorefrontDraftSchema.validate(
+    draftWithStyle({ color: 'url(javascript:alert(1))' }),
+  ).error);
+  assert.ok(saveStorefrontDraftSchema.validate(
+    draftWithStyle({ unsupportedProperty: 'value' }),
+  ).error);
+  assert.ok(saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'hero',
+        type: 'hero',
+        data: { layout: { richText: { 'block:text': '<script>alert(1)</script>' } } },
+      }],
+    },
+  }).error);
+});
+
 test('storefront CTA layout only accepts inline or stacked buttons', () => {
   for (const buttonLayout of ['inline', 'stacked']) {
     const result = saveStorefrontDraftSchema.validate({
@@ -853,6 +924,35 @@ test('public storefront strictly whitelists essentials while owner revisions ret
         service_area: 'Toronto',
         languages_spoken: ['english'],
         calendly_link: 'https://calendly.com/example',
+        investor_theme_preset: 'midnight-gold',
+        investor_color_mode: 'dark',
+        investor_gradients: false,
+        investor_animations: true,
+        investor_visuals: {
+          gradient_angle: 220,
+          gradient_intensity: 44,
+          spacing: 'airy',
+          content_width: 'wide',
+          card_radius: 'soft',
+          shadow: 'large',
+          private_setting: 'confidential',
+        },
+        aurora_theme_preset: 'midnight-gold',
+        aurora_color_mode: 'dark',
+        aurora_gradients: false,
+        aurora_animations: true,
+        aurora_visuals: {
+          gradient_angle: 220,
+          gradient_intensity: 48,
+          spacing: 'spacious',
+          content_width: 'wide',
+          card_radius: 'soft',
+          card_style: 'glass',
+          divider_style: 'angled',
+          button_style: 'outline',
+          button_size: 'large',
+          private_setting: 'confidential',
+        },
         private_onboarding_answer: 'confidential',
         ai_context: { customer_segment: 'private' },
       },
@@ -865,7 +965,69 @@ test('public storefront strictly whitelists essentials while owner revisions ret
   assert.equal(owner.brandKit.essentials.private_onboarding_answer, 'confidential');
   assert.deepEqual(publicStorefront.brandKit.essentials, {
     calendly_link: 'https://calendly.com/example',
+    investor_theme_preset: 'midnight-gold',
+    investor_color_mode: 'dark',
+    investor_gradients: false,
+    investor_animations: true,
+    investor_visuals: {
+      gradient_angle: 220,
+      gradient_intensity: 44,
+      spacing: 'airy',
+      content_width: 'wide',
+      card_radius: 'soft',
+      shadow: 'large',
+    },
+    aurora_theme_preset: 'midnight-gold',
+    aurora_color_mode: 'dark',
+    aurora_gradients: false,
+    aurora_animations: true,
+    aurora_visuals: {
+      gradient_angle: 220,
+      gradient_intensity: 48,
+      spacing: 'spacious',
+      content_width: 'wide',
+      card_radius: 'soft',
+      card_style: 'glass',
+      divider_style: 'angled',
+      button_style: 'outline',
+      button_size: 'large',
+    },
     languages_spoken: ['english'],
     service_area: 'Toronto',
   });
+});
+
+test('public investor theme settings reject invalid and unknown values', () => {
+  const draft = createDraftRevision({
+    blocks: [],
+    brandKit: {
+      essentials: {
+        investor_theme_preset: 'unknown-preset',
+        investor_color_mode: 'sepia',
+        investor_gradients: 'false',
+        investor_animations: 1,
+        investor_visuals: {
+          gradient_angle: 361,
+          gradient_intensity: 61,
+          shadow: 'glow',
+          private_setting: 'confidential',
+        },
+        aurora_theme_preset: 'unknown-preset',
+        aurora_color_mode: 'sepia',
+        aurora_gradients: 'false',
+        aurora_animations: 1,
+        aurora_visuals: {
+          gradient_angle: 361,
+          gradient_intensity: 61,
+          card_style: 'neon',
+          private_setting: 'confidential',
+        },
+      },
+    },
+  });
+  const publicStorefront = serializePublishedStorefront({
+    published: createPublishedRevision(draft),
+  });
+
+  assert.deepEqual(publicStorefront.brandKit.essentials, {});
 });

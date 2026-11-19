@@ -89,6 +89,7 @@ const storefrontRevisionSchema = new mongoose.Schema({
   revision_version: { type: Number, min: 0, default: 0 },
   updated_at: { type: Date, default: null },
   published_at: { type: Date, default: null },
+  website: { type: mongoose.Schema.Types.Mixed },
 }, { _id: false });
 
 const storefrontTemplatePurchaseSchema = new mongoose.Schema({

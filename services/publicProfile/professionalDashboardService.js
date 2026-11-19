@@ -363,17 +363,14 @@ function hasRevisionExpectation(expected = {}) {
 
 function revisionContentMatches(revision, canonicalDraft) {
   const serialized = serializeStorefrontRevision(revision);
-  return JSON.stringify({
-    blocks: serialized?.blocks || [],
-    brandKit: serialized?.brandKit || {},
-    template: serialized?.template || {},
-    seo_meta: serialized?.seo_meta || {},
-  }) === JSON.stringify({
-    blocks: canonicalDraft?.blocks || [],
-    brandKit: canonicalDraft?.brandKit || {},
-    template: canonicalDraft?.template || {},
-    seo_meta: canonicalDraft?.seo_meta || {},
+  const snapshot = (entry) => ({
+    blocks: entry?.blocks || [],
+    brandKit: entry?.brandKit || {},
+    template: entry?.template || {},
+    seo_meta: entry?.seo_meta || {},
+    ...(entry?.website ? { website: entry.website } : {}),
   });
+  return JSON.stringify(snapshot(serialized)) === JSON.stringify(snapshot(canonicalDraft));
 }
 
 async function saveProfileOrConflict(profile, currentRevision) {

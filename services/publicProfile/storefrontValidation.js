@@ -328,6 +328,65 @@ const storefrontContentSchema = Joi.object()
   })
   .default({});
 
+const storefrontCssColorSchema = Joi.string()
+  .max(40)
+  .pattern(/^(?:#[0-9a-fA-F]{3,8}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\))$/);
+const storefrontCssLengthSchema = Joi.string()
+  .max(24)
+  .pattern(/^\d{1,4}(?:\.\d+)?(?:px|rem|em|%)$/);
+const storefrontStyleMapKeyPattern = /^(?!__proto__$|constructor$|prototype$)[\s\S]{1,240}$/;
+const storefrontElementStyleSchema = Joi.object({
+  fontFamily: Joi.string().max(80).pattern(/^[a-zA-Z0-9 ,"'._-]+$/).optional(),
+  fontSize: storefrontCssLengthSchema.optional(),
+  fontWeight: Joi.string().valid('300', '400', '500', '600', '650', '700', '800').optional(),
+  fontStyle: Joi.string().valid('normal', 'italic').optional(),
+  textDecoration: Joi.string().max(24).pattern(/^(?:underline|line-through)(?: (?:underline|line-through))*$/).optional(),
+  color: storefrontCssColorSchema.optional(),
+  backgroundColor: storefrontCssColorSchema.optional(),
+  lineHeight: Joi.string().max(8).pattern(/^(?:0|[1-9]\d?)(?:\.\d+)?$/).optional(),
+  letterSpacing: Joi.string().max(24).pattern(/^-?\d{1,4}(?:\.\d+)?(?:px|rem|em|%)$/).optional(),
+  textTransform: Joi.string().valid('none', 'uppercase', 'lowercase', 'capitalize').optional(),
+  textAlign: Joi.string().valid('left', 'center', 'right', 'justify').optional(),
+  borderRadius: storefrontCssLengthSchema.optional(),
+  width: storefrontCssLengthSchema.optional(),
+  height: storefrontCssLengthSchema.optional(),
+  objectFit: Joi.string().valid('cover', 'contain', 'fill', 'none', 'scale-down').optional(),
+  aspectRatio: Joi.string().valid('1 / 1', '4 / 3', '3 / 4', '16 / 9', '9 / 16').optional(),
+  padding: storefrontCssLengthSchema.optional(),
+  borderWidth: storefrontCssLengthSchema.optional(),
+  borderColor: storefrontCssColorSchema.optional(),
+  paddingLeft: storefrontCssLengthSchema.optional(),
+  textRole: Joi.string().valid('p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote').optional(),
+  linkHref: Joi.string().trim().max(500)
+    .custom((value, helpers) => (
+      isSafeNavigationValue(value) ? value : helpers.error('any.invalid')
+    ))
+    .optional(),
+}).min(1).unknown(false);
+const storefrontElementStylesSchema = Joi.object()
+  .pattern(storefrontStyleMapKeyPattern, storefrontElementStyleSchema)
+  .max(80)
+  .unknown(false);
+const storefrontRichTextSchema = Joi.object()
+  .pattern(
+    storefrontStyleMapKeyPattern,
+    Joi.string().max(20000).custom((value, helpers) => (
+      /<\s*script|javascript:|on\w+\s*=/i.test(value)
+        ? helpers.error('any.invalid')
+        : value
+    )),
+  )
+  .max(80)
+  .unknown(false);
+const storefrontChromeSchema = Joi.object({
+  background: storefrontCssColorSchema.optional(),
+  radius: storefrontCssLengthSchema.optional(),
+  marginY: storefrontCssLengthSchema.optional(),
+  borderWidth: storefrontCssLengthSchema.optional(),
+  borderColor: storefrontCssColorSchema.optional(),
+  minHeight: storefrontCssLengthSchema.optional(),
+}).min(1).unknown(false);
+
 const storefrontLayoutSchema = Joi.object({
   alignment: Joi.string().valid('left', 'center', 'right').optional(),
   contentAlignment: Joi.string().valid('left', 'center', 'right').optional(),
@@ -373,6 +432,9 @@ const storefrontLayoutSchema = Joi.object({
       .max(48)
       .optional(),
   }).optional(),
+  elementStyles: storefrontElementStylesSchema.optional(),
+  richText: storefrontRichTextSchema.optional(),
+  chrome: storefrontChromeSchema.optional(),
 }).unknown(false);
 
 const storefrontStyleSchema = Joi.object({
@@ -431,11 +493,84 @@ const storefrontSeoSchema = Joi.object({
   keywords: Joi.array().items(Joi.string().trim().max(50)).unique().max(8).optional(),
 }).unknown(false);
 
+function assertSafeWebsiteHref(value, helpers) {
+  if (value === undefined || value === null || value === '') return value || '';
+  const href = String(value);
+  const allowed = (href.startsWith('/') && !href.startsWith('//'))
+    || /^https?:\/\//i.test(href)
+    || /^(mailto|tel):/i.test(href);
+  if (!allowed) return helpers.error('any.invalid');
+  return href;
+}
+
+const websiteFieldSchema = Joi.object({
+  key: Joi.string().trim().max(40).pattern(/^[a-z][a-z0-9_]*$/).required(),
+  label: Joi.string().trim().max(80).required(),
+  type: Joi.string().valid('text', 'email', 'tel', 'textarea', 'select').required(),
+  required: Joi.boolean().optional(),
+  options: Joi.array().items(Joi.string().trim().max(80)).max(12).optional(),
+}).unknown(false);
+
+const websiteFormSchema = Joi.object({
+  intent: Joi.string().trim().max(40).required(),
+  submit_label: Joi.string().trim().max(80).allow('').optional(),
+  success_message: Joi.string().trim().max(400).allow('').optional(),
+  redirect_page_id: Joi.string().trim().max(80).allow('', null).optional(),
+  fields: Joi.array().items(websiteFieldSchema).max(12).required(),
+}).unknown(false);
+
+const websiteNavLeafSchema = Joi.object({
+  id: Joi.string().trim().max(80).pattern(SAFE_BLOCK_IDENTIFIER_PATTERN).required(),
+  label: Joi.string().trim().max(80).required(),
+  kind: Joi.string().valid('page', 'external').required(),
+  page_id: Joi.string().trim().max(80).allow('').optional(),
+  href: Joi.string().trim().max(500).allow('').custom(assertSafeWebsiteHref).optional(),
+  visible: Joi.boolean().optional(),
+}).unknown(false);
+
+const websiteNavItemSchema = websiteNavLeafSchema.keys({
+  children: Joi.array().items(websiteNavLeafSchema).max(8).optional(),
+});
+
+const websitePageSchema = Joi.object({
+  id: Joi.string().trim().max(80).pattern(SAFE_BLOCK_IDENTIFIER_PATTERN).required(),
+  name: Joi.string().trim().max(80).required(),
+  slug: Joi.string().trim().max(60).pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).required(),
+  type: Joi.string().trim().max(40).required(),
+  status: Joi.string().valid('draft', 'published').optional(),
+  updated_at: Joi.string().isoDate().allow(null, '').optional(),
+  seo: storefrontSeoSchema.optional(),
+  form: websiteFormSchema.allow(null).optional(),
+  blocks: Joi.array().items(storefrontBlockSchema).unique('id').max(40).default([]),
+}).unknown(false);
+
+const websiteSchema = Joi.object({
+  name: Joi.string().trim().max(160).allow('').optional(),
+  active_page_id: Joi.string().trim().max(80).allow('').optional(),
+  styles: Joi.object({
+    container: Joi.string().valid('narrow', 'standard', 'wide').optional(),
+    section_spacing: Joi.string().valid('compact', 'comfortable', 'spacious').optional(),
+    radius: Joi.string().valid('none', 'small', 'medium', 'large').optional(),
+    shadow: Joi.string().valid('none', 'small', 'medium', 'large').optional(),
+  }).unknown(false).optional(),
+  settings: Joi.object({
+    favicon_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('', null).optional(),
+    seo_title: Joi.string().trim().max(60).allow('').optional(),
+    seo_description: Joi.string().trim().max(160).allow('').optional(),
+  }).unknown(false).optional(),
+  navigation: Joi.object({
+    header: Joi.array().items(websiteNavItemSchema).max(24).default([]),
+    footer: Joi.array().items(websiteNavItemSchema).max(24).default([]),
+  }).unknown(false).optional(),
+  pages: Joi.array().items(websitePageSchema).unique('id').max(24).required(),
+}).unknown(false);
+
 export const storefrontDraftSchema = Joi.object({
   blocks: Joi.array().items(storefrontBlockSchema).unique('id').max(60).optional(),
   brandKit: storefrontBrandKitSchema.optional(),
   template: storefrontTemplateSchema.optional(),
   seo_meta: storefrontSeoSchema.optional(),
+  website: websiteSchema.optional(),
   revision_id: Joi.string().trim().max(80).allow(null, '').optional(),
   revision_version: Joi.number().integer().min(0).optional(),
 }).min(1);
@@ -750,7 +885,10 @@ export function validateStorefrontDraftForRole(draft, role) {
   });
   if (error) return { error, value };
 
-  const allowedBlockTypes = new Set(allowedStorefrontBlockTypes(role, value.template?.id));
+  const allowedBlockTypes = new Set([
+    ...allowedStorefrontBlockTypes(role, value.template?.id),
+    'ui-element',
+  ]);
   const invalidBlockTypes = (value.blocks || [])
     .filter((block) => !allowedBlockTypes.has(block.type))
     .map((block) => block.type);
@@ -759,6 +897,18 @@ export function validateStorefrontDraftForRole(draft, role) {
       error: new Error(`Unsupported storefront block type for ${role}: ${invalidBlockTypes.join(', ')}`),
       value,
     };
+  }
+
+  for (const page of value.website?.pages || []) {
+    const invalidPageBlocks = (page.blocks || [])
+      .filter((block) => !allowedBlockTypes.has(block.type))
+      .map((block) => block.type);
+    if (invalidPageBlocks.length) {
+      return {
+        error: new Error(`Unsupported storefront block type on ${page.name}: ${invalidPageBlocks.join(', ')}`),
+        value,
+      };
+    }
   }
 
   if (

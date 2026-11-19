@@ -150,30 +150,35 @@ function presentOpenInvoice(invoice) {
   };
 }
 
-async function billingPortalFallbackUrl(customerId) {
-  const normalizedCustomerId = String(customerId || '').trim();
-  if (!normalizedCustomerId) return '';
-  try {
-    const stripe = getStripeClient();
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: normalizedCustomerId,
-    });
-    return portalSession.url || '';
-  } catch {
-    return '';
-  }
+// Open-invoice lookups hit Stripe; the billing page reads them on every load while past due,
+// so results (including "none") are reused briefly. No Customer Portal sessions are created.
+const PAYMENT_ACTION_TTL_MS = 60_000;
+const PAYMENT_ACTION_CACHE_MAX = 500;
+const paymentActionCache = new Map();
+
+export function clearPaymentActionCache() {
+  paymentActionCache.clear();
 }
 
 export async function paymentActionForOpenInvoice({
   customerId,
   subscriptionId = '',
   latestInvoiceId = '',
+  fallbackUrl = '',
+  fallbackLabel = 'Choose a plan',
 } = {}) {
-  const openInvoice = await getOpenPayableInvoiceForCustomer({
-    customerId,
-    subscriptionId,
-    latestInvoiceId,
-  });
+  const key = [customerId, subscriptionId, latestInvoiceId].map((v) => String(v || '').trim()).join('|');
+  const cached = paymentActionCache.get(key);
+  let openInvoice;
+  if (cached && Date.now() - cached.at < PAYMENT_ACTION_TTL_MS) {
+    openInvoice = cached.openInvoice;
+  } else {
+    openInvoice = await getOpenPayableInvoiceForCustomer({ customerId, subscriptionId, latestInvoiceId });
+    if (paymentActionCache.size >= PAYMENT_ACTION_CACHE_MAX) {
+      paymentActionCache.delete(paymentActionCache.keys().next().value);
+    }
+    paymentActionCache.set(key, { at: Date.now(), openInvoice: openInvoice || null });
+  }
   if (openInvoice?.hostedInvoiceUrl) {
     return {
       paymentActionUrl: openInvoice.hostedInvoiceUrl,
@@ -181,13 +186,8 @@ export async function paymentActionForOpenInvoice({
       openInvoice,
     };
   }
-  const portalUrl = await billingPortalFallbackUrl(customerId);
-  if (portalUrl) {
-    return {
-      paymentActionUrl: portalUrl,
-      paymentActionLabel: 'Manage payment',
-      openInvoice: null,
-    };
+  if (fallbackUrl) {
+    return { paymentActionUrl: fallbackUrl, paymentActionLabel: fallbackLabel, openInvoice: null };
   }
   return null;
 }

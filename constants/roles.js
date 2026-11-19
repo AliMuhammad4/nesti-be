@@ -14,6 +14,18 @@ export const USER_ROLE = Object.freeze({
 
 export const PROFESSIONAL_TYPE_VALUES = Object.freeze(Object.values(PROFESSIONAL_TYPE));
 
+/** Roles a person can pick when they sign up. Admin accounts are never self-created. */
+export const SIGNUP_ROLE_VALUES = Object.freeze([
+  USER_ROLE.AGENT,
+  USER_ROLE.MORTGAGE_BROKER,
+  USER_ROLE.LAWYER,
+  USER_ROLE.CLIENT,
+]);
+
+export function isSignupRole(role) {
+  return SIGNUP_ROLE_VALUES.includes(role);
+}
+
 export const USER_ROLE_VALUES = Object.freeze([
   USER_ROLE.AGENT,
   USER_ROLE.MORTGAGE_BROKER,

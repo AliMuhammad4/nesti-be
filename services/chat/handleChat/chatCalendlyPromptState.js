@@ -79,6 +79,7 @@ export async function buildFlowSystemPromptOptions({
   isAutomatedBookingEnabled,
   calendlyLinkForVisitor,
   propertyMatchesEnabled = true,
+  storedForm = null,
 }) {
   const calendlySnapForPrompt = conversationSnapshot || {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,

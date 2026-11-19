@@ -25,24 +25,33 @@ import {
   fetchCalendlyAccountLabel,
   fetchCalendlyUserResource,
   parseCalendlyOAuthState,
-  refreshCalendlyAccessToken,
 } from '../services/calendly/oauthService.js';
 import { applyCalendlyOAuthAlignment, calendlyWebhookAlignmentMeta } from '../services/calendly/calendlyAlignmentService.js';
 import { listCalendlyWebhookSubscriptions, registerCalendlyInviteeWebhook } from '../services/calendly/registerInviteeWebhook.js';
 import { applyCalendlyCancellationToLeadForUser, processCalendlyWebhook } from '../services/calendly/calendlyWebhookService.js';
+import { notifyCalendlySyncRestored } from '../services/calendly/calendlyNotifications.js';
+import { CALENDLY_WEBHOOK_ERROR_KINDS, calendlyWebhookErrorKind, userFacingCalendlyRegisterError } from '../utils/calendlyWebhookErrors.js';
+import { isTransientCalendlyError } from '../services/calendly/calendlyHttp.js';
 import {
-  notifyCalendlyPlanBlocked,
-  notifyCalendlySyncRestored,
-} from '../services/calendly/calendlyNotifications.js';
-import { calendlyWebhookErrorKind, userFacingCalendlyRegisterError } from '../utils/calendlyWebhookErrors.js';
+  CALENDLY_ACCESS_KIND,
+  CalendlyAccessError,
+  ensureFreshCalendlyAccess,
+} from '../services/calendly/calendlyTokenService.js';
+import {
+  attentionKindForCalendlyError,
+  checkCalendlyConnectionHealth,
+  markCalendlyReconnectRequired,
+  persistCalendlyWebhookState,
+} from '../services/calendly/calendlyConnectionHealth.js';
 import { listBookedAppointmentsForUser } from '../services/calendar/calendarBookingsService.js';
 
 const router = express.Router();
 
 // ─── Feature flags ────────────────────────────────────────────────────────────
 
-const embedAllowed  = () => process.env.CALENDLY_CONNECT_BY_EMBED === 'true' || process.env.NODE_ENV !== 'production';
-const devAllowed    = () => process.env.CALENDLY_DEV_TOOLS === 'true' || process.env.NODE_ENV !== 'production';
+// Embed-token Calendly routes and the test-booking (simulate) tools are off unless explicitly enabled.
+const embedAllowed  = () => process.env.CALENDLY_CONNECT_BY_EMBED === 'true';
+const devAllowed    = () => process.env.CALENDLY_DEV_TOOLS === 'true';
 
 function maskToken(t) {
   if (!t || typeof t !== 'string' || !t.trim()) return null;
@@ -71,45 +80,44 @@ async function loadEmbed(req, res, next) {
   next();
 }
 
-/** Refresh OAuth token this many ms before Calendly expiry so cancel/webhooks don’t hit 401. */
-const CALENDLY_REFRESH_SKEW_MS = 5 * 60 * 1000;
+const CALENDLY_UNAVAILABLE_MESSAGE = 'Calendly is not responding right now. Please try again in a moment.';
+/** Max time a status load waits for the (throttled) Calendly health re-check before answering. */
+const STATUS_HEALTH_WAIT_MS = 4000;
+
+/** Calendly-side failure → JSON. The codes are never session-end codes, so the user stays logged in. */
+async function sendCalendlyAccessError(res, userId, err) {
+  if (err?.kind === CALENDLY_ACCESS_KIND.reconnect) {
+    await markCalendlyReconnectRequired(userId, err.message);
+    return res.status(401).json({ success: false, code: 'CALENDLY_RECONNECT_REQUIRED', message: err.message });
+  }
+  return res.status(503).json({ success: false, code: 'CALENDLY_UNAVAILABLE', message: err?.message || CALENDLY_UNAVAILABLE_MESSAGE });
+}
 
 async function requireCalendlyConnected(req, res, next) {
   const userId = req.embed ? req.embed.user_id : req.user._id;
-  let integ = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' });
+  const integ = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' });
   if (!integ?.access_token) return res.status(400).json({ success: false, message: 'Connect Calendly (OAuth) first.' });
 
-  const expiresAt = integ.expires_at ? new Date(integ.expires_at).getTime() : 0;
-  const staleOrUnknownExpiry = !expiresAt || expiresAt < Date.now() + CALENDLY_REFRESH_SKEW_MS;
-  if (staleOrUnknownExpiry && integ.refresh_token) {
-    try {
-      const tokens = await refreshCalendlyAccessToken(integ.refresh_token);
-      const accessToken = tokens.access_token;
-      const newRefresh = tokens.refresh_token || integ.refresh_token;
-      const newExpires = new Date(Date.now() + (Number(tokens.expires_in) || 7200) * 1000);
-      integ = await CalendarIntegration.findOneAndUpdate(
-        { _id: integ._id },
-        { $set: { access_token: accessToken, refresh_token: newRefresh, expires_at: newExpires } },
-        { returnDocument: 'after' },
-      );
-      logger.info('Calendar API: Calendly access token refreshed', { op: 'calendar.calendly.refresh', user_id: String(userId) });
-    } catch (e) {
-      logger.warn(`Calendly token refresh: ${e.message}`);
-      return res.status(401).json({
-        success: false,
-        message:
-          'Calendly connection expired. Open Settings and disconnect, then connect Calendly again (or wait a moment and retry).',
-      });
-    }
-  } else if (staleOrUnknownExpiry && !integ.refresh_token) {
-    return res.status(401).json({
-      success: false,
-      message: 'Calendly access expired and no refresh token is stored. Connect Calendly again in Settings.',
-    });
+  try {
+    req.calendlyInteg = await ensureFreshCalendlyAccess(integ);
+  } catch (e) {
+    return sendCalendlyAccessError(res, userId, e);
   }
-
-  req.calendlyInteg = integ;
   next();
+}
+
+async function runBoundedCalendlyHealthCheck(userId) {
+  const check = checkCalendlyConnectionHealth(userId).catch((err) => {
+    logger.warn('Calendly health check failed', { op: 'calendly.health', user_id: String(userId), error: err?.message });
+    return null;
+  });
+  let timer;
+  const wait = new Promise((resolve) => {
+    timer = setTimeout(resolve, STATUS_HEALTH_WAIT_MS);
+    timer.unref?.();
+  });
+  await Promise.race([check, wait]);
+  clearTimeout(timer);
 }
 
 function requireCalendlyProvider(req, res, next) {
@@ -163,32 +171,6 @@ function resolveCalendlyOAuthErrorBrowserRedirect() {
   const fe = process.env.FRONTEND_URL?.trim().replace(/\/$/, '');
   if (fe) return `${fe}/calendly-callback?calendly=error`;
   return null;
-}
-
-async function persistCalendlyWebhookState(userId, { targetUrl, error }) {
-  const prev = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' })
-    .select('calendly_webhook_error_kind')
-    .lean();
-  const previousKind = prev?.calendly_webhook_error_kind || null;
-
-  const url = String(targetUrl || '').trim() || null;
-  if (error) {
-    const kind = calendlyWebhookErrorKind(String(error));
-    const msg = userFacingCalendlyRegisterError(kind, String(error));
-    await CalendarIntegration.updateOne(
-      { user_id: userId, provider: 'calendly' },
-      { $set: { calendly_webhook_url: url, calendly_webhook_register_error: msg, calendly_webhook_error_kind: kind, calendly_webhook_registered_at: null } }
-    );
-    if (kind === 'calendly_plan') {
-      await notifyCalendlyPlanBlocked(userId, { errorMessage: String(error), previousKind });
-    }
-  } else {
-    await CalendarIntegration.updateOne(
-      { user_id: userId, provider: 'calendly' },
-      { $set: { calendly_webhook_url: url, calendly_webhook_register_error: null, calendly_webhook_error_kind: null, calendly_webhook_registered_at: new Date() } }
-    );
-    await notifyCalendlySyncRestored(userId, { previousKind });
-  }
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -261,6 +243,10 @@ const callbackCalendar = async (req, res) => {
       fetchCalendlyUserResource(accessToken),
     ]);
 
+    const priorInteg = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' })
+      .select('calendly_webhook_error_kind')
+      .lean();
+
     await CalendarIntegration.findOneAndUpdate(
       { user_id: userId, provider: 'calendly' },
       {
@@ -271,6 +257,7 @@ const callbackCalendar = async (req, res) => {
         expires_at: expiresAt,
         ...(accountLabel ? { account_email: String(accountLabel) } : {}),
         ...(userResource?.uri ? { calendly_user_uri: String(userResource.uri).trim().toLowerCase() } : {}),
+        calendly_health_checked_at: null,
       },
       { upsert: true, returnDocument: 'after' },
     );
@@ -304,6 +291,14 @@ const callbackCalendar = async (req, res) => {
       }
     } else {
       logger.info('Calendar API: webhook target URL not resolved — skipping auto-registration');
+      // Fresh OAuth tokens: a stored "reconnect" state no longer applies.
+      if (priorInteg?.calendly_webhook_error_kind === CALENDLY_WEBHOOK_ERROR_KINDS.reconnect) {
+        await CalendarIntegration.updateOne(
+          { user_id: userId, provider: 'calendly' },
+          { $set: { calendly_webhook_register_error: null, calendly_webhook_error_kind: null } }
+        );
+        await notifyCalendlySyncRestored(userId, { previousKind: CALENDLY_WEBHOOK_ERROR_KINDS.reconnect });
+      }
     }
 
     const browserOk = resolveCalendlyOAuthSuccessBrowserRedirect();
@@ -330,8 +325,10 @@ const callbackCalendar = async (req, res) => {
 };
 
 const getCalendarStatus = async (req, res) => {
+  // Throttled re-check (at most hourly per account) so an expired plan / revoked access shows up here.
+  await runBoundedCalendlyHealthCheck(req.user._id);
   const rows = await CalendarIntegration.find({ user_id: req.user._id })
-    .select('provider account_email expires_at updatedAt calendly_webhook_url calendly_webhook_registered_at calendly_webhook_register_error')
+    .select('provider account_email expires_at updatedAt calendly_webhook_url calendly_webhook_registered_at calendly_webhook_register_error calendly_webhook_error_kind')
     .lean();
   return res.json({ success: true, status: rows });
 };
@@ -455,22 +452,68 @@ const cancelCalendlyBookingHandler = async (req, res, next) => {
 
     const cancelMeta = { calendly_event_uri: eventUri, calendly_invitee_uri: inviteeUri };
     const reason = String(req.body.reason || '').trim().slice(0, 500);
-    await cancelCalendlyScheduledEvent(req.calendlyInteg.access_token, cancelMeta, reason || undefined);
+
+    // 'canceled' | 'not_connected' | 'not_allowed' | 'not_found'
+    let calendlyOutcome = 'canceled';
+    const integ = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' });
+    if (!integ?.access_token) {
+      calendlyOutcome = 'not_connected';
+    } else {
+      try {
+        const fresh = await ensureFreshCalendlyAccess(integ);
+        await cancelCalendlyScheduledEvent(fresh.access_token, cancelMeta, reason || undefined);
+      } catch (err) {
+        if (err instanceof CalendlyAccessError) {
+          if (err.kind !== CALENDLY_ACCESS_KIND.reconnect) return sendCalendlyAccessError(res, userId, err);
+          await markCalendlyReconnectRequired(userId, err.message);
+          calendlyOutcome = 'not_connected';
+        } else if (isTransientCalendlyError(err)) {
+          logger.warn(`Calendly cancel booking (temporary): ${err.message}`);
+          return res.status(503).json({ success: false, code: 'CALENDLY_UNAVAILABLE', message: CALENDLY_UNAVAILABLE_MESSAGE });
+        } else if (Number(err?.status) === 404) {
+          calendlyOutcome = 'not_found';
+        } else {
+          const kind = attentionKindForCalendlyError(err);
+          if (kind === CALENDLY_WEBHOOK_ERROR_KINDS.reconnect) {
+            await markCalendlyReconnectRequired(userId, err.message);
+            calendlyOutcome = 'not_connected';
+          } else if (kind === CALENDLY_WEBHOOK_ERROR_KINDS.permission || kind === CALENDLY_WEBHOOK_ERROR_KINDS.plan) {
+            calendlyOutcome = 'not_allowed';
+          } else {
+            logger.warn(`Calendly cancel booking: ${err.message}`);
+            return res.status(400).json({
+              success: false,
+              code: 'CALENDLY_CANCEL_FAILED',
+              message: `Calendly could not cancel this appointment: ${String(err.message || '').replace(/^Calendly cancel failed \(\d+\):\s*/, '').slice(0, 300)}`,
+            });
+          }
+        }
+      }
+    }
 
     const apply = await applyCalendlyCancellationToLeadForUser(leadMatchId, userId, { payload: storedCal });
     if (!apply.ok) {
       return res.status(500).json({ success: false, message: apply.message || 'Could not update lead after cancel.' });
     }
 
-    logger.info('Calendar API: Calendly booking canceled via API', {
+    logger.info('Calendar API: booking canceled', {
       op: 'calendar.calendly.cancel_booking',
       user_id: String(userId),
       lead_match_id: String(leadMatchId),
+      calendly_outcome: calendlyOutcome,
     });
-    return res.json({ success: true, message: 'Appointment canceled in Calendly.' });
+    if (calendlyOutcome === 'canceled') {
+      return res.json({ success: true, calendly_canceled: true, message: 'Appointment canceled in Calendly.' });
+    }
+    const localMessage = {
+      not_connected: 'Appointment canceled in Nesti. Calendly is not connected, so please also cancel it in Calendly.',
+      not_allowed: 'Appointment canceled in Nesti. Calendly did not allow the cancellation, so please also cancel it in Calendly.',
+      not_found: 'Appointment canceled in Nesti. Calendly could not find this booking, so please check it in Calendly.',
+    }[calendlyOutcome];
+    return res.json({ success: true, calendly_canceled: false, calendly_outcome: calendlyOutcome, message: localMessage });
   } catch (err) {
     logger.warn(`Calendly cancel booking: ${err.message}`);
-    return res.status(502).json({ success: false, message: err.message || 'Calendly cancel failed' });
+    return next(err);
   }
 };
 
@@ -487,7 +530,6 @@ router.post(
   protect,
   requireCompleteProfessionalProfile,
   requireFeature(FEATURES.CALENDAR_VIRTUAL_CONSULT),
-  requireCalendlyConnected,
   validateBody(calendlyCancelBookingBodySchema),
   cancelCalendlyBookingHandler
 );
@@ -497,4 +539,5 @@ router.get('/status',                                protect, requireCompletePro
 router.get('/bookings',                              protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALENDAR_INTEGRATION), getBookings);
 router.delete('/disconnect/:provider',               protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CALENDAR_INTEGRATION), requireCalendlyProvider, disconnectCalendar);
 
+export { cancelCalendlyBookingHandler, requireCalendlyConnected, getCalendarStatus };
 export default router;

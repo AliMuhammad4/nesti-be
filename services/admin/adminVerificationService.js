@@ -14,6 +14,22 @@ import {
   serializeCredentialStateAsync,
 } from '../credentials/credentialService.js';
 
+// Only what the list shows; full profiles carry long event histories.
+const LIST_FIELDS = [
+  'user_id',
+  'credential_status',
+  'country',
+  'jurisdiction',
+  'professional_type',
+  'license_number',
+  'company_name',
+  'nmls_id',
+  'credential_submitted_at',
+  'credential_reviewed_at',
+  'credential_documents._id',
+].join(' ');
+const SEARCH_USER_CAP = 500;
+
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -43,12 +59,17 @@ export async function listAdminVerificationsService({
   }
 
   let userIds = null;
-  if (q) {
-    const rx = new RegExp(escapeRegex(q), 'i');
+  const words = String(q || '').trim().split(/\s+/).filter(Boolean).slice(0, 5);
+  if (words.length) {
+    // Every word has to match the first name, last name or email, so "John Smith" works.
     const users = await User.find({
-      $or: [{ email: rx }, { first_name: rx }, { last_name: rx }],
+      $and: words.map((word) => {
+        const rx = new RegExp(escapeRegex(word.slice(0, 80)), 'i');
+        return { $or: [{ email: rx }, { first_name: rx }, { last_name: rx }] };
+      }),
     })
       .select('_id')
+      .limit(SEARCH_USER_CAP)
       .lean();
     userIds = users.map((u) => u._id);
     filter.user_id = { $in: userIds };
@@ -60,9 +81,15 @@ export async function listAdminVerificationsService({
   const [total, profiles] = await Promise.all([
     ProfessionalProfile.countDocuments(filter),
     ProfessionalProfile.find(filter)
-      .sort({ credential_submitted_at: -1, updatedAt: -1 })
+      // The review queue is first come, first served; other views show the latest first.
+      .sort(
+        filter.credential_status === CREDENTIAL_STATUS.PENDING_REVIEW
+          ? { credential_submitted_at: 1, updatedAt: 1 }
+          : { credential_submitted_at: -1, updatedAt: -1 },
+      )
       .skip(skip)
       .limit(take)
+      .select(LIST_FIELDS)
       .lean(),
   ]);
 
@@ -177,16 +204,16 @@ export async function getAdminVerificationService(userId) {
   };
 }
 
-export async function approveAdminVerificationService({ userId, adminId }) {
-  return approveCredentialsService({ userId, adminId });
+export async function approveAdminVerificationService({ userId, adminId, allowMissingDocuments = false }) {
+  return approveCredentialsService({ userId, adminId, allowMissingDocuments });
 }
 
-export async function rejectAdminVerificationService({ userId, adminId, reason }) {
-  return rejectCredentialsService({ userId, adminId, reason });
+export async function rejectAdminVerificationService({ userId, adminId, reason, documentIds }) {
+  return rejectCredentialsService({ userId, adminId, reason, documentIds });
 }
 
-export async function getAdminVerificationDocumentService({ userId, docId }) {
-  return loadCredentialDocumentFile({ userId, docId });
+export async function getAdminVerificationDocumentService({ userId, docId, thumb = false }) {
+  return loadCredentialDocumentFile({ userId, docId, thumb });
 }
 
 export async function countPendingVerifications() {

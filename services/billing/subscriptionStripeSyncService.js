@@ -58,16 +58,46 @@ function planFromInvoice(invoice = {}) {
   return match?.plan || null;
 }
 
+function planFromInvoiceLine(line = {}) {
+  const description = String(line.description || '');
+  const named = description.match(/Nesti\s+(Basic|Standard|Enterprise)/i);
+  if (named) return getPlan(named[1]);
+
+  const priceId = invoiceLinePriceId(line);
+  const byPrice = getPlanByPriceId(priceId);
+  if (byPrice) return byPrice;
+
+  const metaPlan = String(line?.metadata?.plan_key || line?.price?.metadata?.plan_key || '').trim();
+  const fromMeta = metaPlan ? getPlan(metaPlan) : null;
+  if (!fromMeta) return null;
+  const amount = Number(line?.price?.unit_amount || line?.pricing?.unit_amount_decimal || 0);
+  if (!amount) return fromMeta;
+  if (amount === Number(fromMeta.amount) || amount === Number(fromMeta.annual_amount)) return fromMeta;
+  return null;
+}
+
 function paidPlanFromInvoice(invoice = {}) {
-  for (const line of invoice.lines?.data || []) {
+  const lines = [...(invoice.lines?.data || [])]
+    .filter((line) => Number(line.amount || 0) > 0)
+    .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
+  for (const line of lines) {
     const priceId = invoiceLinePriceId(line);
-    const metaPlan = String(
-      line?.metadata?.plan_key || line?.price?.metadata?.plan_key || '',
-    ).trim();
-    const plan = (metaPlan && getPlan(metaPlan)) || getPlanByPriceId(priceId);
+    const plan = planFromInvoiceLine(line);
     if (plan && priceId) return { plan, priceId };
   }
   return null;
+}
+
+async function reusablePriceId(stripe, priceId) {
+  const id = String(priceId || '').trim();
+  if (!id) return '';
+  try {
+    const price = await stripe.prices.retrieve(id);
+    return price?.active ? id : '';
+  } catch (error) {
+    if (error?.code === 'resource_missing') return '';
+    throw error;
+  }
 }
 
 function invoiceHasPrice(invoice = {}, priceId = '') {
@@ -124,6 +154,8 @@ async function repairUnpaidUpgradeIfNeeded(stripe, user, localSubscription, stri
   }
   const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
   if (!subscriptionItemId) return { repaired: false, stripeSubscription };
+  const priceId = await reusablePriceId(stripe, lastPaid.priceId);
+  if (!priceId) return { repaired: false, stripeSubscription };
 
   await clearPendingScheduleIfAny(
     stripe,
@@ -133,7 +165,7 @@ async function repairUnpaidUpgradeIfNeeded(stripe, user, localSubscription, stri
   await voidOrDeleteUnpaidInvoice(stripe, latestInvoice);
   const restored = await stripe.subscriptions.update(subscriptionId, {
     cancel_at_period_end: false,
-    items: [{ id: subscriptionItemId, price: lastPaid.priceId }],
+    items: [{ id: subscriptionItemId, price: priceId }],
     proration_behavior: 'none',
     payment_behavior: 'allow_incomplete',
     expand: ['latest_invoice'],
@@ -190,11 +222,13 @@ async function repairPaidPlanMismatchIfNeeded(stripe, user, localSubscription, s
   }
   const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
   if (!subscriptionItemId) return { repaired: false, stripeSubscription };
+  const priceId = await reusablePriceId(stripe, lastPaid.priceId);
+  if (!priceId) return { repaired: false, stripeSubscription };
 
   await clearPendingScheduleIfAny(stripe, localSubscription, attachedScheduleId);
   const restored = await stripe.subscriptions.update(subscriptionId, {
     cancel_at_period_end: false,
-    items: [{ id: subscriptionItemId, price: lastPaid.priceId }],
+    items: [{ id: subscriptionItemId, price: priceId }],
     proration_behavior: 'none',
     payment_behavior: 'allow_incomplete',
     expand: ['latest_invoice'],
@@ -269,19 +303,29 @@ export async function refreshSubscriptionFromStripeForUser(user) {
   } catch (error) {
     return fallbackProfessionalSubscriptionAfterStripeError(user, subscription, error, 'retrieve-active');
   }
-  const repairResult = await repairUnpaidUpgradeIfNeeded(
-    stripe,
-    user,
-    subscription,
-    detailedStripeSubscription,
-  );
+  let repairResult = { repaired: false };
+  try {
+    repairResult = await repairUnpaidUpgradeIfNeeded(
+      stripe,
+      user,
+      subscription,
+      detailedStripeSubscription,
+    );
+  } catch (error) {
+    console.warn('Skipped unpaid upgrade repair', { error: error?.message || error });
+  }
   if (repairResult.repaired) return repairResult.subscription;
-  const paidPlanRepairResult = await repairPaidPlanMismatchIfNeeded(
-    stripe,
-    user,
-    subscription,
-    detailedStripeSubscription,
-  );
+  let paidPlanRepairResult = { repaired: false };
+  try {
+    paidPlanRepairResult = await repairPaidPlanMismatchIfNeeded(
+      stripe,
+      user,
+      subscription,
+      detailedStripeSubscription,
+    );
+  } catch (error) {
+    console.warn('Skipped paid plan repair', { error: error?.message || error });
+  }
   if (paidPlanRepairResult.repaired) return paidPlanRepairResult.subscription;
 
   if (canReuseLocalProfessionalStripeSnapshot(subscription, detailedStripeSubscription)) {

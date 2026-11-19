@@ -10,6 +10,7 @@ import {
   isClientSubscriptionActive,
   shouldRefreshClientSubscriptionFromStripe,
 } from '../services/client/clientSubscriptionService.js';
+import { CLIENT_TRIAL_TIER, isClientTrialActive } from '../services/client/clientTrial.js';
 
 function isAdmin(req) {
   return req.user?.role === USER_ROLE.ADMIN;
@@ -73,8 +74,13 @@ export async function loadClientSubscription(req, { refresh = false } = {}) {
     subscription = await getClientSubscriptionForUser(req.user._id);
   }
   req.clientSubscription = subscription;
-  req.clientSubscriptionTier = canonicalClientTier(subscription?.tier);
-  req.clientSubscriptionActive = isClientSubscriptionActive(subscription);
+  const planActive = isClientSubscriptionActive(subscription);
+  // A running signup trial gives entry-plan access until the client buys a plan.
+  req.clientTrialActive = !planActive && isClientTrialActive(req.user, subscription);
+  req.clientSubscriptionTier = req.clientTrialActive
+    ? CLIENT_TRIAL_TIER
+    : canonicalClientTier(subscription?.tier);
+  req.clientSubscriptionActive = planActive || req.clientTrialActive;
   return subscription;
 }
 

@@ -52,6 +52,12 @@ export const FEATURES = Object.freeze({
 });
 
 
+export const TRIAL_STUDIO_FEATURES = new Set([
+  FEATURES.ASSISTANT_PROFESSIONAL,
+  FEATURES.ASSISTANT_PROFESSIONAL_CLOSING,
+  FEATURES.ASSISTANT_PROFESSIONAL_FOLLOWUP,
+]);
+
 export const BASIC_FEATURES = new Set([
   FEATURES.CHATBOT_BASIC,
   FEATURES.LEADS_CAPTURE,
@@ -146,18 +152,21 @@ export function hasFeature(subscription, featureKey) {
   const feature = String(featureKey || '').trim();
   if (!feature) return false;
   if (feature === FEATURES.SETTINGS_SUBSCRIPTION) return true;
+  // The free web page (public profile + free storefront templates) stays available to every
+  // approved professional, including after the trial ends or a plan lapses. A subscription row
+  // exists only after credential approval. Publishing and paid templates keep their own checks.
+  if (feature === FEATURES.PUBLIC_PROFILE) return Boolean(subscription);
 
   const accountStatus = accountStatusFromSubscription(subscription);
   if (accountStatus === ACCOUNT_STATUS.EXPIRED) return false;
 
-  const planKey = getEffectivePlan(subscription);
-  if (
-    accountStatus === ACCOUNT_STATUS.FREE_TRIAL
-    && feature === FEATURES.PUBLIC_PROFILE
-    && planKey === SUBSCRIPTION_PLAN.BASIC
-  ) {
+  // Free trial includes RAVI studio even though the trial row is stored as Basic.
+  // Paid Basic stays on the embed link only. Voice stays off until a paid Enterprise plan.
+  if (accountStatus === ACCOUNT_STATUS.FREE_TRIAL && TRIAL_STUDIO_FEATURES.has(feature)) {
     return true;
   }
+
+  const planKey = getEffectivePlan(subscription);
   return Boolean(PLAN_FEATURES[planKey]?.has(feature));
 }
 

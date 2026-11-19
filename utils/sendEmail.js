@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import logger from './logger.js';
+import { supportEmail } from '../constants/support.js';
 
 export function isResendConfigured() {
   return Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL);
@@ -73,6 +74,9 @@ const sendEmail = async (options) => {
       3,
       { min: 1, max: 5 },
     );
+    // The sending inbox is not monitored: replies go to support unless the caller sets a
+    // Reply-To, or passes null/false to send none.
+    const replyTo = options.replyTo === undefined ? supportEmail() : options.replyTo;
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
@@ -83,7 +87,7 @@ const sendEmail = async (options) => {
           subject: options.subject,
           text: options.message,
           html: options.htmlMessage || `<p>${options.message}</p>`,
-          ...(options.replyTo ? { replyTo: options.replyTo } : {}),
+          ...(replyTo ? { replyTo } : {}),
         };
         const request = idempotencyKey
           ? resend.emails.send(payload, {

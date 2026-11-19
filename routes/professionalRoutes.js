@@ -24,7 +24,7 @@ import {
   uploadCredentialDocument,
 } from '../controllers/credentialController.js';
 import { runProfileUpload } from '../middleware/uploadProfileImage.js';
-import { uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
+import { limitCredentialUploads, uploadCredentialDocument as uploadCredentialMulter } from '../middleware/uploadCredentialDocument.js';
 import { MAX_IMAGE_UPLOAD_MB } from '../constants/mediaLimits.js';
 import {
   deleteMyAssistant,
@@ -105,7 +105,7 @@ router.post('/me/assistant/knowledge', protect, requireFeature(FEATURES.ASSISTAN
 
 router.get('/me/credentials', protect, getMyCredentials);
 router.patch('/me/credentials', protect, patchCredentialMeta);
-router.post('/me/credentials/documents', protect, runCredentialUpload, uploadCredentialDocument);
+router.post('/me/credentials/documents', protect, limitCredentialUploads, runCredentialUpload, uploadCredentialDocument);
 router.get('/me/credentials/documents/:docId', protect, getCredentialDocument);
 router.delete('/me/credentials/documents/:docId', protect, deleteCredentialDocument);
 router.post('/me/credentials/submit', protect, submitCredentials);
@@ -119,8 +119,10 @@ router.post('/icp', protect, requireActiveSubscriptionAccess, ensureCredentialAp
 router.put('/icp', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, requireCompleteProfessionalProfile, validateIcpByRole, saveIdealClientProfile);
 
 router.get('/:id', protect, requireActiveSubscriptionAccess, ensureCredentialApproved, getProfessionalById);
-router.post('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.put('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
-router.patch('/', protect, validateBody(professionalUpsertBodySchema), upsertProfessionalProfile);
+// Partial saves: only the fields sent are changed (no schema defaults filled in).
+const validateProfileUpsert = validateBody(professionalUpsertBodySchema, { noDefaults: true });
+router.post('/', protect, validateProfileUpsert, upsertProfessionalProfile);
+router.put('/', protect, validateProfileUpsert, upsertProfessionalProfile);
+router.patch('/', protect, validateProfileUpsert, upsertProfessionalProfile);
 
 export default router;

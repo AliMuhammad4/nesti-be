@@ -1,4 +1,5 @@
 import logger from '../../utils/logger.js';
+import { calendlyFetch, calendlyHttpError, readCalendlyText } from './calendlyHttp.js';
 const API = 'https://api.calendly.com';
 function organizationUriFromUserMe(resource) {
   if (!resource) return null;
@@ -17,12 +18,12 @@ export async function registerCalendlyInviteeWebhook(accessToken, targetUrl) {
     return { skipped: true, reason: 'empty_target_url' };
   }
 
-  const meRes = await fetch(`${API}/users/me`, {
+  const meRes = await calendlyFetch(`${API}/users/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const meText = await meRes.text();
+  const meText = await readCalendlyText(meRes);
   if (!meRes.ok) {
-    throw new Error(`Calendly users/me failed (${meRes.status}): ${meText.slice(0, 500)}`);
+    throw calendlyHttpError(`Calendly users/me failed (${meRes.status}): ${meText.slice(0, 500)}`, meRes.status);
   }
   const me = JSON.parse(meText);
   const r = me.resource;
@@ -62,7 +63,7 @@ export async function registerCalendlyInviteeWebhook(accessToken, targetUrl) {
     );
   }
 
-  const subRes = await fetch(`${API}/webhook_subscriptions`, {
+  const subRes = await calendlyFetch(`${API}/webhook_subscriptions`, {
     method:  'POST',
     headers: {
       Authorization:  `Bearer ${accessToken}`,
@@ -70,7 +71,7 @@ export async function registerCalendlyInviteeWebhook(accessToken, targetUrl) {
     },
     body: JSON.stringify(body),
   });
-  const subText = await subRes.text();
+  const subText = await readCalendlyText(subRes);
   let parsed;
   try {
     parsed = JSON.parse(subText);
@@ -99,8 +100,9 @@ export async function registerCalendlyInviteeWebhook(accessToken, targetUrl) {
   }
 
   if (!subRes.ok) {
-    throw new Error(
-      `Calendly webhook_subscriptions failed (${subRes.status}): ${subText.slice(0, 800)}`
+    throw calendlyHttpError(
+      `Calendly webhook_subscriptions failed (${subRes.status}): ${subText.slice(0, 800)}`,
+      subRes.status
     );
   }
 
@@ -114,12 +116,12 @@ export async function registerCalendlyInviteeWebhook(accessToken, targetUrl) {
 }
 
 export async function listCalendlyWebhookSubscriptions(accessToken) {
-  const meRes = await fetch(`${API}/users/me`, {
+  const meRes = await calendlyFetch(`${API}/users/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const meText = await meRes.text();
+  const meText = await readCalendlyText(meRes);
   if (!meRes.ok) {
-    throw new Error(`Calendly users/me failed (${meRes.status}): ${meText.slice(0, 400)}`);
+    throw calendlyHttpError(`Calendly users/me failed (${meRes.status}): ${meText.slice(0, 400)}`, meRes.status);
   }
   const me = JSON.parse(meText);
   const r = me.resource;
@@ -135,10 +137,11 @@ export async function listCalendlyWebhookSubscriptions(accessToken) {
     ...(orgUri ? { organization: orgUri } : {}),
   };
   const userQ = new URLSearchParams(userListParams);
-  const userRes = await fetch(`${API}/webhook_subscriptions?${userQ}`, { headers: auth });
+  const userRes = await calendlyFetch(`${API}/webhook_subscriptions?${userQ}`, { headers: auth });
+  const userText = await readCalendlyText(userRes);
   const userJson = userRes.ok
-    ? await userRes.json()
-    : { _error: userRes.status, _body: (await userRes.text()).slice(0, 400) };
+    ? JSON.parse(userText || '{}')
+    : { _error: userRes.status, _body: userText.slice(0, 400) };
 
   let orgJson = null;
   if (orgUri) {
@@ -147,10 +150,11 @@ export async function listCalendlyWebhookSubscriptions(accessToken) {
       organization: orgUri,
       count:        '100',
     });
-    const orgRes = await fetch(`${API}/webhook_subscriptions?${orgQ}`, { headers: auth });
+    const orgRes = await calendlyFetch(`${API}/webhook_subscriptions?${orgQ}`, { headers: auth });
+    const orgText = await readCalendlyText(orgRes);
     orgJson = orgRes.ok
-      ? await orgRes.json()
-      : { _error: orgRes.status, _body: (await orgRes.text()).slice(0, 400) };
+      ? JSON.parse(orgText || '{}')
+      : { _error: orgRes.status, _body: orgText.slice(0, 400) };
   }
 
   return {
@@ -161,4 +165,17 @@ export async function listCalendlyWebhookSubscriptions(accessToken) {
     user_scope_list:   userJson,
     organization_scope_list: orgJson,
   };
+}
+
+/** Remove one webhook subscription (used to replace a subscription Calendly has disabled). */
+export async function deleteCalendlyWebhookSubscription(accessToken, subscriptionUri) {
+  const uri = String(subscriptionUri || '').trim();
+  if (!uri.startsWith(`${API}/webhook_subscriptions/`)) return { skipped: true };
+  const res = await calendlyFetch(uri, {
+    method:  'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (res.ok || res.status === 404) return { deleted: true };
+  const text = await readCalendlyText(res);
+  throw calendlyHttpError(`Calendly webhook delete failed (${res.status}): ${text.slice(0, 400)}`, res.status);
 }

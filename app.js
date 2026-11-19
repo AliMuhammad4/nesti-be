@@ -10,6 +10,8 @@ import morgan from 'morgan';
 import logger from './utils/logger.js';
 import { planQuotaErrorResponse } from './services/billing/planQuota.js';
 import authRoutes from './routes/authRoutes.js';
+import { protect, ensureAdmin } from './middleware/authMiddleware.js';
+import { authUserLimiter } from './middleware/rateLimit.js';
 import embedRoutes from './routes/embedRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
 import referralRoutes from './routes/referralRoutes.js';
@@ -38,11 +40,6 @@ import { configureR2 } from './services/media/r2Client.js';
 configureR2();
 
 const app = express();
-if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {
-  app.set('trust proxy', 1);
-}
-
-// HTTP Request Logging Middleware using Morgan and Winston
 const morganFormat = process.env.NODE_ENV === "production" ? "combined" : "dev";
 app.use(
   morgan(morganFormat, {
@@ -51,17 +48,13 @@ app.use(
     },
   })
 );
-
-// Middleware
 const corsOptions = {
   origin: true,
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   optionsSuccessStatus: 204,
-  maxAge: 60 * 60 * 24, // cache preflight for 24h to reduce repeated OPTIONS noise
+  maxAge: 60 * 60 * 24,
 };
 app.use(cors(corsOptions));
-
-// Webhooks often need raw bodies, so they are routed before express.json()
 app.use(
   '/api/billing/stripe/webhook',
   express.raw({ type: 'application/json' }),
@@ -80,10 +73,8 @@ app.use(
   twilioWebhookRoutes,
 );
 
-// We need express.json() for all other routes
 app.use(express.json());
 
-// Static HTML pages for testing
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -94,18 +85,15 @@ app.get('/lawyer', (req, res) => {
   res.sendFile(path.join(__dirname, 'lawyer.html'));
 });
 
-app.get('/api/health/smtp', async (req, res) => {
+// Email delivery check for admins only: answers ok / not ok, with no addresses or provider errors.
+app.get('/api/health/smtp', protect, ensureAdmin, authUserLimiter, async (req, res) => {
   try {
     if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM_EMAIL) {
-      return res.status(500).json({
-        success: false,
-        message: 'Missing Resend config: RESEND_API_KEY or RESEND_FROM_EMAIL',
-      });
+      return res.status(503).json({ success: false, message: 'Email is not configured' });
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);
     const { data, error } = await resend.domains.list();
-
     if (error) {
       throw new Error(error.message || 'Resend API check failed');
     }
@@ -115,19 +103,10 @@ app.get('/api/health/smtp', async (req, res) => {
       (domain) => domain.name === fromDomain && domain.status === 'verified',
     );
 
-    return res.json({
-      success: true,
-      message: 'Resend connection verified successfully',
-      resendFromEmail: process.env.RESEND_FROM_EMAIL,
-      fromDomainVerified: domainVerified,
-    });
+    return res.json({ success: true, fromDomainVerified: domainVerified });
   } catch (error) {
     logger.error(`Resend health check failed: ${error.message}`);
-    return res.status(500).json({
-      success: false,
-      message: 'Resend verification failed',
-      error: error.message,
-    });
+    return res.status(503).json({ success: false, message: 'Email check failed' });
   }
 });
 
@@ -153,16 +132,34 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/public', publicProfileRoutes);
 app.use('/api/professional-dashboard', professionalDashboardRoutes);
 app.use('/api/admin', adminRoutes);
-
-// Error handling middleware
 app.use((err, req, res, next) => {
   if (err?.code === 'PLAN_LIMIT_REACHED') {
     const payload = planQuotaErrorResponse(err);
     if (payload) return res.status(403).json(payload);
   }
-  logger.error(`${err.status || 500} - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
-  logger.error(err.stack);
-  res.status(err.status || 500).json({ success: false, message: err.message || 'Server Error' });
+  const declared = Number(err?.status ?? err?.statusCode);
+  const status = Number.isInteger(declared) && declared >= 400 && declared < 600 ? declared : 500;
+  logger.error(`${status} - ${err?.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
+  logger.error(err?.stack);
+  // Body parser errors (bad JSON, too large) carry a `type` like "entity.parse.failed".
+  const bodyError = typeof err?.type === 'string' && err.type.startsWith('entity.');
+  let message;
+  let code;
+  if (bodyError) {
+    message = status === 413 ? 'This request is too large.' : 'Invalid request body.';
+    code = 'INVALID_BODY';
+  } else if (status === 502 || status === 503 || status === 504) {
+    message = 'This service is temporarily unavailable. Please try again in a moment.';
+    code = 'SERVICE_UNAVAILABLE';
+  } else if (status >= 500) {
+    // Unexpected errors (database, library) are logged above and shown as a neutral message.
+    message = 'Something went wrong on our side. Please try again in a moment.';
+    code = 'SERVER_ERROR';
+  } else {
+    // Errors raised on purpose with a 4xx status keep their message.
+    message = err?.message || 'Request failed';
+  }
+  res.status(status).json({ success: false, message, ...(code ? { code } : {}) });
 });
 
 export default app;

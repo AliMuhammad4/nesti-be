@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import ProfessionalProfile from '../models/ProfessionalProfile.js';
-import { USER_ROLE, USER_ROLE_VALUES, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
+import { USER_ROLE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.js';
 import { evaluateProfessionalProfileSetup } from '../utils/professionalProfileSetup.js';
 import logger from '../utils/logger.js';
 import { getJwtSecret } from '../utils/jwtSecret.js';
@@ -9,6 +9,12 @@ import { ACCOUNT_SUSPENDED_CODE, ACCOUNT_SUSPENDED_MESSAGE } from '../constants/
 import { buildCredentialGate } from '../services/credentials/credentialGate.js';
 import { CREDENTIAL_STATUS } from '../constants/credentialDocuments.js';
 import { adminHasPermission } from '../constants/adminPermissions.js';
+import { sessionTokenProblem } from '../utils/sessionToken.js';
+
+/** 401 codes the frontend treats as "this login session is over" (see frontend lib/api.js). */
+const AUTH_REQUIRED_CODE = 'AUTH_REQUIRED';
+const SESSION_INVALID_CODE = 'SESSION_INVALID';
+const SESSION_EXPIRED_CODE = 'SESSION_EXPIRED';
 
 function readAuthToken(req) {
   const auth = req.headers.authorization;
@@ -21,14 +27,24 @@ function readAuthToken(req) {
 const protect = async (req, res, next) => {
   const token = readAuthToken(req);
   if (!token) {
-    return res.status(401).json({ success: false, message: 'Not authorized, no token' });
+    return res.status(401).json({ success: false, code: AUTH_REQUIRED_CODE, message: 'Not authorized, no token' });
   }
 
   try {
     const decoded = jwt.verify(token, getJwtSecret());
+    if (sessionTokenProblem(decoded, null)) {
+      return res.status(401).json({ success: false, code: SESSION_INVALID_CODE, message: 'Not authorized, token failed' });
+    }
     const doc = await User.findById(decoded.id).select('-password').lean();
     if (!doc) {
-      return res.status(401).json({ success: false, message: 'Not authorized, user not found' });
+      return res.status(401).json({ success: false, code: SESSION_INVALID_CODE, message: 'Not authorized, user not found' });
+    }
+    if (sessionTokenProblem(decoded, doc)) {
+      return res.status(401).json({
+        success: false,
+        code: SESSION_EXPIRED_CODE,
+        message: 'Your session has ended. Please log in again.',
+      });
     }
     if (doc.is_active === false) {
       return res.status(401).json({
@@ -39,13 +55,30 @@ const protect = async (req, res, next) => {
     }
     req.user = User.hydrate(doc);
     if (!req.user) {
-      return res.status(401).json({ success: false, message: 'Not authorized, user not found' });
+      return res.status(401).json({ success: false, code: SESSION_INVALID_CODE, message: 'Not authorized, user not found' });
     }
-    next();
   } catch (error) {
+    if (error?.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        code: SESSION_EXPIRED_CODE,
+        message: 'Your session has ended. Please log in again.',
+      });
+    }
+    if (error?.name !== 'JsonWebTokenError' && error?.name !== 'NotBeforeError') {
+      // Database/server trouble is not a bad session: don't make the browser log out.
+      logger.error('Auth middleware: session check unavailable', { err: error.message });
+      return res.status(503).json({
+        success: false,
+        code: 'AUTH_UNAVAILABLE',
+        message: 'We could not verify your session right now. Please try again.',
+      });
+    }
     logger.warn('Auth middleware: token verification failed', { err: error.message });
-    return res.status(401).json({ success: false, message: 'Not authorized, token failed' });
+    return res.status(401).json({ success: false, code: SESSION_INVALID_CODE, message: 'Not authorized, token failed' });
   }
+  // Outside the try: errors from later handlers are not session failures.
+  next();
 };
 
 const optionalAuth = async (req, res, next) => {
@@ -58,7 +91,10 @@ const optionalAuth = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, getJwtSecret());
-    req.user = await User.findById(decoded.id).select('-password');
+    const user = sessionTokenProblem(decoded, null)
+      ? null
+      : await User.findById(decoded.id).select('-password');
+    req.user = user && !sessionTokenProblem(decoded, user) && user.is_active !== false ? user : null;
   } catch (error) {
     logger.warn('Optional auth: token verification failed', { err: error.message });
     req.user = null;
@@ -77,11 +113,14 @@ const ensureAgent = async (req, res, next) => {
   next();
 };
 
+const PROFESSIONAL_ROLES_AND_ADMIN = Object.freeze([...PROFESSIONAL_TYPE_VALUES, USER_ROLE.ADMIN]);
+
 const ensureAgentOrMortgageBroker = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: 'Not authenticated' });
   }
-  if (!USER_ROLE_VALUES.includes(req.user.role)) {
+  // Professionals (agent, mortgage broker, lawyer) and admins; clients are refused.
+  if (!PROFESSIONAL_ROLES_AND_ADMIN.includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Lead management is available only for agents, mortgage brokers, and lawyers.' });
   }
   next();
@@ -129,6 +168,8 @@ const requirePermission = (permission) => (req, res, next) => {
   return next();
 };
 
+const GATE_PROFILE_EXCLUDED_FIELDS = '-property_match_scoring -credential_events -credential_documents';
+
 /** Blocks non-admin professionals until personal + business basics are saved (see professionalProfileSetup). */
 const requireCompleteProfessionalProfile = async (req, res, next) => {
   if (!req.user) {
@@ -141,7 +182,10 @@ const requireCompleteProfessionalProfile = async (req, res, next) => {
     return next();
   }
   try {
-    const professionalProfile = await ProfessionalProfile.findOne({ user_id: req.user._id }).lean();
+    // The gates only need basic profile fields; skip the large ones on this per-request lookup.
+    const professionalProfile = await ProfessionalProfile.findOne({ user_id: req.user._id })
+      .select(GATE_PROFILE_EXCLUDED_FIELDS)
+      .lean();
     const profileSetup = evaluateProfessionalProfileSetup(req.user, professionalProfile);
     req.professionalProfile = professionalProfile || null;
     req.profileSetup = profileSetup;
@@ -181,7 +225,7 @@ async function evaluateCredentialAccess(req) {
   try {
     const professionalProfile =
       req.professionalProfile
-      || (await ProfessionalProfile.findOne({ user_id: req.user._id }).lean());
+      || (await ProfessionalProfile.findOne({ user_id: req.user._id }).select(GATE_PROFILE_EXCLUDED_FIELDS).lean());
     req.professionalProfile = professionalProfile || null;
     const gate = buildCredentialGate(professionalProfile, req.user.role);
     req.credentialGate = gate;

@@ -6,6 +6,12 @@ import { emitNotification } from '../realtime/workspaceSocket.js';
 const CALENDLY_BILLING_URL = 'https://calendly.com/app/admin/billing';
 const PLAN_BLOCKED_TYPE = 'calendly_plan_blocked';
 const SYNC_RESTORED_TYPE = 'calendly_sync_restored';
+const RECONNECT_NEEDED_TYPE = 'calendly_reconnect_needed';
+const ATTENTION_KINDS = new Set([
+  CALENDLY_WEBHOOK_ERROR_KINDS.plan,
+  CALENDLY_WEBHOOK_ERROR_KINDS.reconnect,
+  CALENDLY_WEBHOOK_ERROR_KINDS.permission,
+]);
 
 const SYNC_IMPACT =
   'New Calendly bookings will not sync to Nesti (webhooks are disabled). ' +
@@ -110,9 +116,55 @@ export async function notifyCalendlyPlanBlocked(userId, { errorMessage = '', pre
   }
 }
 
-/** Notify when webhook registration succeeds after a prior plan-block state. */
+/**
+ * Notify once when Calendly access is lost (revoked/expired) or Calendly refuses booking-sync permission.
+ * Only fires on the transition into that state, and never while an identical unread notice exists.
+ */
+export async function notifyCalendlyReconnectNeeded(userId, { kind = CALENDLY_WEBHOOK_ERROR_KINDS.reconnect, previousKind = null } = {}) {
+  if (!userId) return null;
+  if (previousKind === kind) return null;
+
+  const idempotencyKey = `calendly:reconnect_needed:${String(userId)}`;
+  const unread = await ProfessionalNotification.findOne({
+    user_id: userId,
+    notification_type: RECONNECT_NEEDED_TYPE,
+    'action.idempotency_key': idempotencyKey,
+    read_at: null,
+  })
+    .select('_id')
+    .lean();
+  if (unread?._id) return null;
+
+  const permission = kind === CALENDLY_WEBHOOK_ERROR_KINDS.permission;
+  try {
+    return await persistAndEmit(userId, {
+      notification_type: RECONNECT_NEEDED_TYPE,
+      title: permission
+        ? 'Calendly access needs approval — booking sync paused'
+        : 'Calendly needs to be reconnected — booking sync paused',
+      body: permission
+        ? `Calendly did not allow Nesti to set up booking sync. ${SYNC_IMPACT} Reconnect Calendly in Settings and approve the requested access.`
+        : `Calendly access expired or was removed. ${SYNC_IMPACT} Reconnect Calendly in Settings to resume booking sync.`,
+      severity: 'high',
+      action: {
+        type: 'open_url',
+        href: '/settings',
+        reason: permission ? 'permission' : 'reconnect',
+        idempotency_key: idempotencyKey,
+      },
+    });
+  } catch (err) {
+    logger.warn('Calendly reconnect notification failed', {
+      user_id: String(userId),
+      error: err?.message,
+    });
+    return null;
+  }
+}
+
+/** Notify when booking sync works again after a prior plan-block / reconnect / permission state. */
 export async function notifyCalendlySyncRestored(userId, { previousKind = null } = {}) {
-  if (!userId || previousKind !== CALENDLY_WEBHOOK_ERROR_KINDS.plan) return null;
+  if (!userId || !ATTENTION_KINDS.has(previousKind)) return null;
 
   const idempotencyKey = `calendly:sync_restored:${String(userId)}:${Date.now()}`;
 

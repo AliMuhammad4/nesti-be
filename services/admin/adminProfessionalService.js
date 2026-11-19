@@ -30,7 +30,9 @@ import { getStorefrontTemplateTier, normalizeTemplateId } from '../billing/store
 import { refreshStorefrontTemplateSubscriptionsForUser } from '../billing/storefrontTemplates/refresh.js';
 import { repairPlatformSubscriptionIfTemplateCollision } from '../billing/subscriptionStripeSyncService.js';
 import { listPaidInvoicesForUser } from '../billing/subscriptionInvoiceService.js';
-import { deriveLeadInquirySource } from './adminLeadService.js';
+import { deriveLeadInquirySource } from './adminLeadService.js';
+import { PHONE_INVALID_MESSAGE, PHONE_TAKEN_MESSAGE, isPhoneDuplicateError, normalizePhoneE164 } from '../../utils/phone.js';
+import { PERSON_NAME_MESSAGE, isValidPersonName } from '../../utils/personName.js';
 
 const OPEN_LEAD_STATUSES = ['new', 'consult_booked', 'showing_booked', 'nurturing'];
 const TRAFFIC_DAYS = 30; // unique visitors use this window; lead counts are all-time
@@ -655,9 +657,45 @@ export async function patchAdminProfessionalService(id, patch = {}) {
   if (!mongoose.Types.ObjectId.isValid(id)) return fail(400, 'Invalid professional id');
   const profile = await ProfessionalProfile.findById(id);
   if (!profile) return fail(404, 'Professional not found');
+  const user = await User.findById(profile.user_id);
+  if (!user) return fail(404, 'Professional user not found');
 
-  for (const key of ['full_name', 'company_name', 'phone', 'location', 'professional_type', 'website', 'license_number']) {
+  // Roles are fixed at signup: the professional type always follows the account role.
+  if (patch.professional_type !== undefined && patch.professional_type !== (user.role || profile.professional_type)) {
+    return fail(400, 'The professional type is set at signup and cannot be changed.');
+  }
+
+  // Name and phone live on the account too; the professional's own saves rebuild the
+  // profile from the account, so both are updated or the edit would be undone.
+  if (patch.full_name !== undefined) {
+    const parts = String(patch.full_name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return fail(400, 'Enter a first and last name.');
+    const firstName = parts[0];
+    // A single word edits the first name and keeps the last name already on the account.
+    const lastName = parts.length > 1 ? parts.slice(1).join(' ') : String(user.last_name || '').trim();
+    if (!lastName) return fail(400, 'Enter a first and last name.');
+    if (!isValidPersonName(firstName) || !isValidPersonName(lastName)) return fail(400, PERSON_NAME_MESSAGE);
+    user.first_name = firstName;
+    user.last_name = lastName;
+    profile.full_name = `${firstName} ${lastName}`;
+  }
+  if (patch.phone !== undefined) {
+    const normalizedPhone = normalizePhoneE164(patch.phone);
+    if (!normalizedPhone) return fail(400, PHONE_INVALID_MESSAGE);
+    if (await User.exists({ phone: normalizedPhone, _id: { $ne: user._id } })) {
+      return fail(400, PHONE_TAKEN_MESSAGE);
+    }
+    user.phone = normalizedPhone;
+    profile.phone = normalizedPhone;
+  }
+  for (const key of ['company_name', 'location', 'website', 'license_number']) {
     if (patch[key] !== undefined) profile[key] = patch[key];
+  }
+  try {
+    if (user.isModified()) await user.save();
+  } catch (error) {
+    if (isPhoneDuplicateError(error)) return fail(400, PHONE_TAKEN_MESSAGE);
+    throw error;
   }
   await profile.save();
   return getAdminProfessionalService(id);

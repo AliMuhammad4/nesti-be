@@ -98,6 +98,8 @@ export async function sendIdempotentEmail(options = {}) {
       message: payload.text_body,
       htmlMessage: payload.html_body,
       idempotencyKey,
+      // Admin notices pass no replyTo and keep none (sendEmail would default it to support).
+      replyTo: options.replyTo || null,
     });
   } catch (error) {
     await emailDeliveryDeps.EmailDelivery.updateOne(

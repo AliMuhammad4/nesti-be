@@ -8,7 +8,8 @@ import { fail, ok } from './adminCommon.js';
 import sendEmail from '../../utils/sendEmail.js';
 import logger from '../../utils/logger.js';
 import { formalityFor, guideForAudience, landingBotIdentity, landingChatPlanCards, loadLandingChatSettings, personalityFor } from '../chat/nestiLanding/landingChatConfig.js';
-import { EMAIL_BRAND, EMAIL_FONT, renderBrandedEmailShell } from '../email/emailTheme.js';
+import { EMAIL_BRAND, EMAIL_FONT, renderBrandedEmailShell } from '../email/emailTheme.js';
+import { supportEmail } from '../../constants/support.js';
 
 export const salesEmailDeps = { sendEmail };
 
@@ -473,6 +474,8 @@ export async function sendAdminLeadEmailService(id, body) {
     subject,
     message,
     htmlMessage: emailHtml(subject, message),
+    // The From inbox is not monitored; replies ("Reply to this email…") go to support.
+    replyTo: supportEmail(),
     idempotencyKey: attempt.idempotency_key,
   });
   attempt.status = result?.success ? 'sent' : 'failed';

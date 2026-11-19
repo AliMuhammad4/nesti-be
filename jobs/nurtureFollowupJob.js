@@ -314,6 +314,8 @@ async function sendFollowupForLead(leadMatch, now, followupDays) {
     subject: email.subject,
     message: email.message,
     htmlMessage: email.htmlMessage,
+    // Sent on the professional's behalf: replies go to them, not the unmonitored From inbox.
+    ...(user?.email ? { replyTo: String(user.email).trim() } : {}),
   });
 
   const status = result.success ? 'sent' : 'failed';

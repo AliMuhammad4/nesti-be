@@ -58,14 +58,19 @@ test('Standard includes moved features and group chat', () => {
   assert.equal(STANDARD_FEATURES.has(FEATURES.LEADS_FOLLOWUP_AUTOMATED), true);
 });
 
-test('hasFeature gates lead conversation and public profile by plan', () => {
+test('hasFeature gates lead conversation by plan; the free web page is on every plan', () => {
   const basicSub = mockSubscription('basic');
   const standardSub = mockSubscription('standard');
 
   assert.equal(hasFeature(basicSub, FEATURES.CRM_LEAD_CONVERSATION), false);
   assert.equal(hasFeature(standardSub, FEATURES.CRM_LEAD_CONVERSATION), true);
-  assert.equal(hasFeature(basicSub, FEATURES.PUBLIC_PROFILE), false);
+  assert.equal(hasFeature(basicSub, FEATURES.PUBLIC_PROFILE), true);
   assert.equal(hasFeature(standardSub, FEATURES.PUBLIC_PROFILE), true);
+  // After the trial ends the free web page stays on; with no subscription row
+  // (credentials not approved yet) it stays off.
+  assert.equal(hasFeature({ status: 'expired', plan_key: 'basic' }, FEATURES.PUBLIC_PROFILE), true);
+  assert.equal(hasFeature(null, FEATURES.PUBLIC_PROFILE), false);
+  assert.equal(hasFeature({ status: 'expired', plan_key: 'basic' }, FEATURES.CHATBOT_BASIC), false);
   assert.equal(hasFeature(basicSub, FEATURES.PRO_CHAT_DM), true);
   assert.equal(hasFeature(basicSub, FEATURES.PRO_CHAT), false);
   assert.equal(hasFeature(basicSub, FEATURES.REFERRALS_MANUAL), true);
@@ -81,7 +86,9 @@ test('a basic trial can preview the website builder without publishing it', () =
   };
   assert.equal(getEffectivePlan(trialSub), SUBSCRIPTION_PLAN.BASIC);
   assert.equal(hasFeature(trialSub, FEATURES.PUBLIC_PROFILE), true);
+  assert.equal(hasFeature(trialSub, FEATURES.ASSISTANT_PROFESSIONAL), true);
   assert.equal(hasFeature(trialSub, FEATURES.VOICE_AGENT), false);
+  assert.equal(hasFeature(mockSubscription('basic'), FEATURES.ASSISTANT_PROFESSIONAL), false);
   const trialLimits = getPlanLimitsForSubscription(trialSub);
   assert.equal(trialLimits.captured_leads, 150);
 });

@@ -1,6 +1,7 @@
 
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../../utils/jwtSecret.js';
+import { calendlyFetch, calendlyHttpError, readCalendlyText } from './calendlyHttp.js';
 const AUTH_BASE = 'https://auth.calendly.com';
 const API_BASE = 'https://api.calendly.com';
 export function getCalendlyRedirectUri() {
@@ -58,15 +59,15 @@ export async function exchangeCalendlyAuthorizationCode(code) {
     client_secret: clientSecret,
   });
 
-  const res = await fetch(`${AUTH_BASE}/oauth/token`, {
+  const res = await calendlyFetch(`${AUTH_BASE}/oauth/token`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body:    body.toString(),
   });
 
-  const text = await res.text();
+  const text = await readCalendlyText(res);
   if (!res.ok) {
-    throw new Error(`Calendly token exchange failed (${res.status}): ${text.slice(0, 500)}`);
+    throw calendlyHttpError(`Calendly token exchange failed (${res.status}): ${text.slice(0, 500)}`, res.status);
   }
   return JSON.parse(text);
 }
@@ -93,21 +94,21 @@ export async function refreshCalendlyAccessToken(refreshToken) {
     client_secret: clientSecret,
   });
 
-  const res = await fetch(`${AUTH_BASE}/oauth/token`, {
+  const res = await calendlyFetch(`${AUTH_BASE}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
   });
 
-  const text = await res.text();
+  const text = await readCalendlyText(res);
   if (!res.ok) {
-    throw new Error(`Calendly token refresh failed (${res.status}): ${text.slice(0, 500)}`);
+    throw calendlyHttpError(`Calendly token refresh failed (${res.status}): ${text.slice(0, 500)}`, res.status);
   }
   return JSON.parse(text);
 }
 
 export async function fetchCalendlyAccountLabel(accessToken) {
-  const res = await fetch(`${API_BASE}/users/me`, {
+  const res = await calendlyFetch(`${API_BASE}/users/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return null;
@@ -118,7 +119,7 @@ export async function fetchCalendlyAccountLabel(accessToken) {
 }
 
 export async function fetchCalendlyUserResource(accessToken) {
-  const res = await fetch(`${API_BASE}/users/me`, {
+  const res = await calendlyFetch(`${API_BASE}/users/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return null;

@@ -6,17 +6,24 @@ import {
   CREDENTIAL_EVENT_TYPE,
   CREDENTIAL_STATUS,
   CREDENTIAL_STATUS_VALUES,
+  isValidCredentialJurisdiction,
 } from '../../constants/credentialDocuments.js';
 import { getRequiredCredentialDocTypes } from './credentialRequirements.js';
 import {
   notifyAdminsCredentialSubmitted,
   notifyAdminsProfessionalSignup,
 } from './credentialNotifications.js';
-import { latestCredentialEventId, pushCredentialEvent } from './credentialEvents.js';
+import { credentialEventPushOp, latestCredentialEventId } from './credentialEvents.js';
 import { serializeCredentialStateAsync } from './credentialSerialize.js';
 import logger from '../../utils/logger.js';
 
+const notProfessionalResponse = () => ({
+  status: 403,
+  body: { success: false, message: 'Verification is only for professional accounts.' },
+});
+
 export async function getMyCredentialsService(user) {
+  if (!isProfessionalRole(user?.role)) return notProfessionalResponse();
   const profile = await ProfessionalProfile.findOne({ user_id: user._id });
   if (!profile) {
     return { status: 404, body: { success: false, message: 'Professional profile not found' } };
@@ -34,6 +41,7 @@ export async function getMyCredentialsService(user) {
 }
 
 export async function updateCredentialMetaService(user, payload = {}) {
+  if (!isProfessionalRole(user?.role)) return notProfessionalResponse();
   const profile = await ProfessionalProfile.findOne({ user_id: user._id });
   if (!profile) {
     return { status: 404, body: { success: false, message: 'Professional profile not found' } };
@@ -54,12 +62,18 @@ export async function updateCredentialMetaService(user, payload = {}) {
   if (payload.country !== undefined) {
     const country = String(payload.country || '').trim().toUpperCase();
     if (country && !CREDENTIAL_COUNTRY_VALUES.includes(country)) {
-      return { status: 400, body: { success: false, message: 'country must be CA or US' } };
+      return { status: 400, body: { success: false, field: 'country', message: 'Select Canada or the United States.' } };
     }
     profile.country = country || null;
   }
   if (payload.jurisdiction !== undefined) {
     profile.jurisdiction = String(payload.jurisdiction || '').trim().toUpperCase().slice(0, 12);
+  }
+  if (profile.jurisdiction && !isValidCredentialJurisdiction(profile.country, profile.jurisdiction)) {
+    return {
+      status: 400,
+      body: { success: false, field: 'jurisdiction', message: 'Select a province or state that matches the country.' },
+    };
   }
   if (payload.nmls_id !== undefined) {
     profile.nmls_id = String(payload.nmls_id || '').trim().slice(0, 40);
@@ -78,7 +92,8 @@ export async function updateCredentialMetaService(user, payload = {}) {
     profile.credential_status = CREDENTIAL_STATUS.PENDING_DOCS;
   }
 
-  await profile.save();
+  // Only the edited fields are checked, so an older value elsewhere in the profile can't block this save.
+  await profile.save({ validateModifiedOnly: true });
   return {
     status: 200,
     body: { success: true, ...(await serializeCredentialStateAsync(profile, user.role)) },
@@ -86,7 +101,8 @@ export async function updateCredentialMetaService(user, payload = {}) {
 }
 
 export async function submitCredentialsService(user) {
-  const profile = await ProfessionalProfile.findOne({ user_id: user._id });
+  if (!isProfessionalRole(user?.role)) return notProfessionalResponse();
+  let profile = await ProfessionalProfile.findOne({ user_id: user._id });
   if (!profile) {
     return { status: 404, body: { success: false, message: 'Professional profile not found' } };
   }
@@ -101,7 +117,7 @@ export async function submitCredentialsService(user) {
   if (!CREDENTIAL_COUNTRY_VALUES.includes(country)) {
     return { status: 400, body: { success: false, message: 'Select country (CA or US) before submitting.' } };
   }
-  if (!String(profile.jurisdiction || '').trim()) {
+  if (!isValidCredentialJurisdiction(country, profile.jurisdiction)) {
     return { status: 400, body: { success: false, message: 'Select province/state before submitting.' } };
   }
   if (!String(profile.license_number || '').trim()) {
@@ -152,24 +168,51 @@ export async function submitCredentialsService(user) {
 
   const wasRejected = profile.credential_status === CREDENTIAL_STATUS.REJECTED;
   const now = new Date();
-  profile.credential_status = CREDENTIAL_STATUS.PENDING_REVIEW;
-  profile.credential_submitted_at = now;
-  profile.credential_reject_reason = '';
-  profile.credential_reviewed_at = null;
-  profile.credential_reviewed_by = null;
-
-  pushCredentialEvent(profile, {
-    type: wasRejected ? CREDENTIAL_EVENT_TYPE.RESUBMITTED : CREDENTIAL_EVENT_TYPE.SUBMITTED,
-    actor_user_id: user._id,
-    actor_role: user.role,
-    meta: {
-      country: profile.country,
-      jurisdiction: profile.jurisdiction,
-      document_count: (profile.credential_documents || []).length,
+  // One step, and only from the status that was checked: a second click or a document
+  // change at the same moment can't submit twice or submit a different set of files.
+  const docIds = (profile.credential_documents || []).map((doc) => doc._id).filter(Boolean);
+  const submitted = await ProfessionalProfile.findOneAndUpdate(
+    {
+      _id: profile._id,
+      credential_status: profile.credential_status ?? null,
+      credential_documents: { $size: (profile.credential_documents || []).length },
+      ...(docIds.length ? { 'credential_documents._id': { $all: docIds } } : {}),
     },
-  });
-
-  await profile.save();
+    {
+      $set: {
+        credential_status: CREDENTIAL_STATUS.PENDING_REVIEW,
+        credential_submitted_at: now,
+        credential_reject_reason: '',
+        credential_reviewed_at: null,
+        credential_reviewed_by: null,
+      },
+      $push: {
+        credential_events: credentialEventPushOp({
+          at: now,
+          type: wasRejected ? CREDENTIAL_EVENT_TYPE.RESUBMITTED : CREDENTIAL_EVENT_TYPE.SUBMITTED,
+          actor_user_id: user._id,
+          actor_role: user.role,
+          meta: {
+            country: profile.country,
+            jurisdiction: profile.jurisdiction,
+            document_count: (profile.credential_documents || []).length,
+          },
+        }),
+      },
+    },
+    { returnDocument: 'after' },
+  );
+  if (!submitted) {
+    return {
+      status: 409,
+      body: {
+        success: false,
+        code: 'CREDENTIALS_CHANGED',
+        message: 'Your credentials changed at the same time. Please check them and submit again.',
+      },
+    };
+  }
+  profile = submitted;
 
   const submitType = wasRejected ? CREDENTIAL_EVENT_TYPE.RESUBMITTED : CREDENTIAL_EVENT_TYPE.SUBMITTED;
   const submitEventId = latestCredentialEventId(profile, submitType);

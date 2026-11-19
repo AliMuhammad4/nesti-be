@@ -2,6 +2,7 @@ import ChatConversation from '../../../models/ChatConversation.js';
 import ChatMessage from '../../../models/ChatMessage.js';
 import ProfessionalProfile from '../../../models/ProfessionalProfile.js';
 import PublicProfile from '../../../models/PublicProfile.js';
+import User from '../../../models/User.js';
 import logger from '../../../utils/logger.js';
 import { classifyIntentFromKeywords } from '../utils/normalizationUtils.js';
 import {
@@ -36,6 +37,7 @@ import {
 } from '../../professionalAssistant/professionalAssistantService.js';
 import { nestiLandingFlow } from '../nestiLanding/nestiLandingFlow.js';
 import { attachDocumentsToTurn } from '../documents/chatDocumentService.js';
+import { isEmbedPaused } from '../embedSettings.js';
 import { chatAnsweredQuestionIds, openQualificationQuestionIds } from '../../professionalAssistant/qualificationProgress.js';
 import { clientTypeForForm, settingForClientType } from '../../professionalAssistant/assistantSettings.js';
 import { propertyMatchesEnabledForPlan, readSavedPlan } from './chatPlan.js';
@@ -107,6 +109,24 @@ export async function prepareProfessionalChatTurn(input) {
         body: { success: false, message: 'Sign in again to preview unsaved changes.' },
       },
     };
+  }
+  if (!landingMode && !previewForOwner) {
+    // A suspended professional's widget, or a paused widget, does not take new chats or leads.
+    const owner = await User.findById(userId).select('is_active').lean();
+    if ((owner && owner.is_active === false) || isEmbedPaused(embed)) {
+      return {
+        response: {
+          status: 200,
+          body: {
+            success: true,
+            reply: "Thanks for your message. The assistant isn't available right now. Please try again later.",
+            session_id: sessionId,
+            visitor_id: visitor?.uuid || '',
+            meta: { assistant_unavailable: true },
+          },
+        },
+      };
+    }
   }
   const canCreateLeads = Boolean(flow?.flowRole) && !previewForOwner;
   const previewPersona = previewForOwner && ['buyer', 'seller', 'investor'].includes(testPersona) ? testPersona : '';
@@ -329,6 +349,7 @@ export async function prepareProfessionalChatTurn(input) {
     isAutomatedBookingEnabled,
     calendlyLinkForVisitor,
     propertyMatchesEnabled,
+    storedForm,
   });
   systemPromptOptions.contactKnown = hasContact;
   const visitorClientType = landingMode ? '' : (previewPersona || clientTypeForForm(storedForm));

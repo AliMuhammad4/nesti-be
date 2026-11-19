@@ -158,7 +158,7 @@ async function persistAndEmit(userId, eventId, payload) {
     severity: payload.severity || 'info',
     action: {
       type: 'open_billing',
-      href: '/checkout',
+      href: '/billing',
       stripe_event_id: eventId,
       ...(payload.action || {}),
     },

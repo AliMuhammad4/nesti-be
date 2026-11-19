@@ -79,7 +79,7 @@ function proChatRoom(threadId) {
 function normalizeCallRoomName(threadId, value) {
   const base = proChatRoom(threadId);
   const roomName = String(value || '').trim();
-  if (roomName === base) return roomName; // Backward compatibility for an in-flight legacy call.
+  if (roomName === base) return roomName;
   if (roomName.startsWith(`${base}:`)) {
     const callId = roomName.slice(base.length + 1);
     if (/^[a-zA-Z0-9_-]{8,128}$/.test(callId)) return roomName;
@@ -166,7 +166,6 @@ export async function initWorkspaceSocket(httpServer) {
       next();
     } catch (e) {
       logger.warn('Socket auth failed', { message: e.message });
-      // Only token problems end the browser session; a DB hiccup should just be retried.
       const tokenError = e?.name === 'JsonWebTokenError' || e?.name === 'TokenExpiredError' || e?.name === 'NotBeforeError';
       next(new Error(tokenError ? 'invalid_token' : 'auth_unavailable'));
     }
@@ -175,8 +174,6 @@ export async function initWorkspaceSocket(httpServer) {
   io.on('connection', (socket) => {
     const uid = socket.data.userId;
     socket.join(userRoom(uid));
-    // A socket must not outlive its session token (30-day JWT). Timers are capped below the
-    // setTimeout limit and re-armed until the token's expiry.
     let sessionExpiryTimer = null;
     const armSessionExpiry = () => {
       const expMs = Number(socket.data.tokenExpMs || 0);
@@ -203,7 +200,6 @@ export async function initWorkspaceSocket(httpServer) {
       transport: socket.conn?.transport?.name,
     });
     void (async () => {
-      // Replay unanswered rings, including mid-call reinvites while the room is active.
       const pendingInvites = await ProfessionalCall.find({
         participant_ids: uid,
         caller_id: { $ne: uid },
@@ -265,7 +261,6 @@ export async function initWorkspaceSocket(httpServer) {
         try {
           ack(payload);
         } catch {
-          /* ignore ack errors */
         }
       }
     };
@@ -485,7 +480,6 @@ export async function initWorkspaceSocket(httpServer) {
           target_user_id: target_user_id ? String(target_user_id) : null,
           user_id: String(uid),
           sender_name: senderName,
-          // Prefer DB invited_at so reinvites always outrank a prior local "handled" stamp.
           occurred_at: inviteOccurredAt,
         };
         for (const pid of registryResult.invitee_ids || []) {
@@ -639,7 +633,6 @@ export async function initWorkspaceSocket(httpServer) {
           await assertCallEventRate('leave', thread_id);
         } catch (rateError) {
           if (rateError?.code === 'call_action_rate_limited') {
-            // Duplicate leave/end from multi-tab close — treat as confirmed.
             safeAck(ack, { success: true, code: 'call_action_rate_limited' });
             return;
           }
@@ -695,7 +688,6 @@ export async function initWorkspaceSocket(httpServer) {
           await assertCallEventRate('ended', thread_id);
         } catch (rateError) {
           if (rateError?.code === 'call_action_rate_limited') {
-            // Duplicate end from pagehide + UI close (or multi-tab) — already closing.
             safeAck(ack, { success: true, code: 'call_action_rate_limited' });
             return;
           }

@@ -25,7 +25,7 @@ async function loadBillingAccount(user) {
   const isClient = String(user?.role || '') === USER_ROLE.CLIENT;
   const Model = isClient ? ClientSubscription : Subscription;
   const row = await Model.findOne({ user_id: user._id }).lean();
-  return { row, returnPath: isClient ? '/client-dashboard/billing' : '/checkout' };
+  return { row, returnPath: isClient ? '/client-dashboard/billing' : '/billing' };
 }
 
 function serializeCard(method, defaultId) {

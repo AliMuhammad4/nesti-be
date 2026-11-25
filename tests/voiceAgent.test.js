@@ -130,6 +130,6 @@ test('browser sales brief names the caller and speaks prices in words', () => {
   assert.match(serviceLine('lawyer', {}), /newcomer/);
   assert.equal(parseGuide('agent', SERVICE_SEEDS.agent)?.length, 5);
   assert.equal(composeGuide('broker'), SERVICE_SEEDS.broker);
-  assert.match(liveSalesInstructions({ role: 'agent', caller: {}, settings: {} }), /one topic/);
+  assert.match(liveSalesInstructions({ role: 'agent', caller: {}, settings: {} }), /questions he asks come only from the Sales pipeline note/);
   assert.equal(serviceLine('agent', { agent_services: 'Custom storefront line' }), 'Custom storefront line');
 });

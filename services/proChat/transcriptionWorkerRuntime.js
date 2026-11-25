@@ -10,6 +10,8 @@ export { DEFAULT_TRANSCRIPTION_WORKER_PORT };
 export const TRANSCRIPTION_WORKER_READY_TIMEOUT_MS = 45_000;
 export const TRANSCRIPTION_WORKER_HEALTH_POLL_MS = 400;
 export const TRANSCRIPTION_WORKER_HEALTH_TIMEOUT_MS = 4_000;
+// How long a call request waits for an already-running Ravi worker to report healthy.
+export const RAVI_WORKER_REQUEST_WAIT_MS = 6_000;
 
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const workerEntryPath = path.join(backendRoot, 'workers', 'callTranscriberWorker.js');
@@ -63,6 +65,42 @@ export async function waitForTranscriptionWorkerHealth(
     await new Promise((resolve) => setTimeout(resolve, TRANSCRIPTION_WORKER_HEALTH_POLL_MS));
   }
   return false;
+}
+
+/** Why a worker health check fails: '', 'unreachable', 'livekit', 'inference' or 'unknown'. */
+export async function readWorkerHealthProblem(port, timeoutMs = TRANSCRIPTION_WORKER_HEALTH_TIMEOUT_MS) {
+  try {
+    const response = await fetch(transcriptionWorkerHealthUrl(port), {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (response.ok) return '';
+    const body = String(await response.text().catch(() => '')).toLowerCase();
+    if (body.includes('livekit')) return 'livekit';
+    if (body.includes('inference')) return 'inference';
+    return 'unknown';
+  } catch {
+    return 'unreachable';
+  }
+}
+
+export function raviWorkerProblemMessage(problem) {
+  if (problem === 'restarting') {
+    return 'The server is restarting for an update. Try the call again in a minute.';
+  }
+  if (problem === 'unreachable') {
+    return "Ravi's voice worker isn't running. Restart npm run dev in the backend folder, then try again.";
+  }
+  if (problem === 'livekit') {
+    return "Ravi's voice worker can't reach LiveKit. Check your internet connection and LIVEKIT_URL, then restart npm run dev in the backend folder.";
+  }
+  if (problem === 'inference') {
+    return "Ravi's voice worker stopped responding. Restart npm run dev in the backend folder, then try again.";
+  }
+  return "Ravi's voice worker isn't ready. Restart npm run dev in the backend folder, then try again.";
+}
+
+export function raviWorkerLogPath() {
+  return path.join(os.tmpdir(), 'nesti-ravi-worker.log');
 }
 
 export function resolveRaviWorkerPort(env = process.env) {

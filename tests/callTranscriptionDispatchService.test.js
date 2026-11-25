@@ -15,6 +15,8 @@ let claimed = true;
 let consenting = true;
 let claimReject = false;
 let createDispatchGate = null;
+let voiceTarget = '';
+let dispatches = 0;
 const updates = [];
 const warnings = [];
 
@@ -64,13 +66,15 @@ test.before(() => {
         { user_id: 'user-2', transcription_consent: false },
       ],
       transcription_policy_version: '2026-07',
-      transcription_status: consenting ? 'dispatching' : 'pending',
-      transcription_dispatch_id: consenting ? 'dispatch-1' : '',
+      transcription_status: voiceTarget ? 'pending' : (consenting ? 'dispatching' : 'pending'),
+      transcription_dispatch_id: consenting && !voiceTarget ? 'dispatch-1' : '',
+      voice_target_type: voiceTarget,
     }),
   }));
   mock.method(AgentDispatchClient.prototype, 'listDispatch', async () => []);
   mock.method(AgentDispatchClient.prototype, 'deleteDispatch', async () => {});
   mock.method(AgentDispatchClient.prototype, 'createDispatch', async (_room, agentName, options) => {
+    dispatches += 1;
     if (createDispatchGate) await createDispatchGate;
     assert.equal(agentName, TRANSCRIPTION_AGENT_NAME);
     const metadata = JSON.parse(options.metadata);
@@ -92,6 +96,8 @@ test.beforeEach(() => {
   consenting = true;
   claimReject = false;
   createDispatchGate = null;
+  voiceTarget = '';
+  dispatches = 0;
   updates.splice(0);
   warnings.splice(0);
 });
@@ -175,6 +181,21 @@ test('scheduled dispatch catches rejection and queues a retry', async () => {
       message.includes('Asynchronous call transcription dispatch rejected'),
     ),
   );
+});
+
+test('a Ravi call is not given the transcription worker after a restart', async () => {
+  claimed = false;
+  voiceTarget = 'sales';
+  const result = await dispatchTranscriptionWorkerForCall(callId);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ravi_call');
+  assert.equal(dispatches, 0);
+  const source = await readFile(
+    new URL('../services/proChat/transcriptionWorkerLifecycle.js', import.meta.url),
+    'utf8',
+  );
+  const restart = source.slice(source.indexOf('interruptedCalls'), source.indexOf('worker_restarting'));
+  assert.match(restart, /voice_target_type:\s*\{\s*\$in:\s*\[null,\s*''\]\s*\}/);
 });
 
 test('call activation signaling does not await or pre-report dispatch state', async () => {

@@ -4,6 +4,7 @@ import path from 'node:path';
 import v8 from 'node:v8';
 import {
   AgentServer,
+  InferenceRunner,
   ServerOptions,
   initializeLogger,
   log,
@@ -21,6 +22,17 @@ dotenv.config({
   override: true,
   quiet: true,
 });
+
+// Transcription uses OpenAI's own speech detection (server_vad), never
+// LiveKit's local audio end-of-turn model, so its separate inference process
+// (about 250 MB on Nov 23) is not started. Not enumerable, so the server
+// creates no inference process for it.
+export function skipLocalTurnModel(runner = InferenceRunner) {
+  const runners = runner?.registeredRunners;
+  if (!runners || runners.lk_eot_audio) return false;
+  Object.defineProperty(runners, 'lk_eot_audio', { value: 'not used by this worker', enumerable: false, configurable: true });
+  return true;
+}
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
@@ -47,6 +59,7 @@ if (isMain) {
 
   initializeLogger({ pretty: false, level: process.env.LOG_LEVEL || 'info' });
   const logger = log();
+  skipLocalTurnModel();
   const server = new AgentServer(
     new ServerOptions({
       agent: agentPath,

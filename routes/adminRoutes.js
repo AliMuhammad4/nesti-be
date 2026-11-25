@@ -88,9 +88,13 @@ import {
   adminStartVoiceCall,
   adminStartVoicePreview,
   adminStartLiveKitVoice,
+  adminStartTestVoice,
+  adminTestCallMinutes,
+  adminRedispatchTestVoice,
   adminVoicePreviewTurn,
   adminStopVoiceCall,
   adminListVoiceCalls,
+  adminVoiceSalesAnalytics,
   adminListCallRecordings,
   adminStoreCallRecording,
   adminRecordingPlayback,
@@ -368,9 +372,13 @@ router.post('/voice/sales-settings/sample', runCallRecordingUpload, adminSaveSal
 router.post('/voice/calls', adminStartVoiceCall);
 router.post('/voice/calls/preview', adminStartVoicePreview);
 router.post('/voice/calls/livekit', adminStartLiveKitVoice);
+router.post('/voice/test-calls', adminStartTestVoice);
+router.get('/voice/test-calls/:id/minutes', adminTestCallMinutes);
+router.post('/voice/test-calls/:id/redispatch', adminRedispatchTestVoice);
 router.post('/voice/calls/:id/turns', adminVoicePreviewTurn);
 router.post('/voice/calls/:id/stop', adminStopVoiceCall);
 router.get('/voice/calls', adminListVoiceCalls);
+router.get('/voice/sales-analytics', adminVoiceSalesAnalytics);
 router.get('/voice/calls/:id/recordings', adminListCallRecordings);
 router.post('/voice/calls/:id/recording', runCallRecordingUpload, adminStoreCallRecording);
 router.get('/voice/recordings/:id/playback', adminRecordingPlayback);

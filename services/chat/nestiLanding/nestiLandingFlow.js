@@ -54,11 +54,7 @@ function safeVisitorName(value) {
   return name;
 }
 
-export function asksHowNestiIsDifferent(value) {
-  const spoken = text(value).toLowerCase();
-  return /\b(different|difference|compare|comparison|stand out|versus|vs\.?)\b/.test(spoken)
-    || /\b(why nesti|why choose|what makes (you|nesti)|better than)\b/.test(spoken);
-}
+export { asksHowNestiIsDifferent } from '../../proChat/landingFeatures.js';
 
 export function replyWithoutVisitorName(value, name) {
   const who = text(name);

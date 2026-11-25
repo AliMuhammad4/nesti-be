@@ -69,6 +69,9 @@ import {
   adminStartVoiceCallService,
   adminStartVoicePreviewService,
   adminStartLiveKitVoiceService,
+  adminStartTestVoiceService,
+  adminRedispatchTestVoiceService,
+  adminTestCallMinutesService,
   adminVoicePreviewTurnService,
   adminStopVoiceCallService,
   adminGetSalesSettingsService,
@@ -85,6 +88,7 @@ import {
 import { deleteAdminSalesLeadService, getAdminSalesLeadService, listAdminSalesPipelineService, moveAdminLeadStageService, updateAdminSalesLeadRoleService } from '../services/admin/adminSalesPipelineService.js';
 import { closeAdminLeadService, draftAdminLeadEmailService, insightAdminLeadService, saveAdminLeadEmailDraftService, sendAdminLeadEmailService } from '../services/admin/adminLeadGuideEmailService.js';
 import { sendStoredFile } from '../utils/fileResponse.js';
+import { adminVoiceSalesAnalyticsService } from '../services/admin/voiceSalesAnalyticsService.js';
 
 const send = (res, result) => res.status(result.status).json(result.body);
 
@@ -377,9 +381,13 @@ export const adminSaveSalesVoiceSample = handle((req) => adminSaveSalesVoiceSamp
 export const adminStartVoiceCall = handle((req) => adminStartVoiceCallService(req.body, req.user));
 export const adminStartVoicePreview = handle((req) => adminStartVoicePreviewService(req.body, req.user));
 export const adminStartLiveKitVoice = handle((req) => adminStartLiveKitVoiceService(req.body, req.user));
+export const adminStartTestVoice = handle((req) => adminStartTestVoiceService(req.body, req.user));
+export const adminRedispatchTestVoice = handle((req) => adminRedispatchTestVoiceService(req.params.id, req.body, req.user));
+export const adminTestCallMinutes = handle((req) => adminTestCallMinutesService(req.params.id, req.query, req.user));
 export const adminVoicePreviewTurn = handle((req) => adminVoicePreviewTurnService(req.params.id, req.body, req.user));
 export const adminStopVoiceCall = handle((req) => adminStopVoiceCallService(req.params.id, req.user));
 export const adminListVoiceCalls = handle((req) => adminListVoiceCallsService(req.query, req.user));
+export const adminVoiceSalesAnalytics = handle((req) => adminVoiceSalesAnalyticsService(req.query, req.user));
 export const adminListCallRecordings = handle((req) =>
   adminListCallRecordingsService(req.params.id, req.user),
 );

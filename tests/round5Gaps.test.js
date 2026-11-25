@@ -34,7 +34,8 @@ import { previewIntakeSignals } from '../services/chat/handleChat/previewSignals
 import { buildLawyerSystemPrompt } from '../services/chat/prompts/lawyerPrompt.js';
 import { buildMortgageBrokerSystemPrompt } from '../services/chat/prompts/mortgageBrokerPrompt.js';
 
-const src = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+// Normalize line endings so source checks pass for CRLF (Windows) and LF files alike.
+const src = (path) => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const DETECTED = ['english', 'french', 'spanish', 'arabic', 'urdu', 'hindi', 'punjabi', 'tamil', 'mandarin'];
 const fixed = (language) => ({ applied: true, languages: [language], auto_detect_language: false });
 

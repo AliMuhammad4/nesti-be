@@ -2,7 +2,6 @@ import dotenv from 'dotenv';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import dns from 'node:dns/promises';
 import { AgentServer, InferenceRunner, ServerOptions, initializeLogger } from '@livekit/agents';
 import {
   DEFAULT_RAVI_WORKER_PORT,
@@ -10,7 +9,6 @@ import {
   RAVI_AGENT_IDENTITY,
   RAVI_AGENT_NAME,
 } from '../services/proChat/raviAgentConstants.js';
-import { installDnsLookupFallback, isDnsFailure, usePublicDns } from './ravi/mongo.js';
 
 function startupLog(level, message) {
   const date = new Date();
@@ -87,30 +85,6 @@ export function skipLocalTurnModel(runner = InferenceRunner) {
 const DRAIN_MS = 23_000;
 const LOW_MEMORY_MB = 2048;
 
-export function livekitHost(url) {
-  try {
-    return new URL(String(url || '').replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:')).hostname;
-  } catch {
-    return '';
-  }
-}
-
-export async function resolveLiveKitHost(url) {
-  const host = livekitHost(url);
-  if (!host) return;
-  try {
-    await dns.lookup(host);
-  } catch (error) {
-    if (!isDnsFailure(error)) return;
-    usePublicDns();
-    try {
-      await dns.lookup(host);
-    } catch (retryError) {
-      console.warn(`Ravi could not find the LiveKit server (${plainConnectReason(retryError?.message)}).`);
-    }
-  }
-}
-
 // One spare process: Ravi shares the one Render box with the API and the
 // transcription worker, and each call process can use up to 2000 MB.
 export function idleProcessCount(env = process.env) {
@@ -140,8 +114,6 @@ if (isMain) {
   if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
     throw new Error('LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET are required for the Ravi worker.');
   }
-  installDnsLookupFallback();
-  await resolveLiveKitHost(livekitUrl);
   const emitWarning = process.emitWarning.bind(process);
   process.emitWarning = (warning, type, code, ...rest) => {
     if (warning?.code === 'DEP0190' || type === 'DEP0190' || code === 'DEP0190') return;

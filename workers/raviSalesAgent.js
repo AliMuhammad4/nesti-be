@@ -22,23 +22,13 @@ import { loadSalesSettings } from '../services/proChat/voiceSalesBrief.js';
 import { CREDITS_LOW } from './raviVoiceTts.js';
 
 function prewarmDatabase() {
-  let tries = 0;
-  const tryConnect = () => {
-    connectMongo().then(() => {
-      markMongoPrewarm(true);
-      loadSalesSettings({ fresh: true }).catch(() => {});
-      if (tries) logger.info(`Ravi prewarm reached the database after ${tries + 1} tries`);
-    }).catch((error) => {
-      if (!tries) {
-        markMongoPrewarm(false);
-        logger.warn(`Ravi prewarm could not reach the database (${error?.message || 'unknown error'}), retrying in the background`);
-      }
-      tries += 1;
-      const timer = setTimeout(tryConnect, Math.min(30000, 3000 * tries));
-      timer.unref?.();
-    });
-  };
-  tryConnect();
+  connectMongo().then(() => {
+    markMongoPrewarm(true);
+    loadSalesSettings({ fresh: true }).catch(() => {});
+  }).catch((error) => {
+    markMongoPrewarm(false);
+    logger.warn(`Ravi could not reach the database (${error?.message || 'unknown error'})`);
+  });
 }
 
 const raviSalesAgent = defineAgent({

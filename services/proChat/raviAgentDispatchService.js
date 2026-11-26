@@ -120,8 +120,8 @@ export async function dispatchRaviAgent({ roomName, callId, role, greeting, test
         logger.warn('Ravi agent dispatch timed out, first dispatch is still there', { call_id: text(callId), message: error?.message });
         return existing;
       }
-      logger.warn('Ravi agent dispatch timed out and no first job was found, trying once more', { call_id: text(callId), message: error?.message });
-      dispatch = await send();
+      logger.warn('Ravi agent dispatch timed out and no first job was found, not sending a second Ravi', { call_id: text(callId), message: error?.message });
+      return { ok: true, kept: true };
     }
     return { ok: true, dispatchId: text(dispatch?.id) };
   } catch (error) {

@@ -4,7 +4,7 @@ import logger from '../../utils/logger.js';
 
 let sharedVad;
 
-function presenceVad() {
+export function presenceVad() {
   if (sharedVad === undefined) sharedVad = createPresenceVad();
   return sharedVad;
 }

@@ -3,6 +3,7 @@ import { createReplyPace } from '../../services/proChat/replyPace.js';
 import { voiceEngine } from '../../services/proChat/voiceSalesBrief.js';
 import { createSalesPipeline, pipelineRole } from '../../services/proChat/salesPipeline.js';
 import { chatFaqAnswer, warmChatKnowledge } from '../../services/proChat/chatKnowledge.js';
+import { claimRaviGreeting } from '../../services/proChat/liveKitRoomService.js';
 import { elevenLabsOptions, RaviVoice } from '../raviVoiceTts.js';
 import logger from '../../utils/logger.js';
 import { turnFilter } from './callerTurns.js';
@@ -62,8 +63,15 @@ export function watchRoom(c) {
   });
 }
 
-export function greetCaller(c) {
+export async function greetCaller(c) {
   const { session, caller } = c;
+  const roomName = c.ctx?.room?.name || c.call?.room_name;
+  const first = await claimRaviGreeting(roomName);
+  if (!first) {
+    c.greeted = true;
+    logger.info('Ravi skipped the greeting because this call already has one', { call_id: c.callId });
+    return false;
+  }
   const voiceMissing = c.elevenCall && !(session.tts instanceof RaviVoice);
   if (voiceMissing) {
     c.failVoice(c.voiceCheck && !c.voiceCheck.ok ? c.voiceCheck.problem : 'the ElevenLabs voice could not start');

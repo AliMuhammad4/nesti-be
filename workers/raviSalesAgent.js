@@ -93,7 +93,7 @@ const raviSalesAgent = defineAgent({
       await c.finish('caller never joined');
       return;
     }
-    const voiceMissing = c.voiceFailed ? true : greetCaller(c);
+    const voiceMissing = c.voiceFailed ? true : await greetCaller(c);
     logJoined(c, { startedAt, callerAt, voiceMissing });
   },
 });

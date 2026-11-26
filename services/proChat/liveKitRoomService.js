@@ -28,6 +28,36 @@ function getRoomServiceClient() {
   return cachedClient;
 }
 
+export async function claimRaviGreeting(roomName) {
+  const client = getRoomServiceClient();
+  const name = String(roomName || '').trim();
+  if (!client || !name) return true;
+  const mine = `${process.pid}-${Date.now()}`;
+  try {
+    const rooms = await client.listRooms([name]);
+    let meta = {};
+    try {
+      meta = JSON.parse(rooms?.[0]?.metadata || '{}');
+    } catch {
+      meta = {};
+    }
+    if (meta?.raviGreeting) return false;
+    meta.raviGreeting = mine;
+    await client.updateRoomMetadata(name, JSON.stringify(meta));
+    const check = await client.listRooms([name]);
+    let saved = {};
+    try {
+      saved = JSON.parse(check?.[0]?.metadata || '{}');
+    } catch {
+      saved = {};
+    }
+    return saved?.raviGreeting === mine;
+  } catch (error) {
+    logger.warn('Ravi greeting claim failed', { room: name, message: error?.message });
+    return true;
+  }
+}
+
 function isAutomatedTestRuntime() {
   return (
     process.execArgv.some((arg) => arg === '--test' || arg.startsWith('--test=')) ||

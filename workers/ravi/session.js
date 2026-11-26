@@ -1,11 +1,11 @@
 import { voice } from '@livekit/agents';
 import * as openai from '@livekit/agents-plugin-openai';
-import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import { languageMode } from '../../services/proChat/callLanguage.js';
 import { ttsModel, voiceEngine } from '../../services/proChat/voiceSalesBrief.js';
 import { createElevenLabsVoice, elevenLabsKey, secondElevenLabsOptions } from '../raviVoiceTts.js';
 import logger from '../../utils/logger.js';
 import { CloneVoice } from './cloneVoice.js';
+import { presenceVad } from './callerPresence.js';
 import { HearingSwitch } from './hearingSwitch.js';
 import { replyLlm } from './replyLlm.js';
 
@@ -16,29 +16,22 @@ const ENDPOINTING_MAX_DELAY = 1000;
 const HEARING_HINT = 'Nesti, Ravi, realtor, mortgage broker, lawyer';
 
 function openAiHearing(mode) {
-  const shared = { model: HEARING_MODEL, useRealtime: true, prompt: HEARING_HINT, noiseReductionType: 'near_field' };
+  const vad = presenceVad();
+  // Server-side end-of-speech held one turn open for 40 s on the 8:39 call.
+  // The local detector closes it, and OpenAI is asked to transcribe at that moment.
+  const shared = {
+    model: HEARING_MODEL,
+    useRealtime: true,
+    prompt: HEARING_HINT,
+    noiseReductionType: 'near_field',
+    ...(vad ? { vad, turnDetection: null } : {}),
+  };
   if (languageMode(mode) === 'english') return new openai.STT({ ...shared, language: 'en', detectLanguage: false });
   return new openai.STT({ ...shared, language: '', detectLanguage: true });
 }
 
-const SPARE_HEARING = 'scribe_v2_realtime';
-const SPARE_HINTS = HEARING_HINT.split(',').map((word) => word.trim()).filter(Boolean);
-
-function spareHearing(mode) {
-  const apiKey = elevenLabsKey();
-  if (!apiKey) throw new Error('ElevenLabs API key is not set');
-  const opts = { model: SPARE_HEARING, apiKey, keyterms: SPARE_HINTS, serverVad: {} };
-  if (languageMode(mode) === 'english') opts.languageCode = 'en';
-  return new elevenlabs.STT(opts);
-}
-
 function anyLanguageHearing(mode = 'auto', callId = '') {
-  return new HearingSwitch({
-    primary: openAiHearing(mode),
-    makeSpare: () => spareHearing(mode),
-    spareName: 'ElevenLabs Scribe',
-    callId,
-  });
+  return new HearingSwitch({ primary: openAiHearing(mode), callId });
 }
 
 export function callEndpointing(isTest, eagerness) {

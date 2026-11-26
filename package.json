@@ -4,7 +4,7 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/devWithTranscription.mjs",
     "dev": "node scripts/devWithTranscription.mjs",
     "dev:api": "node --watch-path=server.js --watch-path=app.js --watch-path=config --watch-path=constants --watch-path=controllers --watch-path=jobs --watch-path=middleware --watch-path=models --watch-path=routes --watch-path=schemas --watch-path=services --watch-path=utils server.js",
     "worker:transcription": "node scripts/startTranscriptionWorker.mjs",

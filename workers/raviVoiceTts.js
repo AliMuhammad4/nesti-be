@@ -49,6 +49,7 @@ export function elevenLabsOptions({ voiceId = '', model = '', speed = 1, env = p
     model: text(model) || text(env.ELEVENLABS_MODEL) || DEFAULT_ELEVENLABS_MODEL,
     language: 'en',
     voiceSettings: { stability: 0.5, similarity_boost: 0.8, speed: Number(speed) > 0 ? Number(speed) : 1 },
+    streamingLatency: 4,
     wordTokenizer: new tokenize.basic.SentenceTokenizer({ minSentenceLength: 6, streamContextLength: 6 }),
   };
 }

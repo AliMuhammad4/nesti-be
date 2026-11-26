@@ -10,8 +10,8 @@ import { HearingSwitch } from './hearingSwitch.js';
 import { replyLlm } from './replyLlm.js';
 
 const HEARING_MODEL = 'gpt-4o-mini-transcribe';
-const ENDPOINTING_MIN_DELAY = { low: 900, medium: 600, high: 450, auto: 600 };
-const ENDPOINTING_MAX_DELAY = 1000;
+const ENDPOINTING_MIN_DELAY = { low: 450, medium: 350, high: 300, auto: 300 };
+const ENDPOINTING_MAX_DELAY = 550;
 
 const HEARING_HINT = 'Nesti, Ravi, realtor, mortgage broker, lawyer';
 

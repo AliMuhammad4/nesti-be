@@ -3,6 +3,44 @@ import { AudioStream, ParticipantKind, RoomEvent, TrackKind, TrackSource } from 
 import logger from '../../utils/logger.js';
 
 let sharedVad;
+const presenceListeners = new Set();
+const wrappedVads = new WeakSet();
+
+function presenceAudioDetached(env = process.env) {
+  return env.NESTI_RAVI_LAUNCH === 'start';
+}
+
+function emitPresenceVad(event) {
+  for (const listener of presenceListeners) {
+    try {
+      listener(event);
+    } catch {
+      continue;
+    }
+  }
+}
+
+function shareVadEvents(vad) {
+  if (!vad || wrappedVads.has(vad)) return vad;
+  const originalStream = vad.stream.bind(vad);
+  vad.stream = () => {
+    const stream = originalStream();
+    const originalNext = stream.next.bind(stream);
+    stream.next = async () => {
+      const result = await originalNext();
+      if (!result.done && result.value) emitPresenceVad(result.value);
+      return result;
+    };
+    return stream;
+  };
+  wrappedVads.add(vad);
+  return vad;
+}
+
+function subscribePresenceVad(listener) {
+  presenceListeners.add(listener);
+  return () => presenceListeners.delete(listener);
+}
 
 export function presenceVad() {
   if (sharedVad === undefined) sharedVad = createPresenceVad();
@@ -11,12 +49,13 @@ export function presenceVad() {
 
 export function createPresenceVad() {
   try {
-    return new inference.VAD({
+    const vad = new inference.VAD({
       model: 'silero',
       minSpeechDuration: 80,
       minSilenceDuration: 200,
       activationThreshold: 0.5,
     });
+    return presenceAudioDetached() ? shareVadEvents(vad) : vad;
   } catch (error) {
     logger.warn(`Ravi local speaking detector could not start (${error?.message || 'unknown error'})`);
     return null;
@@ -24,6 +63,7 @@ export function createPresenceVad() {
 }
 
 export function prewarmPresenceVad() {
+  if (presenceAudioDetached()) return;
   try {
     const vad = presenceVad();
     if (!vad) return;
@@ -38,10 +78,42 @@ export function prewarmPresenceVad() {
   }
 }
 
+function applyPresenceEvent(c, session, callId, event) {
+  if (event.type === VADEventType.START_OF_SPEECH) {
+    c.callerPresent = true;
+    c.presentAt = Date.now();
+    session?.stt?.noteLocalSpeech?.(true);
+    logger.info('Ravi local detector heard the caller start speaking', { call_id: callId });
+  } else if (event.type === VADEventType.END_OF_SPEECH) {
+    c.callerPresent = false;
+    c.presentAt = Date.now();
+    session?.stt?.noteLocalSpeech?.(false);
+    logger.info('Ravi local detector heard the caller stop speaking', { call_id: callId });
+  } else if (event.type === VADEventType.INFERENCE_DONE && event.speaking) {
+    c.callerPresent = true;
+    c.presentAt = Date.now();
+  }
+}
+
 export function watchCallerPresence(c, vad = presenceVad()) {
   const { ctx, callId, session } = c;
   c.callerPresent = false;
   c.presentAt = 0;
+  if (presenceAudioDetached()) {
+    if (!vad) return () => {};
+    if (session?.stt) session.stt.callerPresenting = () => Boolean(c.callerPresent) || Date.now() - (c.presentAt || 0) < 400;
+    let closed = false;
+    const stopListen = subscribePresenceVad((event) => {
+      if (!closed) applyPresenceEvent(c, session, callId, event);
+    });
+    const stop = () => {
+      if (closed) return;
+      closed = true;
+      stopListen();
+    };
+    session?.on?.('close', stop);
+    return stop;
+  }
   if (session?.stt) session.stt.callerPresenting = () => Boolean(c.callerPresent) || Date.now() - (c.presentAt || 0) < 400;
   if (!vad || !ctx?.room) return () => {};
   const streams = new Set();
@@ -58,20 +130,7 @@ export function watchCallerPresence(c, vad = presenceVad()) {
     try {
       for await (const event of vadStream) {
         if (closed) break;
-        if (event.type === VADEventType.START_OF_SPEECH) {
-          c.callerPresent = true;
-          c.presentAt = Date.now();
-          session?.stt?.noteLocalSpeech?.(true);
-          logger.info('Ravi local detector heard the caller start speaking', { call_id: callId });
-        } else if (event.type === VADEventType.END_OF_SPEECH) {
-          c.callerPresent = false;
-          c.presentAt = Date.now();
-          session?.stt?.noteLocalSpeech?.(false);
-          logger.info('Ravi local detector heard the caller stop speaking', { call_id: callId });
-        } else if (event.type === VADEventType.INFERENCE_DONE && event.speaking) {
-          c.callerPresent = true;
-          c.presentAt = Date.now();
-        }
+        applyPresenceEvent(c, session, callId, event);
       }
     } catch (error) {
       if (!closed) logger.warn(`Ravi local speaking detector stopped (${error?.message || 'unknown error'})`, { call_id: callId });

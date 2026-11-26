@@ -36,7 +36,9 @@ const raviSalesAgent = defineAgent({
     try {
       os.setPriority(0, os.constants.priority.PRIORITY_ABOVE_NORMAL);
     } catch (error) {
-      logger.warn(`Ravi call process could not raise its priority (${error?.message || 'unknown error'})`);
+      const message = `Ravi call process could not raise its priority (${error?.message || 'unknown error'})`;
+      if (error?.code === 'EACCES' || /EACCES/i.test(String(error?.message || ''))) logger.info(message);
+      else logger.warn(message);
     }
     prewarmDatabase();
     prewarmHearing();

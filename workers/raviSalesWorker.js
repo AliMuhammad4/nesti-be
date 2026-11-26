@@ -124,7 +124,9 @@ if (isMain) {
   try {
     os.setPriority(0, os.constants.priority.PRIORITY_ABOVE_NORMAL);
   } catch (error) {
-    console.warn(`Ravi worker could not raise its priority (${error?.message || 'unknown error'})`);
+    const message = `Ravi worker could not raise its priority (${error?.message || 'unknown error'})`;
+    if (error?.code === 'EACCES' || /EACCES/i.test(String(error?.message || ''))) console.log(message);
+    else console.warn(message);
   }
   skipLocalTurnModel();
   const totalMb = Math.round(os.totalmem() / 1048576);

@@ -42,7 +42,7 @@ export function watchQuiet(c) {
     }
   };
   const callerBusy = () => Boolean(c.callerBusy?.()) || session.userState === 'speaking';
-  const lastSound = () => Math.max(c.raviDoneAt, c.callerDoneAt, c.heardAt || 0, c.joinedAt || 0);
+  const lastSound = () => Math.max(c.raviDoneAt, c.callerDoneAt, c.heardAt || 0, c.presentAt || 0, c.joinedAt || 0);
   const armQuiet = (ms) => {
     clearTimeout(c.quietTimer);
     c.quietTimer = setTimeout(sayCheckIn, ms);

@@ -1,7 +1,7 @@
 import logger from '../../utils/logger.js';
 import { text } from './text.js';
 
-export const REPLY_WAIT_MS = 5000;
+export const REPLY_WAIT_MS = 1500;
 const CHECK_MS = 1000;
 const MAX_FORCED = 3;
 const ARM_AFTER_MS = 4000;
@@ -35,7 +35,7 @@ export function watchReplies(c) {
     if (c.skippedTurnAt && c.skippedTurnAt >= pendingAt) return clear();
     const quietFrom = Math.max(pendingAt, c.callerDoneAt || 0);
     const waited = Date.now() - quietFrom;
-    const talking = session.userState === 'speaking' && (!c.heard?.current || (c.heard.current.partials || 0) > 0);
+    const talking = Boolean(c.callerPresent) || (session.userState === 'speaking' && (!c.heard?.current || (c.heard.current.partials || 0) > 0));
     if (talking || session.agentState !== 'listening' || waited < REPLY_WAIT_MS - 50) {
       timer = setTimeout(check, Math.max(CHECK_MS, REPLY_WAIT_MS - waited));
       timer.unref?.();

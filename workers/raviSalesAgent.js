@@ -5,26 +5,34 @@ import logger from '../utils/logger.js';
 import { attachCallBrief } from './ravi/callBrief.js';
 import { attachCallEnd } from './ravi/callEnd.js';
 import { watchCallerHearing } from './ravi/callerHearing.js';
+import { prewarmPresenceVad, watchCallerPresence } from './ravi/callerPresence.js';
 import { watchCallerTurns, watchRaviLines } from './ravi/callerTurns.js';
 import { keepRecording, watchCallLifecycle, watchClosing, watchReplyFailures } from './ravi/callLifecycle.js';
 import { createCallTools } from './ravi/callTools.js';
-import { connectMongo } from './ravi/mongo.js';
+import { connectMongo, markMongoPrewarm } from './ravi/mongo.js';
 import { prepareCall } from './ravi/prepareCall.js';
 import { watchPipeline } from './ravi/pipelineSave.js';
 import { watchQuiet } from './ravi/quietCheckIn.js';
 import { watchReplies } from './ravi/replyWatchdog.js';
+import { prewarmHearing } from './ravi/session.js';
 import { createAgent, greetCaller, logJoined, watchRoom } from './ravi/startCall.js';
 import { isDebugOn } from './ravi/text.js';
 import { trackTurnLatency } from './ravi/turnLatency.js';
+import { loadSalesSettings } from '../services/proChat/voiceSalesBrief.js';
 import { CREDITS_LOW } from './raviVoiceTts.js';
 
 function prewarmDatabase() {
   let tries = 0;
   const tryConnect = () => {
     connectMongo().then(() => {
+      markMongoPrewarm(true);
+      loadSalesSettings({ fresh: true }).catch(() => {});
       if (tries) logger.info(`Ravi prewarm reached the database after ${tries + 1} tries`);
     }).catch((error) => {
-      if (!tries) logger.warn(`Ravi prewarm could not reach the database (${error?.message || 'unknown error'}), retrying in the background`);
+      if (!tries) {
+        markMongoPrewarm(false);
+        logger.warn(`Ravi prewarm could not reach the database (${error?.message || 'unknown error'}), retrying in the background`);
+      }
       tries += 1;
       const timer = setTimeout(tryConnect, Math.min(30000, 3000 * tries));
       timer.unref?.();
@@ -41,6 +49,8 @@ const raviSalesAgent = defineAgent({
       logger.warn(`Ravi call process could not raise its priority (${error?.message || 'unknown error'})`);
     }
     prewarmDatabase();
+    prewarmHearing();
+    prewarmPresenceVad();
   },
   entry: async (ctx) => {
     const c = await prepareCall(ctx);
@@ -65,6 +75,7 @@ const raviSalesAgent = defineAgent({
     c.noteActivity = trackTurnLatency(session, c.callId);
     watchClosing(c);
     watchCallerHearing(c);
+    watchCallerPresence(c);
     watchQuiet(c);
     watchCallerTurns(c);
     watchReplies(c);

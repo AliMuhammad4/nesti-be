@@ -409,17 +409,30 @@ ${who} ${filed}${callLanguagePriceNote(role, language) ? `\n${callLanguagePriceN
 // A short in-memory cache so back-to-back test calls don't each hit Mongo for
 // the same settings row. Saves on the admin page cleared it via the write path.
 let settingsCache = null;
+let lastGoodSettings = undefined;
+let hasLastGoodSettings = false;
 const SETTINGS_TTL_MS = 30_000;
 
 export function invalidateSalesSettingsCache() {
   settingsCache = null;
 }
 
+export function lastCachedSettings() {
+  return hasLastGoodSettings ? lastGoodSettings : null;
+}
+
 export async function loadSalesSettings({ fresh = false } = {}) {
   if (!fresh && settingsCache && settingsCache.until > Date.now()) return settingsCache.value;
-  const value = await VoiceAgentSalesSetting.findOne({ key: 'sales' }).lean();
-  settingsCache = { value, until: Date.now() + SETTINGS_TTL_MS };
-  return value;
+  try {
+    const value = await VoiceAgentSalesSetting.findOne({ key: 'sales' }).lean();
+    settingsCache = { value, until: Date.now() + SETTINGS_TTL_MS };
+    lastGoodSettings = value;
+    hasLastGoodSettings = true;
+    return value;
+  } catch (error) {
+    if (hasLastGoodSettings) return lastGoodSettings;
+    throw error;
+  }
 }
 
 export function speechSpeed(value) {

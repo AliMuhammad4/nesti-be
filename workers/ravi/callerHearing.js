@@ -23,7 +23,7 @@ export function watchCallerHearing(c) {
   const noTextTimers = new Set();
   c.heard = heard;
   c.heardAt = 0;
-  c.callerBusy = () => session.userState === 'speaking' || Date.now() - (c.heardAt || 0) < HEARD_GRACE_MS || Boolean(session.stt?.inHearingGap?.());
+  c.callerBusy = () => session.userState === 'speaking' || Boolean(c.callerPresent) || Date.now() - (c.heardAt || 0) < HEARD_GRACE_MS || Date.now() - (c.presentAt || 0) < HEARD_GRACE_MS || Boolean(session.stt?.inHearingGap?.());
   const flushPartials = () => {
     partialTimer = null;
     if (!heard.windowPartials) return;

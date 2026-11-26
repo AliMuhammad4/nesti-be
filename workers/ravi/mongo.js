@@ -8,6 +8,24 @@ const DNS_FAILURE = /querySrv|queryTxt|ENOTFOUND|ETIMEOUT|ECONNREFUSED|EAI_AGAIN
 
 let mongoConnecting = null;
 let publicDns = false;
+let prewarmKnown = false;
+let prewarmOk = false;
+
+export const DB_WAIT_MS = 4000;
+export const FAST_DB_WAIT_MS = 500;
+
+export function markMongoPrewarm(ok) {
+  prewarmKnown = true;
+  prewarmOk = Boolean(ok);
+}
+
+export function mongoPrewarmFailed() {
+  return prewarmKnown && !prewarmOk;
+}
+
+export function dbWaitMs() {
+  return mongoPrewarmFailed() ? FAST_DB_WAIT_MS : DB_WAIT_MS;
+}
 
 export function isDnsFailure(error) {
   return DNS_FAILURE.test(`${error?.code || ''} ${error?.syscall || ''} ${error?.message || ''}`);
@@ -19,12 +37,51 @@ export function usePublicDns() {
   try {
     const current = dns.getServers().filter((server) => !PUBLIC_DNS.includes(server));
     dns.setServers([...PUBLIC_DNS, ...current]);
-    logger.warn(`Ravi database lookup failed, using public DNS (${PUBLIC_DNS.join(', ')}) for this worker`);
+    logger.warn(`Ravi is using public DNS (${PUBLIC_DNS.join(', ')}) for this worker`);
+    installDnsLookupFallback();
     return true;
   } catch (error) {
     logger.warn(`Ravi could not switch to public DNS (${error?.message || 'unknown error'})`);
     return false;
   }
+}
+
+let lookupFallback = false;
+
+export function installDnsLookupFallback() {
+  if (lookupFallback) return false;
+  lookupFallback = true;
+  const original = dns.lookup.bind(dns);
+  const resolver = new dns.Resolver();
+  resolver.setServers(PUBLIC_DNS);
+  dns.lookup = (hostname, options, callback) => {
+    if (typeof options === 'function') {
+      callback = options;
+      options = undefined;
+    }
+    original(hostname, options, (error, address, family) => {
+      if (!error || !callback || !isDnsFailure(error)) {
+        callback?.(error, address, family);
+        return;
+      }
+      usePublicDns();
+      const all = options && typeof options === 'object' && options.all;
+      resolver.resolve4(hostname, (error4, ipv4) => {
+        if (!error4 && ipv4?.length) {
+          callback(null, all ? ipv4.map((ip) => ({ address: ip, family: 4 })) : ipv4[0], all ? undefined : 4);
+          return;
+        }
+        resolver.resolve6(hostname, (error6, ipv6) => {
+          if (!error6 && ipv6?.length) {
+            callback(null, all ? ipv6.map((ip) => ({ address: ip, family: 6 })) : ipv6[0], all ? undefined : 6);
+            return;
+          }
+          callback(error, address, family);
+        });
+      });
+    });
+  };
+  return true;
 }
 
 export function mongoReady() {

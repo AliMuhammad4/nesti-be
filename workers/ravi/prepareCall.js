@@ -6,6 +6,7 @@ import {
   allowedVoice,
   bargeIn,
   loadCaller,
+  lastCachedSettings,
   loadSalesSettings,
   responseEagerness,
   silenceSeconds,
@@ -17,14 +18,13 @@ import {
 import { createLanguageTracker, languageMode } from '../../services/proChat/callLanguage.js';
 import { checkElevenLabs, voiceSetupProblem } from '../raviVoiceTts.js';
 import { newCallState } from './callState.js';
-import { connectMongo, mongoReady, waitForMongo } from './mongo.js';
+import { connectMongo, dbWaitMs, markMongoPrewarm, mongoReady, waitForMongo } from './mongo.js';
 import { callEndpointing, openSession, prewarmSession } from './session.js';
 import { isDebugOn, parseMetadata, text } from './text.js';
 import logger from '../../utils/logger.js';
 
 const SLOW_JOIN_MS = 8000;
 const SLOW_CALLER_MS = 15000;
-const DB_WAIT_MS = 4000;
 const DB_RETRY_MS = 5000;
 
 export function watchJoin(callId) {
@@ -64,6 +64,7 @@ function keepTryingMongo(callId) {
     if (mongoReady()) return;
     tries += 1;
     connectMongo().then(() => {
+      markMongoPrewarm(true);
       logger.info(`Ravi reached the database during the call after ${tries} tries`, { call_id: callId });
     }).catch(() => {
       if (tries >= 12) return;
@@ -105,17 +106,19 @@ export async function prepareCall(ctx) {
   const join = watchJoin(callId);
   const roomReady = connectRoom(ctx, callId);
   join.stage('database');
-  const dbReady = await waitForMongo(DB_WAIT_MS);
+  const dbReady = await waitForMongo(dbWaitMs());
   join.stage('call record');
   let call;
   let settings = null;
   if (dbReady) {
     [call, settings] = await Promise.all([
       findCall(callId, metadata).catch(() => offlineCall(metadata)),
-      loadSalesSettings({ fresh: true }).catch(() => null),
+      loadSalesSettings({ fresh: true }).catch(() => lastCachedSettings()),
     ]);
   } else {
-    logger.warn('Ravi started without the database, using default settings; the call is saved once it reconnects', { call_id: callId });
+    settings = lastCachedSettings();
+    const source = settings ? 'last saved settings' : 'default settings';
+    logger.warn(`Ravi started without the database, using ${source}; the call is saved once it reconnects`, { call_id: callId });
     call = offlineCall(metadata);
     keepTryingMongo(callId);
   }

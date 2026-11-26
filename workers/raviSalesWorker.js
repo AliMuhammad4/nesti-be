@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import dns from 'node:dns/promises';
 import { AgentServer, InferenceRunner, ServerOptions, initializeLogger } from '@livekit/agents';
 import {
   DEFAULT_RAVI_WORKER_PORT,
@@ -9,6 +10,60 @@ import {
   RAVI_AGENT_IDENTITY,
   RAVI_AGENT_NAME,
 } from '../services/proChat/raviAgentConstants.js';
+import { installDnsLookupFallback, isDnsFailure, usePublicDns } from './ravi/mongo.js';
+
+function startupLog(level, message) {
+  const date = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const time = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const line = `${time} ${level}: ${message}`;
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
+}
+
+function memoryFreePhrase(freeMb, totalMb) {
+  const free = Number(freeMb);
+  const total = Number(totalMb);
+  if (!Number.isFinite(free) || !Number.isFinite(total)) return '';
+  if (total >= 1024) return `${(free / 1024).toFixed(1)} GB of ${Math.round(total / 1024)} GB`;
+  return `${Math.round(free)} MB of ${Math.round(total)} MB`;
+}
+
+function plainConnectReason(reason) {
+  const text = String(reason || '').trim();
+  if (!text) return 'unknown error';
+  const lower = text.toLowerCase();
+  if (lower.includes('closed unexpectedly') || lower.includes('connection closed')) return 'the connection closed unexpectedly';
+  if (/enotfound|getaddrinfo|eai_again|enodata/i.test(text)) return 'the LiveKit server could not be found';
+  if (/econnreset/i.test(text)) return 'the connection was reset';
+  if (/econnrefused/i.test(text)) return 'the connection was refused';
+  if (/etimedout|timed out|timeout/i.test(text)) return 'the connection timed out';
+  const cleaned = text.replace(/wss?:\/\/\S+/gi, '').replace(/https?:\/\/\S+/gi, '').replace(/getaddrinfo\s+/i, '').replace(/\s+/g, ' ').trim().replace(/\.+$/, '');
+  if (!cleaned || /livekit\.cloud/i.test(cleaned)) return 'unknown error';
+  return cleaned;
+}
+
+async function logStartupKeys() {
+  const openaiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  startupLog(openaiKey ? 'info' : 'warn', openaiKey ? 'The OpenAI key is loaded.' : 'The OpenAI key is missing.');
+  const { checkElevenLabs, elevenLabsKey } = await import('./raviVoiceTts.js');
+  if (!elevenLabsKey()) {
+    startupLog('warn', 'The ElevenLabs key is missing.');
+    return;
+  }
+  const checked = await checkElevenLabs();
+  if (checked?.ok && !checked.unchecked) {
+    startupLog('info', 'ElevenLabs is connected.');
+    return;
+  }
+  if (checked?.ok || checked?.unchecked) {
+    startupLog('info', 'The ElevenLabs key is loaded.');
+    return;
+  }
+  const problem = String(checked?.problem || 'unknown error').trim().replace(/\.+$/, '') || 'unknown error';
+  startupLog('error', `ElevenLabs is not connected (${problem}).`);
+}
 
 dotenv.config({
   path: path.join(path.dirname(fileURLToPath(import.meta.url)), '../.env'),
@@ -32,8 +87,32 @@ export function skipLocalTurnModel(runner = InferenceRunner) {
 const DRAIN_MS = 23_000;
 const LOW_MEMORY_MB = 2048;
 
+export function livekitHost(url) {
+  try {
+    return new URL(String(url || '').replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:')).hostname;
+  } catch {
+    return '';
+  }
+}
+
+export async function resolveLiveKitHost(url) {
+  const host = livekitHost(url);
+  if (!host) return;
+  try {
+    await dns.lookup(host);
+  } catch (error) {
+    if (!isDnsFailure(error)) return;
+    usePublicDns();
+    try {
+      await dns.lookup(host);
+    } catch (retryError) {
+      console.warn(`Ravi could not find the LiveKit server (${plainConnectReason(retryError?.message)}).`);
+    }
+  }
+}
+
 // One spare process: Ravi shares the one Render box with the API and the
-// transcription worker, and each call process can use up to 1200 MB.
+// transcription worker, and each call process can use up to 2000 MB.
 export function idleProcessCount(env = process.env) {
   const parsed = Number(env.RAVI_IDLE_PROCESSES);
   if (Number.isFinite(parsed) && parsed >= 0) return parsed;
@@ -61,6 +140,8 @@ if (isMain) {
   if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
     throw new Error('LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET are required for the Ravi worker.');
   }
+  installDnsLookupFallback();
+  await resolveLiveKitHost(livekitUrl);
   const emitWarning = process.emitWarning.bind(process);
   process.emitWarning = (warning, type, code, ...rest) => {
     if (warning?.code === 'DEP0190' || type === 'DEP0190' || code === 'DEP0190') return;
@@ -75,8 +156,10 @@ if (isMain) {
   }
   skipLocalTurnModel();
   const totalMb = Math.round(os.totalmem() / 1048576);
-  console.log(`Ravi worker starting agent=${RAVI_AGENT_NAME} memory_total_mb=${totalMb} memory_free_mb=${Math.round(os.freemem() / 1048576)} idle_processes=${idleProcessCount()}`);
-  for (const warning of startupWarnings(process.env, RAVI_AGENT_NAME, totalMb)) console.warn(warning);
+  const freeMb = Math.round(os.freemem() / 1048576);
+  startupLog('info', `Ravi worker started. ${memoryFreePhrase(freeMb, totalMb)} memory free.`);
+  for (const warning of startupWarnings(process.env, RAVI_AGENT_NAME, totalMb)) startupLog('warn', warning);
+  await logStartupKeys();
   const server = new AgentServer(new ServerOptions({
     agent: path.join(path.dirname(fileURLToPath(import.meta.url)), 'raviSalesAgent.js'),
     agentName: RAVI_AGENT_NAME,
@@ -84,8 +167,9 @@ if (isMain) {
     production: process.env.NODE_ENV === 'production',
     numIdleProcesses: idleProcessCount(),
     initializeProcessTimeout: 60_000,
-    jobMemoryWarnMB: 600,
-    jobMemoryLimitMB: 1200,
+    jobMemoryWarnMB: 0,
+    jobMemoryLimitMB: 0,
+    maxRetry: Infinity,
     wsURL: livekitUrl,
     apiKey: livekitApiKey,
     apiSecret: livekitApiSecret,
@@ -128,10 +212,13 @@ if (isMain) {
     process.stdin.on('end', () => void shutdown(0));
     process.stdin.on('error', () => void shutdown(0));
   }
+  server.event.on('worker_registered', () => {
+    startupLog('info', 'LiveKit is connected.');
+  });
   try {
     await server.run();
   } catch (error) {
-    console.error('Ravi worker failed to start:', error);
+    startupLog('error', `LiveKit could not connect (${plainConnectReason(error?.message)}).`);
     process.exit(1);
   }
 }

@@ -21,6 +21,9 @@ export class HearingSwitch extends stt.STT {
     this.spareBroken = typeof makeSpare !== 'function';
     this.switched = false;
     this.session = null;
+    this.activeStream = null;
+    this.callerPresenting = null;
+    this.localSpeechTimer = null;
     this.gapUntil = 0;
     this.stats = { lateDropped: 0, lateDroppedWhileRavi: 0, switchReason: '' };
     this.#listen(primary);
@@ -58,6 +61,14 @@ export class HearingSwitch extends stt.STT {
     return this.session?.agentState === 'speaking';
   }
 
+  locallySpeaking() {
+    return Boolean(this.callerPresenting?.());
+  }
+
+  noteLocalSpeech() {
+    // The local detector no longer switches hearing. A switch closed the OpenAI stream.
+  }
+
   spare() {
     if (this.spareBroken) return null;
     if (this.spareStt) return this.spareStt;
@@ -74,6 +85,20 @@ export class HearingSwitch extends stt.STT {
 
   prewarm() {
     this.primary.prewarm?.();
+    if (this.warming) return;
+    this.warming = true;
+    try {
+      const stream = this.primary.stream();
+      const timer = setTimeout(() => {
+        try { stream.close(); } catch { /* already closed */ }
+        this.warming = false;
+      }, 2000);
+      timer.unref?.();
+      logger.info('Ravi is opening speech-to-text early', { call_id: this.callId });
+    } catch (error) {
+      this.warming = false;
+      logger.warn(`Ravi could not pre-open speech-to-text (${error?.message || 'unknown error'})`, { call_id: this.callId });
+    }
   }
 
   async _recognize() {
@@ -81,7 +106,9 @@ export class HearingSwitch extends stt.STT {
   }
 
   stream(options = {}) {
-    return new HearingStream(this, options.connOptions);
+    const stream = new HearingStream(this, options.connOptions);
+    this.activeStream = stream;
+    return stream;
   }
 
   async close() {
@@ -207,6 +234,13 @@ class HearingStream extends stt.SpeechStream {
   observe(event) {
     const now = Date.now();
     const type = event?.type;
+    if (this.owner.callerPresenting && this.owner.raviSpeaking() && !this.owner.locallySpeaking()) {
+      if (type === SpeechEventType.START_OF_SPEECH || type === SpeechEventType.INTERIM_TRANSCRIPT) {
+        this.owner.stats.lateDropped += 1;
+        this.owner.stats.lateDroppedWhileRavi += 1;
+        return false;
+      }
+    }
     if (type === SpeechEventType.START_OF_SPEECH) {
       this.speaking = true;
       this.speechAt = now;
@@ -214,7 +248,9 @@ class HearingStream extends stt.SpeechStream {
       clearTimeout(this.longTimer);
       if (this.which === 'primary') {
         this.longTimer = setTimeout(() => {
-          if (this.speaking && !this.textSinceStart) this.switchTo('backup', `caller spoke ${Math.round(LONG_SPEECH_MS / 1000)} s with no text`);
+          if (this.speaking && !this.textSinceStart) {
+            logger.warn(`Ravi hearing: caller spoke ${Math.round(LONG_SPEECH_MS / 1000)} s with no text, keeping OpenAI`, { call_id: this.owner.callId });
+          }
         }, LONG_SPEECH_MS);
         this.longTimer.unref?.();
       }
@@ -231,7 +267,9 @@ class HearingStream extends stt.SpeechStream {
         this.finalTimer = setTimeout(() => {
           if (this.endAt !== stoppedAt) return;
           this.strikes += 1;
-          if (spokeMs >= LONG_SILENT_SEGMENT_MS || this.strikes >= 2) this.switchTo('backup', `no text ${FINAL_LATE_MS / 1000} s after ${spokeMs} ms of speech`);
+          if (spokeMs >= LONG_SILENT_SEGMENT_MS || this.strikes >= 2) {
+            logger.warn(`Ravi hearing: no text ${FINAL_LATE_MS / 1000} s after ${spokeMs} ms of speech, keeping OpenAI`, { call_id: this.owner.callId });
+          }
         }, FINAL_LATE_MS);
         this.finalTimer.unref?.();
       }
@@ -239,6 +277,8 @@ class HearingStream extends stt.SpeechStream {
     }
     if (type === SpeechEventType.INTERIM_TRANSCRIPT) {
       this.textSinceStart = true;
+      clearTimeout(this.owner.localSpeechTimer);
+      this.owner.localSpeechTimer = null;
       if (!this.speaking && this.endAt && now - this.endAt > LATE_PARTIAL_MS) {
         this.owner.stats.lateDropped += 1;
         if (this.owner.raviSpeaking()) this.owner.stats.lateDroppedWhileRavi += 1;
@@ -248,13 +288,13 @@ class HearingStream extends stt.SpeechStream {
     }
     if (type === SpeechEventType.FINAL_TRANSCRIPT) {
       this.textSinceStart = true;
+      clearTimeout(this.owner.localSpeechTimer);
+      this.owner.localSpeechTimer = null;
       clearTimeout(this.finalTimer);
       const late = !this.speaking && this.endAt ? now - this.endAt : 0;
       this.endAt = 0;
       if (this.which === 'primary' && late > FINAL_LATE_MS) {
-        this.put(event);
-        this.switchTo('backup', `final text arrived ${late} ms after the caller stopped`);
-        return false;
+        logger.warn(`Ravi hearing: final text arrived ${late} ms after the caller stopped, keeping OpenAI`, { call_id: this.owner.callId });
       }
       return true;
     }

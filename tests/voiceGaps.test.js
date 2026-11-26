@@ -7,6 +7,7 @@ import { HearingSwitch } from '../workers/ravi/hearingSwitch.js';
 import { AFTER_QUESTION_MS, missedCaller, quietDelayMs } from '../workers/ravi/quietCheckIn.js';
 import { missedLine } from '../workers/ravi/lines.js';
 import { answerTiming } from '../workers/ravi/turnLatency.js';
+import { REPLY_WAIT_MS } from '../workers/ravi/replyWatchdog.js';
 
 test('answer timing uses the wait the caller heard', () => {
   const turn = { end_of_turn_ms: 320, llm_first_token_ms: 610, tts_first_audio_ms: 290, heard_to_voice_ms: 1350 };
@@ -20,6 +21,9 @@ test('hearing with no spare never leaves OpenAI', () => {
   assert.equal(hearing.spareBroken, true);
   assert.equal(hearing.spare(), null);
   assert.equal(hearing.model, 'gpt-4o-mini-transcribe');
+  hearing.noteLocalSpeech(true);
+  assert.equal(hearing.stats.switchReason, '');
+  assert.equal(REPLY_WAIT_MS, 1500);
 });
 
 test('a spoken sentence with no text asks to repeat once, real silence does not', () => {

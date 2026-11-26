@@ -80,6 +80,7 @@ if (isMain) {
         const memoryLoad = heapLimit > 0 ? memory.heapUsed / heapLimit : 0;
         return Math.min(1, Math.max(0.05, memoryLoad));
       },
+      maxRetry: Infinity,
       wsURL: livekitUrl,
       apiKey: livekitApiKey,
       apiSecret: livekitApiSecret,

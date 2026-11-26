@@ -1,6 +1,6 @@
 import { voice } from '@livekit/agents';
-import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as openai from '@livekit/agents-plugin-openai';
+import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import { languageMode } from '../../services/proChat/callLanguage.js';
 import { ttsModel, voiceEngine } from '../../services/proChat/voiceSalesBrief.js';
 import { createElevenLabsVoice, elevenLabsKey, secondElevenLabsOptions } from '../raviVoiceTts.js';
@@ -14,14 +14,15 @@ const ENDPOINTING_MIN_DELAY = { low: 900, medium: 600, high: 450, auto: 600 };
 const ENDPOINTING_MAX_DELAY = 1000;
 
 const HEARING_HINT = 'Nesti, Ravi, realtor, mortgage broker, lawyer';
-const SPARE_HEARING = 'scribe_v2_realtime';
-const SPARE_HINTS = HEARING_HINT.split(',').map((word) => word.trim()).filter(Boolean);
 
 function openAiHearing(mode) {
   const shared = { model: HEARING_MODEL, useRealtime: true, prompt: HEARING_HINT, noiseReductionType: 'near_field' };
   if (languageMode(mode) === 'english') return new openai.STT({ ...shared, language: 'en', detectLanguage: false });
   return new openai.STT({ ...shared, language: '', detectLanguage: true });
 }
+
+const SPARE_HEARING = 'scribe_v2_realtime';
+const SPARE_HINTS = HEARING_HINT.split(',').map((word) => word.trim()).filter(Boolean);
 
 function spareHearing(mode) {
   const apiKey = elevenLabsKey();
@@ -132,8 +133,23 @@ export function openSession({ builtinVoice, speechSpeed: speed, cloneVoiceId, ea
   });
 }
 
+export function prewarmHearing() {
+  try {
+    const stt = openAiHearing('auto');
+    const stream = stt.stream();
+    const timer = setTimeout(() => {
+      try { stream.close(); } catch { /* already closed */ }
+      try { stt.close?.(); } catch { /* already closed */ }
+    }, 2500);
+    timer.unref?.();
+    logger.info('Ravi is opening speech-to-text early');
+  } catch (error) {
+    logger.warn(`Ravi could not pre-open speech-to-text (${error?.message || 'unknown error'})`);
+  }
+}
+
 export function prewarmSession(session, { urdu = true } = {}) {
-  for (const part of [session.tts, session.llm]) {
+  for (const part of [session.stt, session.tts, session.llm]) {
     try {
       part?.prewarm?.({ urdu });
     } catch {

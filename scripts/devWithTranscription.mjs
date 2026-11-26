@@ -644,8 +644,12 @@ function watchRaviCode() {
 takeLauncherLock();
 worker = await startWorker();
 raviWorker = await startRaviWorker();
-watchRaviCode();
-watchApiCode();
+// npm run dev restarts when code changes. npm start runs the same workers
+// without that watcher, so a saved file does not bounce a live server.
+if (process.env.npm_lifecycle_event === 'dev') {
+  watchRaviCode();
+  watchApiCode();
+}
 server = startServer();
 wireServerLifecycle(server);
 startHealthWatch();

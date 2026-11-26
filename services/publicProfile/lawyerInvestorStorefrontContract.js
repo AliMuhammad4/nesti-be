@@ -1,3 +1,5 @@
+import { preserveLibraryElements } from './preserveLibraryElements.js';
+
 export const LAWYER_INVESTOR_TEMPLATE_ID = 'lawyer-investor';
 export const LAWYER_INVESTOR_DESIGN_VERSION = 11;
 
@@ -366,9 +368,10 @@ export function canonicalizeLawyerInvestorDraft(draft, generated = {}) {
     return draft;
   }
 
-  let blocks = (Array.isArray(draft?.blocks) ? draft.blocks : [])
+  const prepared = (Array.isArray(draft?.blocks) ? draft.blocks : [])
     .filter(Boolean)
-    .map((block) => normalizeBlockShape(clone(block)))
+    .map((block) => normalizeBlockShape(clone(block)));
+  let blocks = prepared
     .filter((block) => LAWYER_INVESTOR_BLOCK_TYPES.includes(block.type));
 
   const currentVersion = lawyerInvestorDesignVersion(blocks);
@@ -420,7 +423,7 @@ export function canonicalizeLawyerInvestorDraft(draft, generated = {}) {
       },
     }));
   }
-  blocks = normalizeLegacyBlockIds(blocks);
+  blocks = preserveLibraryElements(prepared, normalizeLegacyBlockIds(blocks));
 
   return {
     ...draft,

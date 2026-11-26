@@ -1,5 +1,6 @@
 import express from 'express';
 const router = express.Router();
+import { disposableEmailRules } from '../services/auth/disposableEmailGuard.js';
 import { validateBody } from '../middleware/validate.js';
 import {
   signupSchema,
@@ -11,7 +12,6 @@ import {
   verifyEmailSchema,
   googleLoginSchema,
   googleSignupSchema,
-  emailOnlySchema,
   resendVerificationSchema,
 } from '../schemas/authSchemas.js';
 import {
@@ -26,7 +26,6 @@ import {
   forgotPassword,
   resetPassword,
   verifyResetOtp,
-  checkEmail,
   resendVerification,
 } from '../controllers/authController.js';
 import { protect } from '../middleware/authMiddleware.js';
@@ -37,18 +36,21 @@ import {
   authUserLimiter,
 } from '../middleware/rateLimit.js';
 
+router.get('/disposable-email-rules', authGlobalLimiter, (req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({ success: true, ...disposableEmailRules() });
+});
 router.post('/signup', authGlobalLimiter, authSensitiveLimiter, validateBody(signupSchema), signup);
 router.post('/verify-email', authGlobalLimiter, authOtpVerifyLimiter, validateBody(verifyEmailSchema), verifyEmail);
 router.post('/login', authGlobalLimiter, authSensitiveLimiter, validateBody(loginSchema), login);
 router.post('/google', authGlobalLimiter, authSensitiveLimiter, validateBody(googleLoginSchema), google);
 router.post('/google-signup', authGlobalLimiter, authSensitiveLimiter, validateBody(googleSignupSchema), googleSignup);
 router.get('/profile', protect, authUserLimiter, profile);
-router.get('/public-profile', authGlobalLimiter, publicProfile);
+router.get('/public-profile', authGlobalLimiter, protect, authUserLimiter, publicProfile);
 router.post('/change-password', protect, authUserLimiter, validateBody(changePasswordSchema), changePassword);
 router.post('/forgot-password', authGlobalLimiter, authSensitiveLimiter, validateBody(forgotPasswordSchema), forgotPassword);
 router.post('/reset-password', authGlobalLimiter, authSensitiveLimiter, validateBody(resetPasswordSchema), resetPassword);
 router.post('/verify-reset-otp', authGlobalLimiter, authSensitiveLimiter, validateBody(otpWithEmailSchema), verifyResetOtp);
-router.post('/check-email', authGlobalLimiter, authOtpVerifyLimiter, validateBody(emailOnlySchema), checkEmail);
 router.post('/resend-verification', authGlobalLimiter, authSensitiveLimiter, validateBody(resendVerificationSchema), resendVerification);
 
 export default router;

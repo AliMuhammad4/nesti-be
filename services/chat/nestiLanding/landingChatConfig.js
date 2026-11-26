@@ -494,15 +494,15 @@ function clip(value, max = 2000) {
 }
 
 const CLIENT_PLAN_CARDS = {
-  basic: {
+  essential: {
     description: 'For buyers and sellers who want progress tracking, a simple budget, and a first set of matches.',
     popular: false,
   },
-  standard: {
+  plus: {
     description: 'For an active purchase or sale that needs fuller planning, more matches, and chat support.',
     popular: true,
   },
-  pro: {
+  premium: {
     description: 'For buyers and sellers who want unlimited matching, priority, and a dedicated guide.',
     popular: false,
   },
@@ -514,7 +514,7 @@ const PROFESSIONAL_PLAN_CARDS = {
     features: [
       'Basic chatbot and lead capture',
       'Lead scoring, classification, and CRM list',
-      'Up to 50 captured leads',
+      'Up to 150 saved leads',
       'Manual nurture emails (up to 50)',
       '1:1 professional conversations',
       'Notes, referrals, and client management',
@@ -524,7 +524,7 @@ const PROFESSIONAL_PLAN_CARDS = {
   standard: {
     description: 'Advanced workflows for active professionals using automation, insights, calendar, and referrals.',
     features: [
-      'Everything in Basic with up to 150 leads per month',
+      'Everything in Basic with unlimited saved leads',
       'Bulk follow-up workspace (up to 500 emails)',
       'Calendly calendar integration',
       'Advanced lead insights and conversation transcript',

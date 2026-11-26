@@ -1,5 +1,6 @@
 import LeadMatch from '../../models/LeadMatch.js';
 import NurtureLog from '../../models/NurtureLog.js';
+import ChatConversation from '../../models/ChatConversation.js';
 import { getPlanLimitsForSubscription } from './entitlements.js';
 import { getOrCreateSubscriptionForUser } from './subscriptionLocalService.js';
 
@@ -27,9 +28,14 @@ export async function countNurtureSends(userId) {
   return NurtureLog.countDocuments({ user_id: userId, status: 'sent' });
 }
 
+export async function countChatbotConversations(userId) {
+  return ChatConversation.countDocuments({ user_id: userId });
+}
+
 const COUNT_FNS = Object.freeze({
   captured_leads: countCapturedLeads,
   followup_actions: countNurtureSends,
+  chatbot_conversations: countChatbotConversations,
 });
 
 export async function assertWithinPlanQuota({ userId, subscription, limitKey }) {
@@ -47,11 +53,12 @@ export async function assertWithinPlanQuota({ userId, subscription, limitKey }) 
 }
 
 export async function getPlanUsageForUser(userId) {
-  const [captured_leads, followup_actions] = await Promise.all([
+  const [captured_leads, followup_actions, chatbot_conversations] = await Promise.all([
     countCapturedLeads(userId),
     countNurtureSends(userId),
+    countChatbotConversations(userId),
   ]);
-  return { captured_leads, followup_actions };
+  return { captured_leads, followup_actions, chatbot_conversations };
 }
 
 /**
@@ -136,6 +143,8 @@ const LIMIT_USER_MESSAGES = Object.freeze({
     'Your current plan displays up to {max} {maxLeadLabel} in the workspace, while {used} {usedLeadLabel} are saved from your chatbot. Upgrade to view and manage all captured leads.',
   followup_actions:
     'You have reached your nurture email limit ({used}/{max} {usedEmailLabel} sent). Upgrade your plan to send additional follow-up emails.',
+  chatbot_conversations:
+    'Your current plan includes {max} chatbot {maxConversationLabel}. {used} {usedConversationLabel} already exist. Upgrade your plan to start additional conversations.',
 });
 
 function pluralize(count, singular, plural = `${singular}s`) {
@@ -147,6 +156,8 @@ export function planQuotaErrorResponse(err) {
   const maxLeadLabel = pluralize(err.max, 'lead');
   const usedLeadLabel = pluralize(err.used, 'lead');
   const usedEmailLabel = pluralize(err.used, 'email');
+  const maxConversationLabel = pluralize(err.max, 'conversation');
+  const usedConversationLabel = pluralize(err.used, 'conversation');
   const template =
     LIMIT_USER_MESSAGES[err.limitKey] ||
     `You have reached your plan limit for ${err.limitKey.replace(/_/g, ' ')} ({used}/{max}). Please upgrade to continue.`;
@@ -155,7 +166,9 @@ export function planQuotaErrorResponse(err) {
     .replace('{max}', String(err.max))
     .replace('{maxLeadLabel}', maxLeadLabel)
     .replace('{usedLeadLabel}', usedLeadLabel)
-    .replace('{usedEmailLabel}', usedEmailLabel);
+    .replace('{usedEmailLabel}', usedEmailLabel)
+    .replace('{maxConversationLabel}', maxConversationLabel)
+    .replace('{usedConversationLabel}', usedConversationLabel);
   return {
     success: false,
     code: err.code,

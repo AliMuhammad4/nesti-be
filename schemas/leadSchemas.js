@@ -33,6 +33,7 @@ export const leadMatchCreateSchema = Joi.object({
   lead_type: leadType.default('unknown'),
   lead_profile_id: objectId.allow(null),
   conversation_id: objectId,
+  lead_slot: Joi.string().trim().max(80),
   match_score: Joi.number().default(0),
   match_status: Joi.string().valid(...MATCH_STATUSES).default('new'),
   icp_fit: icpFitSchema.optional(),
@@ -157,6 +158,8 @@ export const leadProfileCreateSchema = Joi.object({
   lead_refs: Joi.array().items(objectId).default([]),
   source: str.default('chatbot'),
   total_score: Joi.number().default(0),
+  client_type: Joi.string().valid('buyer', 'seller', 'investor', '').allow('').optional(),
+  template_answers: anyObj.optional(),
 });
 
 export const leadProfileUpdateSchema = leadProfileCreateSchema.fork(['intent'], (s) => s.optional());

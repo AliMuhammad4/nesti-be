@@ -86,4 +86,7 @@ export const embedGenerateBodySchema = chatbotEmbedUrlCreateSchema.fork(
 export const embedPatchBodySchema = chatbotEmbedUrlUpdateSchema.fork(
   ['user_id', 'token'],
   (s) => s.optional()
-);
+).keys({
+  // Pause / resume the widget; stored as widget_settings.is_active.
+  is_active: Joi.boolean(),
+});

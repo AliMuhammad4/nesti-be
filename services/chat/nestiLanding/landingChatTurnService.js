@@ -16,11 +16,13 @@ import {
 import { cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, nestiLandingFlow, replyFromSavedKnowledge, replyIsUsable, scoreLandingLead, shortenLandingReply } from './nestiLandingFlow.js';
 import { agreesToWalkthrough, askedForWalkthrough, detectPain, mentionsPricing, painById, roleFallbackQuestion } from './landingPainPoints.js';
 import { appendChatEvents, nextChatState, questionFromReply, readChatState } from './landingChatState.js';
-import { notifyAdminsOfAdminLead } from './notifyAdminsOfLandingLead.js';
+import { notifyAdminsOfAdminLead, queueLandingThanksEmail } from './notifyAdminsOfLandingLead.js';
 import { queueAdminLeadFollowUp } from '../../admin/adminLeadGuideEmailService.js';
 import { nextAutoPipelineStage, reopenNurtureLead } from '../../admin/adminPipelineStage.js';
+import { withExclusiveKey } from '../../../utils/exclusiveKey.js';
+import logger from '../../../utils/logger.js';
 
-export const landingChatLeadDeps = { notifyAdminsOfAdminLead, queueAdminLeadFollowUp };
+export const landingChatLeadDeps = { notifyAdminsOfAdminLead, queueAdminLeadFollowUp, queueLandingThanksEmail };
 
 export function shouldReuseLandingInquiry(past) {
   return Boolean(past && past.close_outcome !== 'won');
@@ -76,7 +78,14 @@ function applyLeadProfile(inquiry, contact) {
   if (contact.preferred_contact) inquiry.preferred_contact = contact.preferred_contact;
 }
 
-export async function saveAdminLead({ sessionId, contact, audience, spoken, reply, score, grade, skipUser = false, chatState, chatEvents, botName = 'Ravi', notify = true }) {
+export async function saveAdminLead(args) {
+  const contactKey = text(args?.contact?.email).toLowerCase();
+  const sessionKey = text(args?.sessionId);
+  const key = `landing-lead:${contactKey || sessionKey || 'new'}`;
+  return withExclusiveKey(key, () => saveAdminLeadOnce(args));
+}
+
+async function saveAdminLeadOnce({ sessionId, contact, audience, spoken, reply, score, grade, skipUser = false, chatState, chatEvents, botName = 'Ravi', notify = true }) {
   const email = text(contact.email).toLowerCase();
   const phone = text(contact.phone);
   const name = text(contact.name);
@@ -118,8 +127,13 @@ export async function saveAdminLead({ sessionId, contact, audience, spoken, repl
       chat_state: chatState,
       chat_events: chatEvents,
     });
-    if (notify) await landingChatLeadDeps.notifyAdminsOfAdminLead({ inquiry }).catch(() => {});
+    if (notify) {
+      void Promise.resolve(landingChatLeadDeps.notifyAdminsOfAdminLead({ inquiry })).catch((error) => {
+        logger.warn('Landing lead admin notify failed', { error: error?.message, inquiry_id: String(inquiry._id) });
+      });
+    }
     landingChatLeadDeps.queueAdminLeadFollowUp(inquiry._id);
+    landingChatLeadDeps.queueLandingThanksEmail(inquiry);
     return inquiry;
   }
   inquiry.email = email || inquiry.email;
@@ -139,13 +153,16 @@ export async function saveAdminLead({ sessionId, contact, audience, spoken, repl
   if (inquiry.pipeline_stage === 'calling' && inquiry.status === 'pending') inquiry.status = 'contacted';
   await inquiry.save();
   if (notify && cameBack) {
-    await landingChatLeadDeps.notifyAdminsOfAdminLead({
+    void Promise.resolve(landingChatLeadDeps.notifyAdminsOfAdminLead({
       inquiry,
       title: 'Nurture lead came back',
       body: `${text(inquiry.full_name) || 'A nurture lead'} is chatting on the homepage again and is back in conversation.`,
-    }).catch(() => {});
+    })).catch((error) => {
+      logger.warn('Landing lead admin notify failed', { error: error?.message, inquiry_id: String(inquiry._id) });
+    });
   }
   landingChatLeadDeps.queueAdminLeadFollowUp(inquiry._id);
+  landingChatLeadDeps.queueLandingThanksEmail(inquiry);
   return inquiry;
 }
 
@@ -350,8 +367,8 @@ export async function handleLandingChatTurn({
     { type: 'turn', detail: String(chatState.turns) },
   ]);
   const leadActions = new Set(roleCustomization?.next_actions || []);
-  const inquiry = leadActions.has('save_lead')
-    ? await saveAdminLead({
+  if (leadActions.has('save_lead')) {
+    void saveAdminLead({
       sessionId: sid,
       contact,
       audience,
@@ -364,15 +381,17 @@ export async function handleLandingChatTurn({
       chatEvents,
       botName,
       notify: leadActions.has('notify_admins'),
-    })
-    : null;
+    }).catch((error) => {
+      logger.warn('Landing lead save failed', { error: error?.message, session_id: sid });
+    });
+  }
   return {
     status: 200,
     body: {
       success: true,
       reply,
       session_id: sid,
-      lead_id: inquiry?._id ? String(inquiry._id) : '',
+      lead_id: '',
     },
   };
 }

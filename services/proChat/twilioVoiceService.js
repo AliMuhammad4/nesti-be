@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import mongoose from 'mongoose';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import LeadMatch from '../../models/LeadMatch.js';
@@ -18,6 +19,7 @@ import { dispatchRaviAgent } from './raviAgentDispatchService.js';
 import { normalizeE164, pickSalesPhone } from './voicePhone.js';
 import ProfessionalProfile from '../../models/ProfessionalProfile.js';
 import { TERMINAL_RETENTION_MS } from './callRegistryShared.js';
+import { deleteLiveKitRoom } from './liveKitRoomService.js';
 
 const ACTIVE_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -88,6 +90,15 @@ async function clientPipelineLeadIds(userId) {
   return leads.map((lead) => String(lead._id));
 }
 
+async function askedNotToCall(targetType, targetId) {
+  try {
+    const found = await ProfessionalCall.exists({ voice_target_type: targetType, voice_target_id: String(targetId), 'voice_pipeline.do_not_call': true });
+    return Boolean(found);
+  } catch {
+    return false;
+  }
+}
+
 async function loadTarget({ targetType, targetId }) {
   if (targetType === 'lead') {
     const lead = await LeadMatch.findById(targetId).lean();
@@ -141,6 +152,7 @@ export async function startAdminVoiceCall({
   if (!twilioConfigured(config)) return fail(503, 'Twilio is not configured');
   const loaded = await loadTarget({ targetType, targetId });
   if (loaded.error) return loaded.error;
+  if (await askedNotToCall(targetType, targetId)) return fail(409, 'This contact asked not to be called again');
   const destination = normalizeE164(toPhone) || loaded.phone;
   if (!destination) return fail(400, 'A destination phone number is required');
 
@@ -324,6 +336,7 @@ export async function startAdminLiveKitVoice({ actorUser, targetType, targetId, 
   if (!['lead', 'client', 'sales'].includes(targetType)) return fail(400, 'Invalid voice target');
   const loaded = await loadTarget({ targetType, targetId });
   if (loaded.error) return loaded.error;
+  if (await askedNotToCall(targetType, targetId)) return fail(409, 'This contact asked not to be called again');
   const threadId = `admin-voice:${targetType}:${targetId}`;
   await ProfessionalCall.updateMany(
     { thread_id: threadId, provider: { $in: [CALL_PROVIDERS.PREVIEW, CALL_PROVIDERS.LIVEKIT] }, status: { $in: ['connecting', 'ringing', 'active'] } },
@@ -377,6 +390,7 @@ export async function startAdminLiveKitVoice({ actorUser, targetType, targetId, 
       { _id: call._id },
       { $set: { status: 'ended', ended_at: new Date(), active_thread_key: null, transcription_error_message: dispatched.message } },
     );
+    closeLiveKitRoomSoon(roomName);
     return fail(503, dispatched.message);
   }
   const token = new AccessToken(apiKey, apiSecret, { identity: actorId, ttl: 60 * 30 });
@@ -419,6 +433,107 @@ export async function startAdminLiveKitVoice({ actorUser, targetType, targetId, 
     agent_name: 'Ravi',
     ringing,
     offline: Boolean(targetType === 'client' && clientUserId && !ringing),
+  });
+}
+
+// Admin browser test call: no lead/client target, no phone, no recording.
+export async function startAdminTestVoice({ actorUser, role, overrides }) {
+  if (!voiceAgentEnabled()) return fail(503, 'Voice agent is disabled');
+  const livekitUrl = text(process.env.LIVEKIT_URL);
+  const apiKey = text(process.env.LIVEKIT_API_KEY);
+  const apiSecret = text(process.env.LIVEKIT_API_SECRET);
+  if (!livekitUrl || !apiKey || !apiSecret) return fail(503, 'LiveKit is not configured');
+  const actorId = String(actorUser?._id || actorUser?.id || 'admin');
+  const threadId = `admin-voice:test:${actorId}`;
+  const openFilter = { thread_id: threadId, provider: CALL_PROVIDERS.LIVEKIT, status: { $in: ['connecting', 'ringing', 'active'] } };
+  const roomName = `admin-voice:test:${actorId}:${randomUUID()}`;
+  const now = new Date();
+  const callId = new mongoose.Types.ObjectId();
+  const token = new AccessToken(apiKey, apiSecret, { identity: actorId, ttl: 60 * 30 });
+  token.addGrant({
+    roomJoin: true,
+    room: roomName,
+    canPublish: true,
+    canSubscribe: true,
+    canPublishSources: [TrackSource.MICROPHONE],
+  });
+  const jwt = await token.toJwt();
+  (async () => {
+    try {
+      const stale = await ProfessionalCall.find(openFilter).select('room_name').lean();
+      if (stale.length) {
+        await ProfessionalCall.updateMany(
+          openFilter,
+          { $set: { status: 'ended', ended_at: new Date(), active_thread_key: null, transcription_status: 'completed' } },
+        );
+        for (const row of stale) closeLiveKitRoomSoon(row.room_name);
+      }
+      await ProfessionalCall.create({
+        _id: callId,
+        room_name: roomName,
+        thread_id: threadId,
+        active_thread_key: `${threadId}:live`,
+        caller_id: actorId,
+        participant_ids: [actorId],
+        participant_states: [{
+          user_id: actorId,
+          status: 'joined',
+          joined_at: now,
+          transcription_consent: true,
+          transcription_consented_at: now,
+          transcription_consent_recorded_at: now,
+          transcription_consent_version: '1',
+        }],
+        call_scope: 'direct',
+        call_type: 'voice',
+        provider: CALL_PROVIDERS.LIVEKIT,
+        voice_target_type: 'test',
+        voice_target_id: '',
+        voice_agent_voice: text(overrides?.voice),
+        transcription_policy_version: '1',
+        transcription_status: 'active',
+        transcription_started_at: now,
+        minutes_status: 'not_ready',
+        recording_status: 'not_requested',
+        status: 'active',
+        connecting_at: now,
+        started_at: now,
+        expires_at: new Date(Date.now() + ACTIVE_TTL_MS),
+        delete_at: new Date(Date.now() + ACTIVE_TTL_MS + TERMINAL_RETENTION_MS),
+      });
+    } catch (error) {
+      logger.warn('Test call save failed', { call_id: String(callId), message: error?.message });
+    }
+  })();
+  (async () => {
+    const dispatched = await dispatchRaviAgent({
+      roomName,
+      callId,
+      role,
+      greeting: spokenGreeting(),
+      test: overrides || {},
+    });
+    if (!dispatched.ok) {
+      await ProfessionalCall.updateOne(
+        { _id: callId },
+        { $set: { status: 'ended', ended_at: new Date(), active_thread_key: null, transcription_error_message: dispatched.message } },
+      ).catch(() => {});
+      closeLiveKitRoomSoon(roomName);
+      logger.warn('Test call dispatch failed', { call_id: String(callId), message: dispatched.message });
+    }
+  })();
+  Promise.resolve().then(() => recordAdminAudit({
+    actorUserId: actorUser?._id,
+    action: 'voice.test.start',
+    targetType: 'ProfessionalCall',
+    targetId: String(callId),
+    meta: { role, engine: text(overrides?.voice_engine) },
+  })).catch((error) => logger.warn('Test call audit failed', { call_id: String(callId), message: error?.message }));
+  return ok({
+    call: { id: String(callId), status: 'active', provider: 'livekit' },
+    url: livekitUrl,
+    token: jwt,
+    agent_name: 'Ravi',
   });
 }
 
@@ -486,6 +601,11 @@ export async function sendAdminVoicePreviewTurn({ callId, text: spoken }) {
   return ok({ say: reply.say, audio: reply.audio || '', done: Boolean(reply.done) });
 }
 
+function closeLiveKitRoomSoon(roomName) {
+  if (!text(roomName) || !text(process.env.LIVEKIT_URL) || process.env.NODE_ENV === 'test') return;
+  void deleteLiveKitRoom(roomName).catch(() => {});
+}
+
 export async function stopAdminVoiceCall({ actorUser, callId, fetchImpl = fetch }) {
   const call = await ProfessionalCall.findById(callId);
   if (!call || ![CALL_PROVIDERS.TWILIO, CALL_PROVIDERS.PREVIEW, CALL_PROVIDERS.LIVEKIT].includes(call.provider)) {
@@ -506,6 +626,8 @@ export async function stopAdminVoiceCall({ actorUser, callId, fetchImpl = fetch 
       },
     ).catch((error) => logger.warn('Twilio hangup failed', { message: error?.message }));
   }
+  // Deleting the room disconnects Ravi, which ends its job right away.
+  if (call.provider === CALL_PROVIDERS.LIVEKIT) closeLiveKitRoomSoon(call.room_name);
   const ended = terminalVoiceUpdate(call);
   call.status = ended.status;
   call.ended_at = ended.ended_at;

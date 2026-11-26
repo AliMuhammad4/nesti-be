@@ -56,18 +56,23 @@ function intentToAgentClientTags(intent) {
   return [];
 }
 
-function qualToClientTypes(qualification) {
+function qualToClientTypes(qualification, leadProfile = null) {
   const types = [];
   const q = qualification?.agent || {};
+  const clientType = norm(leadProfile?.client_type || q.client_type);
   const motivation = norm(q.motivation_reason);
-  if (motivation === 'investment') types.push('investors');
+  if (clientType === 'investor' || motivation === 'investment' || norm(q.investment_type)) {
+    types.push('investors');
+  }
   if (motivation === 'downsizing') types.push('downsizers');
   if (motivation === 'upgrading') types.push('luxury_buyers');
   if (motivation === 'relocation' || motivation === 'family_change' || motivation === 'divorce') {
     types.push('first_time_buyers');
   }
   const living = norm(q.living_situation);
-  if (living === 'renting' && !types.includes('first_time_buyers')) types.push('first_time_buyers');
+  if (living === 'renting' && !types.includes('first_time_buyers') && !types.includes('investors')) {
+    types.push('first_time_buyers');
+  }
   return types;
 }
 
@@ -101,7 +106,13 @@ function agentLeadTimelineBucket(leadProfile) {
 function inferMortgageBrokerLoanTypes(leadProfile, q, options = {}) {
   const inferred = [];
   if (options?.reusedExisting === false) inferred.push('first_time_buyers');
-  if (norm(q.purchase_purpose) === 'investment') inferred.push('investment_properties');
+  if (
+    norm(q.purchase_purpose) === 'investment'
+    || norm(leadProfile?.client_type) === 'investor'
+    || norm(q.investment_type)
+  ) {
+    inferred.push('investment_properties');
+  }
   if (norm(q.purchase_purpose) === 'refinance') inferred.push('refinances');
   if (norm(q.employment_status) === 'self_employed') inferred.push('self_employed_borrowers');
   return inferred;
@@ -162,7 +173,7 @@ function scoreAgentLeadAgainstIcp(leadProfile, icp, options = {}) {
 
   const leadClientTypes = [
     ...intentToAgentClientTags(leadProfile.intent),
-    ...qualToClientTypes(leadProfile.qualification),
+    ...qualToClientTypes(leadProfile.qualification, leadProfile),
   ]
     .map(norm)
     .filter(Boolean);

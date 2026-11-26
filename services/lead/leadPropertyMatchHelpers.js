@@ -26,6 +26,7 @@ function pickMatchedLeadForResponse(ml) {
   if (!ml || typeof ml !== 'object') return null;
   const out = {
     intent: ml.intent ?? null,
+    client_type: ml.client_type ?? null,
     preferred_contact_method: ml.preferred_contact_method ?? null,
     best_time_to_contact: ml.best_time_to_contact ?? null,
     property_location: ml.property_location ?? null,
@@ -40,6 +41,8 @@ function pickMatchedLeadForResponse(ml) {
     viewing_readiness: ml.viewing_readiness ?? null,
     living_situation: ml.living_situation ?? null,
     urgency_readiness: ml.urgency_readiness ?? null,
+    investment_type: ml.investment_type ?? null,
+    investment_goal: ml.investment_goal ?? null,
   };
   const has = Object.values(out).some((v) => v != null && v !== '');
   return has ? out : null;
@@ -71,9 +74,38 @@ export function enrichPropertyMatch(match = {}) {
       : [];
   const mc = match.matched_contact && typeof match.matched_contact === 'object' ? match.matched_contact : null;
   const mergedLead = mergeRowIntoMatchedLead(match);
+  const imageUrl = String(match?.image_url || match?.imageUrl || '').trim();
+  const imageList = [];
+  const seenImages = new Set();
+  const pushImage = (value) => {
+    const url = String(value || '').trim();
+    if (!url || seenImages.has(url)) return;
+    seenImages.add(url);
+    imageList.push(url);
+  };
+  if (imageUrl) pushImage(imageUrl);
+  const rawImages = Array.isArray(match?.images)
+    ? match.images
+    : Array.isArray(match?.photos)
+      ? match.photos
+      : [];
+  for (const image of rawImages) {
+    if (typeof image === 'string') pushImage(image);
+    else pushImage(image?.secure_url || image?.url);
+  }
   return {
     id: match?.id || null,
     title: match?.title || null,
+    address: match?.address || null,
+    location: match?.location || null,
+    price: match?.price ?? null,
+    bedrooms: match?.bedrooms ?? null,
+    bathrooms: match?.bathrooms ?? null,
+    property_type: match?.property_type || null,
+    image_url: imageList[0] || imageUrl || null,
+    images: imageList,
+    listing_url: match?.listing_url || match?.listingUrl || null,
+    summary: match?.summary || null,
     match_score: match?.match_score ?? null,
     match_headline: match?.match_headline || null,
     source: match?.source || null,
@@ -133,10 +165,29 @@ export async function buildLeadPropertyMatchesPayload({ user, leadMatch, page, l
 
   let property_matches = [];
   let context = 'buy';
+  const clientType = String(
+    leadProfile?.client_type
+    || leadMatch?.compatibility_factors?.client_type
+    || '',
+  ).trim().toLowerCase();
+  const isInvestorLead = clientType === 'investor'
+    || /investor/i.test(String(leadMatch?.lead_type || ''))
+    || String(leadProfile?.qualification?.agent?.motivation_reason || '').toLowerCase() === 'investment'
+    || Boolean(
+      leadProfile?.qualification?.agent?.investment_type
+      || leadProfile?.qualification?.agent?.investment_goal,
+    );
   if (prof === PROFESSIONAL_TYPE.AGENT) {
-    const isBuyer = /buy/i.test(leadProfile.intent || leadMatch.lead_type || '');
-    context = isBuyer ? 'buy' : 'sell';
-    property_matches = isBuyer
+    // Investors keep intent "buy" but lead_type is often *_investor — never route them to seller matching.
+    const isSellSide = String(leadProfile?.intent || '').toLowerCase() === 'sell'
+      || /seller/i.test(String(leadMatch?.lead_type || ''));
+    const isBuyerSide = !isSellSide && (
+      isInvestorLead
+      || /buy/i.test(String(leadProfile?.intent || ''))
+      || /buyer|client|investor/i.test(String(leadMatch?.lead_type || ''))
+    );
+    context = isBuyerSide ? 'buy' : 'sell';
+    property_matches = isBuyerSide
       ? await getBuyerPropertyMatches({ userId: user._id, leadProfile, signals: {} })
       : await getBuyerMatchesForSellerProperty({ userId: user._id, leadProfile, signals: {} });
   }
@@ -154,6 +205,7 @@ export async function buildLeadPropertyMatchesPayload({ user, leadMatch, page, l
     lead_id: String(leadMatch._id),
     user_name: professionalSummaryFromUser(user)?.name || null,
     property_matches: matchesPaginated,
+    property_matches_context: isInvestorLead && context === 'buy' ? 'investor' : context,
     match_count: property_matches.length,
     next_steps: {
       primary_action: {
@@ -173,7 +225,12 @@ export async function buildLeadPropertyMatchesPayload({ user, leadMatch, page, l
     },
     empty_state:
       property_matches.length === 0 && prof === PROFESSIONAL_TYPE.AGENT
-        ? buildCollectionEmptyState('property_matches', { intent: context })
+        ? buildCollectionEmptyState('property_matches', {
+          intent: isInvestorLead && context === 'buy' ? 'investor' : context,
+          client_type: isInvestorLead ? 'investor' : clientType || null,
+          investment_type: leadProfile?.qualification?.agent?.investment_type || null,
+          investment_goal: leadProfile?.qualification?.agent?.investment_goal || null,
+        })
         : null,
     pagination: buildPaginationMeta({ page, limit, total: property_matches.length }),
   };

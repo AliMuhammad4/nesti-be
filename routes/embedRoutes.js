@@ -11,7 +11,8 @@ import { PROFESSIONAL_TYPE, PROFESSIONAL_TYPE_VALUES } from '../constants/roles.
 import { validateWidgetRoleAgainstProfile } from '../utils/embedWidgetRole.js';
 import { embedGenerateBodySchema, embedPatchBodySchema } from '../schemas/chatSchemas.js';
 import { FEATURES } from '../services/billing/entitlements.js';
-import { loadAppliedAssistantSetting } from '../services/professionalAssistant/professionalAssistantService.js';
+import { loadAppliedAssistantSetting } from '../services/professionalAssistant/professionalAssistantService.js';
+import { isEmbedPaused, mergeEmbedWidgetSettings, serializeOwnerEmbed } from '../services/chat/embedSettings.js';
 
 const generateEmbedToken = async (req, res, next) => {
   try {
@@ -65,7 +66,7 @@ const generateEmbedToken = async (req, res, next) => {
 const listEmbeds = async (req, res, next) => {
   try {
     const embeds = await ChatbotEmbedUrl.find({ user_id: req.user._id });
-    res.json({ success: true, embeds });
+    res.json({ success: true, embeds: embeds.map(serializeOwnerEmbed) });
   } catch (error) {
     next(error);
   }
@@ -103,6 +104,7 @@ const resolveEmbed = async (req, res, next) => {
           display_name: assistantSetting.display_name,
           bot_persona_title: assistantSetting.bot_persona_title,
           welcome_message: assistantSetting.welcome_message,
+          consent_line: assistantSetting.consent_line || '',
           personalities: assistantSetting.personalities || [],
           communication_style: assistantSetting.communication_style || '',
           response_length: assistantSetting.response_length || 'balanced',
@@ -114,6 +116,7 @@ const resolveEmbed = async (req, res, next) => {
           avatar_url: assistantSetting.avatar_url || '',
           client_types: assistantSetting.client_types || [],
           qualification_templates: assistantSetting.qualification_templates || null,
+          offer_property_matches: assistantSetting.offer_property_matches !== false,
         }
       : null;
 
@@ -123,6 +126,7 @@ const resolveEmbed = async (req, res, next) => {
       userId: embed.user_id,
       widget_role: resolvedWidgetRole,
       widget_settings: embed.widget_settings || {},
+      is_active: !isEmbedPaused(embed),
       assistant_identity: assistantIdentity,
       profile_image: profileImage,
       host_display_name: hostDisplayName,
@@ -135,6 +139,9 @@ const resolveEmbed = async (req, res, next) => {
 const updateEmbed = async (req, res, next) => {
   try {
     const body = { ...req.body };
+    // Ownership and the public token never change through PATCH.
+    delete body.user_id;
+    delete body.token;
     if (Object.prototype.hasOwnProperty.call(body, 'widget_role')) {
       const wr = body.widget_role;
       if (wr != null && String(wr).trim() !== '') {
@@ -150,13 +157,16 @@ const updateEmbed = async (req, res, next) => {
       }
     }
 
-    const embed = await ChatbotEmbedUrl.findOneAndUpdate(
-      { _id: req.params.id, user_id: req.user._id },
-      { $set: body },
-      { returnDocument: 'after' }
-    );
+    const embed = await ChatbotEmbedUrl.findOne({ _id: req.params.id, user_id: req.user._id });
     if (!embed) return res.status(404).json({ success: false, message: 'Embed not found' });
-    res.json({ success: true, embed });
+    if (body.widget_role !== undefined) embed.widget_role = body.widget_role;
+    if (body.allowed_domains !== undefined) embed.allowed_domains = body.allowed_domains;
+    if (body.widget_settings !== undefined || body.is_active !== undefined) {
+      embed.widget_settings = mergeEmbedWidgetSettings(embed.widget_settings, body);
+      embed.markModified('widget_settings');
+    }
+    await embed.save();
+    res.json({ success: true, embed: serializeOwnerEmbed(embed) });
   } catch (error) {
     next(error);
   }
@@ -181,7 +191,7 @@ router.post(
 );
 router.get('/list', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CHATBOT_BASIC), listEmbeds);
 router.get('/resolve/:token', resolveEmbed);
-router.patch('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CHATBOT_BASIC), validateBody(embedPatchBodySchema), updateEmbed);
+router.patch('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CHATBOT_BASIC), validateBody(embedPatchBodySchema, { noDefaults: true }), updateEmbed);
 router.delete('/:id', protect, requireCompleteProfessionalProfile, requireFeature(FEATURES.CHATBOT_BASIC), deleteEmbed);
 
 export default router;

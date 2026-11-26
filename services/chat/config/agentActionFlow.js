@@ -106,7 +106,58 @@ const SELLER = {
   },
 };
 
-export const getAgentActionFlow = (leadGrade, intent) => {
+/**
+ * Investor (buy intent) wording. Overlays the buyer tier so automation keys, tier labels, and scoring stay
+ * unchanged; only goals, CTA options, and the visitor checklist speak to investment strategy.
+ */
+const INVESTOR = {
+  hot: {
+    goal: 'Get them into an investment strategy call or deal review immediately',
+    recommendedAppointment: ['Investment Strategy Call (15–20 min)', 'Investment Property Tour'],
+    prompt:
+      "Based on your answers, you're ready to review investment properties. Choose a time below to book your investment strategy call or a property tour.",
+    calendlyOptions: ['Investment Strategy Call', 'Investment Property Tour', 'Deal Review Call'],
+    postBookingChatChecklist: [
+      'Confirm you received your consultation materials email and check spam or promotions folders.',
+      'Have proof of funds or your financing plan (pre-approval, cash, or lender terms) ready to discuss.',
+      'List target markets and your strategy (long-term rental, short-term rental, flip, or multi-unit).',
+      'Note your return targets — rent, cash flow, or appreciation — so your agent can screen deals.',
+    ],
+  },
+  warm: {
+    goal: 'Investment strategy consultation first',
+    recommendedAppointment: ['Investment Strategy Call'],
+    prompt:
+      "You're getting close to investing. Book a quick strategy session so we can plan markets, budget, and your next steps.",
+    calendlyOptions: ['Investment Strategy Consultation', 'Rental Market Review'],
+    postBookingChatChecklist: [
+      'Review the budget and listing-alert sections in your consultation materials email; note anything that has changed.',
+      'Confirm target markets, price band, and property types for investment alerts with your agent.',
+      'Prepare questions on expected rents, vacancy, and local rental rules in your target market.',
+      'Share how you plan to finance and hold the property (personally or through a company).',
+    ],
+  },
+  early: {
+    goal: 'Investor education call',
+    recommendedAppointment: [],
+    prompt:
+      "Investing in real estate starts with a clear plan. Book a short call and we'll walk you through markets and strategy — no pressure.",
+    calendlyOptions: ['Investor Discovery Call', 'Investment Market Overview'],
+    postBookingChatChecklist: [
+      'Write down your investment goal: rental income, appreciation, or both.',
+      'Rough capital available for a down payment and reserves — even a range helps.',
+      'Markets or property types you are curious about so the call stays focused.',
+      'Your timeline — even “still exploring” helps your agent prepare.',
+    ],
+  },
+};
+
+/**
+ * @param {string} leadGrade
+ * @param {string} intent
+ * @param {{ clientType?: string }} [context] investor visitors (buy intent) get investment-strategy wording.
+ */
+export const getAgentActionFlow = (leadGrade, intent, context = {}) => {
   const tier = mapGradeToTier(leadGrade || 'cold');
   const isBuyer = intent !== 'sell';
   const roleLabel = isBuyer ? 'BUYER' : 'SELLER';
@@ -114,7 +165,9 @@ export const getAgentActionFlow = (leadGrade, intent) => {
   const tierLabel = `${tier.toUpperCase()} ${roleLabel} ${band}`;
 
   const byTier = isBuyer ? BUYER : SELLER;
-  const flow = byTier[tier] || byTier.early;
+  const base = byTier[tier] || byTier.early;
+  const investor = isBuyer && String(context?.clientType || '').toLowerCase() === 'investor';
+  const flow = investor ? { ...base, ...(INVESTOR[tier] || INVESTOR.early) } : base;
 
   return {
     ...flow,

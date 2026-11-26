@@ -45,10 +45,11 @@ export const enterpriseInquiryCreateSchema = Joi.object({
   phone: str.max(40),
   full_name: str.max(160),
   interest_role: Joi.string().valid('agent', 'mortgage_broker', 'lawyer', 'client', '').allow(null, ''),
-  source: Joi.string().valid('demo', 'contact', 'inquiry', 'support', 'direct_inquiry').default('inquiry'),
+  source: Joi.string().valid('demo', 'contact', 'inquiry', 'support', 'direct_inquiry', 'newsletter').default('inquiry'),
   city: Joi.string().allow('', null).max(120),
   country: Joi.string().allow('', null).max(80),
-  inquiry_topic: Joi.string().valid('demo', 'inquiry', 'support', '').allow(null),
+  inquiry_topic: Joi.string().valid('demo', 'inquiry', 'support', 'newsletter', '').allow(null),
+  embed_token: Joi.string().trim().max(200).allow('', null),
 });
 
 export const enterpriseInquiryUpdateSchema = enterpriseInquiryCreateSchema.fork(
@@ -135,8 +136,6 @@ const landingChatSettingsFields = {
   dual_write_inquiry: Joi.boolean(),
 };
 
-// The admin UI echoes read-only view fields (seeds, personalities, ...) back;
-// validateBody runs with stripUnknown so those are dropped rather than rejected.
 export const landingChatSettingsSchema = Joi.object(landingChatSettingsFields);
 
 export const landingChatPreviewSchema = Joi.object({

@@ -8,15 +8,19 @@ import {
   LANGUAGES,
   NEXT_ACTIONS,
   PERSONALITIES,
+  PERSONALITY_VOICE_CONDUCT,
+  PERSONALITY_GREETING_CONDUCT,
   QUALIFICATION,
   SERVICES,
   labelOf,
 } from './catalog.js';
-import { documentRequestIds } from '../chat/documents/chatDocumentService.js';
+import { documentRequestIds, intakeHasPropertyImages } from '../chat/documents/chatDocumentService.js';
 import { clip } from './assistantText.js';
+import { agentDocumentContextFromForm, brokerDocumentContextFromForm, lawyerDocumentContextFromForm, marketDocumentName } from './brokerInvestorMarket.js';
 import { questionLabel, questionOptions } from './assistantSettings.js';
 import { intakeHasHelloAnswer, openQualificationQuestionIds } from './qualificationProgress.js';
 import { replyLanguage } from './replyStyle.js';
+import { DETECTED_LANGUAGE_NAMES } from './localizedReplyCopy.js';
 import {
   brokerHelloQuestion,
   brokerPurposeEnabled,
@@ -35,11 +39,21 @@ const FORMALITY_DIRECTIVES = {
   casual: 'Use casual everyday language. Contractions are fine. Do not sound corporate.',
 };
 
+export function formalityFromToneLevel(toneLevel) {
+  const level = Number(toneLevel);
+  if (!Number.isFinite(level)) return '';
+  if (level < 34) return 'casual';
+  if (level > 66) return 'formal';
+  return 'professional';
+}
+
 export function formalityInstruction(setting) {
-  const key = setting?.formality;
+  const level = Number(setting?.tone_level);
+  const fromDial = formalityFromToneLevel(level);
+  // Studio keeps formality and tone_level synced; honor formality when set.
+  const key = FORMALITY_DIRECTIVES[setting?.formality] ? setting.formality : (fromDial || '');
   const directive = FORMALITY_DIRECTIVES[key];
   if (!directive) return '';
-  const level = Number(setting?.tone_level);
   const toneLine = Number.isFinite(level) && level !== 50
     ? level <= 20
       ? ' Tone dial: very relaxed. Short friendly words, contractions welcome.'
@@ -66,7 +80,7 @@ export function voiceInstruction(setting) {
     const custom = (setting?.custom_tones || []).find((tone) => tone.id === id);
     if (custom?.name) return custom.guidance ? `${custom.name}: ${custom.guidance}` : custom.name;
     const row = PERSONALITIES.find(([value]) => value === id);
-    return row ? `${row[1]} — ${row[2]}` : '';
+    return row ? `${row[1]} - ${row[2]}` : '';
   }).filter(Boolean);
   return voices.join('; ');
 }
@@ -76,14 +90,7 @@ export function communicationInstruction(setting) {
   return style ? `${style[1]}. ${style[2]}` : '';
 }
 
-const VOICE_CONDUCT = {
-  friendly: 'Friendly: easy, upbeat, texting rhythm. Use contractions and everyday words such as "great", "sure", "love that". One light exclamation is fine. Avoid stiff words such as "assist", "regarding", "kindly".',
-  polished: 'Polished: crisp, businesslike, complete sentences. Knowledgeable and reassuring. Use words such as "certainly", "I can arrange", "to confirm". No exclamation marks, no "Hey", no slang, and no gushing.',
-  luxury: 'Luxury: refined, private, and unhurried. Use words such as "private", "at your pace", "exceptional". No exclamation marks, no slang, no "Hey", and no hurry words such as "quick" or "ASAP".',
-  persuasive: 'Persuasive: confident, direct, and efficient. Name one concrete next step and a benefit, using words such as "let\'s", "the next step is", "I can line up". No hedging such as "maybe" or "if you want".',
-  caring: 'Caring: patient and reassuring. Warm and direct. On a hello, greet and ask the question. Do not say the visitor can answer later, and do not say there is no rush unless they sound worried.',
-  consultative: 'Consultative: analytical, strategic advisor. Ask one precise question and give a short reason it matters ("so I can..."). Numbers and specifics over adjectives. No pitch, no hype, and no stock greeting.',
-};
+const VOICE_CONDUCT = PERSONALITY_VOICE_CONDUCT;
 
 const ROLE_GREETING_OPENER = {
   agent: 'buying or selling',
@@ -91,14 +98,7 @@ const ROLE_GREETING_OPENER = {
   mortgage_broker: 'a new mortgage or a refinance',
 };
 
-const TONE_GREETING = {
-  friendly: 'Friendly opening: a casual hello. Write a fresh word, not a copied phrase.',
-  polished: 'Polished opening: a formal hello. No hey, no slang, and no exclamation mark.',
-  luxury: 'Luxury opening: reserved and unhurried. No hey, no slang, and no exclamation mark. Write your own greeting.',
-  persuasive: 'Persuasive opening: a plain hello, then the next step.',
-  caring: 'Caring opening: a soft hello. No sales push.',
-  consultative: 'Consultative opening: a plain hello.',
-};
+const TONE_GREETING = PERSONALITY_GREETING_CONDUCT;
 
 function firstGreetingLine(setting, opener) {
   const greetings = (setting?.personalities || []).map((id) => {
@@ -116,7 +116,7 @@ function firstGreetingLine(setting, opener) {
   const askNow = question === 'Greet in the selected voice. Do not add a question.'
     ? 'Do not add a follow-up question.'
     : 'The visitor is already here, so ask that question directly.';
-  return `When the visitor's latest message is only a greeting (hello, hi, hey, hi there, good morning, salam), the reply must start with a greeting in the selected voice, warm and glad they are here, before any fact or question. ${greeting}${second} ${question} ${askNow} Do not say they can answer later. Do not skip the greeting. Do not open with the question. Do not repeat the welcome line. Do not list three options. Do not describe or label the greeting. The opening words must sound like the selected voice. Do not open with "I understand" or "Could you clarify". When emojis are on, end a greeting with a wave.`;
+  return `When the visitor's latest message is only a greeting (hello, hi, hey, hi there, good morning, salam), the reply must start with a greeting in the selected voice, warm and glad they are here, before any fact or question. ${greeting}${second} ${question} ${askNow} Do not say they can answer later. Do not skip the greeting. Do not open with the question. Do not repeat the welcome line. Do not list three options. Do not describe or label the greeting. The opening words must sound like the selected voice. Do not open with "I understand" or "Could you clarify".`;
 }
 
 const BANNED_STOCK_PHRASES = [
@@ -142,7 +142,7 @@ function voiceUseLine(voices, mode) {
     return `Use only this voice, inside the short reply. Do not lay a generic warm voice on top of it. ${voices[0]}`;
   }
   if (voices.length > 1) {
-    const named = `First voice — ${voices[0]} Second voice — ${voices[1]}`;
+    const named = `First voice - ${voices[0]} Second voice - ${voices[1]}`;
     if (mode === 'greeting') {
       return `Use both voices in the same one or two short sentences. The greeting carries the first voice. The question carries the second voice. Do not drop the second voice. ${named}`;
     }
@@ -203,7 +203,9 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
   const formality = formalityKeepsVoiceLine(setting);
   if (formality) lines.push(formality);
   lines.push(setting.use_emojis
-    ? 'Choose one emoji that matches this reply and the visitor\'s mood, and put it at the very end. Use a wave for a greeting, a smile for a social check-in, a decline, or reassurance, a heart for worry, folded hands when the visitor says thank you, a calendar for a booking offer, a house for a home, a handshake for mortgage, renewal, pre-approval, or closing help, a page when a document arrives, a check mark for a clear next step, and sparkles for good news. Skip the emoji on a plain intake question. Do not repeat the emoji from the previous reply. Do not put an emoji between sentences.'
+    ? (greeting
+      ? 'Required for this greeting reply: end with exactly one fitting emoji after the final punctuation (pick any single appropriate emoji). Do this even in Luxury Concierge / formal voice. Never stack emojis, never place an emoji mid-sentence, and skip emoji only if the reply includes a booking link.'
+      : 'Emojis are switched on: end most conversational replies (about every other turn, including qualification questions and replies about property options) with exactly one fitting emoji after the final punctuation. Skip emoji on document confirmations and any reply that includes a booking link. A short, friendly document ask may end with one emoji. Never place an emoji mid-sentence or between sentences (only after the final sentence), never stack emojis, and do not force an emoji on every turn.')
     : 'No emojis.');
   lines.push(setting.role === 'lawyer'
     ? 'Keep the reply short and polished. Sound like a lawyer speaking with a client. The selected voice and communication style stay easy to hear.'
@@ -212,8 +214,11 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
     lines.push('The confirmation recap may use short labeled lines. Every other reply stays one or two short sentences.');
   }
   lines.push('Ignore the tone of earlier assistant replies. Answer the latest visitor message directly.');
+  if (setting.custom_guidance) {
+    lines.push(`Professional instructions: ${setting.custom_guidance}. Follow them for emphasis only, inside the selected voice, formality, and short reply length. Do not let them make the reply longer, and do not break safety, consent, or role limits.`);
+  }
   const language = replyLanguage(setting, latestMessage, options.conversationText || '');
-  const languageName = labelOf(LANGUAGES, language);
+  const languageName = labelOf(LANGUAGES, language) || DETECTED_LANGUAGE_NAMES[language] || '';
   if (language && language !== 'english' && languageName) {
     lines.push(`The visitor wrote in ${languageName}. Write the greeting and the question in ${languageName} only. Do not use English.`);
   } else if (setting.auto_detect_language !== false && (setting.languages || []).length > 1) {
@@ -226,7 +231,15 @@ export function voiceTurnReminder(setting, latestMessage = '', options = {}) {
       ? (brokerPurposeEnabled(setting) ? ROLE_GREETING_OPENER.mortgage_broker : (brokerQuestionTopics(setting, { preview: true })[0] || 'the mortgage'))
       : (ROLE_GREETING_OPENER[setting.role] || ROLE_GREETING_OPENER.agent);
   if (options.openingTurn) {
-    lines.push('This is the first reply after the intake form. Start with a short greeting in the selected voice, then ask one saved question that is still missing. Do not skip the greeting. Do not open with the question. Do not ask a detail the form already has.');
+    const welcome = String(setting?.welcome_message || '').trim();
+    if (welcome) {
+      lines.push(`This is the first reply after the intake form. Open with a short greeting that follows this customized welcome in the selected voice (keep the same meaning, paraphrase lightly if needed): "${welcome}". Do not skip the greeting. Do not open with the question.`);
+    } else {
+      lines.push('This is the first reply after the intake form. Start with a short greeting in the selected voice. Do not skip the greeting. Do not open with the question.');
+    }
+    lines.push(`Make that greeting warm and personal: a hello${setting.address_by_first_name ? ' with the visitor\'s first name' : ''}, not a flat "Thank you for sharing your details".${setting.use_emojis ? ' Required for this first reply: end it with exactly one fitting emoji after the final punctuation, even when it ends with a document request.' : ''}`);
+    lines.push('After the greeting, ask exactly one question. Prefer one saved question that is still missing. If the form already answered every saved question, ask one short refinement question that helps narrow options (for example area preference, budget flexibility, property priorities, or timeline certainty). Do not ask for a detail the form already has.');
+    lines.push('Opening quality: greet by first name with a brief, specific welcome, then one sentence that accurately reflects their brief (strategy, goal, market, budget). No filler openers such as "It\'s a pleasure to connect", "It\'s great to see your interest", or "Great start". Write budgets with a currency symbol, capital K/M, and an en dash (for example $400K–$700K). If the strategy and goal pull in different directions (for example fix and flip with a rental income goal), acknowledge both neutrally and ask which matters most instead of asserting either.');
   } else if (greeting && intakeHasHelloAnswer(setting, options.intakeFormContact)) {
     lines.push('The visitor said hello. Greet in the selected voice. The intake form already answered the opening question, so do not ask it again. Ask one saved question that is still missing.');
   } else if (greeting) {
@@ -285,14 +298,16 @@ export function replyConductBlock(setting, options = {}) {
         : '',
     'Speak as the professional in the first person. Say "I have" and "I help with". When the visitor asks your name, say "My name is" and the saved name, then list the saved expertise. On every other reply, do not talk about yourself in the third person.',
     options.openingTurn
-      ? 'The intake form is already submitted. This first reply starts with a short greeting in the selected voice, then asks one missing question. Use the visitor\'s first name in that greeting only when addressing by first name is on.'
+      ? 'The intake form is already submitted. This first reply starts with a short greeting in the selected voice (use the customized welcome when one is saved), then asks exactly one question. Use the visitor\'s first name in that greeting only when addressing by first name is on. No filler openers such as "It\'s a pleasure to connect" or "It\'s great to see your interest". Reflect their brief accurately, write budgets like $400K–$700K, and when strategy and goal pull in different directions (fix and flip with a rental income goal) acknowledge both neutrally and ask which matters most.'
       : options.openingTurn === false
-        ? 'The greeting already happened. Answer what they just said and ask the next missing question. Do not greet again. Do not say the visitor\'s name. Do not open with "Thank you" plus their name.'
-        : 'The intake form is already submitted. The first reply is a short greeting, then the questions. Do not say the visitor\'s name after that greeting.',
-    'Never repeat the previous question.',
+        ? 'The greeting already happened. Answer what they just said and ask exactly one next-step question. Prefer the next missing saved question; if none are missing, ask one short refinement question that advances search or readiness. Do not greet again. Do not say the visitor\'s name. Do not open with "Thank you" plus their name.'
+        : 'The intake form is already submitted. The first reply is a short greeting, then exactly one question. Do not say the visitor\'s name after that greeting.',
+    'Make the single question engaging and easy to answer: prefer either-or choices or one concrete decision point (for example "downtown or the suburbs first?" or "maximize rental yield or appreciation first?").',
+    'Avoid dry form wording. Do not ask stacked multi-part questions. Keep one clear question mark per reply.',
+    'Never repeat the previous question. Never invent durations, timelines, prices, or statistics you were not given (for example "several weeks to a few months"). When asked how long something takes or what happens next, ground the answer in the current step: matching options can be shown here in the chat, and viewings, offers, and closing timing are confirmed by the professional.',
     `A "how are you" is a social question. Answer it in the selected voice. Do not greet again, and do not repeat the question about ${opener}.`,
   ].filter(Boolean);
-  if (setting?.welcome_message) {
+  if (setting?.welcome_message && !options.openingTurn) {
     lines.push(`The visitor already saw this welcome: "${setting.welcome_message}". Do not paste that welcome again. A short greeting in the selected voice is still required when they say hi.`);
   }
   lines.push(firstGreetingLine(setting, opener));
@@ -356,7 +371,7 @@ export function appliedQualificationBlock(setting) {
 - No extra qualification questions are turned on. Do not walk the older default list.`;
   }
   const clientLine = setting?.client_type
-    ? ` This visitor is a ${setting.client_type}; these are the ${setting.client_type} questions in the saved order.`
+    ? ` This visitor is ${/^[aeiou]/i.test(String(setting.client_type)) ? 'an' : 'a'} ${setting.client_type}; these are the ${setting.client_type} questions in the saved order.`
     : '';
   return `SELECTED QUALIFICATION QUESTIONS (ask only these, one at a time, in this order, and skip any the client already answered):${clientLine}
 ${labels.map((question, index) => `${index + 1}. "${question}"`).join('\n')}
@@ -382,6 +397,13 @@ export function listingInsideServiceArea(listing, setting) {
   const places = serviceAreaPlaces(setting);
   if (!places.length) return true;
   return places.some((place) => locationOverlaps(place, listing?.location, listing?.address));
+}
+
+/** Prefer listings inside the saved area. If none of the lead's matches are inside it, keep those matches. */
+export function selectChatPropertyMatches(matches, setting) {
+  const all = Array.isArray(matches) ? matches : [];
+  const inArea = all.filter((listing) => listingInsideServiceArea(listing, setting));
+  return inArea.length ? inArea : all;
 }
 
 export function appendAssistantOverlay(prompt, setting, options = {}) {
@@ -427,7 +449,7 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
       : `Written chat languages: ${names.join(', ')}. Answer every written reply in ${names[0]}.`);
   }
   lines.push(setting.use_emojis
-    ? 'Emojis are allowed in chat replies only. Never use emojis in a spoken or voice reply.'
+    ? 'Chat emoji rule: when the visitor only greets (hello, hi, salam), end that reply with exactly one tasteful emoji after the final sentence (your choice of which emoji). On other turns, end most conversational replies (about every other turn, including qualification questions) with exactly one fitting emoji after the final punctuation. Never use emojis in a spoken or voice reply, on document confirmations, or on booking-link replies. Never stack emojis or place one mid-sentence or between sentences; it belongs only after the final sentence. A short, friendly document ask may end with one emoji.'
     : 'Do not use emojis.');
   lines.push(setting.address_by_first_name
     ? 'Use the visitor\'s first name once, in the first greeting after the form. Later replies ask the next question and do not say their name.'
@@ -478,23 +500,47 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
     lines.push(`Approved uploaded materials (bio, services, FAQs, marketing). Use facts from these only when they answer the visitor's question, rewritten in the selected voice and length. Do not quote long passages. ${excerpts.join('\n')}`);
   }
   if (setting.cta_label) {
-    lines.push(`Consultation call to action for this visitor: "${setting.cta_label}". When the saved questions are answered and a next step fits, offer that consultation by that name, rewritten in the selected voice. Do not offer it before the saved questions are answered unless the visitor asks to book.`);
+    lines.push(`Consultation call to action for this visitor: "${setting.cta_label}". When the saved questions are answered and a next step fits, offer that consultation by that name, rewritten in the selected voice. Do not offer it before the saved questions are answered unless the visitor asks to book. Never include a booking URL unless the visitor explicitly asks to book or the chat confirms that qualification and document steps are complete; the system adds the link when allowed.`);
   }
   if (setting.role === 'lawyer' && setting.client_type) {
     lines.push('This chat collects preliminary information only. Do not ask for confidential details such as purchase price, mortgage amounts, identification numbers, or document contents. Say that confidential details are collected through the secure intake after the consultation is booked.');
   }
   if (setting.custom_guidance) lines.push(`Professional instructions: ${setting.custom_guidance}. Follow them for emphasis only, inside the selected voice, formality, and short reply length. Do not let them make the reply longer, and do not break safety, consent, or role limits.`);
-  const requestedDocs = documentRequestIds(setting)
-    .map((id) => labelOf(DOCUMENT_REQUESTS[setting.role] || [], id))
+  const requestedDocs = documentRequestIds(setting, {
+    intent: options.intakeFormContact?.intent || '',
+    clientType: options.intakeFormContact?.client_type || setting.client_type || '',
+    propertyImages: intakeHasPropertyImages(options.intakeFormContact),
+    mortgageStatus: options.intakeFormContact?.mortgage_status || '',
+    text: `${options.intakeFormContact?.mortgage_status || ''} ${options.intakeFormContact?.motivation_reason || ''}`,
+    ...(setting.role === 'mortgage_broker' ? brokerDocumentContextFromForm(options.intakeFormContact) : {}),
+    ...(setting.role === 'lawyer' ? lawyerDocumentContextFromForm(options.intakeFormContact) : {}),
+    ...(setting.role === 'agent' ? agentDocumentContextFromForm(options.intakeFormContact) : {}),
+  })
+    .map((id) => {
+      const market = setting.role === 'mortgage_broker'
+        ? brokerDocumentContextFromForm(options.intakeFormContact).market
+        : setting.role === 'lawyer' ? lawyerDocumentContextFromForm(options.intakeFormContact).market
+          : setting.role === 'agent' ? agentDocumentContextFromForm(options.intakeFormContact).market || '' : '';
+      return marketDocumentName(id, market) || labelOf(DOCUMENT_REQUESTS[setting.role] || [], id);
+    })
     .filter(Boolean);
   if (requestedDocs.length) {
-    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and while a saved qualification question is still unanswered. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
+    lines.push(`Documents this ${setting.role === 'mortgage_broker' ? 'mortgage broker' : setting.role} collects for this visitor, in order: ${requestedDocs.join(', ')}. Do not ask for a document yourself. Do not ask for a pre-approval letter when the visitor is paying cash. ${setting.role === 'mortgage_broker' && brokerDocumentContextFromForm(options.intakeFormContact).market !== 'other' ? "For U.S. mortgage income verification, tax returns, W-2s, or 1099s may be relevant instead of Canada's NOA/T4; request" : 'Request'} only what this professional needs for the visitor's market and situation. Remind visitors to redact account numbers and unrelated sensitive details where practical. One short upload line is added after the reply, in the visitor's language, for the next missing file. It is skipped on a greeting and while a saved qualification question is still unanswered. When a file arrives, confirm it. Do not claim approval or give a legal or financial ruling.`);
   }
   lines.push(`CUSTOMIZATION PRIORITY — assistant style: The selected voice, communication style, formality, and language preferences above override conflicting general persona or style instructions elsewhere in this prompt. Keep role-specific safety and accuracy requirements.`);
   if (setting.role === 'agent') {
-    lines.push(options.preview
-      ? 'This preview has no intake form. Do not claim a form already collected intent, location, budget, timeline, property type, or mortgage status. Learn those from the chat. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.'
-      : 'Buyer and seller handling stays in force. The intake form may already have intent, location, budget, timeline, property type, and mortgage status. Ask a saved qualification question only when that answer is still missing. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.');
+    const investorVisitor = String(options.intakeFormContact?.client_type || setting.client_type || '').toLowerCase() === 'investor'
+      || String(options.intakeFormContact?.motivation_reason || '').toLowerCase() === 'investment';
+    if (options.propertyMatchesEnabled === false) {
+      // Plan or assistant turned property cards off: never promise cards, in any client type.
+      lines.push(investorVisitor
+        ? 'This visitor is an investor (buy intent). Property match cards are turned off for this assistant: do not offer, promise, or point at listings or cards. Talk markets, budget, investment type, and goals — not bedrooms or living situation — and ask a saved qualification question only when that answer is still missing.'
+        : 'Property match cards are turned off for this assistant: do not offer, promise, or point at listings or cards. Buyer and seller handling stays in force; ask a saved qualification question only when that answer is still missing.');
+    } else lines.push(options.preview
+      ? 'This preview has no intake form. Do not claim a form already collected intent, location, budget, timeline, property type, or mortgage status. Learn those from the chat. For a buyer or investor, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For investors, talk markets, budget, and investment goals — not bedrooms or living situation. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.'
+      : investorVisitor
+        ? 'This visitor is an investor (buy intent). The intake form may already have markets, budget, investment type/goal, financing, and capital readiness. Ask a saved qualification question only when that answer is still missing. Never re-ask buyer-only fields such as bedrooms, bathrooms, living situation, or school district. Property matches appear only as chat cards; when they ask to see options, reply with one short sentence that points at the cards.'
+        : 'Buyer and seller handling stays in force. The intake form may already have intent, location, budget, timeline, property type, and mortgage status. Ask a saved qualification question only when that answer is still missing. For a buyer, property matches appear only as chat cards. When they ask to see options, reply with one short sentence that points at the cards. Do not list homes, prices, or features. An FAQ cannot replace that reply. For a seller, do not offer property match cards. Ask about the property they are selling, not about a home they want to buy.');
   }
   const chatAnswered = new Set(options.chatAnsweredQuestions || []);
   if (setting.role === 'lawyer' || setting.role === 'mortgage_broker') {
@@ -525,6 +571,12 @@ export function appendAssistantOverlay(prompt, setting, options = {}) {
         const booking = setting.next_actions.includes('schedule')
           ? 'A booking link can be shared when the visitor asks.'
           : 'Do not offer a booking link unless the visitor asks to schedule.';
+        // Lawyer prompts carry their own contact goal; agent and broker follow "Collect contact information" here.
+        if (setting.role !== 'lawyer' && setting.next_actions.includes('collect_contact')) {
+          lines.push(options.contactKnown === false
+            ? 'Collect contact information: before sharing a booking link or closing the conversation, ask in the selected voice for the visitor\'s name and best email or phone, one missing detail per reply. Never ask again for a detail they already gave.'
+            : 'Collect contact information: the intake form already has contact details. Ask only for a missing one, such as a phone number when only an email is on file, and never ask again for a detail they already gave.');
+        }
         lines.push(`Preferred next steps from the studio: ${steps.join(', ')}. Mention one when a next step fits the selected style. ${savesLead ? 'A qualified conversation can be saved as a lead.' : 'Do not tell the visitor a CRM lead was created.'} ${notifies ? 'The professional can receive a lead notification.' : 'Do not promise an instant notification.'} ${booking}`);
       }
     }

@@ -13,7 +13,6 @@ import {
 const ACTIVE_TEMPLATE_SUBSCRIPTION_STATUSES = new Set([
   'active',
   'trialing',
-  'past_due',
 ]);
 
 export function uniqueTemplateIds(ids = []) {
@@ -44,37 +43,61 @@ export function templatePurchasePeriodEnd(purchase = {}) {
   return null;
 }
 
+function latestPurchaseForTemplate(profile, templateId) {
+  const purchases = Array.isArray(profile?.storefront?.template_purchases)
+    ? profile.storefront.template_purchases
+    : [];
+  return purchases.reduce((latest, purchase) => {
+    if (normalizeTemplateId(purchase?.template_id) !== templateId) return latest;
+    if (!latest) return purchase;
+    const purchasedAt = new Date(purchase.purchased_at || 0).getTime();
+    const latestAt = new Date(latest.purchased_at || 0).getTime();
+    return purchasedAt >= latestAt ? purchase : latest;
+  }, null);
+}
+
 export function serializePaidTemplateSubscriptions(profile) {
   const { templates } = serializeStorefrontTemplateEntitlements(profile);
   return templates
-    .filter((template) => Number(template.amount || 0) > 0 && template.unlocked && template.subscription)
-    .map((template) => ({
-      template_id: template.template_id,
-      name: template.name,
-      display_amount: template.display_amount,
-      billing_interval: template.billing_interval || template.subscription.billing_interval || 'month',
-      status: template.subscription.status,
-      cancel_at_period_end: Boolean(template.subscription.cancel_at_period_end),
-      current_period_end: template.subscription.current_period_end,
-      manageable: Boolean(template.subscription.manageable),
-    }));
+    .filter((template) => {
+      if (Number(template.amount || 0) <= 0 || !template.subscription) return false;
+      if (template.unlocked) return true;
+      const status = String(template.subscription.status || '').trim().toLowerCase();
+      if (status !== 'past_due' && status !== 'unpaid') return false;
+      const purchase = latestPurchaseForTemplate(profile, template.template_id);
+      return Boolean(String(purchase?.stripe_subscription_id || '').trim());
+    })
+    .map((template) => {
+      const purchase = latestPurchaseForTemplate(profile, template.template_id);
+      return {
+        template_id: template.template_id,
+        name: template.name,
+        display_amount: template.display_amount,
+        billing_interval: template.billing_interval || template.subscription.billing_interval || 'month',
+        status: template.subscription.status,
+        cancel_at_period_end: Boolean(template.subscription.cancel_at_period_end),
+        current_period_end: template.subscription.current_period_end,
+        manageable: Boolean(template.subscription.manageable),
+        stripe_subscription_id: String(purchase?.stripe_subscription_id || '').trim(),
+        stripe_invoice_id: String(purchase?.stripe_invoice_id || '').trim(),
+      };
+    });
 }
 
 export function templatePurchaseGrantsAccess(purchase = {}) {
   const subscriptionId = String(purchase.stripe_subscription_id || '').trim();
+  if (!subscriptionId) return false;
   const status = String(purchase.subscription_status || '').trim().toLowerCase();
   const periodEnd = templatePurchasePeriodEnd(purchase);
-  const now = new Date();
+  const now = Date.now();
 
-  if (subscriptionId) {
-    if (isActiveTemplateSubscriptionStatus(status || 'active')) return true;
-    if (purchase.cancel_at_period_end && periodEnd && periodEnd > now) return true;
+  if (['past_due', 'unpaid', 'incomplete', 'canceled', 'cancelled', 'incomplete_expired', 'expired'].includes(status)) {
     return false;
   }
-
-  if (['canceled', 'incomplete_expired', 'unpaid', 'expired'].includes(status)) return false;
-  if (periodEnd) return periodEnd > now;
-  return Boolean(String(purchase.stripe_checkout_session_id || '').trim());
+  if (periodEnd && periodEnd.getTime() <= now) return false;
+  if (isActiveTemplateSubscriptionStatus(status || 'active')) return true;
+  if (purchase.cancel_at_period_end && periodEnd && periodEnd.getTime() > now) return true;
+  return false;
 }
 
 export function userHasStorefrontTemplateAccess(profile, templateId) {

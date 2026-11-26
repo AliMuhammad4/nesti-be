@@ -2,6 +2,7 @@ import Subscription from '../../models/Subscription.js';
 import { getStripeClient } from './stripeClient.js';
 import { markSubscriptionStripeStateExpired } from './subscriptionLocalService.js';
 import {
+  buildProrationBreakdown,
   buildProrationNote,
   describeInvoice,
   formatInvoiceAmount,
@@ -75,7 +76,9 @@ export async function listPaidInvoicesForUser(user, limit = 24, options = {}) {
     await markSubscriptionStripeStateExpired(userId);
     return [];
   }
-  const invoices = result.data.map((invoice) => {
+  // $0 invoices (Stripe's "Free trial for ..." records and trial plan switches) are not
+  // payments, so they stay out of the paid billing history.
+  const invoices = result.data.filter((invoice) => Number(invoice.amount_paid || 0) > 0).map((invoice) => {
     const templateId = invoiceTemplateId(invoice, templateBySubId);
     const catalog = templateId ? getStorefrontTemplateTier(templateId) : null;
     const kind = templateId ? 'template' : 'platform';
@@ -99,6 +102,7 @@ export async function listPaidInvoicesForUser(user, limit = 24, options = {}) {
       hostedInvoiceUrl: invoice.hosted_invoice_url || '',
       invoicePdf: invoice.invoice_pdf || '',
       description: catalog?.name || describeInvoice(invoice),
+      proration: buildProrationBreakdown(invoice),
       prorationNote: buildProrationNote(invoice),
       billingReason: invoice.billing_reason || '',
       subscription_id: getInvoiceSubscriptionId(invoice) || platformSubId || '',
@@ -106,4 +110,147 @@ export async function listPaidInvoicesForUser(user, limit = 24, options = {}) {
   });
   invoiceCache.set(cacheKey, { at: Date.now(), data: invoices });
   return invoices;
+}
+
+function isOpenInvoiceWithAmountDue(invoice) {
+  const status = String(invoice?.status || '').trim().toLowerCase();
+  const amountDue = Number(invoice?.amount_due ?? invoice?.amount_remaining ?? 0);
+  return ['open', 'uncollectible'].includes(status) && amountDue > 0;
+}
+
+function isPayableOpenInvoice(invoice) {
+  return isOpenInvoiceWithAmountDue(invoice) && Boolean(invoice?.hosted_invoice_url);
+}
+
+async function invoiceWithHostedUrl(stripe, invoice) {
+  if (isPayableOpenInvoice(invoice)) return invoice;
+  if (!isOpenInvoiceWithAmountDue(invoice) || !invoice?.id) return null;
+  const live = await stripe.invoices.retrieve(invoice.id);
+  return isPayableOpenInvoice(live) ? live : null;
+}
+
+function invoiceMatchesSubscription(invoice, subscriptionId) {
+  const normalizedSubscriptionId = String(subscriptionId || '').trim();
+  if (!normalizedSubscriptionId) return true;
+  const invoiceSubId = getInvoiceSubscriptionId(invoice);
+  // Keep invoices whose subscription id is missing so a follow-up retrieve can
+  // still attach the hosted invoice URL for this subscription.
+  return !invoiceSubId || invoiceSubId === normalizedSubscriptionId;
+}
+
+function presentOpenInvoice(invoice) {
+  return {
+    id: invoice.id,
+    amountDue: Number(invoice.amount_due ?? invoice.amount_remaining ?? 0),
+    currency: invoice.currency || 'usd',
+    displayAmountDue: formatInvoiceAmount(
+      invoice.amount_due ?? invoice.amount_remaining ?? 0,
+      invoice.currency,
+    ),
+    hostedInvoiceUrl: invoice.hosted_invoice_url || '',
+    status: invoice.status || 'open',
+  };
+}
+
+// Open-invoice lookups hit Stripe; the billing page reads them on every load while past due,
+// so results (including "none") are reused briefly. No Customer Portal sessions are created.
+const PAYMENT_ACTION_TTL_MS = 60_000;
+const PAYMENT_ACTION_CACHE_MAX = 500;
+const paymentActionCache = new Map();
+
+export function clearPaymentActionCache() {
+  paymentActionCache.clear();
+  // Invoice events also change the paid history; drop it so a new payment shows at once.
+  invoiceCache.clear();
+}
+
+export async function paymentActionForOpenInvoice({
+  customerId,
+  subscriptionId = '',
+  latestInvoiceId = '',
+  fallbackUrl = '',
+  fallbackLabel = 'Choose a plan',
+} = {}) {
+  const key = [customerId, subscriptionId, latestInvoiceId].map((v) => String(v || '').trim()).join('|');
+  const cached = paymentActionCache.get(key);
+  let openInvoice;
+  if (cached && Date.now() - cached.at < PAYMENT_ACTION_TTL_MS) {
+    openInvoice = cached.openInvoice;
+  } else {
+    openInvoice = await getOpenPayableInvoiceForCustomer({ customerId, subscriptionId, latestInvoiceId });
+    if (paymentActionCache.size >= PAYMENT_ACTION_CACHE_MAX) {
+      paymentActionCache.delete(paymentActionCache.keys().next().value);
+    }
+    paymentActionCache.set(key, { at: Date.now(), openInvoice: openInvoice || null });
+  }
+  if (openInvoice?.hostedInvoiceUrl) {
+    return {
+      paymentActionUrl: openInvoice.hostedInvoiceUrl,
+      paymentActionLabel: 'Pay now / Update payment method',
+      openInvoice,
+    };
+  }
+  if (fallbackUrl) {
+    return { paymentActionUrl: fallbackUrl, paymentActionLabel: fallbackLabel, openInvoice: null };
+  }
+  return null;
+}
+
+export async function getOpenPayableInvoiceForCustomer({
+  customerId,
+  subscriptionId = '',
+  latestInvoiceId = '',
+} = {}) {
+  const normalizedCustomerId = String(customerId || '').trim();
+  const normalizedSubscriptionId = String(subscriptionId || '').trim();
+  const normalizedLatestInvoiceId = String(latestInvoiceId || '').trim();
+  if (!normalizedCustomerId && !normalizedLatestInvoiceId) return null;
+
+  const stripe = getStripeClient();
+  try {
+    if (normalizedLatestInvoiceId) {
+      const invoice = await stripe.invoices.retrieve(normalizedLatestInvoiceId);
+      if (invoiceMatchesSubscription(invoice, normalizedSubscriptionId)) {
+        const payable = await invoiceWithHostedUrl(stripe, invoice);
+        if (payable) return presentOpenInvoice(payable);
+      }
+    }
+    if (!normalizedCustomerId) return null;
+
+    const listParams = {
+      customer: normalizedCustomerId,
+      status: 'open',
+      limit: 10,
+    };
+    if (normalizedSubscriptionId) listParams.subscription = normalizedSubscriptionId;
+
+    let invoices = [];
+    try {
+      const result = await stripe.invoices.list(listParams);
+      invoices = result?.data || [];
+    } catch (error) {
+      if (normalizedSubscriptionId && !isStripeResourceMissing(error)) {
+        const result = await stripe.invoices.list({
+          customer: normalizedCustomerId,
+          status: 'open',
+          limit: 10,
+        });
+        invoices = result?.data || [];
+      } else {
+        throw error;
+      }
+    }
+
+    for (const invoice of invoices) {
+      if (!invoiceMatchesSubscription(invoice, normalizedSubscriptionId)) continue;
+      const payable = await invoiceWithHostedUrl(stripe, invoice);
+      if (payable) return presentOpenInvoice(payable);
+    }
+    return null;
+  } catch (error) {
+    if (!isStripeResourceMissing(error)) {
+      console.warn('Looking up open payable invoice failed:', error?.message || error);
+    }
+    return null;
+  }
 }

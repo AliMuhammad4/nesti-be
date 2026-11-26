@@ -4,6 +4,7 @@ import {
   buildSharedDocumentsPrompt,
   applyDocumentAsk,
   documentReviewReply,
+  isSameChatDocument,
   assertChatDocumentLimits,
   countDocumentPages,
   documentReadReply,
@@ -11,10 +12,12 @@ import {
   documentRequestIds,
   leadDocumentLinkFilter,
   nextDocumentRequest,
+  followUpSkipIds,
   requestDocumentForReply,
   sniffChatFile,
 } from '../services/chat/documents/chatDocumentService.js';
 import { buildPreviewChatPrompt, sanitizeAssistant } from '../services/professionalAssistant/professionalAssistantService.js';
+import { documentCoversRequest, localizedDocumentName } from '../services/chat/documents/documentCoverage.js';
 
 test('chat uploads accept pdf, docx, and images and reject other bytes', () => {
   assert.equal(sniffChatFile(Buffer.from('%PDF-1.4\n'), 'application/pdf').kind, 'pdf');
@@ -156,7 +159,8 @@ test('document requests are sanitized and reach the broker prompt', () => {
     document_requests: ['pay_stubs', 'not-a-document', 'photo_id'],
   }, 'mortgage_broker');
   assert.deepEqual(setting.document_requests, ['pay_stubs', 'photo_id']);
-  const prompt = buildPreviewChatPrompt('mortgage_broker', { full_name: 'Sam Broker' }, { assistantSetting: setting });
+  const prompt = buildPreviewChatPrompt('mortgage_broker', { full_name: 'Sam Broker' }, { assistantSetting: setting   });
+
   assert.match(prompt, /Recent pay stubs/);
   assert.match(prompt, /Photo ID/);
   assert.equal(nextDocumentRequest(setting, []).label, 'Recent pay stubs');
@@ -168,10 +172,49 @@ test('document requests are sanitized and reach the broker prompt', () => {
   assert.equal(requestDocumentForReply({ id: 'photo_id', label: 'Photo ID' }, 'A photo of the kitchen.'), null);
   assert.equal(nextDocumentRequest({ role: 'lawyer', document_requests: [] }, []), null);
   assert.equal(nextDocumentRequest({ role: 'agent', document_requests: ['preapproval_letter', 'home_photos'] }, [], 'sell').id, 'home_photos');
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: ['preapproval_letter', 'home_photos', 'listing_sheet'] }, 'buy'),
+    ['preapproval_letter'],
+  );
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: ['preapproval_letter', 'home_photos', 'listing_sheet'] }, { intent: 'buy', text: 'investor rental property' }),
+    ['preapproval_letter'],
+  );
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: ['preapproval_letter', 'home_photos', 'listing_sheet'] }, 'sell'),
+    ['home_photos', 'listing_sheet'],
+  );
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: ['preapproval_letter', 'home_photos', 'listing_sheet'] }, { intent: 'sell', propertyImages: true }),
+    ['listing_sheet'],
+  );
+  assert.equal(
+    nextDocumentRequest({ role: 'agent', document_requests: ['home_photos', 'listing_sheet'] }, [], { intent: 'sell', propertyImages: true }).id,
+    'listing_sheet',
+  );
+  const agentDocs = ['preapproval_letter', 'proof_of_funds', 'photo_id', 'home_photos', 'listing_sheet'];
+  assert.deepEqual(documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'buyer' }), ['preapproval_letter', 'proof_of_funds', 'photo_id']);
+  assert.deepEqual(documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'investor' }), ['proof_of_funds', 'photo_id', 'preapproval_letter']);
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'investor', mortgageStatus: 'paying_cash' }),
+    ['proof_of_funds', 'photo_id'],
+  );
+  assert.deepEqual(
+    documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'buyer', mortgageStatus: 'paying_cash' }),
+    ['proof_of_funds', 'photo_id'],
+  );
+  assert.deepEqual(documentRequestIds({ role: 'agent', document_requests: agentDocs }, { clientType: 'seller', propertyImages: true }), ['listing_sheet', 'photo_id']);
   assert.equal(nextDocumentRequest({ role: 'mortgage_broker', document_requests: ['pay_stubs', 'mortgage_statement'] }, [], { text: 'this is a renewal' }).id, 'mortgage_statement');
   assert.equal(documentRequestIds({ role: 'lawyer', document_requests: ['purchase_agreement', 'condo_status'] }, { text: 'detached house' }).includes('condo_status'), false);
   assert.equal(documentRequestIds({ role: 'lawyer', document_requests: ['purchase_agreement', 'condo_status'] }, { text: 'a condo purchase' }).includes('condo_status'), true);
   assert.equal(nextDocumentRequest(setting, [{ original_filename: 'paystubs.pdf', summary: '' }]).id, 'photo_id');
+  assert.equal(documentCoversRequest({ original_filename: '2024 W-2.pdf' }, 'notice_of_assessment'), true);
+  assert.equal(documentCoversRequest({ original_filename: '1099-NEC.pdf' }, 'notice_of_assessment'), true);
+  assert.equal(documentCoversRequest({ original_filename: '1040-tax-return.pdf' }, 'notice_of_assessment'), true);
+  assert.match(nextDocumentRequest({ role: 'mortgage_broker', document_requests: ['notice_of_assessment'] }, []).label, /W-2\/1099/);
+  for (const language of ['french', 'spanish', 'chinese', 'arabic', 'hindi', 'punjabi', 'tamil']) {
+    assert.match(localizedDocumentName('notice_of_assessment', language), /W-2\/1099/);
+  }
   const asked = applyDocumentAsk('I can look at the file.', nextDocumentRequest(setting, []), {
     userMessage: 'I need a mortgage',
     setting,
@@ -183,6 +226,27 @@ test('document requests are sanitized and reach the broker prompt', () => {
     userMessage: 'I need help',
     setting,
   }).request, null);
+  const afterQualification = applyDocumentAsk(
+    'I can help with that. What is your preferred closing date?',
+    nextDocumentRequest(setting, []),
+    {
+      userMessage: 'I have a mortgage question',
+      previousReply: 'What kind of mortgage are you considering?',
+      setting,
+      qualificationOpen: false,
+    },
+  );
+  assert.equal(afterQualification.request.id, 'pay_stubs');
+  assert.doesNotMatch(afterQualification.reply, /preferred closing date/i);
+  assert.match(afterQualification.reply, /recent pay stubs/i);
+  const bookedEarly = applyDocumentAsk(
+    'I recommend booking a consultation to discuss your pre-approval and next steps. Would you like to arrange a convenient time for our discussion?',
+    nextDocumentRequest(setting, []),
+    { userMessage: 'Yes', previousReply: 'Do you own other investment properties?', setting },
+  );
+  assert.match(bookedEarly.reply, /recent pay stubs/i);
+  assert.doesNotMatch(bookedEarly.reply, /consultation/i);
+  assert.equal(bookedEarly.request.id, 'pay_stubs');
   const french = applyDocumentAsk('Je peux regarder le dossier.', nextDocumentRequest(setting, []), {
     userMessage: 'je veux un prêt',
     setting: { ...setting, languages: ['french'] },
@@ -227,6 +291,18 @@ test('document requests are sanitized and reach the broker prompt', () => {
   });
   assert.match(ready.reply, /photos of the home/i);
   assert.equal(ready.request.id, 'home_photos');
+  const optionsOffer = applyDocumentAsk(
+    'Thank you for confirming that parking is required. Would you like to see available options that fit your criteria?',
+    nextDocumentRequest(agent, []),
+    {
+      userMessage: 'yes parking is required',
+      previousReply: 'Is parking required?',
+      setting: agent,
+    },
+  );
+  assert.equal(optionsOffer.request, null);
+  assert.doesNotMatch(optionsOffer.reply, /upload|pre-approval/i);
+  assert.match(optionsOffer.reply, /available options/i);
   const duringQuestions = applyDocumentAsk('What is the approximate property value?', nextDocumentRequest(setting, []), {
     userMessage: 'yeah location will be in lahore',
     previousReply: 'Where is the property located?',
@@ -239,6 +315,43 @@ test('document requests are sanitized and reach the broker prompt', () => {
     applied: true,
     document_requests: ['pay_stubs', 'photo_id'],
   }, 'mortgage_broker');
+  const unread = documentReviewReply([{
+    status: 'reading',
+    text_ready: true,
+    kind: 'pdf',
+    original_filename: 'random.docx',
+    summary: '',
+    extracted_text: 'Recent pay stubs for March.',
+    document_type: 'document',
+  }], settingForReview, { priorDocuments: [] });
+  assert.equal(unread, '');
+  assert.equal(isSameChatDocument(
+    { _id: 'a', content_hash: 'abc', original_filename: 'pay.pdf', bytes: 10 },
+    { _id: 'b', content_hash: 'abc', original_filename: 'copy.pdf', bytes: 10 },
+  ), true);
+  assert.equal(isSameChatDocument(
+    { _id: 'a', original_filename: 'pay.pdf', bytes: 10 },
+    { _id: 'b', original_filename: 'pay.pdf', bytes: 99 },
+  ), false);
+  const repeated = documentReviewReply([{
+    _id: 'second',
+    status: 'ready',
+    text_ready: true,
+    content_hash: 'same-file',
+    original_filename: 'paystubs.pdf',
+    summary: 'Recent pay stubs for March.',
+    extracted_text: 'Pay stub for March.',
+  }], settingForReview, {
+    priorDocuments: [{ _id: 'first', status: 'ready', content_hash: 'same-file', original_filename: 'paystubs.pdf' }],
+  });
+  assert.match(repeated, /already sent this file/i);
+  assert.doesNotMatch(repeated, /This is the recent pay stubs/i);
+  assert.equal(nextDocumentRequest(settingForReview, [{
+    status: 'reading',
+    text_ready: true,
+    extracted_text: 'Recent pay stubs for March.',
+    document_type: 'photo',
+  }]).id, 'pay_stubs');
   const wrongPhoto = documentReviewReply([{
     status: 'ready',
     text_ready: true,
@@ -249,8 +362,10 @@ test('document requests are sanitized and reach the broker prompt', () => {
     document_type: 'photo',
   }], settingForReview, { priorDocuments: [] });
   assert.match(wrongPhoto, /This is a different file/i);
-  assert.match(wrongPhoto, /photo ID/i);
-  assert.doesNotMatch(wrongPhoto, /send the recent pay stubs/i);
+  // Names the file that arrived and asks again for the same document (not the next one).
+  assert.match(wrongPhoto, /WP6A4670\.JPG/);
+  assert.match(wrongPhoto, /send the recent pay stubs/i);
+  assert.doesNotMatch(wrongPhoto, /photo ID/i);
   assert.doesNotMatch(wrongPhoto, /four individuals|lively conversation/i);
   const askedAgain = documentReviewReply([{
     status: 'ready',
@@ -282,4 +397,94 @@ test('document requests are sanitized and reach the broker prompt', () => {
   });
   assert.equal(paused.request, null);
   assert.doesNotMatch(paused.reply, /upload/i);
+});
+
+test('document follow-up only skips a requested file after a clear deferral', () => {
+  const setting = { role: 'mortgage_broker', document_requests: ['pay_stubs'] };
+  const context = { intent: 'mortgage', text: 'mortgage renewal' };
+  const ask = { role: 'assistant', content: 'Please upload your recent pay stubs.' };
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: 'Can I send the pay stubs next week?' },
+  ]), []);
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: 'I have a question about my mortgage.' },
+  ]), []);
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: "I don't have the pay stubs right now." },
+  ]), ['pay_stubs']);
+  assert.deepEqual(followUpSkipIds(setting, [], context, [
+    ask,
+    { role: 'user', content: 'Can we book a meeting?' },
+  ]), ['pay_stubs']);
+});
+
+test('reviews every attachment in a multi-file turn against the outstanding request', () => {
+  const agent = sanitizeAssistant({
+    applied: true,
+    role: 'agent',
+    document_requests: ['preapproval_letter', 'proof_of_funds', 'photo_id', 'home_photos', 'listing_sheet'],
+  }, 'agent');
+  const investorCtx = {
+    priorDocuments: [],
+    clientType: 'investor',
+    intent: 'buy',
+    text: 'investor buy',
+    previousReply: 'Please upload your proof of funds.',
+  };
+  const receipt = {
+    _id: 'receipt',
+    status: 'ready',
+    text_ready: true,
+    kind: 'pdf',
+    original_filename: 'Receipt-2389-2765.pdf',
+    summary: 'A payment receipt for an online subscription.',
+    extracted_text: 'Receipt total $20. Cursor Pro Plus.',
+    document_type: 'receipt',
+  };
+  const proof = {
+    _id: 'proof',
+    status: 'ready',
+    text_ready: true,
+    kind: 'pdf',
+    original_filename: 'Proof.pdf',
+    summary: 'Bank statement showing proof of funds available for a down payment.',
+    extracted_text: 'Proof of funds. Available balance supports the purchase.',
+    document_type: 'bank statement',
+  };
+  // Last file alone would miss the match if it were only the receipt; both must be reviewed.
+  const onlyLastWouldMiss = documentReviewReply([proof, receipt], agent, investorCtx);
+  assert.match(onlyLastWouldMiss, /proof of funds/i);
+  assert.doesNotMatch(onlyLastWouldMiss, /different file/i);
+  assert.doesNotMatch(onlyLastWouldMiss, /listing or MLS sheet/i);
+  const bothWrong = documentReviewReply([
+    {
+      _id: 'img1',
+      status: 'ready',
+      text_ready: true,
+      kind: 'image',
+      original_filename: '1765527631275-14.jpg',
+      summary: 'A person wearing a light blue blazer sitting outdoors.',
+      extracted_text: 'Person seated outdoors.',
+      document_type: 'photo',
+    },
+    {
+      _id: 'img2',
+      status: 'ready',
+      text_ready: true,
+      kind: 'image',
+      original_filename: '2.JPG',
+      summary: 'A person in a black jacket standing near a gate.',
+      extracted_text: 'Person standing near a gate.',
+      document_type: 'photo',
+    },
+  ], agent, investorCtx);
+  assert.match(bothWrong, /is not one of the documents I asked for;.*is not one of the documents I asked for/i);
+  assert.doesNotMatch(bothWrong, /listing or MLS sheet/i);
+  // Without clientType, seller mis-detect must not drive the next ask when clientType is set.
+  const withType = documentReviewReply([receipt], agent, investorCtx);
+  assert.match(withType, /different file/i);
+  assert.doesNotMatch(withType, /listing or MLS sheet/i);
 });

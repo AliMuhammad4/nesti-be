@@ -271,6 +271,8 @@ export async function sendVisitorAndAgentCopy(ctx, { visitorSubject, html, text 
     subject: visitorSubject,
     message: text,
     htmlMessage: html,
+    // Sent on the professional's behalf: the client's replies go to them.
+    ...(ctx.agentUser?.email ? { replyTo: String(ctx.agentUser.email).trim() } : {}),
   });
   if (!visitorSend.success) {
     return { status: 'failed', detail: String(visitorSend.error?.message || 'send_failed') };

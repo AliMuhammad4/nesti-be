@@ -8,6 +8,7 @@ const DEDUPE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 function titleForLimitKey(limitKey) {
   if (limitKey === 'captured_leads') return 'Lead capture limit reached';
   if (limitKey === 'followup_actions') return 'Nurture email limit reached';
+  if (limitKey === 'chatbot_conversations') return 'Chatbot conversation limit reached';
   return 'Plan limit reached';
 }
 

@@ -1,5 +1,3 @@
-import CalendarIntegration from '../../../models/CalendarIntegration.js';
-import { calendlyWebhookAlignmentMeta } from '../../calendly/calendlyAlignmentService.js';
 import {
   getPostBookingChecklistForMeta,
   supportsPropertyMatches,
@@ -12,13 +10,12 @@ export async function buildChatResponseMeta({
   flow,
   conversation,
   conversationSnapshot = null,
-  userId,
-  professionalProfile,
   hasContact,
   propertyMatchesEnabled = true,
   deferCalendlyLink,
   calendlyLinkForVisitor,
   isAutomatedBookingEnabled,
+  assistantSetting = null,
   finalScore,
   finalGrade,
   aiIntent,
@@ -30,20 +27,19 @@ export async function buildChatResponseMeta({
   mortgageBrokerSnapshotSignals,
   extractedData,
   refetchPropertyMatches = false,
+  qualificationOpen = false,
 }) {
+  const sellIntent = String(aiIntent || '').toLowerCase() === 'sell';
   const property_matches_available = Boolean(
-    supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact,
+    supportsPropertyMatches(flow) && propertyMatchesEnabled && hasContact && !sellIntent
+      // Qualify first: cards only after open template questions are answered, unless the visitor explicitly asks.
+      && (!qualificationOpen || refetchPropertyMatches),
   );
 
   const calendlyBookingSnap = conversationSnapshot || {
     calendly_booking_status: conversation?.calendly_booking_status ?? null,
     calendly_booking_at: conversation?.calendly_booking_at ?? null,
   };
-
-  const calInt = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' })
-    .select('access_token calendly_slug calendly_slug_mismatch')
-    .lean();
-  const calendlyAlign = calendlyWebhookAlignmentMeta(calInt, professionalProfile);
 
   const mortgage_affordability_snapshot =
     usesMortgageAffordabilitySnapshot(flow) && mortgageBrokerSnapshotQual
@@ -55,6 +51,11 @@ export async function buildChatResponseMeta({
       : null;
 
   const visitorFacingIntent = usesFixedBuyIntentForLeadMatch(flow) ? 'unspecified' : aiIntent;
+  const scheduleActions = assistantSetting?.next_actions;
+  const scheduleAllowed = !assistantSetting?.applied
+    || !Array.isArray(scheduleActions)
+    || !scheduleActions.length
+    || scheduleActions.includes('schedule');
 
   return {
     intent: visitorFacingIntent,
@@ -73,13 +74,13 @@ export async function buildChatResponseMeta({
     calendly_link: deferCalendlyLink ? null : calendlyLinkForVisitor || null,
     conversation_id: conversation._id ? String(conversation._id) : null,
     automated_booking_enabled: isAutomatedBookingEnabled,
+    schedule_allowed: Boolean(isAutomatedBookingEnabled && scheduleAllowed),
     calendly_booking_status: calendlyBookingSnap?.calendly_booking_status ?? null,
     calendly_booking_at: calendlyBookingSnap?.calendly_booking_at ?? null,
     post_booking_checklist:
       calendlyBookingSnap?.calendly_booking_status === 'booked'
-        ? getPostBookingChecklistForMeta(flow, finalGrade, aiIntent)
+        ? getPostBookingChecklistForMeta(flow, finalGrade, aiIntent, conversation?.form_data || null)
         : null,
-    ...calendlyAlign,
     ...(mortgage_affordability_snapshot ? { mortgage_affordability_snapshot } : {}),
   };
 }

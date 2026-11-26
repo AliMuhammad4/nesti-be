@@ -15,16 +15,16 @@ function mockSubscription(planKey, status = 'active') {
   return { plan_key: planKey, status };
 }
 
-test('Basic plan limits are 50 leads and 50 nurture emails', () => {
+test('Basic plan limits are 150 saved leads', () => {
   const limits = getPlanLimits(SUBSCRIPTION_PLAN.BASIC);
-  assert.equal(limits.captured_leads, 50);
-  assert.equal(limits.followup_actions, 50);
+  assert.equal(limits.captured_leads, 150);
+  assert.equal(limits.followup_actions, null);
 });
 
-test('Standard plan limits are 150 leads and 500 nurture emails', () => {
+test('Standard plan limits are unlimited saved leads', () => {
   const limits = getPlanLimits(SUBSCRIPTION_PLAN.STANDARD);
-  assert.equal(limits.captured_leads, 150);
-  assert.equal(limits.followup_actions, 500);
+  assert.equal(limits.captured_leads, null);
+  assert.equal(limits.followup_actions, null);
 });
 
 test('Enterprise plan limits are unlimited', () => {
@@ -58,14 +58,19 @@ test('Standard includes moved features and group chat', () => {
   assert.equal(STANDARD_FEATURES.has(FEATURES.LEADS_FOLLOWUP_AUTOMATED), true);
 });
 
-test('hasFeature gates lead conversation and public profile by plan', () => {
+test('hasFeature gates lead conversation by plan; the free web page is on every plan', () => {
   const basicSub = mockSubscription('basic');
   const standardSub = mockSubscription('standard');
 
   assert.equal(hasFeature(basicSub, FEATURES.CRM_LEAD_CONVERSATION), false);
   assert.equal(hasFeature(standardSub, FEATURES.CRM_LEAD_CONVERSATION), true);
-  assert.equal(hasFeature(basicSub, FEATURES.PUBLIC_PROFILE), false);
+  assert.equal(hasFeature(basicSub, FEATURES.PUBLIC_PROFILE), true);
   assert.equal(hasFeature(standardSub, FEATURES.PUBLIC_PROFILE), true);
+  // After the trial ends the free web page stays on; with no subscription row
+  // (credentials not approved yet) it stays off.
+  assert.equal(hasFeature({ status: 'expired', plan_key: 'basic' }, FEATURES.PUBLIC_PROFILE), true);
+  assert.equal(hasFeature(null, FEATURES.PUBLIC_PROFILE), false);
+  assert.equal(hasFeature({ status: 'expired', plan_key: 'basic' }, FEATURES.CHATBOT_BASIC), false);
   assert.equal(hasFeature(basicSub, FEATURES.PRO_CHAT_DM), true);
   assert.equal(hasFeature(basicSub, FEATURES.PRO_CHAT), false);
   assert.equal(hasFeature(basicSub, FEATURES.REFERRALS_MANUAL), true);
@@ -73,15 +78,24 @@ test('hasFeature gates lead conversation and public profile by plan', () => {
   assert.equal(hasFeature(standardSub, FEATURES.REFERRALS_INVITES), true);
 });
 
-test('free trial effective plan is enterprise', () => {
+test('a basic trial can preview the website builder without publishing it', () => {
   const trialSub = {
     status: 'free_trial',
     plan_key: 'basic',
     trial_end: new Date(Date.now() + 86400000),
   };
-  assert.equal(getEffectivePlan(trialSub), SUBSCRIPTION_PLAN.ENTERPRISE);
+  assert.equal(getEffectivePlan(trialSub), SUBSCRIPTION_PLAN.BASIC);
   assert.equal(hasFeature(trialSub, FEATURES.PUBLIC_PROFILE), true);
+  assert.equal(hasFeature(trialSub, FEATURES.ASSISTANT_PROFESSIONAL), true);
+  assert.equal(hasFeature(trialSub, FEATURES.VOICE_AGENT), false);
+  assert.equal(hasFeature(mockSubscription('basic'), FEATURES.ASSISTANT_PROFESSIONAL), false);
   const trialLimits = getPlanLimitsForSubscription(trialSub);
-  assert.equal(trialLimits.captured_leads, 5);
-  assert.equal(trialLimits.followup_actions, 5);
+  assert.equal(trialLimits.captured_leads, 150);
+});
+
+test('enterprise unlocks the voice agent and call history', () => {
+  const enterprise = mockSubscription('enterprise');
+  assert.equal(hasFeature(enterprise, FEATURES.VOICE_AGENT), true);
+  assert.equal(hasFeature(enterprise, FEATURES.CALL_HISTORY), true);
+  assert.equal(hasFeature(mockSubscription('standard'), FEATURES.VOICE_AGENT), false);
 });

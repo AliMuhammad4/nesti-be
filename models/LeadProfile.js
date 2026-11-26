@@ -81,6 +81,15 @@ const leadProfileSchema = new mongoose.Schema(
         living_situation: { type: String },
         urgency_readiness: { type: String },
         buy_property_location: { type: String },
+        investment_type: { type: String },
+        investment_goal: { type: String },
+        owns_investments: { type: String },
+        down_payment_readiness: { type: String },
+        buying_another: { type: String },
+        market_country: { type: String },
+        market_region: { type: String },
+        market_city: { type: String },
+        market_country_name: { type: String },
       },
       mortgage_broker: {
         mortgage_timeline: { type: String },
@@ -92,6 +101,14 @@ const leadProfileSchema = new mongoose.Schema(
         purchase_purpose: { type: String },
         urgency_signal: { type: String },
         property_budget: { type: String },
+        investment_type: { type: String },
+        owns_investments: { type: String },
+        investment_financing: { type: String },
+        borrower_entity: { type: String },
+        market_country: { type: String },
+        market_region: { type: String },
+        market_city: { type: String },
+        market_country_name: { type: String },
       },
       lawyer: {
         transaction_stage: { type: String },
@@ -102,6 +119,11 @@ const leadProfileSchema = new mongoose.Schema(
         realtor_involved: { type: String },
         first_time_buyer: { type: String },
         legal_services_needed: { type: String },
+        via_company: { type: String },
+        market_country: { type: String },
+        market_region: { type: String },
+        market_city: { type: String },
+        market_country_name: { type: String },
       },
     },
     scoring: {
@@ -123,9 +145,7 @@ const leadProfileSchema = new mongoose.Schema(
       last_seen_at: { type: Date, default: Date.now },
     },
     lead_refs: [{ type: mongoose.Schema.Types.ObjectId, ref: 'LeadMatch' }],
-    /** Additive: buyer / seller / investor from the assistant's client-type templates. */
     client_type: { type: String, enum: ['buyer', 'seller', 'investor', ''], default: '' },
-    /** Additive: last suggested next action computed from the role action flow and template CTA. */
     suggested_next_action: {
       action: { type: String, default: '' },
       label: { type: String, default: '' },
@@ -134,7 +154,6 @@ const leadProfileSchema = new mongoose.Schema(
       tier: { type: String, default: '' },
       updated_at: { type: Date, default: null },
     },
-    /** Additive: answers to the professional's custom template questions, keyed by question id. */
     template_answers: { type: mongoose.Schema.Types.Mixed, default: {} },
     preferences: {
       language_preference: [{ type: String }],

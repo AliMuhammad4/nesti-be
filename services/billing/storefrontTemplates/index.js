@@ -14,6 +14,7 @@ export {
   serializePaidTemplateSubscriptions,
   serializeStorefrontTemplateEntitlements,
   templatePurchasePeriodEnd,
+  templatePurchaseGrantsAccess,
   userHasStorefrontTemplateAccess,
 } from './access.js';
 
@@ -36,6 +37,8 @@ export {
 export {
   confirmStorefrontTemplateCheckoutSession,
   createStorefrontTemplateCheckoutSession,
+  isBlockingStorefrontTemplateStripeSubscription,
+  isStorefrontTemplateStripeSubscription,
   selectReusableStorefrontTemplateCheckout,
   syncStorefrontTemplateCheckoutSession,
   validateStorefrontTemplateCheckoutSession,

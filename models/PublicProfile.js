@@ -89,6 +89,7 @@ const storefrontRevisionSchema = new mongoose.Schema({
   revision_version: { type: Number, min: 0, default: 0 },
   updated_at: { type: Date, default: null },
   published_at: { type: Date, default: null },
+  website: { type: mongoose.Schema.Types.Mixed },
 }, { _id: false });
 
 const storefrontTemplatePurchaseSchema = new mongoose.Schema({
@@ -107,6 +108,7 @@ const storefrontTemplatePurchaseSchema = new mongoose.Schema({
   purchased_at: { type: Date, default: Date.now },
   /** Last successful Stripe reconcile; refreshes skip recently synced rows. */
   last_synced_at: { type: Date, default: null },
+  stripe_last_event_created: { type: Number, default: 0 },
 }, { _id: false });
 
 const publicProfileSchema = new mongoose.Schema({

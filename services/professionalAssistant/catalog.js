@@ -62,12 +62,35 @@ export const ROLE_ASSISTANT_FAQS = Object.fromEntries(
 // Storage ids stay stable (they key the voice maps in replyStyle and the prompt blocks);
 // labels and descriptors follow the five client-facing personality cards.
 export const PERSONALITIES = [
-  ['luxury', 'Luxury Concierge', 'Sophisticated, polished, exclusive.'],
-  ['friendly', 'Friendly Advisor', 'Warm, approachable, conversational.'],
-  ['polished', 'Trusted Expert', 'Professional, knowledgeable, reassuring.'],
-  ['persuasive', 'Results-Oriented', 'Confident, direct, efficient.'],
-  ['consultative', 'Investor Specialist', 'Analytical, strategic, detail-focused.'],
+  ['luxury', 'Luxury Concierge', 'White-glove and discreet: composed, exclusive, and paced entirely to the client.'],
+  ['friendly', 'Friendly Advisor', 'Warm and human guidance: natural conversation with clear, helpful next steps.'],
+  ['polished', 'Trusted Expert', 'Calm professional authority: precise, reassuring, and quietly confident.'],
+  ['persuasive', 'Results-Oriented', 'Focused partnership: one clear priority, concrete next moves, no filler.'],
+  ['consultative', 'Investor Specialist', 'Investment-grade advisory: structured questions, numbers, and trade-offs.'],
 ];
+
+/**
+ * Prompt-side voice conduct for each built-in personality id.
+ * UI labels/blurbs live in PERSONALITIES; reply engines import these strings.
+ */
+export const PERSONALITY_VOICE_CONDUCT = {
+  luxury: 'Luxury Concierge: refined, private, and unhurried - like discreet hospitality. Prefer measured phrasing ("at your pace", "I will arrange that privately", "a considered selection"). No slang, no "Hey", no exclamation marks, and no hurry words ("quick", "ASAP"). Warmth comes from composure, not cheerleading.',
+  polished: 'Trusted Expert: crisp, businesslike, complete sentences. Knowledgeable and reassuring without lecturing. Prefer confident phrasing ("certainly", "to confirm", "I can arrange"). No exclamation marks, no "Hey", no slang, and no gushing.',
+  friendly: 'Friendly Advisor: warm, natural, and conversational - like a thoughtful colleague, not a script. Contractions are welcome. Keep energy light without sounding juvenile. Avoid stiff fillers ("assist", "regarding", "kindly") and stacked slang.',
+  persuasive: 'Results-Oriented: confident, direct, and efficient. Name one concrete next step and its benefit. Prefer decisive phrasing ("the next step is", "I can line that up"). Avoid hedging ("maybe", "if you want") unless the visitor is hesitant.',
+  consultative: 'Investor Specialist: analytical and strategic. Offer one precise observation or figure, then one purposeful question ("so I can..."). Prefer specifics over adjectives. No pitch language, no hype, and no stock cheer.',
+  // Legacy id kept for older saved settings mapped via legacyPersonalityId.
+  caring: 'Caring: patient and reassuring. Warm and direct. On a hello, greet and ask the question. Do not say the visitor can answer later, and do not say there is no rush unless they sound worried.',
+};
+
+export const PERSONALITY_GREETING_CONDUCT = {
+  luxury: 'Luxury Concierge opening: reserved and unhurried. No hey, no slang, and no exclamation mark. Write a fresh, composed greeting.',
+  polished: 'Trusted Expert opening: a polished hello in complete sentences. No hey, no slang, and no exclamation mark.',
+  friendly: 'Friendly Advisor opening: a warm, natural hello. Write a fresh sentence - do not copy a stock phrase.',
+  persuasive: 'Results-Oriented opening: a plain hello, then move cleanly toward the next useful step.',
+  consultative: 'Investor Specialist opening: a plain, professional hello - then one purposeful question.',
+  caring: 'Caring opening: a soft hello. No sales push.',
+};
 
 const LEGACY_PERSONALITY_IDS = {
   caring: 'friendly',
@@ -101,6 +124,7 @@ const BUDGET_OPTIONS = ['Under $400k', '$400k–$700k', '$700k–$1M', '$1M+'];
 const TIMELINE_OPTIONS = ['As soon as possible', '1–3 months', '3–6 months', '6–12 months', 'Just exploring'];
 const PROPERTY_TYPE_OPTIONS = ['Detached house', 'Townhouse', 'Condo', 'Multi-family', 'Other'];
 const DOWN_PAYMENT_OPTIONS = ['20% or more', '10–19%', '5–9%', 'Under 5%', 'Not yet'];
+const INVESTOR_DOWN_PAYMENT_OPTIONS = ['Cash purchase / no financing', 'Under 15%', '15–19%', '20–24%', '25% or more', 'Not sure'];
 const INCOME_OPTIONS = ['Under $70k', '$70k–$100k', '$100k–$150k', '$150k–$200k', '$200k+'];
 const CLOSING_OPTIONS = ['Within 30 days', '30–60 days', '60–90 days', 'Not set yet'];
 
@@ -126,11 +150,19 @@ export const QUALIFICATION_TEMPLATES = {
       ['buying_another', 'Are you also buying another property?', ['Yes', 'No', 'Not sure yet']],
     ]),
     investor: template('Book an Investment Consultation', [
-      ['investment_type', 'What type of investment are you interested in?', ['Rental property', 'Fix and flip', 'Pre-construction', 'Multi-unit', 'Commercial']],
-      ['location', 'Which markets are you considering?'],
-      ['budget', 'What is your investment budget?', BUDGET_OPTIONS],
+      ['investment_type', 'What type of investment are you interested in?', ['Long-term rental', 'Short-term rental', 'Fix and flip', 'New construction / pre-construction', 'Multi-unit', 'Commercial']],
+      ['location', 'Which city, province or state, and country are you considering?'],
+      ['budget', 'What is your approximate investment budget in USD?', BUDGET_OPTIONS],
       ['investment_goal', 'Are you focused on rental income or appreciation?', ['Rental income', 'Appreciation', 'Both']],
       ['timeline', 'When are you planning to invest?', TIMELINE_OPTIONS],
+      ['property_type', 'What property type are you targeting?', PROPERTY_TYPE_OPTIONS],
+      ['preapproval', 'Are you pre-approved, paying cash, or still arranging financing?', ['Fully pre-approved', 'Paying cash', 'In progress', 'Not yet', 'Unsure']],
+      ['realtor_status', 'Are you currently working with a realtor?', ['No', 'Yes but open', 'Yes exclusively']],
+      ['owns_investments', 'Do you already own investment properties?', ['Yes', 'No', 'Through a company / LLC']],
+
+      ['down_payment', 'How ready is your down payment or cash capital (requirements vary by market and lender)?', ['Ready now', 'Within 30 days', 'Still accumulating', 'Not sure']],
+      ['viewing_readiness', 'Ready to tour investment properties?', ['Yes ASAP', 'Within a few weeks', 'Maybe later', 'Just browsing']],
+      ['urgency_readiness', 'If the right deal appeared tomorrow, would you make an offer?', ['Yes immediately', 'Maybe', 'No']],
     ]),
   },
   mortgage_broker: {
@@ -149,9 +181,9 @@ export const QUALIFICATION_TEMPLATES = {
       ['timeline', 'When would you like to review your options?', TIMELINE_OPTIONS],
     ]),
     investor: template('Book an Investment Financing Consultation', [
-      ['investment_type', 'What type of investment property are you considering?', ['Rental property', 'Multi-unit', 'Pre-construction', 'Commercial', 'Vacation rental']],
-      ['property_value', 'What is the purchase price range?', BUDGET_OPTIONS],
-      ['down_payment', 'What down payment do you have available?', DOWN_PAYMENT_OPTIONS],
+      ['investment_type', 'What type of investment property are you considering?', ['Long-term rental', 'Short-term rental', 'Fix and flip', 'Multi-unit', 'New construction / pre-construction', 'Commercial']],
+      ['property_value', 'What is your approximate purchase price range in USD?', BUDGET_OPTIONS],
+      ['down_payment', 'What approximate down-payment range or cash-purchase plan do you expect (requirements vary by market and lender)?', INVESTOR_DOWN_PAYMENT_OPTIONS],
       ['owns_investments', 'Do you own other investment properties?', ['Yes', 'No']],
       ['timeline', 'When do you need financing?', TIMELINE_OPTIONS],
     ]),
@@ -183,9 +215,35 @@ export const QUALIFICATION_TEMPLATES = {
 
 /** Question ids the public intake form already collects for this role. Chat skips them when filled. */
 export const INTAKE_QUESTION_IDS = {
-  agent: ['intent', 'location', 'budget', 'timeline', 'property_type', 'preapproval', 'expected_price'],
-  mortgage_broker: ['purpose', 'location', 'property_value', 'timeline', 'preapproval', 'down_payment', 'household_income'],
-  lawyer: ['legal_service', 'location', 'transaction_type', 'closing_date'],
+  agent: [
+    'intent',
+    'location',
+    'budget',
+    'timeline',
+    'property_type',
+    'preapproval',
+    'expected_price',
+    'buying_another',
+    'investment_type',
+    'investment_goal',
+    'realtor_status',
+    'owns_investments',
+    'down_payment',
+    'viewing_readiness',
+    'urgency_readiness',
+  ],
+  mortgage_broker: [
+    'purpose',
+    'location',
+    'property_value',
+    'timeline',
+    'preapproval',
+    'down_payment',
+    'household_income',
+    'investment_type',
+    'owns_investments',
+  ],
+  lawyer: ['legal_service', 'location', 'transaction_type', 'closing_date', 'via_company'],
 };
 
 export function templateQuestionLabel(role, id) {
@@ -213,6 +271,7 @@ export const LANGUAGES = [
   ['hindi', 'Hindi'],
   ['tamil', 'Tamil'],
   ['punjabi', 'Punjabi'],
+  ['urdu', 'Urdu'],
   ['arabic', 'Arabic'],
   ['other', 'Other supported language'],
 ];
@@ -320,23 +379,29 @@ export const QUALIFICATION = {
 
 export const DOCUMENT_REQUESTS = {
   agent: [
-    ['preapproval_letter', 'Pre-approval letter'],
-    ['home_photos', 'Photos of the home'],
-    ['listing_sheet', 'Listing or MLS sheet'],
+    ['preapproval_letter', 'Mortgage pre-approval letter', 'Buyer and investor'],
+    ['proof_of_funds', 'Proof of funds (bank letter or statement)', 'Buyer and investor'],
+    ['photo_id', 'Photo ID', 'Buyer, seller, and investor'],
+    ['home_photos', 'Photos of the home', 'Seller'],
+    ['listing_sheet', 'Listing or MLS sheet', 'Seller'],
   ],
   mortgage_broker: [
     ['pay_stubs', 'Recent pay stubs'],
-    ['notice_of_assessment', 'Notice of assessment or T4'],
+    ['notice_of_assessment', 'Tax or income documents (Canada: NOA/T4; U.S.: W-2/1099/tax return)'],
     ['mortgage_statement', 'Current mortgage statement'],
     ['preapproval_letter', 'Pre-approval letter'],
     ['photo_id', 'Photo ID'],
+    ['proof_of_funds', 'Proof of down payment or funds (bank statements)'],
+    ['lease_agreements', 'Lease agreements or rent roll (investment / rental properties)'],
+    ['entity_documents', 'Company documents for corporate / LLC borrowers (Canada: articles of incorporation; U.S.: LLC operating agreement)'],
   ],
   lawyer: [
     ['purchase_agreement', 'Purchase or sale agreement'],
     ['title_deed', 'Title or deed'],
     ['mortgage_commitment', 'Mortgage commitment'],
     ['photo_id', 'Photo ID'],
-    ['condo_status', 'Condo status certificate'],
+    ['condo_status', 'Condo status certificate / HOA docs (Canada status certificate; U.S. HOA/condo docs)'],
+    ['entity_documents', 'Company documents for a purchase through a corporation / LLC (investor clients)'],
   ],
 };
 

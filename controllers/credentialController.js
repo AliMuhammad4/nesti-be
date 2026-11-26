@@ -6,20 +6,9 @@ import {
   updateCredentialMetaService,
   uploadCredentialDocumentService,
 } from '../services/credentials/credentialService.js';
+import { sendStoredFile } from '../utils/fileResponse.js';
 
 const send = (res, result) => res.status(result.status).json(result.body);
-
-function sendFile(res, result) {
-  if (result.body || !result.file) {
-    return res.status(result.status || 500).json(result.body || { success: false, message: 'Failed to load document' });
-  }
-  const { buffer, contentType, fileName, contentLength } = result.file;
-  res.setHeader('Content-Type', contentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${fileName || 'document'}"`);
-  res.setHeader('Cache-Control', 'private, max-age=120');
-  if (contentLength != null) res.setHeader('Content-Length', String(contentLength));
-  return res.status(200).send(buffer);
-}
 
 export const getMyCredentials = async (req, res, next) => {
   try {
@@ -53,7 +42,7 @@ export const uploadCredentialDocument = async (req, res, next) => {
 
 export const getCredentialDocument = async (req, res, next) => {
   try {
-    return sendFile(res, await getMyCredentialDocumentService(req.user, req.params.docId));
+    return sendStoredFile(res, await getMyCredentialDocumentService(req.user, req.params.docId, { thumb: req.query?.thumb === '1' }));
   } catch (error) {
     next(error);
   }

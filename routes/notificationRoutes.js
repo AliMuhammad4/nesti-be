@@ -1,7 +1,6 @@
 import express from 'express';
 import {
   protect,
-  ensureAgentOrMortgageBroker,
   requireCompleteProfessionalProfile,
 } from '../middleware/authMiddleware.js';
 import {
@@ -15,12 +14,12 @@ import {
 const router = express.Router();
 
 // Credential-locked / pre-trial professionals must still receive approve/reject notices.
+// Clients read their own notifications here too (property and message alerts); every query is scoped to req.user.
 // Do not require active subscription or credential approval here.
 router.get(
   '/unread-count',
   protect,
   requireCompleteProfessionalProfile,
-  ensureAgentOrMortgageBroker,
   async (req, res) => {
     try {
       const count = await getUnreadNotificationCount(req.user._id);
@@ -31,7 +30,7 @@ router.get(
   }
 );
 
-router.get('/', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, async (req, res) => {
+router.get('/', protect, requireCompleteProfessionalProfile, async (req, res) => {
   try {
     const limit = req.query.limit;
     const offset = req.query.offset;
@@ -47,7 +46,6 @@ router.patch(
   '/read-all',
   protect,
   requireCompleteProfessionalProfile,
-  ensureAgentOrMortgageBroker,
   async (req, res) => {
     try {
       const result = await markAllNotificationsRead(req.user._id);
@@ -58,7 +56,7 @@ router.patch(
   }
 );
 
-router.get('/:id', protect, requireCompleteProfessionalProfile, ensureAgentOrMortgageBroker, async (req, res) => {
+router.get('/:id', protect, requireCompleteProfessionalProfile, async (req, res) => {
   try {
     const n = await getNotificationById(req.user._id, req.params.id);
     if (!n) {
@@ -77,7 +75,6 @@ router.patch(
   '/:id/read',
   protect,
   requireCompleteProfessionalProfile,
-  ensureAgentOrMortgageBroker,
   async (req, res) => {
     try {
       const updated = await markNotificationRead(req.user._id, req.params.id);

@@ -5,7 +5,16 @@
 import logger from '../../../utils/logger.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
 
-import { extractSignals, mergeSignals, buildLeadType, buildLeadClassification, GRADE_ORDER } from './common.js';
+import {
+  extractSignals,
+  mergeSignals,
+  buildLeadType,
+  buildLeadClassification,
+  resolveInvestorClientType,
+  normalizeInvestmentType,
+  normalizeInvestmentGoal,
+  GRADE_ORDER,
+} from './common.js';
 import { partitionBuyerBudgetInputs } from '../../agent/propertyMatch/parsing.js';
 import {
   bumpLeadProfileStats,
@@ -15,6 +24,12 @@ import {
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
 import { notifyClientsOfNewPropertyForSale } from '../../property/propertyClientNotifications.js';
+import { readQualificationAlias, storedFieldForQuestionId, questionIdForStoredField } from '../../professionalAssistant/qualificationFieldAliases.js';
+
+/** Vacant land / lot listings have no bedrooms, bathrooms, parking, or backyard. */
+function isLandType(value) {
+  return /\b(land|lot|acreage|vacant)\b/i.test(String(value || ''));
+}
 
 export const bestGrade = (a, b) =>
   (GRADE_ORDER[a] || 0) >= (GRADE_ORDER[b] || 0) ? a : b;
@@ -81,13 +96,31 @@ export const mergeQualificationForScoring = (formQualification = {}, aiDetails =
   const fq = formQualification || {};
   const ai = aiDetails || {};
   const pick = (key) => (ai[key] && String(ai[key]).trim() ? ai[key] : fq[key]) || null;
+  const investmentType = normalizeInvestmentType(pick('investment_type') || '');
+  const investmentGoal = normalizeInvestmentGoal(pick('investment_goal') || '');
+  const clientType = resolveInvestorClientType({
+    clientType: pick('client_type') || '',
+    motivationReason: pick('motivation_reason') || '',
+    investmentType: investmentType || '',
+    investmentGoal: investmentGoal || '',
+  }) || pick('client_type');
+  const motivation = pick('motivation_reason')
+    || (clientType === 'investor' ? 'investment' : null);
   return {
-    mortgage_status:    pick('mortgage_status'),
-    realtor_status:     pick('realtor_status'),
-    motivation_reason:  pick('motivation_reason'),
-    viewing_readiness:  pick('viewing_readiness'),
-    living_situation:   pick('living_situation'),
-    urgency_readiness:  pick('urgency_readiness'),
+    mortgage_status: pick('mortgage_status'),
+    realtor_status: pick('realtor_status'),
+    motivation_reason: motivation,
+    viewing_readiness: pick('viewing_readiness'),
+    living_situation: pick('living_situation'),
+    urgency_readiness: pick('urgency_readiness'),
+    client_type: clientType,
+    investment_type: investmentType || null,
+    investment_goal: investmentGoal || null,
+    owns_investments: pick('owns_investments'),
+    down_payment_readiness: readQualificationAlias({
+      down_payment_readiness: pick('down_payment_readiness'),
+      down_payment: pick('down_payment'),
+    }, 'down_payment'),
   };
 };
 
@@ -140,12 +173,52 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
 
   let motivationScore = 0;
   const mr = fq.motivation_reason;
-  if (['relocation', 'family_change', 'divorce', 'investment'].includes(mr)) { motivationScore = 10; reasons.push('Motivation: strong'); }
-  else if (['upgrading', 'downsizing'].includes(mr)) { motivationScore = 6; reasons.push('Motivation: medium'); }
-  else if (mr === 'just_exploring') { motivationScore = 0; reasons.push('Motivation: low'); }
-  else if (/relocat|job transfer|divorce|new baby|investment/.test(text)) { motivationScore = 10; reasons.push('Motivation: strong'); }
-  else if (/upgrad(e|ing)|downsiz(e|ing)/.test(text)) { motivationScore = 6; reasons.push('Motivation: medium'); }
-  else if (/just browsing|just looking|just exploring/.test(text)) { motivationScore = 0; reasons.push('Motivation: low'); }
+  const isInvestor = String(fq.client_type || '').toLowerCase() === 'investor' || mr === 'investment';
+  // Investors are scored via investorScore below — do not also award motivation for "investment".
+  if (!isInvestor) {
+    if (['relocation', 'family_change', 'divorce', 'investment'].includes(mr)) { motivationScore = 10; reasons.push('Motivation: strong'); }
+    else if (['upgrading', 'downsizing'].includes(mr)) { motivationScore = 6; reasons.push('Motivation: medium'); }
+    else if (mr === 'just_exploring') { motivationScore = 0; reasons.push('Motivation: low'); }
+    else if (/relocat|job transfer|divorce|new baby|investment/.test(text)) { motivationScore = 10; reasons.push('Motivation: strong'); }
+    else if (/upgrad(e|ing)|downsiz(e|ing)/.test(text)) { motivationScore = 6; reasons.push('Motivation: medium'); }
+    else if (/just browsing|just looking|just exploring/.test(text)) { motivationScore = 0; reasons.push('Motivation: low'); }
+  }
+
+  let investorScore = 0;
+  if (isInvestor) {
+    // Compensates for skipped buyer-only motivation (+10) + living (+5) buckets.
+    investorScore += 6;
+    reasons.push('Client type: investor');
+    const invType = normalizeInvestmentType(fq.investment_type || '');
+    if (invType) {
+      investorScore += 5;
+      reasons.push(`Investment type: ${invType.replace(/_/g, ' ')}`);
+    }
+    const invGoal = normalizeInvestmentGoal(fq.investment_goal || '');
+    if (invGoal === 'both' || invGoal === 'rental_income' || invGoal === 'appreciation') {
+      investorScore += 4;
+      reasons.push(`Investment goal: ${invGoal.replace(/_/g, ' ')}`);
+    } else if (invGoal) {
+      investorScore += 2;
+      reasons.push(`Investment goal: ${invGoal.replace(/_/g, ' ')}`);
+    }
+    const owns = String(fq.owns_investments || '').toLowerCase();
+    if (owns === 'yes') {
+      investorScore += 3;
+      reasons.push('Portfolio: already owns investment properties');
+    } else if (owns === 'no') {
+      investorScore += 1;
+      reasons.push('Portfolio: first investment property');
+    }
+    const dp = String(readQualificationAlias(fq, 'down_payment') || '').toLowerCase();
+    if (/(ready_now|ready now|funds_ready|proof_of_funds|available)/.test(dp)) {
+      investorScore += 2;
+      reasons.push('Capital: down payment / funds ready');
+    } else if (/(within_30|within 30|30 days)/.test(dp)) {
+      investorScore += 1;
+      reasons.push('Capital: funds within 30 days');
+    }
+  }
 
   let viewingScore = 0;
   const vr = fq.viewing_readiness;
@@ -189,7 +262,7 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
 
   const finalScore = Math.min(
     timelineScore + mortgageScore + budgetScore + realtorScore +
-    motivationScore + viewingScore + livingScore + areaScore +
+    motivationScore + investorScore + viewingScore + livingScore + areaScore +
     urgencyScore + engagementScore + contactBoost,
     100
   );
@@ -206,7 +279,7 @@ const calculateAgentScore = ({ message, signals, interactionCount, hasContact, f
     reasons,
     subScores: {
       timelineScore, mortgageScore, budgetScore, realtorScore,
-      motivationScore, viewingScore, livingScore, areaScore,
+      motivationScore, investorScore, viewingScore, livingScore, areaScore,
       urgencyScore, engagementScore, contactBoost,
     },
   };
@@ -365,15 +438,28 @@ export const createLeadRecords = async ({
   formContact,
   aiDetails,
 }) => {
-  const leadType = buildLeadType(leadGrade, intent);
+  const investmentType = normalizeInvestmentType(
+    formContact?.investment_type || aiDetails?.investment_type || '',
+  );
+  const investmentGoal = normalizeInvestmentGoal(
+    formContact?.investment_goal || aiDetails?.investment_goal || '',
+  );
+  const clientType = resolveInvestorClientType({
+    clientType: formContact?.client_type || aiDetails?.client_type || '',
+    motivationReason: formContact?.motivation_reason || aiDetails?.motivation_reason || '',
+    investmentType,
+    investmentGoal,
+  });
+  const leadType = buildLeadType(leadGrade, intent, clientType);
   const signals  = leadMeta.signals || {};
   const now      = new Date();
 
   const sellerPrice = intent === 'sell' ? (formContact?.price || aiDetails?.budget || signals.budget || '') : '';
+  // The intake form's picked area ("Dubai, United Arab Emirates") beats the city parsed from the opening text.
   const locCombined =
-    signals.location ||
     formContact?.location ||
     formContact?.buy_property_location ||
+    signals.location ||
     aiDetails?.property_address ||
     '';
   const { budgetStr: buyerBudgetStr, financingStr: buyerFinancingFromBudget } =
@@ -430,13 +516,22 @@ export const createLeadRecords = async ({
         budget: intent === 'buy' ? budgetBuy : '',
         expected_price: sellerPrice,
         timeline: signals.timeline || '',
-        bedrooms: formContact?.beds || aiDetails?.bedrooms || (signals.beds != null ? String(signals.beds) : ''),
-        bathrooms: formContact?.baths || aiDetails?.bathrooms || (signals.baths != null ? String(signals.baths) : ''),
+        // Land has no bedrooms, bathrooms, parking, or backyard: never save stray values for it.
+        ...((isLandType(formContact?.property_type || aiDetails?.property_type)) ? {
+          bedrooms: '',
+          bathrooms: '',
+          must_have_features: formContact?.must_have_features || '',
+          parking_required: '',
+          backyard_needed: '',
+        } : {
+          bedrooms: formContact?.beds || aiDetails?.bedrooms || (signals.beds != null ? String(signals.beds) : ''),
+          bathrooms: formContact?.baths || aiDetails?.bathrooms || (signals.baths != null ? String(signals.baths) : ''),
+          must_have_features: formContact?.must_have_features || aiDetails?.must_have_features || '',
+          parking_required: formContact?.parking_required || aiDetails?.parking_required || '',
+          backyard_needed: formContact?.backyard_needed || aiDetails?.backyard_needed || '',
+        }),
         square_footage: signals.area || '',
         property_type: formContact?.property_type || aiDetails?.property_type || '',
-        must_have_features: formContact?.must_have_features || aiDetails?.must_have_features || '',
-        parking_required: formContact?.parking_required || aiDetails?.parking_required || '',
-        backyard_needed: formContact?.backyard_needed || aiDetails?.backyard_needed || '',
         school_district_important: formContact?.school_district_important || '',
         images: intent === 'sell' && Array.isArray(formContact?.property_images) ? formContact.property_images : [],
       },
@@ -449,13 +544,48 @@ export const createLeadRecords = async ({
             financingFromSignal ||
             '',
           realtor_status: formContact?.realtor_status || aiDetails?.realtor_status || '',
-          motivation_reason: formContact?.motivation_reason || aiDetails?.motivation_reason || '',
+          motivation_reason:
+            formContact?.motivation_reason
+            || aiDetails?.motivation_reason
+            || (clientType === 'investor' ? 'investment' : '')
+            || '',
           viewing_readiness: formContact?.viewing_readiness || aiDetails?.viewing_readiness || '',
           living_situation: formContact?.living_situation || aiDetails?.living_situation || '',
           urgency_readiness: formContact?.urgency_readiness || aiDetails?.urgency_readiness || '',
           buy_property_location: formContact?.buy_property_location || '',
+          investment_type: investmentType,
+          investment_goal: investmentGoal,
+          owns_investments: formContact?.owns_investments || aiDetails?.owns_investments || '',
+          down_payment_readiness:
+            readQualificationAlias(formContact, 'down_payment')
+            || readQualificationAlias(aiDetails, 'down_payment')
+            || '',
+          market_country: String(formContact?.market_country || '').trim(),
+          market_region: String(formContact?.market_region || '').trim(),
+          market_city: String(formContact?.market_city || '').trim().slice(0, 120),
+          market_country_name: String(formContact?.market_country || '').trim().toLowerCase() === 'other'
+            ? String(formContact?.market_country_name || '').trim().slice(0, 80)
+            : '',
         },
       },
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(clientType === 'investor' || investmentType || investmentGoal
+        ? {
+            template_answers: {
+              ...(investmentType ? { investment_type: investmentType } : {}),
+              ...(investmentGoal ? { investment_goal: investmentGoal } : {}),
+              ...(formContact?.owns_investments
+                ? { owns_investments: formContact.owns_investments }
+                : {}),
+              ...(readQualificationAlias(formContact, 'down_payment')
+                ? {
+                    [questionIdForStoredField('down_payment_readiness')]:
+                      readQualificationAlias(formContact, 'down_payment'),
+                  }
+                : {}),
+            },
+          }
+        : {}),
       source: 'chatbot',
       total_score: leadScore,
     },
@@ -494,6 +624,18 @@ export const createLeadRecords = async ({
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
       professional_type: PROFESSIONAL_TYPE.AGENT,
       repeat_visitor: reusedExisting,
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(investmentType ? { investment_type: investmentType } : {}),
+      ...(investmentGoal ? { investment_goal: investmentGoal } : {}),
+      ...(formContact?.owns_investments
+        ? { owns_investments: formContact.owns_investments }
+        : {}),
+      ...(readQualificationAlias(formContact, 'down_payment')
+        ? {
+            [storedFieldForQuestionId('down_payment')]:
+              readQualificationAlias(formContact, 'down_payment'),
+          }
+        : {}),
     },
     ...(icpFit ? { icp_fit: {
       fit_score: icpFit.fit_score,

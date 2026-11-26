@@ -16,6 +16,7 @@ export {
   communicationInstruction,
   formalityInstruction,
   listingInsideServiceArea,
+  selectChatPropertyMatches,
   replyConductBlock,
   serviceAreaPlaces,
   voiceInstruction,

@@ -1,3 +1,5 @@
+import { isPlaceholderName } from './placeholderName.js';
+
 function trimStr(value) {
   if (value == null) return '';
   return String(value).trim();
@@ -18,15 +20,18 @@ function phoneSatisfies(value) {
 }
 
 /**
- * Mirrors core required fields from settings Personal + Business (basics).
+ * Mirrors the settings sequence: personal is name, email, and phone.
+ * Business is company plus at least one service area.
  * Used by GET /auth/profile and API gates for professionals.
  */
 export function evaluateProfessionalProfileSetup(user, professionalProfile) {
   const p = professionalProfile || {};
-  const first = trimStr(user?.first_name);
-  const last = trimStr(user?.last_name);
+  // The signup stand-in name ("New User") still counts as missing, so Settings asks for the real one.
+  const placeholderName = isPlaceholderName(user?.first_name, user?.last_name);
+  const first = placeholderName ? '' : trimStr(user?.first_name);
+  const last = placeholderName ? '' : trimStr(user?.last_name);
   const email = trimStr(user?.email);
-  const phoneRaw = trimStr(p.phone);
+  const phoneRaw = trimStr(p.phone) || trimStr(user?.phone);
   const company = trimStr(p.company_name);
   const location = trimStr(p.location);
   const targetNeighborhoods = trimStr(p.target_neighborhoods);
@@ -45,8 +50,8 @@ export function evaluateProfessionalProfileSetup(user, professionalProfile) {
 
   const emailOk = EMAIL_RE.test(email);
   const phoneOk = phoneSatisfies(phoneRaw);
-  const personalComplete = first.length > 0 && last.length > 0 && emailOk && phoneOk && company.length > 0;
-  const businessComplete = serviceArea;
+  const personalComplete = first.length > 0 && last.length > 0 && emailOk && phoneOk;
+  const businessComplete = company.length > 0 && serviceArea;
 
   const missingFields = [];
   if (!first) missingFields.push('first_name');

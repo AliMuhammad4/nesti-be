@@ -5,14 +5,18 @@ import ProfessionalCallMinutes from '../../models/ProfessionalCallMinutes.js';
 import VoiceAgentSuggestion from '../../models/VoiceAgentSuggestion.js';
 import { ok, fail } from './adminCommon.js';
 import { adminHasPermission, ADMIN_PERMISSION as P } from '../../constants/adminPermissions.js';
-import { startAdminVoiceCall, startAdminVoicePreview, startAdminLiveKitVoice, sendAdminVoicePreviewTurn, stopAdminVoiceCall } from '../proChat/twilioVoiceService.js';
+import { startAdminVoiceCall, startAdminVoicePreview, startAdminLiveKitVoice, startAdminTestVoice, sendAdminVoicePreviewTurn, spokenGreeting, stopAdminVoiceCall } from '../proChat/twilioVoiceService.js';
 import { normalizeE164 } from '../proChat/voicePhone.js';
 import { createPrivateRecordingReadUrl, isPrivateRecordingsConfigured, uploadPrivateRecordingBuffer } from '../media/r2Client.js';
 import VoiceAgentSalesSetting from '../../models/VoiceAgentSalesSetting.js';
-import { allowedVoice, bargeIn, responseEagerness, salesSettingsView, silenceSeconds, speechSpeed } from '../proChat/voiceSalesBrief.js';
+import { allowedVoice, bargeIn, invalidateSalesSettingsCache, responseEagerness, salesSettingsView, silenceSeconds, speechSpeed, sttModel, ttsModel, ttsVoice, voiceEngine } from '../proChat/voiceSalesBrief.js';
 import { storeBrowserCallRecording } from '../proChat/recordingIngestionService.js';
 import { recordAdminAudit } from './adminAuditService.js';
 import { decideVoiceSuggestion } from './adminVoiceActionService.js';
+import { testCallMinutes } from './voiceTestMinutesService.js';
+import { languageMode } from '../proChat/callLanguage.js';
+import { questionOverrides } from '../proChat/salesPipeline.js';
+import { redispatchRaviAgent } from '../proChat/raviAgentDispatchService.js';
 
 function canRead(user, targetType) {
   return adminHasPermission(user, targetType === 'client' ? P.CLIENTS_READ : P.LEADS_READ);
@@ -253,6 +257,62 @@ export async function adminGetSalesSettingsService(actorUser) {
   return ok(salesSettingsView(doc));
 }
 
+const TEST_ROLES = ['client', 'agent', 'broker', 'lawyer'];
+
+// Admin-only browser test call with Ravi. Optional overrides let the admin
+// hear unsaved voice settings; nothing is saved to settings.
+function testCallOverrides(body) {
+  const overrides = {
+    voice_engine: voiceEngine(body?.voice_engine),
+    voice: allowedVoice(body?.voice, 'marin'),
+    stt_model: sttModel(body?.stt_model),
+    tts_model: ttsModel(body?.tts_model),
+    tts_voice: ttsVoice(body?.tts_voice, body?.tts_model),
+  };
+  if (body?.language_mode !== undefined) overrides.language_mode = languageMode(body.language_mode);
+  if (body?.speech_speed !== undefined) overrides.speech_speed = speechSpeed(body.speech_speed);
+  if (body?.vad_eagerness !== undefined) overrides.vad_eagerness = responseEagerness(body.vad_eagerness);
+  if (body?.barge_in !== undefined) overrides.barge_in = bargeIn(body.barge_in);
+  return overrides;
+}
+
+export async function adminStartTestVoiceService(body, actorUser) {
+  if (!canEditSalesSettings(actorUser)) return fail(403, 'Missing write permission');
+  const role = TEST_ROLES.includes(String(body?.role || '')) ? String(body.role) : 'client';
+  return startAdminTestVoice({ actorUser, role, overrides: testCallOverrides(body) });
+}
+
+// Ravi hasn't joined the admin's open test call yet: ask once more.
+export async function adminRedispatchTestVoiceService(callId, body, actorUser) {
+  if (!canEditSalesSettings(actorUser)) return fail(403, 'Missing write permission');
+  if (!/^[a-f0-9]{24}$/i.test(String(callId || ''))) return fail(404, 'Test call not found');
+  const actorId = String(actorUser?._id || actorUser?.id || 'admin');
+  const call = await ProfessionalCall.findOne({ _id: callId, voice_target_type: 'test', caller_id: actorId })
+    .select('room_name status')
+    .lean();
+  if (!call) return fail(404, 'Test call not found');
+  if (call.status !== 'active') return fail(409, 'This test call has ended');
+  const role = TEST_ROLES.includes(String(body?.role || '')) ? String(body.role) : 'client';
+  const sent = await redispatchRaviAgent({
+    roomName: call.room_name,
+    callId,
+    role,
+    greeting: spokenGreeting(),
+    test: testCallOverrides(body),
+  });
+  if (!sent.ok) return fail(503, sent.message);
+  return ok({ redispatched: true });
+}
+
+// Minutes for an admin test call (kept in memory, not saved to leads).
+export async function adminTestCallMinutesService(callId, query, actorUser) {
+  if (!canEditSalesSettings(actorUser)) return fail(403, 'Missing write permission');
+  const role = TEST_ROLES.includes(String(query?.role || '')) ? String(query.role) : 'client';
+  const result = await testCallMinutes(callId, { role, retry: query?.retry === '1' });
+  if (!result) return fail(404, 'Test call not found');
+  return ok(result);
+}
+
 export async function adminSaveSalesSettingsService(body, actorUser) {
   if (!canEditSalesSettings(actorUser)) return fail(403, 'Missing write permission');
   const voice = allowedVoice(body?.voice, 'marin');
@@ -265,27 +325,31 @@ export async function adminSaveSalesSettingsService(body, actorUser) {
         vad_eagerness: responseEagerness(body?.vad_eagerness),
         barge_in: bargeIn(body?.barge_in),
         silence_seconds: silenceSeconds(body?.silence_seconds),
+        language_mode: languageMode(body?.language_mode),
+        voice_engine: voiceEngine(body?.voice_engine),
+        stt_model: sttModel(body?.stt_model),
+        tts_model: ttsModel(body?.tts_model),
+        tts_voice: ttsVoice(body?.tts_voice, body?.tts_model),
         client_services: clip(body?.client_services),
         agent_services: clip(body?.agent_services),
         broker_services: clip(body?.broker_services),
         lawyer_services: clip(body?.lawyer_services),
+        ...(body?.client_questions !== undefined ? { client_questions: questionOverrides('client', body.client_questions) } : {}),
+        ...(body?.agent_questions !== undefined ? { agent_questions: questionOverrides('agent', body.agent_questions) } : {}),
+        ...(body?.broker_questions !== undefined ? { broker_questions: questionOverrides('broker', body.broker_questions) } : {}),
+        ...(body?.lawyer_questions !== undefined ? { lawyer_questions: questionOverrides('lawyer', body.lawyer_questions) } : {}),
       },
       $setOnInsert: { key: 'sales' },
     },
     { upsert: true, returnDocument: 'after' },
   ).lean();
+  invalidateSalesSettingsCache();
   return ok(salesSettingsView(doc));
 }
 
 async function cloneUploadedVoice(buffer, mime, previousId) {
-  const key = String(process.env.ELEVENLABS_API_KEY || '').trim();
-  if (!key) return { id: '', error: 'Recording saved. The test call keeps the built-in voice until a cloned voice is connected.' };
-  if (previousId) {
-    await fetch(`https://api.elevenlabs.io/v1/voices/${previousId}`, {
-      method: 'DELETE',
-      headers: { 'xi-api-key': key },
-    }).catch(() => {});
-  }
+  const key = String(process.env.ELEVEN_API_KEY || process.env.ELEVENLABS_API_KEY || '').trim();
+  if (!key) return { id: previousId || '', error: 'Recording saved. The test call keeps the built-in voice until a cloned voice is connected.' };
   const body = new FormData();
   body.append('name', 'Nesti Ravi');
   body.append('files', new Blob([buffer], { type: mime || 'audio/webm' }), 'ravi-voice.webm');
@@ -296,7 +360,15 @@ async function cloneUploadedVoice(buffer, mime, previousId) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload?.voice_id) {
-    return { id: '', error: payload?.detail?.message || payload?.detail || 'The voice sample could not be cloned.' };
+    // Keep the voice that was working; only a new clone replaces it.
+    const detail = payload?.detail?.message || payload?.detail;
+    return { id: previousId || '', error: typeof detail === 'string' && detail ? detail : 'The voice sample could not be cloned.' };
+  }
+  if (previousId && previousId !== String(payload.voice_id)) {
+    await fetch(`https://api.elevenlabs.io/v1/voices/${previousId}`, {
+      method: 'DELETE',
+      headers: { 'xi-api-key': key },
+    }).catch(() => {});
   }
   return { id: String(payload.voice_id), error: '' };
 }
@@ -323,5 +395,6 @@ export async function adminSaveSalesVoiceSampleService(file, actorUser) {
     },
     { upsert: true, returnDocument: 'after' },
   ).lean();
+  invalidateSalesSettingsCache();
   return ok(salesSettingsView(doc));
 }

@@ -429,7 +429,7 @@ export function finishLawyerReply(reply, { userMessage = '', previousReply = '',
     && CLOSING_LOOP.test(previousReply)
     && (CLOSING_LOOP.test(original) || lawyerReplyDrifted(original));
   let text = original;
-  if (stock) {
+  if (stock && !setting?.applied) {
     if (closingRefusal && CLOSING_LOOP.test(original)) text = moveOffClosingLoop(original, userMessage, previousReply, setting);
     else if (closingRefusal) text = matterFollowUp(setting, userMessage);
     else if (lawyerReplyDrifted(original)) {

@@ -1,3 +1,5 @@
+import { preserveLibraryElements } from './preserveLibraryElements.js';
+
 export const LAWYER_NEWCOMER_TEMPLATE_ID = 'lawyer-newcomer';
 export const LAWYER_NEWCOMER_DESIGN_VERSION = 6;
 
@@ -409,9 +411,10 @@ export function canonicalizeLawyerNewcomerDraft(draft, generated = {}) {
   }
 
   const currentVersion = lawyerNewcomerDesignVersion(draft);
-  let blocks = (Array.isArray(draft?.blocks) ? draft.blocks : [])
+  const prepared = (Array.isArray(draft?.blocks) ? draft.blocks : [])
     .filter(Boolean)
-    .map((block) => normalizeBlockShape(clone(block)))
+    .map((block) => normalizeBlockShape(clone(block)));
+  let blocks = prepared
     .filter((block) => LAWYER_NEWCOMER_BLOCK_TYPES.includes(block.type));
   const shouldRestoreCanonicalOrder = currentVersion < LAWYER_NEWCOMER_DESIGN_VERSION
     && isLegacyDefaultScaffold(blocks);
@@ -457,6 +460,6 @@ export function canonicalizeLawyerNewcomerDraft(draft, generated = {}) {
       id: LAWYER_NEWCOMER_TEMPLATE_ID,
       version: String(LAWYER_NEWCOMER_DESIGN_VERSION),
     },
-    blocks: normalizeBlockIds(blocks),
+    blocks: preserveLibraryElements(prepared, normalizeBlockIds(blocks)),
   };
 }

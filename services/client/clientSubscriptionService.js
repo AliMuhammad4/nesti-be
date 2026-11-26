@@ -1,139 +1,67 @@
 import ClientSubscription from '../../models/ClientSubscription.js';
 import User from '../../models/User.js';
-import { getClientPlan } from './plans.js';
+import {
+  canonicalClientTier,
+  getClientPlan,
+  isSameClientTier,
+} from './plans.js';
 import { getStripeClient } from '../billing/stripeClient.js';
+import {
+  buildCheckoutIdempotencyKey,
+  cancelIncompleteStripeSubscriptions,
+  deduplicateNewCheckoutSession,
+  expireLeftoverOpenCheckoutSessions,
+} from '../billing/subscriptionShared.js';
+import { getOpenPayableInvoiceForCustomer } from '../billing/subscriptionInvoiceService.js';
+import { chargeForPlan, createRecurringPrice, normalizeBillingPeriod, recurringPriceData } from '../billing/planPrices.js';
+import {
+  BLOCKING_CLIENT_CHECKOUT_STATUSES,
+  CLEANABLE_CLIENT_STRIPE_STATUSES,
+  appendPlanChange,
+  buildClientCheckoutMetadata,
+  buildClientStripeSyncUpdate,
+  buildScheduleItemsFromSubscription,
+  buildSinglePriceScheduleItem,
+  clientHttpError,
+  clientSubscriptionEndedError,
+  getClientFrontendOrigin,
+  getClientTierRank,
+  getStripeSubscriptionPeriodEnd,
+  getStripeSubscriptionPeriodStart,
+  hasOpenClientCheckoutConflict,
+  invoiceRequiresPayment,
+  isClientPeriodEnded,
+  isClientStripeSubscription,
+  isClientSubscriptionActive,
+  isClientSubscriptionAlreadyEnded,
+  isStripeSubscriptionMissing,
+  normalizeStripeId,
+  openClientSubscriptionConflictError,
+  presentChangeInvoice,
+  presentClientSubscription,
+  presentPaidClientInvoice,
+  shouldApplyIncomingClientStripeSubscription,
+  stripeTimestampFromDate,
+  toIsoDate,
+} from './clientSubscriptionHelpers.js';
 
-// Cache for dynamically created prices
-const priceCache = new Map();
-const ACTIVE_ACCESS_STATUSES = new Set(['active', 'trialing', 'past_due']);
-const CLIENT_TIER_ORDER = {
-  basic: 1,
-  standard: 2,
-  pro: 3,
-};
-
-function toSafeDate(value) {
-  if (value === null || value === undefined || value === '') return null;
-
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    // Stripe timestamps are usually unix seconds; support ms as fallback.
-    const ms = value > 1e12 ? value : value * 1000;
-    const date = new Date(ms);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      const ms = numeric > 1e12 ? numeric : numeric * 1000;
-      const date = new Date(ms);
-      return Number.isNaN(date.getTime()) ? null : date;
-    }
-    const date = new Date(trimmed);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  return null;
-}
-
-function toIsoDate(value) {
-  if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-function toDateFromUnix(seconds) {
-  const value = Number(seconds || 0);
-  if (!Number.isFinite(value) || value <= 0) return null;
-  const date = new Date(value * 1000);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function stripeTimestampFromDate(value) {
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : Math.floor(date.getTime() / 1000);
-}
-
-function normalizeStripeId(value) {
-  if (!value) return '';
-  if (typeof value === 'string') return value;
-  return String(value.id || '');
-}
-
-function getClientTierRank(tier) {
-  return CLIENT_TIER_ORDER[String(tier || '').trim().toLowerCase()] || 0;
-}
-
-function getStripeSubscriptionPeriodStart(stripeSubscription = {}) {
-  const items = stripeSubscription?.items?.data || [];
-  let earliestStart = null;
-
-  for (const item of items) {
-    const start = toDateFromUnix(item?.current_period_start);
-    if (start && (!earliestStart || start < earliestStart)) earliestStart = start;
-  }
-
-  if (earliestStart) return earliestStart;
-  return toDateFromUnix(stripeSubscription.current_period_start) || null;
-}
-
-function getStripeSubscriptionPeriodEnd(stripeSubscription = {}) {
-  const items = stripeSubscription?.items?.data || [];
-  let latestEnd = null;
-
-  for (const item of items) {
-    const end = toDateFromUnix(item?.current_period_end);
-    if (end && (!latestEnd || end > latestEnd)) latestEnd = end;
-  }
-
-  if (latestEnd) return latestEnd;
-  return (
-    toDateFromUnix(stripeSubscription.current_period_end)
-    || toDateFromUnix(stripeSubscription.cancel_at)
-    || toDateFromUnix(stripeSubscription.ended_at)
-    || null
-  );
-}
-
-function buildScheduleItemsFromSubscription(stripeSubscription = {}) {
-  return (stripeSubscription.items?.data || [])
-    .map((item) => ({
-      price: normalizeStripeId(item.price),
-      quantity: item.quantity || 1,
-    }))
-    .filter((item) => item.price);
-}
-
-function buildSinglePriceScheduleItem(priceId) {
-  return [{ price: priceId, quantity: 1 }];
-}
-
-function invoiceRequiresPayment(invoice) {
-  if (!invoice || typeof invoice !== 'object') return false;
-  const status = String(invoice.status || '').toLowerCase();
-  const amountRemaining = Number(invoice.amount_remaining ?? invoice.amount_due ?? 0);
-  return ['draft', 'open', 'uncollectible'].includes(status) && amountRemaining > 0;
-}
-
-function formatChangeInvoiceAmount(amount, currency = 'usd') {
-  const value = Number(amount || 0);
-  const normalizedCurrency = String(currency || 'usd').trim().toUpperCase() || 'USD';
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: normalizedCurrency,
-      maximumFractionDigits: value % 100 === 0 ? 0 : 2,
-    }).format(value / 100);
-  } catch {
-    return `${normalizedCurrency} ${(value / 100).toFixed(value % 100 === 0 ? 0 : 2)}`;
-  }
-}
+export {
+  BLOCKING_CLIENT_CHECKOUT_STATUSES,
+  CLEANABLE_CLIENT_STRIPE_STATUSES,
+  CLIENT_PAST_DUE_GRACE_MS,
+  CLIENT_PERIOD_END_GRACE_MS,
+  LIVE_CLIENT_STRIPE_STATUSES,
+  TERMINAL_CLIENT_STRIPE_STATUSES,
+  getClientAccessState,
+  getClientFrontendOrigin,
+  getClientPastDueGraceEndsAt,
+  getClientPaymentMessage,
+  isClientPastDueWithinGrace,
+  isClientSubscriptionActive,
+  presentClientSubscription,
+  shouldApplyIncomingClientStripeSubscription,
+  shouldRefreshClientSubscriptionFromStripe,
+} from './clientSubscriptionHelpers.js';
 
 async function voidOrDeleteUnpaidInvoice(stripe, invoice) {
   if (!invoiceRequiresPayment(invoice)) return;
@@ -184,87 +112,79 @@ async function getOrCreateClientSubscriptionSchedule(stripe, stripeSubscription,
   });
 }
 
-async function getOrCreateStripePrice(stripe, plan) {
-  const cacheKey = `client_${plan.tier}`;
-  
-  if (priceCache.has(cacheKey)) {
-    return priceCache.get(cacheKey);
-  }
-
-  try {
-    const productName = `Nesti Client ${plan.name}`;
-    
-    const products = await stripe.products.search({
-      query: `name:'${productName}'`,
-      limit: 1,
-    });
-
-    let product;
-    if (products.data.length > 0) {
-      product = products.data[0];
-    } else {
-      product = await stripe.products.create({
-        name: productName,
-        description: `${plan.name} tier client subscription`,
-        metadata: {
-          subscription_type: 'client',
-          tier: plan.tier,
-        },
-      });
-    }
-
-    const prices = await stripe.prices.list({
-      product: product.id,
-      active: true,
-      limit: 1,
-    });
-
-    let price;
-    if (prices.data.length > 0) {
-      price = prices.data[0];
-    } else {
-      price = await stripe.prices.create({
-        product: product.id,
-        unit_amount: plan.amount,
-        currency: plan.currency,
-        recurring: {
-          interval: plan.interval,
-        },
-        metadata: {
-          subscription_type: 'client',
-          tier: plan.tier,
-        },
-      });
-    }
-
-    priceCache.set(cacheKey, price.id);
-    return price.id;
-  } catch (error) {
-    console.error('Error creating/fetching Stripe price:', error);
-    throw new Error('Failed to prepare subscription price');
-  }
+async function priceForClientPlan(stripe, plan, billingPeriod) {
+  const charge = chargeForPlan(plan, billingPeriod);
+  const price = await createRecurringPrice(stripe, {
+    name: `Nesti ${plan.name}`,
+    amount: charge.amount,
+    currency: charge.currency,
+    interval: charge.interval,
+    metadata: {
+      subscription_type: 'client',
+      tier: plan.tier,
+      billing_period: charge.billingPeriod,
+    },
+  });
+  return { price, charge };
 }
 
-export async function createClientCheckoutSession(userId, tier) {
+async function listClientStripeSubscriptions(stripe, customerId) {
+  const normalizedCustomerId = String(customerId || '').trim();
+  if (!normalizedCustomerId) return [];
+  const result = await stripe.subscriptions.list({
+    customer: normalizedCustomerId,
+    status: 'all',
+    limit: 20,
+  });
+  return (result.data || []).filter(isClientStripeSubscription);
+}
+
+async function listBlockingClientStripeSubscriptions(stripe, customerId) {
+  const subscriptions = await listClientStripeSubscriptions(stripe, customerId);
+  return subscriptions.filter((sub) => (
+    BLOCKING_CLIENT_CHECKOUT_STATUSES.has(String(sub.status || '').trim().toLowerCase())
+  ));
+}
+
+export async function assertClientCanStartCheckout(existingSubscription, stripe, customerId) {
+  const cancelledSubscriptionIds = (stripe && customerId)
+    ? await cancelIncompleteStripeSubscriptions(stripe, customerId, isClientStripeSubscription)
+    : [];
+
+  if (existingSubscription) {
+    await expireCanceledClientSubscriptionIfNeeded(existingSubscription);
+    const status = String(existingSubscription.status || '').trim().toLowerCase();
+    const skipLocalIncomplete = status === 'incomplete' && Boolean(stripe && customerId);
+    if (!skipLocalIncomplete && hasOpenClientCheckoutConflict(existingSubscription)) {
+      throw openClientSubscriptionConflictError(existingSubscription.status);
+    }
+  }
+
+  if (!stripe || !customerId) return cancelledSubscriptionIds;
+  const blocking = await listBlockingClientStripeSubscriptions(stripe, customerId);
+  if (blocking.length) {
+    throw openClientSubscriptionConflictError(blocking[0]?.status);
+  }
+  return cancelledSubscriptionIds;
+}
+
+export async function createClientCheckoutSession(userId, tier, billingPeriod) {
   const plan = getClientPlan(tier);
   if (!plan) {
-    throw new Error(`Invalid client tier: ${tier}`);
+    throw clientHttpError(`Invalid client tier: ${tier}`, 400, 'INVALID_CLIENT_TIER');
   }
+  const period = normalizeBillingPeriod(billingPeriod);
 
   const user = await User.findById(userId);
   if (!user) {
-    throw new Error('User not found');
+    throw clientHttpError('User not found', 404, 'USER_NOT_FOUND');
   }
 
   const existingSubscription = await ClientSubscription.findOne({ user_id: userId });
-  if (existingSubscription && existingSubscription.status === 'active') {
-    throw new Error('User already has an active client subscription');
-  }
 
   const stripe = getStripeClient();
-  
-  const priceId = await getOrCreateStripePrice(stripe, plan);
-  
+  const charge = chargeForPlan(plan, period);
+
   let customerId = existingSubscription?.stripe_customer_id;
 
   if (!customerId) {
@@ -279,52 +199,73 @@ export async function createClientCheckoutSession(userId, tier) {
     customerId = customer.id;
   }
 
+  const frontendOrigin = getClientFrontendOrigin();
+  const metadata = buildClientCheckoutMetadata(userId, plan, charge);
+  const checkoutOptions = {
+    userId: String(userId),
+    subscriptionType: 'client',
+    planKey: plan.tier,
+    billingPeriod: charge.billingPeriod,
+  };
+  const reusableSession = await expireLeftoverOpenCheckoutSessions(stripe, customerId, checkoutOptions);
+  if (reusableSession?.url) {
+    return {
+      sessionId: reusableSession.id,
+      sessionUrl: reusableSession.url,
+    };
+  }
+
+  const cancelledSubscriptionIds = await assertClientCanStartCheckout(
+    existingSubscription,
+    stripe,
+    customerId,
+  );
+
+  const openedWhileCancelling = await expireLeftoverOpenCheckoutSessions(stripe, customerId, checkoutOptions);
+  if (openedWhileCancelling?.url) {
+    return {
+      sessionId: openedWhileCancelling.id,
+      sessionUrl: openedWhileCancelling.url,
+    };
+  }
+
   const session = await stripe.checkout.sessions.create({
     customer: customerId,
     mode: 'subscription',
     payment_method_types: ['card'],
     line_items: [
       {
-        price: priceId,
+        price_data: recurringPriceData({
+          name: `Nesti ${plan.name}`,
+          amount: charge.amount,
+          currency: charge.currency,
+          interval: charge.interval,
+          description: charge.billingPeriod === 'year' ? 'Billed once a year' : 'Billed monthly',
+        }),
         quantity: 1,
       },
     ],
-    success_url: `${process.env.FRONTEND_URL}/client-dashboard/subscription?billing=success&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.FRONTEND_URL}/client-dashboard/subscription?billing=cancelled`,
-    metadata: {
-      user_id: String(userId),
-      subscription_type: 'client',
-      tier,
-    },
+    success_url: `${frontendOrigin}/client-dashboard/subscription?billing=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${frontendOrigin}/client-dashboard/subscription?billing=cancelled`,
+    metadata,
     subscription_data: {
-      metadata: {
-        user_id: String(userId),
-        subscription_type: 'client',
-        tier,
-      },
+      metadata,
     },
+  }, {
+    idempotencyKey: buildCheckoutIdempotencyKey({
+      kind: 'client-checkout',
+      userId,
+      planKey: plan.tier,
+      billingPeriod: charge.billingPeriod,
+      leftoverSubscriptionIds: cancelledSubscriptionIds,
+    }),
   });
 
+  const deduped = await deduplicateNewCheckoutSession(stripe, customerId, session, checkoutOptions);
   return {
-    sessionId: session.id,
-    sessionUrl: session.url,
+    sessionId: deduped.id,
+    sessionUrl: deduped.url,
   };
-}
-
-function isClientPeriodEnded(subscription) {
-  if (!subscription?.current_period_end) return false;
-  const periodEnd = new Date(subscription.current_period_end);
-  return !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() <= Date.now();
-}
-
-export function isClientSubscriptionActive(subscription) {
-  if (!subscription) return false;
-  const status = String(subscription.status || '').trim().toLowerCase();
-  if (!ACTIVE_ACCESS_STATUSES.has(status)) return false;
-  if (Boolean(subscription.cancel_at_period_end) && isClientPeriodEnded(subscription)) {
-    return false;
-  }
-  return true;
 }
 
 export async function expireCanceledClientSubscriptionIfNeeded(subscription) {
@@ -336,7 +277,7 @@ export async function expireCanceledClientSubscriptionIfNeeded(subscription) {
   const terminalStatus = status === 'canceled' || status === 'cancelled' || status === 'incomplete_expired';
   const shouldExpire =
     terminalStatus ||
-    (cancelAtPeriodEnd && periodEnded && ACTIVE_ACCESS_STATUSES.has(status));
+    (cancelAtPeriodEnd && periodEnded && ['active', 'trialing', 'past_due'].includes(status));
 
   if (!shouldExpire) return subscription;
 
@@ -403,41 +344,26 @@ export async function getClientSubscriptionPresentationForUser(userId, { refresh
   }
 
   subscription = await expireCanceledClientSubscriptionIfNeeded(subscription);
-  return subscription?.toObject ? subscription.toObject() : subscription;
-}
-
-function formatInvoiceAmount(amount, currency = 'usd') {
-  const value = Number(amount || 0);
-  const normalizedCurrency = String(currency || 'usd').trim().toUpperCase() || 'USD';
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: normalizedCurrency,
-      maximumFractionDigits: value % 100 === 0 ? 0 : 2,
-    }).format(value / 100);
-  } catch {
-    return `${normalizedCurrency} ${(value / 100).toFixed(value % 100 === 0 ? 0 : 2)}`;
+  const presented = presentClientSubscription(subscription);
+  const status = String(presented?.status || subscription?.status || '').trim().toLowerCase();
+  if (presented && (status === 'past_due' || status === 'unpaid')) {
+    const openInvoice = await getOpenPayableInvoiceForCustomer({
+      customerId: subscription.stripe_customer_id,
+      subscriptionId: subscription.stripe_subscription_id,
+      latestInvoiceId: subscription.latest_invoice_id || subscription.stripe_invoice_id,
+    });
+    if (openInvoice?.hostedInvoiceUrl) {
+      presented.payment_action_url = openInvoice.hostedInvoiceUrl;
+      presented.payment_action_label = 'Pay now / Update payment method';
+      presented.open_invoice = {
+        id: openInvoice.id,
+        display_amount_due: openInvoice.displayAmountDue,
+        currency: openInvoice.currency,
+        status: openInvoice.status,
+      };
+    }
   }
-}
-
-function buildClientInvoiceDescription(invoice = {}, subscription = null) {
-  const lineDescriptions = Array.isArray(invoice?.lines?.data)
-    ? invoice.lines.data
-        .map((line) => String(line?.description || '').trim())
-        .filter(Boolean)
-    : [];
-  if (lineDescriptions.length > 0) return lineDescriptions.join(' + ');
-
-  const directDescription = String(invoice?.description || '').trim();
-  if (directDescription) return directDescription;
-
-  const tier = String(subscription?.tier || '').trim().toLowerCase();
-  const plan = tier ? getClientPlan(tier) : null;
-  if (plan?.name && plan?.amount) {
-    return `1 × ${plan.name.toLowerCase()} (${formatInvoiceAmount(plan.amount, plan.currency)} / month)`;
-  }
-  if (plan?.name) return `1 × ${plan.name.toLowerCase()} plan`;
-  return 'Subscription payment';
+  return presented;
 }
 
 export async function listClientPaidInvoicesForUser(userId, limit = 24) {
@@ -452,155 +378,128 @@ export async function listClientPaidInvoicesForUser(userId, limit = 24) {
     limit: Math.min(Math.max(Number(limit) || 24, 1), 100),
   });
 
-  return result.data.map((invoice) => ({
-    id: invoice.id,
-    number: invoice.number || invoice.id,
-    amountPaid: invoice.amount_paid,
-    currency: invoice.currency || 'usd',
-    displayAmount: formatInvoiceAmount(invoice.amount_paid, invoice.currency),
-    status: invoice.status,
-    createdAt: invoice.created ? new Date(invoice.created * 1000).toISOString() : null,
-    periodStart: invoice.period_start ? new Date(invoice.period_start * 1000).toISOString() : null,
-    periodEnd: invoice.period_end ? new Date(invoice.period_end * 1000).toISOString() : null,
-    hostedInvoiceUrl: invoice.hosted_invoice_url || '',
-    invoicePdf: invoice.invoice_pdf || '',
-    description: buildClientInvoiceDescription(invoice, subscription),
-    billingReason: invoice.billing_reason || '',
-  }));
+  // $0 trial invoices are not payments; keep them out of the paid history.
+  return result.data
+    .filter((invoice) => Number(invoice.amount_paid || 0) > 0)
+    .map((invoice) => presentPaidClientInvoice(invoice, subscription));
 }
 
-export async function changeClientSubscriptionPlan(userId, tier) {
-  const plan = getClientPlan(tier);
-  if (!plan) {
-    return { ok: false, code: 400, message: 'Invalid client subscription tier.' };
+async function recordImmediatePlanChange(synced, subscription, { currentTier, targetTier, type }) {
+  const set = {
+    pending_tier: '',
+    pending_tier_effective_at: null,
+    stripe_subscription_schedule_id: '',
+  };
+  if (type === 'upgrade') {
+    set.metadata = appendPlanChange(synced.metadata || subscription.metadata, {
+      from: currentTier,
+      to: targetTier,
+      type: 'upgrade',
+      at: new Date().toISOString(),
+    });
   }
+  await ClientSubscription.updateOne({ _id: synced._id }, { $set: set });
+  return presentClientSubscription(await ClientSubscription.findById(synced._id).lean());
+}
 
-  let subscription = await ClientSubscription.findOne({ user_id: userId });
-  subscription = await expireCanceledClientSubscriptionIfNeeded(subscription);
-  if (!subscription || !isClientSubscriptionActive(subscription)) {
-    return {
-      ok: false,
-      code: 409,
-      message: 'No active client subscription to change. Subscribe to a plan first.',
-    };
-  }
+async function upgradeClientSubscriptionPlan({
+  stripe,
+  subscription,
+  stripeSubscription,
+  subscriptionItemId,
+  priceId,
+  userId,
+  currentTier,
+  targetTier,
+  plan,
+}) {
+  await clearClientPendingScheduleIfAny(stripe, subscription, normalizeStripeId(stripeSubscription.schedule));
 
-  if (!subscription.stripe_subscription_id) {
-    return { ok: false, code: 404, message: 'No Stripe subscription found for this client account.' };
-  }
-
-  const currentTier = String(subscription.tier || '').trim().toLowerCase();
-  const targetTier = String(plan.tier || '').trim().toLowerCase();
-  if (currentTier === targetTier) {
-    return { ok: false, code: 400, message: 'You are already on this plan.' };
-  }
-
-  const currentTierRank = getClientTierRank(currentTier);
-  const targetTierRank = getClientTierRank(targetTier);
-  if (!currentTierRank || !targetTierRank) {
-    return { ok: false, code: 400, message: 'Unable to compare client subscription plans.' };
-  }
-
-  const stripe = getStripeClient();
-  const priceId = await getOrCreateStripePrice(stripe, plan);
-  const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id, {
+  const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+    items: [{ id: subscriptionItemId, price: priceId }],
+    proration_behavior: 'always_invoice',
+    payment_behavior: 'pending_if_incomplete',
+    cancel_at_period_end: false,
     expand: ['latest_invoice'],
+    metadata: {
+      user_id: String(userId),
+      subscription_type: 'client',
+      tier: targetTier,
+    },
   });
-  const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
-  if (!subscriptionItemId) {
-    return { ok: false, code: 500, message: 'Unable to read subscription items from Stripe.' };
-  }
 
-  if (targetTierRank > currentTierRank) {
-    await clearClientPendingScheduleIfAny(stripe, subscription, normalizeStripeId(stripeSubscription.schedule));
-
-    const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-      items: [{ id: subscriptionItemId, price: priceId }],
-      proration_behavior: 'always_invoice',
-      payment_behavior: 'pending_if_incomplete',
-      expand: ['latest_invoice'],
-      metadata: {
-        user_id: String(userId),
-        subscription_type: 'client',
-        tier: targetTier,
-      },
-    });
-
-    const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object'
-      ? updated.latest_invoice
-      : null;
-
-    const synced = await syncClientStripeSubscription(updated);
-    await ClientSubscription.updateOne(
-      { _id: synced._id },
-      {
-        $set: {
-          pending_tier: '',
-          pending_tier_effective_at: null,
-          stripe_subscription_schedule_id: '',
-        },
-      },
-    );
-
-    return {
-      ok: true,
-      changeType: 'upgrade',
-      subscription: await ClientSubscription.findById(synced._id).lean(),
-      planName: plan.name,
-      invoice: invoice
-        ? {
-            id: invoice.id,
-            status: invoice.status,
-            hostedInvoiceUrl: invoice.hosted_invoice_url || '',
-            invoicePdf: invoice.invoice_pdf || '',
-            amountDue: invoice.amount_due,
-            amountPaid: invoice.amount_paid,
-            displayAmountDue: formatChangeInvoiceAmount(invoice.amount_due, invoice.currency),
-          }
-        : null,
-    };
-  }
-
-  const latestInvoice = stripeSubscription.latest_invoice && typeof stripeSubscription.latest_invoice === 'object'
-    ? stripeSubscription.latest_invoice
+  const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object'
+    ? updated.latest_invoice
     : null;
-  if (invoiceRequiresPayment(latestInvoice) && String(latestInvoice.billing_reason || '') === 'subscription_update') {
-    await clearClientPendingScheduleIfAny(stripe, subscription, normalizeStripeId(stripeSubscription.schedule));
-    await voidOrDeleteUnpaidInvoice(stripe, latestInvoice);
 
-    const restored = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-      cancel_at_period_end: false,
-      items: [{ id: subscriptionItemId, price: priceId }],
-      proration_behavior: 'none',
-      payment_behavior: 'allow_incomplete',
-      expand: ['latest_invoice'],
-      metadata: {
-        user_id: String(userId),
-        subscription_type: 'client',
-        tier: targetTier,
-      },
-    });
+  const synced = await syncClientStripeSubscription(updated);
+  const presented = await recordImmediatePlanChange(synced, subscription, {
+    currentTier,
+    targetTier,
+    type: 'upgrade',
+  });
 
-    const synced = await syncClientStripeSubscription(restored);
-    await ClientSubscription.updateOne(
-      { _id: synced._id },
-      {
-        $set: {
-          pending_tier: '',
-          pending_tier_effective_at: null,
-          stripe_subscription_schedule_id: '',
-        },
-      },
-    );
+  return {
+    ok: true,
+    changeType: 'upgrade',
+    subscription: presented,
+    planName: plan.name,
+    invoice: presentChangeInvoice(invoice),
+  };
+}
 
-    return {
-      ok: true,
-      changeType: 'revert_unpaid_upgrade',
-      subscription: await ClientSubscription.findById(synced._id).lean(),
-      planName: plan.name,
-    };
-  }
+async function revertUnpaidClientUpgrade({
+  stripe,
+  subscription,
+  stripeSubscription,
+  latestInvoice,
+  subscriptionItemId,
+  priceId,
+  userId,
+  targetTier,
+  plan,
+}) {
+  await clearClientPendingScheduleIfAny(stripe, subscription, normalizeStripeId(stripeSubscription.schedule));
+  await voidOrDeleteUnpaidInvoice(stripe, latestInvoice);
 
+  const restored = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+    cancel_at_period_end: false,
+    items: [{ id: subscriptionItemId, price: priceId }],
+    proration_behavior: 'none',
+    payment_behavior: 'allow_incomplete',
+    expand: ['latest_invoice'],
+    metadata: {
+      user_id: String(userId),
+      subscription_type: 'client',
+      tier: targetTier,
+    },
+  });
+
+  const synced = await syncClientStripeSubscription(restored);
+  const presented = await recordImmediatePlanChange(synced, subscription, {
+    currentTier: targetTier,
+    targetTier,
+    type: 'revert_unpaid_upgrade',
+  });
+
+  return {
+    ok: true,
+    changeType: 'revert_unpaid_upgrade',
+    subscription: presented,
+    planName: plan.name,
+  };
+}
+
+async function scheduleClientDowngrade({
+  stripe,
+  subscription,
+  stripeSubscription,
+  priceId,
+  userId,
+  currentTier,
+  targetTier,
+  plan,
+}) {
   const currentPeriodStart = getStripeSubscriptionPeriodStart(stripeSubscription);
   const currentPeriodEnd = getStripeSubscriptionPeriodEnd(stripeSubscription);
   const currentPeriodStartTs = stripeTimestampFromDate(currentPeriodStart);
@@ -667,6 +566,12 @@ export async function changeClientSubscriptionPlan(userId, tier) {
         stripe_subscription_schedule_id: schedule.id,
         cancel_at_period_end: false,
         last_synced_at: new Date(),
+        metadata: appendPlanChange(subscription.metadata, {
+          from: currentTier,
+          to: targetTier,
+          type: 'downgrade',
+          at: new Date().toISOString(),
+        }),
       },
     },
     { returnDocument: 'after' },
@@ -675,13 +580,95 @@ export async function changeClientSubscriptionPlan(userId, tier) {
   return {
     ok: true,
     changeType: 'downgrade',
-    subscription: synced,
+    subscription: presentClientSubscription(synced),
     planName: plan.name,
     effectiveAt: toIsoDate(currentPeriodEnd),
   };
 }
 
-export async function syncClientStripeSubscription(stripeSubscription) {
+export async function changeClientSubscriptionPlan(userId, tier) {
+  const plan = getClientPlan(tier);
+  if (!plan) {
+    return { ok: false, code: 400, message: 'Invalid client subscription tier.' };
+  }
+
+  let subscription = await ClientSubscription.findOne({ user_id: userId });
+  subscription = await expireCanceledClientSubscriptionIfNeeded(subscription);
+  if (!subscription || !isClientSubscriptionActive(subscription)) {
+    return {
+      ok: false,
+      code: 409,
+      message: 'No active client subscription to change. Subscribe to a plan first.',
+    };
+  }
+
+  const currentStatus = String(subscription.status || '').trim().toLowerCase();
+  if (currentStatus === 'past_due' || currentStatus === 'unpaid') {
+    return {
+      ok: false,
+      code: 409,
+      message: 'Update your payment method before changing plans.',
+    };
+  }
+
+  if (!subscription.stripe_subscription_id) {
+    return { ok: false, code: 404, message: 'No Stripe subscription found for this client account.' };
+  }
+
+  const currentTier = canonicalClientTier(subscription.tier) || String(subscription.tier || '').trim().toLowerCase();
+  const targetTier = String(plan.tier || '').trim().toLowerCase();
+  if (isSameClientTier(currentTier, targetTier)) {
+    return { ok: false, code: 400, message: 'You are already on this plan.' };
+  }
+
+  const currentTierRank = getClientTierRank(currentTier);
+  const targetTierRank = getClientTierRank(targetTier);
+  if (!currentTierRank || !targetTierRank) {
+    return { ok: false, code: 400, message: 'Unable to compare client subscription plans.' };
+  }
+
+  const stripe = getStripeClient();
+  const { price } = await priceForClientPlan(
+    stripe,
+    plan,
+    subscription.billing_period || 'month',
+  );
+  const priceId = price.id;
+  const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id, {
+    expand: ['latest_invoice'],
+  });
+  const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
+  if (!subscriptionItemId) {
+    return { ok: false, code: 500, message: 'Unable to read subscription items from Stripe.' };
+  }
+
+  const changeArgs = {
+    stripe,
+    subscription,
+    stripeSubscription,
+    subscriptionItemId,
+    priceId,
+    userId,
+    currentTier,
+    targetTier,
+    plan,
+  };
+
+  if (targetTierRank > currentTierRank) {
+    return upgradeClientSubscriptionPlan(changeArgs);
+  }
+
+  const latestInvoice = stripeSubscription.latest_invoice && typeof stripeSubscription.latest_invoice === 'object'
+    ? stripeSubscription.latest_invoice
+    : null;
+  if (invoiceRequiresPayment(latestInvoice) && String(latestInvoice.billing_reason || '') === 'subscription_update') {
+    return revertUnpaidClientUpgrade({ ...changeArgs, latestInvoice });
+  }
+
+  return scheduleClientDowngrade(changeArgs);
+}
+
+export async function syncClientStripeSubscription(stripeSubscription, extra = {}) {
   const stripeSubscriptionId = String(stripeSubscription?.id || '').trim();
   const existingByStripeId = stripeSubscriptionId
     ? await ClientSubscription.findOne({ stripe_subscription_id: stripeSubscriptionId })
@@ -695,61 +682,25 @@ export async function syncClientStripeSubscription(stripeSubscription) {
     return null;
   }
 
-  const tier =
-    stripeSubscription.metadata?.tier ||
-    existingByStripeId?.tier ||
-    '';
+  const existingByUser = await ClientSubscription.findOne({ user_id: userId });
+  if (
+    existingByUser &&
+    !shouldApplyIncomingClientStripeSubscription(existingByUser, stripeSubscription, extra)
+  ) {
+    return expireCanceledClientSubscriptionIfNeeded(existingByUser);
+  }
+
+  const { updateData, tier } = buildClientStripeSyncUpdate({
+    stripeSubscription,
+    existingByStripeId,
+    existingByUser,
+    userId,
+    eventCreated: extra.eventCreated || extra.event_created || 0,
+  });
   if (!tier) {
     console.error('No tier in stripe subscription metadata');
     return null;
   }
-
-  const priceId =
-    stripeSubscription.items?.data?.[0]?.price?.id ||
-    existingByStripeId?.stripe_price_id ||
-    '';
-  const scheduleId = normalizeStripeId(stripeSubscription.schedule);
-  const periodStart =
-    stripeSubscription.current_period_start
-    ?? stripeSubscription.current_period?.start
-    ?? stripeSubscription.items?.data?.[0]?.current_period_start
-    ?? null;
-  const periodEnd =
-    stripeSubscription.current_period_end
-    ?? stripeSubscription.current_period?.end
-    ?? stripeSubscription.items?.data?.[0]?.current_period_end
-    ?? null;
-
-  const stripeStatus = String(stripeSubscription.status || '').trim().toLowerCase();
-  const updateData = {
-    user_id: userId,
-    tier,
-    stripe_subscription_id: stripeSubscription.id,
-    stripe_customer_id:
-      typeof stripeSubscription.customer === 'string'
-        ? stripeSubscription.customer
-        : stripeSubscription.customer?.id || existingByStripeId?.stripe_customer_id || '',
-    stripe_price_id: priceId,
-    status: stripeStatus || 'canceled',
-    current_period_start: toSafeDate(periodStart) || existingByStripeId?.current_period_start || null,
-    current_period_end: toSafeDate(periodEnd) || existingByStripeId?.current_period_end || null,
-    cancel_at_period_end:
-      stripeStatus === 'canceled' || stripeStatus === 'cancelled'
-        ? false
-        : Boolean(stripeSubscription.cancel_at_period_end),
-    ...(scheduleId
-      ? { stripe_subscription_schedule_id: scheduleId }
-      : {
-          pending_tier: '',
-          pending_tier_effective_at: null,
-          stripe_subscription_schedule_id: '',
-        }),
-    last_synced_at: new Date(),
-    last_stripe_event_id:
-      typeof stripeSubscription.latest_invoice === 'string'
-        ? stripeSubscription.latest_invoice
-        : stripeSubscription.latest_invoice?.id || '',
-  };
 
   const clientSubscription = await ClientSubscription.findOneAndUpdate(
     { user_id: userId },
@@ -761,24 +712,35 @@ export async function syncClientStripeSubscription(stripeSubscription) {
 }
 
 export async function cancelClientSubscription(userId, cancellationReason = '') {
-  const clientSubscription = await ClientSubscription.findOne({ user_id: userId });
+  let clientSubscription = await ClientSubscription.findOne({ user_id: userId });
   if (!clientSubscription) {
-    throw new Error('No client subscription found');
-  }
-
-  if (!clientSubscription.stripe_subscription_id) {
-    throw new Error('No Stripe subscription ID found');
+    throw clientHttpError('No client subscription found', 404, 'CLIENT_SUBSCRIPTION_NOT_FOUND');
   }
 
   const safeReason = String(cancellationReason || '').trim();
   if (!safeReason) {
-    throw new Error('Cancellation reason is required');
+    throw clientHttpError('Cancellation reason is required', 400, 'CANCELLATION_REASON_REQUIRED');
+  }
+
+  clientSubscription = await expireCanceledClientSubscriptionIfNeeded(clientSubscription);
+  if (isClientSubscriptionAlreadyEnded(clientSubscription)) {
+    throw clientSubscriptionEndedError();
   }
 
   const stripe = getStripeClient();
-  await stripe.subscriptions.update(clientSubscription.stripe_subscription_id, {
-    cancel_at_period_end: true,
-  });
+  try {
+    await stripe.subscriptions.update(clientSubscription.stripe_subscription_id, {
+      cancel_at_period_end: true,
+    });
+  } catch (error) {
+    if (isStripeSubscriptionMissing(error)) {
+      clientSubscription.status = 'canceled';
+      clientSubscription.cancel_at_period_end = false;
+      await clientSubscription.save();
+      throw clientSubscriptionEndedError();
+    }
+    throw error;
+  }
 
   clientSubscription.cancel_at_period_end = true;
   clientSubscription.metadata = {
@@ -788,7 +750,7 @@ export async function cancelClientSubscription(userId, cancellationReason = '') 
   };
   await clientSubscription.save();
 
-  return clientSubscription;
+  return presentClientSubscription(clientSubscription);
 }
 
 export async function resumeClientSubscription(userId) {
@@ -797,12 +759,10 @@ export async function resumeClientSubscription(userId) {
     throw new Error('No client subscription found');
   }
 
-  // Refresh from Stripe so we don't resume an already-ended subscription
   clientSubscription =
     (await getClientSubscriptionPresentationForUser(userId, { refreshFromStripe: true })) ||
     clientSubscription;
 
-  // Re-load as a mongoose doc for updates when needed
   const live = await ClientSubscription.findOne({ user_id: userId });
   if (!live?.stripe_subscription_id) {
     const err = new Error('Your subscription has ended. Please subscribe again to restore access.');
@@ -829,14 +789,7 @@ export async function resumeClientSubscription(userId) {
       cancel_at_period_end: false,
     });
   } catch (error) {
-    const message = String(error?.raw?.message || error?.message || '').toLowerCase();
-    const missing =
-      error?.code === 'resource_missing' ||
-      error?.raw?.code === 'resource_missing' ||
-      message.includes('no such subscription') ||
-      message.includes('canceled') ||
-      message.includes('cancelled');
-    if (missing) {
+    if (isStripeSubscriptionMissing(error)) {
       live.status = 'canceled';
       live.cancel_at_period_end = false;
       await live.save();
@@ -854,5 +807,5 @@ export async function resumeClientSubscription(userId) {
   };
   await live.save();
 
-  return syncClientStripeSubscription(updated);
+  return presentClientSubscription(await syncClientStripeSubscription(updated));
 }

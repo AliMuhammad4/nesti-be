@@ -1,6 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import { protect, optionalAuth, evaluateCredentialAccess } from '../middleware/authMiddleware.js';
+import { isProfessionalRole } from '../constants/roles.js';
 import { validateBody } from '../middleware/validate.js';
 import { enterpriseInquiryCreateSchema } from '../schemas/opsSchemas.js';
 import {
@@ -12,20 +13,22 @@ import {
   storefrontTemplateCheckoutSessionSchema,
   storefrontTemplateSubscriptionActionSchema,
 } from '../schemas/billingSchemas.js';
-import Subscription from '../models/Subscription.js';
 import { getStripeClient } from '../services/billing/stripeClient.js';
 import { publicBillingPlans, publicBillingPlansFromStripe } from '../services/billing/plans.js';
 import {
   cancelSubscriptionForUser,
   changeSubscriptionPlanForUser,
   createCheckoutSessionForUser,
-  ensureStripeCustomerForUser,
-  getOrCreateSubscriptionForUser,
   getSubscriptionPresentationForUser,
   listPaidInvoicesForUser,
   resumeSubscriptionForUser,
   serializeSubscription,
 } from '../services/billing/subscriptionService.js';
+import {
+  confirmCardUpdateForUser,
+  createCardUpdateSessionForUser,
+  listPaymentMethodsForUser,
+} from '../services/billing/paymentMethodService.js';
 import {
   cancelStorefrontTemplateSubscriptionForUser,
   confirmStorefrontTemplateCheckoutSession,
@@ -41,18 +44,19 @@ async function requireCredentialApproved(req, res) {
   return false;
 }
 
-const setupIntent = async (req, res) => {
-  if (!(await requireCredentialApproved(req, res))) return;
-  const subscription = await getOrCreateSubscriptionForUser(req.user);
-  const customerId = await ensureStripeCustomerForUser(req.user, subscription);
-  const intent = await getStripeClient().setupIntents.create({
-    customer: customerId,
-    usage: 'off_session',
-    metadata: { user_id: String(req.user._id) },
-  });
-
-  res.json({ success: true, clientSecret: intent.client_secret });
-};
+function requireProfessionalRole(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authenticated' });
+  }
+  if (!isProfessionalRole(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      code: 'PROFESSIONAL_ROLE_REQUIRED',
+      message: 'This billing action is only available for professional accounts.',
+    });
+  }
+  return next();
+}
 
 const listPlans = async (req, res) => {
   try {
@@ -66,7 +70,7 @@ const listPlans = async (req, res) => {
 const createCheckoutSession = async (req, res) => {
   try {
     if (!(await requireCredentialApproved(req, res))) return;
-    const result = await createCheckoutSessionForUser(req.user, req.body.plan_key);
+    const result = await createCheckoutSessionForUser(req.user, req.body.plan_key, req.body.billing_period);
     if (!result.ok) {
       return res.status(result.code || 400).json({ success: false, message: result.message });
     }
@@ -237,7 +241,7 @@ const resumeCurrentSubscription = async (req, res) => {
 
 const changeCurrentSubscriptionPlan = async (req, res) => {
   try {
-    const result = await changeSubscriptionPlanForUser(req.user, req.body.plan_key);
+    const result = await changeSubscriptionPlanForUser(req.user, req.body.plan_key, req.body.billing_period);
     if (!result.ok) {
       if (result.subscription) {
         return res.json({
@@ -282,25 +286,32 @@ const getBillingInvoices = async (req, res) => {
 };
 
 const getPaymentMethods = async (req, res) => {
-  const subscription = await Subscription.findOne({ user_id: req.user._id }).lean();
-  if (!subscription?.stripe_customer_id) {
-    return res.json({ success: true, data: [] });
+  try {
+    const paymentMethods = await listPaymentMethodsForUser(req.user);
+    res.json({ success: true, data: paymentMethods });
+  } catch (err) {
+    res.status(502).json({ success: false, message: err?.message || 'Unable to load payment methods.' });
   }
+};
 
-  const methods = await getStripeClient().paymentMethods.list({
-    customer: subscription.stripe_customer_id,
-    type: 'card',
-  });
-  const paymentMethods = methods.data.map((method) => ({
-    id: method.id,
-    card: {
-      brand: method.card?.brand || '',
-      last4: method.card?.last4 || '',
-      exp_month: method.card?.exp_month || null,
-      exp_year: method.card?.exp_year || null,
-    },
-  }));
-  res.json({ success: true, data: paymentMethods });
+const createCardUpdateSession = async (req, res) => {
+  try {
+    const result = await createCardUpdateSessionForUser(req.user);
+    if (!result.ok) return res.status(result.code || 400).json({ success: false, message: result.message });
+    res.json({ success: true, url: result.url });
+  } catch (err) {
+    res.status(502).json({ success: false, message: err?.message || 'Unable to start the card update.' });
+  }
+};
+
+const confirmCardUpdate = async (req, res) => {
+  try {
+    const result = await confirmCardUpdateForUser(req.user, req.body?.session_id);
+    if (!result.ok) return res.status(result.code || 400).json({ success: false, message: result.message });
+    res.json({ success: true, message: 'Your card on file was updated.' });
+  } catch (err) {
+    res.status(502).json({ success: false, message: err?.message || 'Unable to confirm the card update.' });
+  }
 };
 
 const handleEnterpriseInquiry = async (req, res) => {
@@ -332,65 +343,74 @@ const getEnterpriseStatus = async (req, res) => {
 
 // Note: Stripe webhook is handled separately without protect middleware or JSON parsing
 router.get('/plans', listPlans);
-router.post('/setup-intent', protect, setupIntent);
-router.get('/storefront-templates', protect, getStorefrontTemplateEntitlements);
+router.get('/storefront-templates', protect, requireProfessionalRole, getStorefrontTemplateEntitlements);
 router.post(
   '/storefront-templates/checkout-session',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateCheckoutSessionSchema),
   createStorefrontTemplateCheckout
 );
 router.post(
   '/storefront-templates/checkout-session/confirm',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateCheckoutConfirmSchema),
   confirmStorefrontTemplateCheckout,
 );
 router.post(
   '/storefront-templates/cancel',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateSubscriptionActionSchema),
   cancelStorefrontTemplateSubscription,
 );
 router.post(
   '/storefront-templates/resume',
   protect,
+  requireProfessionalRole,
   validateBody(storefrontTemplateSubscriptionActionSchema),
   resumeStorefrontTemplateSubscription,
 );
 router.post(
   '/checkout-session',
   protect,
+  requireProfessionalRole,
   validateBody(checkoutSessionSchema),
   createCheckoutSession
 );
-router.get('/subscription/me', protect, getCurrentSubscription);
-router.get('/invoices', protect, getBillingInvoices);
+router.get('/subscription/me', protect, requireProfessionalRole, getCurrentSubscription);
+router.get('/invoices', protect, requireProfessionalRole, getBillingInvoices);
 router.post(
   '/subscription/cancel',
   protect,
+  requireProfessionalRole,
   validateBody(cancelSubscriptionSchema),
   cancelCurrentSubscription
 );
 router.post(
   '/subscription/resume',
   protect,
+  requireProfessionalRole,
   validateBody(resumeSubscriptionSchema),
   resumeCurrentSubscription
 );
 router.post(
   '/subscription/change-plan',
   protect,
+  requireProfessionalRole,
   validateBody(changePlanSchema),
   changeCurrentSubscriptionPlan
 );
-router.get('/payment-methods', protect, getPaymentMethods);
+router.get('/payment-methods', protect, requireProfessionalRole, getPaymentMethods);
+router.post('/payment-method/update-session', protect, requireProfessionalRole, createCardUpdateSession);
+router.post('/payment-method/confirm', protect, requireProfessionalRole, confirmCardUpdate);
 router.post(
   '/enterprise-inquiry',
   optionalAuth,
   validateBody(enterpriseInquiryCreateSchema),
   handleEnterpriseInquiry
 );
-router.get('/enterprise-status', protect, getEnterpriseStatus);
+router.get('/enterprise-status', protect, requireProfessionalRole, getEnterpriseStatus);
 
 export default router;

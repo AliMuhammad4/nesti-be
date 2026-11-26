@@ -7,6 +7,7 @@ import ProfessionalChatThread from '../../models/ProfessionalChatThread.js';
 import ProfessionalChatMessage from '../../models/ProfessionalChatMessage.js';
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import logger from '../../utils/logger.js';
+import { sessionTokenProblem } from '../../utils/sessionToken.js';
 import { normalizeAttachments, validateProChatAttachmentLimits } from '../../utils/proChatUtils.js';
 import {
   declineCall,
@@ -20,6 +21,7 @@ import {
   startCallRoomCleanupReconciliation,
 } from '../proChat/liveKitRoomService.js';
 import { scheduleTranscriptionWorkerDispatch } from '../proChat/callTranscriptionDispatchService.js';
+import { registerSessionSocketServer } from './sessionSockets.js';
 
 let io = null;
 const recentCallEvents = new Map();
@@ -77,7 +79,7 @@ function proChatRoom(threadId) {
 function normalizeCallRoomName(threadId, value) {
   const base = proChatRoom(threadId);
   const roomName = String(value || '').trim();
-  if (roomName === base) return roomName; // Backward compatibility for an in-flight legacy call.
+  if (roomName === base) return roomName;
   if (roomName.startsWith(`${base}:`)) {
     const callId = roomName.slice(base.length + 1);
     if (/^[a-zA-Z0-9_-]{8,128}$/.test(callId)) return roomName;
@@ -152,19 +154,39 @@ export async function initWorkspaceSocket(httpServer) {
         return next(new Error('auth_required'));
       }
       const decoded = jwt.verify(token, jwtSecret);
-      const user = await User.findById(decoded.id).select('_id role');
+      if (sessionTokenProblem(decoded, null)) return next(new Error('invalid_token'));
+      const user = await User.findById(decoded.id).select('_id role token_version is_active');
       if (!user) return next(new Error('user_not_found'));
+      if (sessionTokenProblem(decoded, user) || user.is_active === false) {
+        return next(new Error('invalid_token'));
+      }
       socket.data.userId = String(user._id);
       socket.data.role = user.role;
+      socket.data.tokenExpMs = Number(decoded.exp) > 0 ? Number(decoded.exp) * 1000 : 0;
       next();
     } catch (e) {
       logger.warn('Socket auth failed', { message: e.message });
-      next(new Error('invalid_token'));
+      const tokenError = e?.name === 'JsonWebTokenError' || e?.name === 'TokenExpiredError' || e?.name === 'NotBeforeError';
+      next(new Error(tokenError ? 'invalid_token' : 'auth_unavailable'));
     }
   });
+  registerSessionSocketServer(io);
   io.on('connection', (socket) => {
     const uid = socket.data.userId;
     socket.join(userRoom(uid));
+    let sessionExpiryTimer = null;
+    const armSessionExpiry = () => {
+      const expMs = Number(socket.data.tokenExpMs || 0);
+      if (!expMs) return;
+      const remaining = expMs - Date.now();
+      if (remaining <= 0) {
+        socket.disconnect(true);
+        return;
+      }
+      sessionExpiryTimer = setTimeout(armSessionExpiry, Math.min(remaining, 24 * 60 * 60 * 1000));
+      sessionExpiryTimer.unref?.();
+    };
+    armSessionExpiry();
     if (String(socket.data.role || '').toLowerCase() === 'admin') {
       socket.join('admin:platform_leads');
     }
@@ -178,7 +200,6 @@ export async function initWorkspaceSocket(httpServer) {
       transport: socket.conn?.transport?.name,
     });
     void (async () => {
-      // Replay unanswered rings, including mid-call reinvites while the room is active.
       const pendingInvites = await ProfessionalCall.find({
         participant_ids: uid,
         caller_id: { $ne: uid },
@@ -240,7 +261,6 @@ export async function initWorkspaceSocket(httpServer) {
         try {
           ack(payload);
         } catch {
-          /* ignore ack errors */
         }
       }
     };
@@ -460,7 +480,6 @@ export async function initWorkspaceSocket(httpServer) {
           target_user_id: target_user_id ? String(target_user_id) : null,
           user_id: String(uid),
           sender_name: senderName,
-          // Prefer DB invited_at so reinvites always outrank a prior local "handled" stamp.
           occurred_at: inviteOccurredAt,
         };
         for (const pid of registryResult.invitee_ids || []) {
@@ -614,7 +633,6 @@ export async function initWorkspaceSocket(httpServer) {
           await assertCallEventRate('leave', thread_id);
         } catch (rateError) {
           if (rateError?.code === 'call_action_rate_limited') {
-            // Duplicate leave/end from multi-tab close — treat as confirmed.
             safeAck(ack, { success: true, code: 'call_action_rate_limited' });
             return;
           }
@@ -670,7 +688,6 @@ export async function initWorkspaceSocket(httpServer) {
           await assertCallEventRate('ended', thread_id);
         } catch (rateError) {
           if (rateError?.code === 'call_action_rate_limited') {
-            // Duplicate end from pagehide + UI close (or multi-tab) — already closing.
             safeAck(ack, { success: true, code: 'call_action_rate_limited' });
             return;
           }
@@ -732,6 +749,7 @@ export async function initWorkspaceSocket(httpServer) {
     });
 
     socket.on('disconnect', (reason) => {
+      if (sessionExpiryTimer) clearTimeout(sessionExpiryTimer);
       logger.debug('Workspace socket disconnected', { user_id: uid, reason });
     });
   });

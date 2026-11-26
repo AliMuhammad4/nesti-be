@@ -10,9 +10,10 @@ import {
   forgotPasswordService,
   verifyResetOtpService,
   resetPasswordService,
-  checkEmailService,
   resendVerificationService,
 } from '../services/auth/authService.js';
+
+const requestIp = (req) => String(req.ip || req.socket?.remoteAddress || '').trim().toLowerCase();
 
 const send = (res, result) => {
   res.status(result.status).json(result.body);
@@ -77,7 +78,7 @@ const changePassword = async (req, res, next) => {
 
 const forgotPassword = async (req, res, next) => {
   try {
-    send(res, await forgotPasswordService(req.body));
+    send(res, await forgotPasswordService({ email: req.body.email, ip: requestIp(req) }));
   } catch (error) {
     next(error);
   }
@@ -85,7 +86,7 @@ const forgotPassword = async (req, res, next) => {
 
 const verifyResetOtp = async (req, res, next) => {
   try {
-    send(res, await verifyResetOtpService(req.body));
+    send(res, await verifyResetOtpService({ email: req.body.email, otp: req.body.otp, ip: requestIp(req) }));
   } catch (error) {
     next(error);
   }
@@ -127,13 +128,6 @@ const publicProfile = async (req, res, next) => {
     next(error);
   }
 };
-const checkEmail = async (req, res, next) => {
-  try {
-    send(res, await checkEmailService(req.body));
-  } catch (error) {
-    next(error);
-  }
-};
 
 const resendVerification = async (req, res, next) => {
   try {
@@ -161,6 +155,5 @@ export {
   forgotPassword,
   resetPassword,
   verifyResetOtp,
-  checkEmail,
   resendVerification,
 };

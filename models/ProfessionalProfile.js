@@ -17,6 +17,7 @@ const credentialDocumentSchema = new mongoose.Schema(
     },
     file_url: { type: String, required: true },
     file_key: { type: String, default: '' },
+    thumb_key: { type: String, default: '' },
     file_name: { type: String, default: '' },
     mime_type: { type: String, default: '' },
     uploaded_at: { type: Date, default: Date.now },
@@ -253,6 +254,12 @@ const professionalProfileSchema = new mongoose.Schema({
   experience_level: {
     type: String,
     enum: ['junior', 'mid', 'senior', 'elite'],
+  },
+  /** Years of experience, 0-20 (20 = "20+"). experience_level is derived from it. */
+  experience_years: {
+    type: Number,
+    min: 0,
+    max: 20,
   },
   core_specialization_tags: [
     {

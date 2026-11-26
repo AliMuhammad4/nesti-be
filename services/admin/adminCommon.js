@@ -6,7 +6,7 @@ export const USER_LIST =
   'first_name last_name email role phone is_verified is_active suspended_at auth_provider createdAt profile_image';
 
 export const USER_PUBLIC =
-  'first_name last_name email role phone is_verified is_active suspended_at suspended_reason auth_provider createdAt updatedAt profile_image cover_image cover_image_position cover_image_zoom';
+  'first_name last_name email role phone is_verified is_active suspended_at suspended_reason account_status_email auth_provider createdAt updatedAt profile_image cover_image cover_image_position cover_image_zoom';
 
 export function parsePaging(query = {}) {
   const page = Math.max(1, Number(query.page) || 1);
@@ -80,6 +80,7 @@ export function serializeUser(user) {
     is_active: user.is_active !== false,
     suspended_at: user.suspended_at || null,
     suspended_reason: user.suspended_reason || '',
+    account_status_email: user.account_status_email?.status ? user.account_status_email : null,
     auth_provider: user.auth_provider || 'local',
     profile_image: user.profile_image || null,
     cover_image: user.cover_image || null,

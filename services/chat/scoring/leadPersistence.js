@@ -8,6 +8,7 @@ import {
   leadProfileCreateSchema,
 } from '../../../schemas/leadSchemas.js';
 import { PROFESSIONAL_TYPE } from '../../../constants/roles.js';
+import { INVESTOR_ONLY_ANSWER_KEYS, PERSONAL_ONLY_ANSWER_KEYS } from '../../lead/leadOwnAnswers.js';
 
 const JOI_OPTIONS = {
   abortEarly: false,
@@ -169,6 +170,8 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
     profType === PROFESSIONAL_TYPE.LAWYER || profType === PROFESSIONAL_TYPE.MORTGAGE_BROKER
       ? 'unspecified'
       : 'buy';
+  const normalizedClientType = normalizeProfileClientType(payload.client_type);
+  const templateAnswers = normalizeTemplateAnswers(payload.template_answers);
 
   return {
     intent: payload.intent || defaultIntent,
@@ -200,6 +203,7 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
       latest_budget_text: budgetText,
       min_budget: parsedBudget.min,
       max_budget: parsedBudget.max,
+      // Every market (Canada included) stores budgets in USD.
       currency: budgetText ? 'USD' : '',
       confidence: parsedBudget.confidence,
     },
@@ -237,6 +241,15 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         living_situation: payload.qualification?.agent?.living_situation || '',
         urgency_readiness: payload.qualification?.agent?.urgency_readiness || '',
         buy_property_location: payload.qualification?.agent?.buy_property_location || '',
+        investment_type: payload.qualification?.agent?.investment_type || '',
+        investment_goal: payload.qualification?.agent?.investment_goal || '',
+        owns_investments: payload.qualification?.agent?.owns_investments || '',
+        down_payment_readiness: payload.qualification?.agent?.down_payment_readiness || '',
+        buying_another: payload.qualification?.agent?.buying_another || '',
+        market_country: payload.qualification?.agent?.market_country || '',
+        market_region: payload.qualification?.agent?.market_region || '',
+        market_city: payload.qualification?.agent?.market_city || '',
+        market_country_name: payload.qualification?.agent?.market_country_name || '',
       },
       mortgage_broker: {
         mortgage_timeline: payload.qualification?.mortgage_broker?.mortgage_timeline || '',
@@ -248,6 +261,14 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         purchase_purpose: payload.qualification?.mortgage_broker?.purchase_purpose || '',
         urgency_signal: payload.qualification?.mortgage_broker?.urgency_signal || '',
         property_budget: payload.qualification?.mortgage_broker?.property_budget || '',
+        investment_type: payload.qualification?.mortgage_broker?.investment_type || '',
+        owns_investments: payload.qualification?.mortgage_broker?.owns_investments || '',
+        investment_financing: payload.qualification?.mortgage_broker?.investment_financing || '',
+        borrower_entity: payload.qualification?.mortgage_broker?.borrower_entity || '',
+        market_country: payload.qualification?.mortgage_broker?.market_country || '',
+        market_region: payload.qualification?.mortgage_broker?.market_region || '',
+        market_city: payload.qualification?.mortgage_broker?.market_city || '',
+        market_country_name: payload.qualification?.mortgage_broker?.market_country_name || '',
       },
       lawyer: {
         transaction_stage: payload.qualification?.lawyer?.transaction_stage || '',
@@ -258,6 +279,11 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
         realtor_involved: payload.qualification?.lawyer?.realtor_involved || '',
         first_time_buyer: payload.qualification?.lawyer?.first_time_buyer || '',
         legal_services_needed: payload.qualification?.lawyer?.legal_services_needed || '',
+        via_company: payload.qualification?.lawyer?.via_company || '',
+        market_country: payload.qualification?.lawyer?.market_country || '',
+        market_region: payload.qualification?.lawyer?.market_region || '',
+        market_city: payload.qualification?.lawyer?.market_city || '',
+        market_country_name: payload.qualification?.lawyer?.market_country_name || '',
       },
     },
     scoring: {
@@ -278,7 +304,29 @@ function normalizeLeadProfilePayload(raw, { userId, professionalType, contactInf
     },
     source: payload.source || 'chatbot',
     total_score: Number(payload.total_score || 0),
+    ...(normalizedClientType ? { client_type: normalizedClientType } : {}),
+    ...(templateAnswers && Object.keys(templateAnswers).length
+      ? { template_answers: templateAnswers }
+      : {}),
   };
+}
+
+function normalizeProfileClientType(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'buyer' || value === 'seller' || value === 'investor') return value;
+  return '';
+}
+
+function normalizeTemplateAnswers(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const [id, value] of Object.entries(raw)) {
+    if (!/^[a-z0-9_]+$/.test(id)) continue;
+    const text = String(value || '').trim();
+    if (!text) continue;
+    out[id] = text.slice(0, 160);
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function toIdString(value) {
@@ -300,12 +348,49 @@ export async function createValidatedLeadProfile(payload) {
   return LeadProfile.create(validated);
 }
 
-function buildNonEmptyPatch(payload) {
-  const patch = {};
+/** Home-only fields a Land inquiry blanks (vacant land has no bedrooms, bathrooms, parking or backyard). */
+const LAND_CLEARED_PROPERTY_FIELDS = ['bedrooms', 'bathrooms', 'parking_required', 'backyard_needed'];
+
+function isLandPropertyType(value) {
+  return /\b(land|lot|acreage|vacant)\b/i.test(String(value || ''));
+}
+
+/**
+ * Lawyer / broker answers of the person's other inquiry type that a reused profile must not carry over:
+ * an investor inquiry blanks personal-only answers (lawyer first-time buyer), a personal one blanks the
+ * investor-only answers (lawyer purchasing entity, broker investment fields).
+ */
+function clientTypeClearedQualificationPaths(professionalType, validated) {
+  const section = professionalType === PROFESSIONAL_TYPE.LAWYER
+    ? 'lawyer'
+    : professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER ? 'mortgage_broker' : '';
+  if (!section) return [];
+  const investor = String(validated?.client_type || '').toLowerCase() === 'investor'
+    || (section === 'mortgage_broker'
+      && String(validated?.qualification?.mortgage_broker?.purchase_purpose || '').toLowerCase() === 'investment');
+  const keys = investor ? PERSONAL_ONLY_ANSWER_KEYS[professionalType] : INVESTOR_ONLY_ANSWER_KEYS[professionalType];
+  return (keys || []).map((key) => `qualification.${section}.${key}`);
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+/**
+ * Dot-path $set patch with only non-empty values, so a repeat submission that leaves a field blank
+ * (e.g. contact_preferences.preferred_contact_method) keeps the saved value instead of blanking it.
+ */
+function buildNonEmptyPatch(payload, prefix = '', patch = {}) {
   for (const [k, v] of Object.entries(payload || {})) {
+    const path = prefix ? `${prefix}.${k}` : k;
     if (v == null) continue;
     if (typeof v === 'string' && v.trim() === '') continue;
-    patch[k] = v;
+    if (Array.isArray(v) && !v.length) continue;
+    if (isPlainObject(v)) {
+      buildNonEmptyPatch(v, path, patch);
+      continue;
+    }
+    patch[path] = v;
   }
   return patch;
 }
@@ -339,8 +424,6 @@ export async function createOrReuseLeadProfile({
     ...(phone ? [{ 'identity.canonical_phone': phone }] : []),
   ];
 
-  // Always exclude seller profiles from reuse for non-sell intents.
-  // Seller profiles contain property listing data (images, prices) that must never be overwritten.
   const intentExclusion = {};
   if (validated.intent !== 'sell') {
     intentExclusion.$nor = [
@@ -349,7 +432,6 @@ export async function createOrReuseLeadProfile({
       { 'property.images.0': { $exists: true } },
     ];
   } else {
-    // For seller leads, don't reuse buyer profiles
     intentExclusion.$nor = [
       { intent: 'buy' },
       { 'intent_summary.primary_intent': 'buy' },
@@ -372,11 +454,13 @@ export async function createOrReuseLeadProfile({
   }
 
   const patch = buildNonEmptyPatch(validated);
-  // Do not overwrite aggregate/history fields on profile reuse.
-  delete patch.lead_refs;
-  delete patch.stats;
-  delete patch.intent_summary;
-  delete patch.lifecycle;
+  for (const key of Object.keys(patch)) {
+    if (/^(lead_refs|stats|intent_summary|lifecycle)(\.|$)/.test(key)) delete patch[key];
+  }
+  if (isLandPropertyType(validated.property?.property_type)) {
+    for (const field of LAND_CLEARED_PROPERTY_FIELDS) patch[`property.${field}`] = '';
+  }
+  for (const path of clientTypeClearedQualificationPaths(profType, validated)) patch[path] = '';
   const leadProfile = await LeadProfile.findByIdAndUpdate(
     existingProfile._id,
     { $set: patch, $unset: LEGACY_LEAD_PROFILE_UNSET },
@@ -389,13 +473,26 @@ export async function createOrReuseLeadProfile({
   return { leadProfile: await LeadProfile.findById(leadProfile._id), reusedExisting: true };
 }
 
+export function leadSlotFor(conversationId, leadType, professionalType = '') {
+  let suffix = ['buyer', 'seller', 'client', 'investor'].find((name) =>
+    String(leadType || '').endsWith(`_${name}`),
+  );
+  if (!conversationId || !suffix) return undefined;
+  if (suffix === 'investor') suffix = professionalType === PROFESSIONAL_TYPE.AGENT ? 'buyer' : 'client';
+  return `${conversationId}:${suffix}`.slice(0, 80);
+}
+
 export async function createValidatedLeadMatch(payload) {
+  const conversationId = toIdString(payload.conversation_id);
+  const leadSlot = payload.lead_slot
+    || leadSlotFor(conversationId, payload.lead_type, payload.compatibility_factors?.professional_type);
   const candidate = {
     ...payload,
     user_id: toIdString(payload.user_id),
     professional_profile_id: toIdString(payload.professional_profile_id),
     lead_profile_id: toIdString(payload.lead_profile_id),
-    conversation_id: toIdString(payload.conversation_id),
+    conversation_id: conversationId,
+    ...(leadSlot ? { lead_slot: leadSlot } : {}),
   };
   const validated = validateOrThrow(leadMatchCreateSchema, candidate, 'LeadMatch');
   const leadMatch = await LeadMatch.create(validated);
@@ -424,7 +521,7 @@ export async function bumpLeadProfileStats(leadProfileId, intent = 'buy', leadTy
   inc['stats.total_inquiries'] = 1;
   inc['stats.total_sessions'] = 1;
   const lt = String(leadType || '');
-  const isClientLead = /_client$/.test(lt);
+  const isClientLead = /_client$/.test(lt) || (/_investor$/.test(lt) && intent === 'unspecified');
   if (intent === 'sell') inc['stats.sell_matches'] = 1;
   else if (isClientLead) inc['stats.client_matches'] = 1;
   else if (intent !== 'unspecified') inc['stats.buy_matches'] = 1;

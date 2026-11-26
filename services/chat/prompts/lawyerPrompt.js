@@ -11,6 +11,7 @@ import {
 } from './lawyerPromptBlocks.js';
 import { appendAssistantOverlay } from '../../professionalAssistant/professionalAssistantService.js';
 import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
+import { actionFlowContextFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
   const name = professionalProfile?.full_name || 'a real estate lawyer';
@@ -41,7 +42,14 @@ export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
   );
   const effectiveHasBookingLink = Boolean(hasBookingLink && !deferCalendlyLink && !holdForQuestions);
 
-  const actionFlow = getLawyerActionFlow(leadGrade);
+  const actionFlow = getLawyerActionFlow(
+    leadGrade,
+    actionFlowContextFromForm(
+      'lawyer',
+      formProvided ? options.intakeFormContact : (options.previewConversation === true ? options.previewSignals || {} : {}),
+      options.assistantSetting?.client_type,
+    ),
+  );
   const automationBlock = buildLawyerAutomationBlock({
     actionFlow,
     hasBookingLink: effectiveHasBookingLink,
@@ -69,6 +77,7 @@ export const buildLawyerSystemPrompt = (professionalProfile, options = {}) => {
     intakeFormContact: options.intakeFormContact,
     blockSchedule,
     chatAnsweredQuestions: options.chatAnsweredQuestions,
+    previewSignals: options.previewConversation === true ? options.previewSignals || null : null,
   }).trim(), options.assistantSetting, {
     preview: options.previewConversation === true,
     intakeFormContact: options.intakeFormContact,

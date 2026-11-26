@@ -104,7 +104,14 @@ export function buildLeadsListMatchFilter(userId, q = {}) {
     match.match_status = { $nin: ['converted', 'closed_lost'] };
   }
   if (grade) match.lead_type = new RegExp(`^${grade}_`);
-  if (intent === 'buy' || intent === 'sell') {
+  if (intent === 'investor') {
+    // Prefer *_investor lead_type; also catch legacy broker/lawyer *_client rows tagged investor on factors.
+    match.$or = [
+      { lead_type: /investor$/ },
+      { 'compatibility_factors.client_type': 'investor' },
+    ];
+    delete match.lead_type;
+  } else if (intent === 'buy' || intent === 'sell') {
     match.lead_type = new RegExp(`${intent === 'sell' ? 'seller' : '(buyer|client)'}$`);
   }
   if (embedToken) match['compatibility_factors.embed_token'] = embedToken;
@@ -113,6 +120,8 @@ export function buildLeadsListMatchFilter(userId, q = {}) {
 
 export function resolveListIntent(profileView, leadMatch, profile = null) {
   const leadType = String(leadMatch?.lead_type || '').toLowerCase();
+  const clientType = String(profile?.client_type || '').trim().toLowerCase();
+  if (/investor/i.test(leadType) || clientType === 'investor') return 'investor';
   if (/seller/i.test(leadType)) return 'sell';
   if (/(buyer|client)/i.test(leadType)) return 'buy';
 
@@ -126,5 +135,6 @@ export function resolveListIntent(profileView, leadMatch, profile = null) {
   if (raw === 'buy' || raw === 'sell') return raw;
   if (raw === 'buyer') return 'buy';
   if (raw === 'seller') return 'sell';
+  if (raw === 'investor') return 'investor';
   return raw || null;
 }

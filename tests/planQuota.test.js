@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import LeadMatch from '../models/LeadMatch.js';
 import NurtureLog from '../models/NurtureLog.js';
+import ChatConversation from '../models/ChatConversation.js';
 import {
   assertWithinPlanQuota,
   getPlanVisibleLeadMatchIds,
@@ -32,10 +33,10 @@ test('resolvePlanLimit returns finite cap for basic and null for enterprise', ()
   const basicSub = { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'active' };
   const enterpriseSub = { plan_key: SUBSCRIPTION_PLAN.ENTERPRISE, status: 'active' };
   const trialSub = { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'free_trial' };
-  assert.equal(resolvePlanLimit(basicSub, 'captured_leads'), 50);
+  assert.equal(resolvePlanLimit(basicSub, 'captured_leads'), 150);
   assert.equal(resolvePlanLimit(enterpriseSub, 'captured_leads'), null);
-  assert.equal(resolvePlanLimit(trialSub, 'captured_leads'), 5);
-  assert.equal(resolvePlanLimit(trialSub, 'followup_actions'), 5);
+  assert.equal(resolvePlanLimit(trialSub, 'captured_leads'), 150);
+  assert.equal(resolvePlanLimit(trialSub, 'followup_actions'), null);
 });
 
 test('assertWithinPlanQuota passes under captured_leads limit', async () => {
@@ -48,7 +49,7 @@ test('assertWithinPlanQuota passes under captured_leads limit', async () => {
       limitKey: 'captured_leads',
     });
     assert.equal(result.used, 0);
-    assert.equal(result.max, 50);
+    assert.equal(result.max, 150);
   } finally {
     bag.restoreAll();
   }
@@ -56,7 +57,7 @@ test('assertWithinPlanQuota passes under captured_leads limit', async () => {
 
 test('assertWithinPlanQuota throws at captured_leads cap', async () => {
   const bag = createRestoreBag();
-  bag.stub(LeadMatch, 'countDocuments', async () => 50);
+  bag.stub(LeadMatch, 'countDocuments', async () => 150);
   try {
     await assert.rejects(
       () =>
@@ -69,8 +70,8 @@ test('assertWithinPlanQuota throws at captured_leads cap', async () => {
         assert.ok(err instanceof PlanQuotaError);
         assert.equal(err.code, 'PLAN_LIMIT_REACHED');
         assert.equal(err.limitKey, 'captured_leads');
-        assert.equal(err.used, 50);
-        assert.equal(err.max, 50);
+        assert.equal(err.used, 150);
+        assert.equal(err.max, 150);
         return true;
       },
     );
@@ -79,19 +80,17 @@ test('assertWithinPlanQuota throws at captured_leads cap', async () => {
   }
 });
 
-test('assertWithinPlanQuota throws at followup_actions cap for standard', async () => {
+test('assertWithinPlanQuota allows unlimited followup_actions for standard', async () => {
   const bag = createRestoreBag();
   bag.stub(NurtureLog, 'countDocuments', async () => 500);
   try {
-    await assert.rejects(
-      () =>
-        assertWithinPlanQuota({
-          userId: 'user1',
-          subscription: { plan_key: SUBSCRIPTION_PLAN.STANDARD, status: 'active' },
-          limitKey: 'followup_actions',
-        }),
-      (err) => err instanceof PlanQuotaError,
-    );
+    const result = await assertWithinPlanQuota({
+      userId: 'user1',
+      subscription: { plan_key: SUBSCRIPTION_PLAN.STANDARD, status: 'active' },
+      limitKey: 'followup_actions',
+    });
+    // Unlimited keys short-circuit without counting usage.
+    assert.equal(result.max, null);
   } finally {
     bag.restoreAll();
   }
@@ -151,6 +150,52 @@ test('enterprise bypasses finite quota checks', async () => {
       limitKey: 'followup_actions',
     });
     assert.equal(result.max, null);
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('assertWithinPlanQuota enforces basic chatbot_conversations cap', async () => {
+  const bag = createRestoreBag();
+  bag.stub(ChatConversation, 'countDocuments', async () => 200);
+  try {
+    await assert.rejects(
+      () =>
+        assertWithinPlanQuota({
+          userId: 'user1',
+          subscription: { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'active' },
+          limitKey: 'chatbot_conversations',
+        }),
+      (err) => {
+        assert.ok(err instanceof PlanQuotaError);
+        assert.equal(err.limitKey, 'chatbot_conversations');
+        assert.equal(err.used, 200);
+        assert.equal(err.max, 200);
+        return true;
+      },
+    );
+  } finally {
+    bag.restoreAll();
+  }
+});
+
+test('assertWithinPlanQuota allows chatbot conversations under the cap and unlimited enterprise', async () => {
+  const bag = createRestoreBag();
+  bag.stub(ChatConversation, 'countDocuments', async () => 199);
+  try {
+    const under = await assertWithinPlanQuota({
+      userId: 'user1',
+      subscription: { plan_key: SUBSCRIPTION_PLAN.BASIC, status: 'active' },
+      limitKey: 'chatbot_conversations',
+    });
+    assert.equal(under.used, 199);
+    assert.equal(under.max, 200);
+    const unlimited = await assertWithinPlanQuota({
+      userId: 'user1',
+      subscription: { plan_key: SUBSCRIPTION_PLAN.ENTERPRISE, status: 'active' },
+      limitKey: 'chatbot_conversations',
+    });
+    assert.equal(unlimited.max, null);
   } finally {
     bag.restoreAll();
   }

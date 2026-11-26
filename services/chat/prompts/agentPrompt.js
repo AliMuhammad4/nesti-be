@@ -5,6 +5,8 @@ import { questionLabel, questionOptions } from '../../professionalAssistant/assi
 import { intakeValueFor } from '../../professionalAssistant/qualificationProgress.js';
 import { profileVisitorFactsBlock } from '../utils/profileVisitorFacts.js';
 import { communicationInstruction, formalityInstruction, voiceInstruction } from '../../professionalAssistant/professionalAssistantService.js';
+import { readQualificationAlias } from '../../professionalAssistant/qualificationFieldAliases.js';
+import { actionFlowContextFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 
 function appliedAssistant(options) {
   return options.assistantSetting?.applied ? options.assistantSetting : null;
@@ -38,7 +40,13 @@ function hasIntakeAnswer(settingId, formContact = {}) {
     viewing_readiness: formContact.viewing_readiness,
     living_situation: formContact.living_situation,
     urgency_readiness: formContact.urgency_readiness,
-    preferred_contact_method: formContact.preferred_contact_method && formContact.best_time_to_contact,
+    preferred_contact_method: (
+      (formContact.preferred_contact_method && formContact.best_time_to_contact)
+      || formContact.preferred_contact_method
+      // Email/phone on the intake form already give a reachable channel — skip re-asking preferred contact.
+      || formContact.email
+      || formContact.phone
+    ),
     name: formContact.name || formContact.full_name,
     email: formContact.email,
     phone: formContact.phone,
@@ -48,32 +56,55 @@ function hasIntakeAnswer(settingId, formContact = {}) {
     parking_required: formContact.parking_required,
     backyard_needed: formContact.backyard_needed,
     school_district_important: formContact.school_district_important,
+    client_type: formContact.client_type,
+    investment_type: formContact.investment_type,
+    investment_goal: formContact.investment_goal,
+    owns_investments: formContact.owns_investments,
+    down_payment: readQualificationAlias(formContact, 'down_payment'),
+    viewing_readiness: formContact.viewing_readiness,
+    urgency_readiness: formContact.urgency_readiness,
   };
   const value = settingId in values ? values[settingId] : intakeValueFor('agent', settingId, formContact);
   return Boolean(String(value || '').trim());
 }
 
 function answeredIntakeSummary(formContact = {}) {
+  const isInvestor = String(formContact.client_type || '').toLowerCase() === 'investor'
+    || String(formContact.motivation_reason || '').toLowerCase() === 'investment';
   const fields = [
     ['name', 'name'],
     ['email', 'email'],
     ['phone', 'phone'],
     ['intent', 'buy/sell intent'],
+    ['client_type', 'client type'],
     ['location', 'location or property address'],
-    ['budget', 'budget or expected selling price'],
+    ['budget', isInvestor ? 'investment budget' : 'budget or expected selling price'],
     ['property_type', 'property type'],
-    ['bedrooms', 'bedrooms'],
-    ['bathrooms', 'bathrooms'],
-    ['must_have_features', 'must-have features'],
-    ['parking_required', 'parking'],
-    ['backyard_needed', 'backyard'],
-    ['school_district_important', 'school district preference'],
+    ...(isInvestor
+      ? [
+          ['investment_type', 'investment type'],
+          ['investment_goal', 'investment goal'],
+          ['owns_investments', 'existing investment portfolio'],
+          ['down_payment', 'down payment / capital readiness'],
+        ]
+      : [
+          ['bedrooms', 'bedrooms'],
+          ['bathrooms', 'bathrooms'],
+          ['must_have_features', 'must-have features'],
+          ['parking_required', 'parking'],
+          ['backyard_needed', 'backyard'],
+          ['school_district_important', 'school district preference'],
+        ]),
     ['timeline', 'timeline'],
     ['preapproval', 'mortgage status'],
     ['realtor_status', 'realtor status'],
-    ['motivation_reason', 'reason for moving'],
+    ...(isInvestor
+      ? []
+      : [
+          ['motivation_reason', 'reason for moving'],
+          ['living_situation', 'current living situation'],
+        ]),
     ['viewing_readiness', 'viewing readiness'],
-    ['living_situation', 'current living situation'],
     ['urgency_readiness', 'offer readiness'],
     ['preferred_contact_method', 'preferred contact method and best time'],
   ];
@@ -112,7 +143,11 @@ export const buildAgentSystemPrompt = (professionalProfile, options = {}) => {
     && !scheduleActions.includes('schedule'),
   );
   const hasBookingLink = !blockSchedule && isAutomatedBookingEnabled && calendlyLink;
-  const actionFlow = getAgentActionFlow(leadGrade, intent);
+  const actionFlow = getAgentActionFlow(
+    leadGrade,
+    intent,
+    actionFlowContextFromForm('agent', options.intakeFormContact || {}, options.assistantSetting?.client_type),
+  );
   const isBuyer = intent !== 'sell';
   const recommendedLine =
     actionFlow.recommendedAppointment?.length > 0
@@ -232,14 +267,32 @@ ${checklistPlain}
     : applied
       ? 'Ask the saved qualification questions that are still missing, one at a time. Skip any answer the intake form or the visitor already gave.'
       : 'Qualify the lead with the unanswered questions below. Do not ask intent, location, budget, timeline, property type, or mortgage status. The intake form already collected them.';
+  const intakeForm = options.intakeFormContact || {};
+  const intakeIsInvestor = String(intakeForm.client_type || '').toLowerCase() === 'investor'
+    || String(intakeForm.motivation_reason || '').toLowerCase() === 'investment'
+    || Boolean(String(intakeForm.investment_type || '').trim())
+    || Boolean(String(intakeForm.investment_goal || '').trim());
+  // Land has no bedrooms, bathrooms, parking, or backyard: never ask those for a land buyer or seller.
+  const intakeIsLand = /\b(land|lot|acreage|vacant)\b/i.test(String(intakeForm.property_type || ''));
+  const landLine = intakeIsLand
+    ? '\n- The property type is LAND: never ask bedrooms, bathrooms, parking, backyard, school district, or house features. If a detail is needed, ask one of lot size or acreage, zoning or intended use, or utilities and road access.'
+    : '';
   const defaultQuestions = [
     ['realtor_status', 'Are you currently working with a realtor? (No / Yes but open / Yes exclusively)'],
-    ['motivation_reason', 'What is the main reason for your move? (Relocation, family change, divorce, investment, upgrading, downsizing, just exploring)'],
-    ['viewing_readiness', 'Would you like to start viewing properties soon? (Yes ASAP / Within a few weeks / Maybe later / Just browsing)'],
-    ['living_situation', 'Do you currently own or rent? (Renting / Own but need to sell / Own and not selling)'],
-    ['urgency_readiness', 'If you found the perfect home tomorrow, would you make an offer? (Yes immediately / Maybe / No)'],
+    ...(intakeIsInvestor
+      ? []
+      : [
+          ['motivation_reason', 'What is the main reason for your move? (Relocation, family change, divorce, investment, upgrading, downsizing, just exploring)'],
+          ['living_situation', 'Do you currently own or rent? (Renting / Own but need to sell / Own and not selling)'],
+        ]),
+    ['viewing_readiness', intakeIsInvestor
+      ? 'Would you like to start touring investment properties soon? (Yes ASAP / Within a few weeks / Maybe later / Just browsing)'
+      : 'Would you like to start viewing properties soon? (Yes ASAP / Within a few weeks / Maybe later / Just browsing)'],
+    ['urgency_readiness', intakeIsInvestor
+      ? 'If you found the right deal tomorrow, would you make an offer? (Yes immediately / Maybe / No)'
+      : 'If you found the perfect home tomorrow, would you make an offer? (Yes immediately / Maybe / No)'],
     ['preferred_contact_method', 'What is your preferred way to be contacted, and what is the best time?'],
-  ].filter(([id]) => !hasIntakeAnswer(id, options.intakeFormContact));
+  ].filter(([id]) => !hasIntakeAnswer(id, intakeForm));
   const questions = savedQuestions || defaultQuestions;
   const questionsBlock = previewChat && !applied
     ? `LEAD QUALIFICATION QUESTIONS:
@@ -274,39 +327,51 @@ ${voiceOn
 - After they share availability (morning/evening/etc.) or agree to a viewing, include the Calendly Markdown link in the SAME reply — do NOT re-list their contact recap.
 - Do NOT promise you already scheduled them or that a confirmation email is on the way unless they completed Calendly booking. Use the booking link instead.
 - ${voiceOn ? 'Match the selected communication style for the length of a scheduling reply, and keep the booking link when you share it.' : 'Keep scheduling replies to 1–2 short sentences plus the booking link — no filler motivational closings.'}`;
+  const optionsFlowInstruction = !propertyMatchesEnabled
+    ? 'Do not offer or claim property cards are available; continue with the next useful qualification or contact detail.'
+    : options.contactKnown === false
+      ? 'Collect one contact detail (name, email, or phone) before asking whether a buyer or investor wants available options; do not claim cards are available yet.'
+      : 'After qualification, ask a buyer or investor once whether they want available options and wait for their answer.';
   const meetingOrder = blockSchedule
     ? `NEXT STEP ORDER:
 1) Recap once and ask confirmation.
-2) After confirmation, ask if they want available options / property matches.
-3) When options are shown, continue with the next unanswered qualification question.
+2) ${optionsFlowInstruction} Do not ask a seller.
+3) Continue with the next unanswered qualification question.
 4) Do not share a Calendly link unless the client asks to schedule.`
     : voiceOn
       ? `MEETING-FIRST EXECUTION ORDER:
-1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back.
-2) Ask one missing checked qualification question. Do not share a meeting link in that reply.
-3) After every missing question is answered, ask permission to share available times.
-4) After they agree, share one Calendly link clearly and stop repeating booking CTAs unless they ask again.
-5) When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.`
+1) On the first reply, greet in one short sentence. After that, acknowledge what they just said without their name. Do not list it back. A saved lead is not announced and does not skip this order.
+2) Ask one missing checked qualification question. A short answer such as "yes" closes only that question. Do not share a meeting link in that reply.
+3) ${optionsFlowInstruction} Do not ask a seller, and do not claim the cards are already visible.
+4) After they say yes or ask to see options, point at the cards in one short sentence. Then ask for the next requested document, one file at a time: name only that one document, never a list of several. If the visitor does not upload a file, stop asking and share the meeting link, unless they already asked to book.
+5) After they agree, share one Calendly link clearly and stop repeating booking CTAs unless they ask again.
+6) When the visitor asks about the rest of the details, ask the next missing question. Do not ask a detail the intake form already has.`
       : `MEETING-FIRST EXECUTION ORDER:
 1) Recap once and ask confirmation.
-2) After confirmation, ask if they want available options / property matches.
-3) Once options are shown and they show interest, ask to share available times.
+2) ${optionsFlowInstruction} Do not ask a seller.
+3) Once they show interest in a listing, ask to share available times.
 4) After they agree, share one Calendly link clearly and stop repeating booking CTAs unless they ask again.
 5) After link share, keep follow-ups short, practical, and professional.`;
   const propertyMatchesBlock = propertyMatchesEnabled
     ? (applied
       ? `PROPERTY MATCHES (buy intent):
 - Matching listings are shown ONLY in the chat UI property cards (not in your visible reply). Never list properties, prices, beds/baths, numbered lists, or bullet listing rows in the visible message.
-- After the visitor confirms their recap/details, do NOT claim options or matches are visible yet. Ask, in the selected voice, whether they want to see available options, and wait for their answer. Do not copy a stock question.
-- When they say yes or explicitly ask to see options, matches, listings, or homes: reply with one short sentence that points at the cards, such as "Here are options that fit what you shared." Do not repeat details the intake form already collected.
+- ${options.contactKnown === false
+    ? 'Before offering cards, collect one contact detail (name, email, or phone). Do not imply that cards are available before the visitor consents.'
+    : 'After the checked questions are answered, ask once, in the selected voice, whether a buyer or investor wants to see available options, and wait. Do not copy a stock question. Do not claim the cards are visible yet.'}
+- When they say yes or explicitly ask to see options, matches, listings, homes, or investment properties: reply with one short sentence that points at the cards, such as "Here are options that fit what you shared." Do not repeat details the intake form already collected.
+- For investors, frame options around markets, budget, investment type, and investment goal from intake — do not ask buyer-only details like bedrooms or living situation.
 - An FAQ cannot replace that reply, including any answer about finding a property.
 - Do NOT recap contact/details on that turn.
 - For a seller, do not offer property match cards. Ask about the property they are selling.
 - NEVER repeat the lead recap bullet list on later turns (scheduling, viewings, options, or general Q&A). Contact details were captured at intake.`
       : `PROPERTY MATCHES (buy intent):
 - Matching listings are shown ONLY in the chat UI property cards (not in your visible reply). Never list properties, prices, beds/baths, numbered lists, or bullet listing rows in the visible message.
-- After the visitor confirms their recap/details, do NOT claim options or matches are visible yet. Ask ONE friendly question such as "Would you like to see available options?" and wait for their answer.
-- Only after they say yes or explicitly ask to see options/matches/listings: reply in ONE short sentence only (max ~15 words), e.g. "Here are your available options below." Do NOT recap contact/details, do NOT enumerate homes, do NOT re-ask for preferred contact method or best time if META already has them.
+- ${options.contactKnown === false
+    ? 'Before offering cards, collect one contact detail (name, email, or phone). Do not imply that cards are available before the visitor consents.'
+    : 'After the visitor confirms their details, ask once whether a buyer or investor wants to see available options, and wait. A yes or their own request shows the cards.'}
+- When they say yes or explicitly ask to see options, matches, listings, or homes: reply in ONE short sentence only (max ~15 words), e.g. "Here are your available options below." Do NOT recap contact/details, do NOT enumerate homes, do NOT re-ask for preferred contact method or best time if META already has them.
+- For a seller, do not offer property match cards. Ask about the property they are selling.
 - NEVER repeat the lead recap bullet list on later turns (scheduling, viewings, options, or general Q&A). Contact details were captured at intake.`)
     : `PROPERTY MATCHES:
 - Do NOT claim property matches or listing cards are available in this chat.
@@ -321,12 +386,13 @@ ${identity} ${openingReach}
 ${personaBlock}
 
 PRIMARY GOALS (SALES-FOCUSED):
-- Classify every visitor strictly as either a BUYER (intent="buy") or a SELLER (intent="sell").
+- Classify intent as BUY (intent="buy") or SELL (intent="sell"). Investors keep intent="buy" with client_type="investor" — do not treat them as homebuyers.
 - ${qualifyGoal}
 - ${applied ? 'Customization does not change the lead score or the hot, warm, and early classification. Keep every scored signal that the visitor already gave.' : 'The lead score and classification use the existing qualification signals.'}
 - Collect a complete lead form: full name, email, phone, property address (or target area), budget/price range, and timeline.
 - Make it easy and natural for the user to share these details without feeling interrogated.
 - Remember everything the user has already told you and NEVER re-ask for the same field unless they correct it.
+- For investors, never re-ask bedrooms, bathrooms, living situation, school district, parking, backyard, or buyer-only move reasons once intake covered investment answers.
 - Progress the conversation toward a professional consultation with ${name} once qualification signals are strong.
 
 ${meetingStrategy}
@@ -342,14 +408,23 @@ ${previewChat
 - "Looking for", "yes am looking for", "need a home", and "searching" mean buy. Ask one missing detail, such as area or home type. Do not ask "buy or sell?".
 - Selling, listing, or "my house" means sell. Ask about that property.
 - Do not claim a form already collected intent, location, budget, timeline, property type, or mortgage status.`
-  : `The intake form already has intent, location, budget, timeline, property type, and mortgage status. Do not ask for any of those again.
+  : applied
+    ? `The intake form already has intent, location, budget, timeline, property type, and mortgage status${intakeIsInvestor ? ', plus investment type, investment goal, capital readiness, and related investor fields' : ''}. Do not ask for any of those again.
+- Ask only the next open saved qualification question, one at a time.
+- When no open qualification questions remain, your next reply must ask once whether they want to see available ${intakeIsInvestor ? 'investment ' : ''}options. Do not ask for documents or a booking link in that same reply. Wait for their answer. After they say yes, point at the cards. Only then request one document, then booking.
+- Do not invent extra preference questions such as beds, baths, parking, or must-haves unless a saved question still asks for them.${landLine}
+- Do not ask for a pre-approval letter when mortgage status is paying cash; proof of funds / photo ID may still apply.
+- For a seller, never offer property match cards.`
+    : `The intake form already has intent, location, budget, timeline, property type, and mortgage status. Do not ask for any of those again.
 
-For BUYERS (intent="buy"), collect these property preferences only when the form did not already include them:
+${intakeIsInvestor
+  ? `For INVESTORS (intent="buy", client_type="investor"), only collect missing investment fields (markets, budget, investment type/goal, financing, capital readiness). Do not ask bedrooms, bathrooms, living situation, school district, parking, backyard, or homebuyer move reasons.`
+  : `For BUYERS (intent="buy"), collect these property preferences only when the form did not already include them:
 - Bedrooms and bathrooms needed
 - Must-have features (e.g. pool, garage, open floor plan)
 - Parking required? (yes / no)
 - Backyard needed? (yes / no)
-- School district important? (yes / no)
+- School district important? (yes / no)`}
 
 For SELLERS (intent="sell"), collect these about the property they are listing:
 - Property address
@@ -359,7 +434,7 @@ For SELLERS (intent="sell"), collect these about the property they are listing:
 - Key features (e.g. pool, garage, backyard, open floor plan)
 - Parking? (yes / no — does the property have parking/garage?)
 - Backyard? (yes / no — does the property have a backyard?)
-- NEVER ask sellers "what are you looking for" or "how many bedrooms do you need" — those are buyer questions. Sellers are listing a property; ask about THAT property.`}
+- NEVER ask sellers "what are you looking for" or "how many bedrooms do you need" — those are buyer questions. Sellers are listing a property; ask about THAT property.${landLine}`}
 
 ${previewChat
   ? `QUESTION FLOW:
@@ -438,6 +513,9 @@ After EVERY reply, append one JSON block on a NEW line starting with ###META### 
     "viewing_readiness": "",
     "living_situation": "",
     "urgency_readiness": "",
+    "client_type": "",
+    "investment_type": "",
+    "investment_goal": "",
     "preferred_contact_method": "",
     "best_time_to_contact": ""
   },
@@ -446,6 +524,7 @@ After EVERY reply, append one JSON block on a NEW line starting with ###META### 
 
 FIELD VALUES GUIDE FOR META (use these exact values for lead scoring):
 - For SELLERS: property_address = listing address; budget = expected selling price; bedrooms/bathrooms/must_have_features/parking_required/backyard_needed = specs of the property being sold.
+- For INVESTORS: keep intent "buy", set client_type "investor", motivation_reason "investment", and fill investment_type / investment_goal. Put preferred area in both location and property_address (same value — do not invent a separate buy_property_location). Do not re-ask bedrooms, bathrooms, parking, backyard, school district, or living situation once intake already collected investor answers.
 - timeline: "asap" | "1-3 months" | "3-6 months" | "6-12 months" | "browsing" | ""
 - mortgage_status: "fully_pre_approved" | "paying_cash" | "in_progress" | "not_yet" | "unsure" | ""
 - realtor_status: "no_agent" | "has_agent_but_open" | "has_exclusive_agent" | ""
@@ -453,6 +532,9 @@ FIELD VALUES GUIDE FOR META (use these exact values for lead scoring):
 - viewing_readiness: "asap" | "few_weeks" | "maybe_later" | "just_browsing" | ""
 - living_situation: "renting" | "own_need_to_sell" | "own_not_selling" | ""
 - urgency_readiness: "yes_immediately" | "maybe" | "no" | ""
+- client_type: "buyer" | "seller" | "investor" | ""
+- investment_type: "rental_property" | "fix_and_flip" | "pre_construction" | "multi_unit" | "commercial" | ""
+- investment_goal: "rental_income" | "appreciation" | "both" | ""
 - parking_required / backyard_needed / school_district_important: "yes" | "no" | ""
 - preferred_contact_method: "phone" | "text" | "email" | "whatsapp" | "video_call" | "in_person" | ""
 - best_time_to_contact: "morning" | "afternoon" | "evening" | "anytime" | ""
@@ -472,7 +554,7 @@ ${applied
 - If the user says "all good" / "looks correct" / "yes" — keep the data as is.
 - If the user asks to change something — acknowledge it, update META with the new value, and confirm only the changed line.`
     : `CONFIRMATION BEFORE FINALISING:
-- When you have collected most of the key details (contact, budget/price, timeline, address or location), recap in a scannable Markdown list: one fact per line, each line starting with "- " followed by a short bold label and the value (e.g. "- **Budget:** $400k–$700k", "- **Location:** Lahore"). Put a blank line between intro prose and the list if you use an intro sentence. Every list line MUST include the real value after the label — never empty labels. Then ask: "Is everything correct, or would you like to change any details?"
+- When you have collected most of the key details (contact, budget/price, timeline, address or location), recap in a scannable Markdown list: one fact per line, each line starting with "- " followed by a short bold label and the value (e.g. "- **Budget:** $400k–$700k", "- **Location:** Downtown Toronto"). Put a blank line between intro prose and the list if you use an intro sentence. Every list line MUST include the real value after the label — never empty labels. Then ask: "Is everything correct, or would you like to change any details?"
 - If the user says "all good" / "looks correct" / "yes" — keep the data as is.
 - If the user asks to change something (budget, address, timeline, bedrooms, etc.) — acknowledge it, update META with the new value, and confirm the change.`}
 
@@ -488,6 +570,6 @@ CONVERSATION STYLE:
 - Never make legal, tax, or financial promises; you can suggest that ${name} will review the details with them.
 - Out-of-scope guardrail: weather, sports, entertainment, coding, politics, trivia, jokes, recipes, loneliness, relationships, mood, and any other topic outside buying or selling a property get one short redirect back to real-estate buy/sell support. Do not counsel, comfort, or give life advice.
 `.trim();
-  return `${appendAssistantOverlay(prompt, options.assistantSetting, { preview: previewChat, openingTurn: options.openingTurn, intakeFormContact: options.intakeFormContact, chatAnsweredQuestions: options.chatAnsweredQuestions })}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
+  return `${appendAssistantOverlay(prompt, options.assistantSetting, { preview: previewChat, contactKnown: options.contactKnown, openingTurn: options.openingTurn, intakeFormContact: options.intakeFormContact, chatAnsweredQuestions: options.chatAnsweredQuestions, propertyMatchesEnabled })}\n\n${profileVisitorFactsBlock(professionalProfile, options.assistantSetting, options.yearsExperience)}`;
 };
  

@@ -36,6 +36,7 @@ import {
   getRecentClosedSellerLeadOutcomes,
   getSellerCredentialMetrics,
 } from '../analytics/leadKpiService.js';
+import { experienceLabel, experienceYearsEstimate, experienceYearsOf } from '../../utils/experienceYears.js';
 
 export function toProfessionalProfileSummary(profile) {
   if (!profile) return null;
@@ -47,7 +48,10 @@ export function toProfessionalProfileSummary(profile) {
     calendly_link: profile.calendly_link || '',
     location: profile.location || '',
     target_neighborhoods: profile.target_neighborhoods || '',
-    experience: profile.experience || '',
+    experience: experienceLabel(profile),
+    experience_years: experienceYearsOf(profile),
+    // Numeric years for storefront metrics (legacy levels give an estimate).
+    years_experience: experienceYearsEstimate(profile),
     license_number: profile.license_number || '',
     website: profile.website || '',
     transaction_volume: profile.transaction_volume || '',
@@ -363,17 +367,14 @@ function hasRevisionExpectation(expected = {}) {
 
 function revisionContentMatches(revision, canonicalDraft) {
   const serialized = serializeStorefrontRevision(revision);
-  return JSON.stringify({
-    blocks: serialized?.blocks || [],
-    brandKit: serialized?.brandKit || {},
-    template: serialized?.template || {},
-    seo_meta: serialized?.seo_meta || {},
-  }) === JSON.stringify({
-    blocks: canonicalDraft?.blocks || [],
-    brandKit: canonicalDraft?.brandKit || {},
-    template: canonicalDraft?.template || {},
-    seo_meta: canonicalDraft?.seo_meta || {},
+  const snapshot = (entry) => ({
+    blocks: entry?.blocks || [],
+    brandKit: entry?.brandKit || {},
+    template: entry?.template || {},
+    seo_meta: entry?.seo_meta || {},
+    ...(entry?.website ? { website: entry.website } : {}),
   });
+  return JSON.stringify(snapshot(serialized)) === JSON.stringify(snapshot(canonicalDraft));
 }
 
 async function saveProfileOrConflict(profile, currentRevision) {
@@ -496,7 +497,26 @@ export const saveStorefrontDraftService = async (userId, draft, expected = {}) =
   };
 };
 
+function publishPlanRequired() {
+  return {
+    status: 403,
+    body: {
+      success: false,
+      message: 'Publishing a Nesti website is included with an active Standard or Enterprise plan.',
+    },
+  };
+}
+
 export const publishStorefrontService = async (userId, draft = null, expected = {}) => {
+  const { canPublishWebsite } = await import('../billing/entitlements.js');
+  const { getSubscriptionForRead } = await import('../billing/subscriptionReadService.js');
+  const subscription = await getSubscriptionForRead({ _id: userId }, { refresh: false });
+  const planAllowsPublish = canPublishWebsite(subscription);
+  // An approved professional (subscription row exists) can always publish a free template,
+  // including after the trial ends. Paid templates still need the plan check below.
+  if (!planAllowsPublish && !subscription) {
+    return publishPlanRequired();
+  }
   const [profile, professionalProfile] = await Promise.all([
     PublicProfile.findOne({ user_id: userId })
       .select('user_id professional_type slug storefront'),
@@ -566,6 +586,9 @@ export const publishStorefrontService = async (userId, draft = null, expected = 
       status: 400,
       body: { success: false, message: 'This template is not available for your professional type.' },
     };
+  }
+  if (!planAllowsPublish && templateAccess.tier !== 'free') {
+    return publishPlanRequired();
   }
   if (!userHasStorefrontTemplateAccess(profile, templateAccess.template_id)) {
     return {

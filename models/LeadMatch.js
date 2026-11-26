@@ -27,6 +27,10 @@ const leadMatchSchema = new mongoose.Schema(
       ref: 'ChatConversation',
       index: true,
     },
+    /** One lead per conversation and intent, for example "<conversationId>:buyer". */
+    lead_slot: {
+      type: String,
+    },
     match_score: {
       type: Number,
       default: 0,
@@ -58,6 +62,15 @@ const leadMatchSchema = new mongoose.Schema(
     last_contact_at: {
       type: Date,
     },
+    // Client clicked the unsubscribe link in a follow-up email: no more nurture emails to this lead.
+    nurture_opted_out: {
+      type: Boolean,
+      default: false,
+    },
+    nurture_opted_out_at: {
+      type: Date,
+      default: null,
+    },
     ai_insights: {
       payload: {
         type: mongoose.Schema.Types.Mixed,
@@ -84,6 +97,10 @@ leadMatchSchema.index({ user_id: 1, lead_profile_id: 1, last_contact_at: -1, upd
 leadMatchSchema.index({ user_id: 1, createdAt: -1 });
 leadMatchSchema.index({ user_id: 1, match_status: 1, createdAt: -1 });
 leadMatchSchema.index({ user_id: 1, conversation_id: 1 });
+leadMatchSchema.index(
+  { lead_slot: 1 },
+  { unique: true, partialFilterExpression: { lead_slot: { $type: 'string' } } },
+);
 leadMatchSchema.index({ match_status: 1, createdAt: -1 });
 
 export default mongoose.model('LeadMatch', leadMatchSchema);

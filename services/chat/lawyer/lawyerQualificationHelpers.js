@@ -1,7 +1,9 @@
 import { mergeLawyerQualificationForScoring } from '../scoring/index.js';
 import { mergeSignals } from '../scoring/index.js';
+import { marketChoiceFromForm } from '../../professionalAssistant/brokerInvestorMarket.js';
 export function pickLawyerFormQualification(storedForm) {
   if (!storedForm) return {};
+  const clientType = String(storedForm.client_type || '').toLowerCase() || null;
   return {
     transaction_stage: storedForm.transaction_stage || null,
     closing_timeline: storedForm.closing_timeline || null,
@@ -13,6 +15,13 @@ export function pickLawyerFormQualification(storedForm) {
     legal_services_needed: storedForm.legal_services_needed || null,
     preferred_contact_method: storedForm.preferred_contact_method || null,
     best_time_to_contact: storedForm.best_time_to_contact || null,
+    client_type: clientType,
+    via_company: storedForm.via_company || null,
+    // Country from the form, else inferred from province/state or the property address.
+    market_country: marketChoiceFromForm(storedForm) || null,
+    market_region: storedForm.market_region || null,
+    market_city: storedForm.market_city || null,
+    market_country_name: storedForm.market_country_name || null,
   };
 }
 export function pickLawyerFormSignals(storedForm) {
@@ -64,6 +73,12 @@ export function mergeLawyerAiDetailsForMeta(parsedAiDetails, derivedQual) {
     preferred_contact_method:
       parsedAiDetails?.preferred_contact_method || derivedQual.preferred_contact_method || '',
     best_time_to_contact: parsedAiDetails?.best_time_to_contact || derivedQual.best_time_to_contact || '',
+    client_type: parsedAiDetails?.client_type || derivedQual.client_type || '',
+    via_company: parsedAiDetails?.via_company || derivedQual.via_company || '',
+    market_country: parsedAiDetails?.market_country || derivedQual.market_country || '',
+    market_region: parsedAiDetails?.market_region || derivedQual.market_region || '',
+    market_city: parsedAiDetails?.market_city || derivedQual.market_city || '',
+    market_country_name: parsedAiDetails?.market_country_name || derivedQual.market_country_name || '',
   };
 }
 
@@ -95,6 +110,15 @@ export function buildLawyerLeadProfileUpdate(parsedAiDetails, derivedQual, formC
       parsedAiDetails?.best_time_to_contact ||
       derivedQual.best_time_to_contact ||
       formContact?.best_time_to_contact,
+    via_company: parsedAiDetails?.via_company || derivedQual.via_company || formContact?.via_company,
+    // The form's explicit country/region wins over a model guess.
+    lawyer_market_country:
+      marketChoiceFromForm(formContact || {})
+      || marketChoiceFromForm({ market_country: parsedAiDetails?.market_country || derivedQual.market_country })
+      || undefined,
+    lawyer_market_region: formContact?.market_region || parsedAiDetails?.market_region || derivedQual.market_region,
+    lawyer_market_city: formContact?.market_city || parsedAiDetails?.market_city || derivedQual.market_city,
+    lawyer_market_country_name: formContact?.market_country_name || parsedAiDetails?.market_country_name || derivedQual.market_country_name,
     property_address: parsedAiDetails?.property_address || formContact?.address,
     location:
       parsedAiDetails?.location ||

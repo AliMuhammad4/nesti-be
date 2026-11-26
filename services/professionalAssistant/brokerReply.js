@@ -332,7 +332,7 @@ export function finishBrokerReply(reply, { userMessage = '', previousReply = '',
   const refusedMortgage = isClosingRefusal(userMessage)
     && MORTGAGE_LOOP.test(previousReply)
     && MORTGAGE_LOOP.test(original);
-  let text = !stock
+  let text = !stock || setting?.applied
     ? original
     : isGreetingOnly(userMessage) && BROKER_I18N[language]
       ? brokerDriftReply(setting, userMessage, conversationText)

@@ -80,7 +80,7 @@ export function roleForUser(user, profile) {
 }
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
-const MAX_TEMPLATE_QUESTIONS = 8;
+const MAX_TEMPLATE_QUESTIONS = 12;
 const MAX_QUESTION_OPTIONS = 8;
 const MAX_KNOWLEDGE_FILES = 6;
 const MAX_KNOWLEDGE_TEXT = 6000;
@@ -114,6 +114,40 @@ function slugId(text, index) {
   return slug ? `custom_${slug}` : `custom_question_${index + 1}`;
 }
 
+/** Exact pre-expansion catalog ids. Only these full lists auto-receive newer defaults. */
+const LEGACY_FULL_QUALIFICATION_IDS = Object.freeze({
+  agent: Object.freeze({
+    investor: Object.freeze(['investment_type', 'location', 'budget', 'investment_goal', 'timeline']),
+  }),
+});
+
+/**
+ * Exact prior full default document lists. A saved list equal to one of these (any order) is the untouched
+ * old default and receives newer optional documents; a curated subset or a custom list is left alone.
+ */
+const LEGACY_FULL_DOCUMENT_IDS = Object.freeze({
+  lawyer: Object.freeze([
+    Object.freeze(['purchase_agreement', 'title_deed', 'mortgage_commitment', 'photo_id', 'condo_status']),
+  ]),
+});
+
+/** Bumped when a catalog document is added. Saved settings stamped with it are never auto-upgraded again. */
+export const DOCUMENT_CATALOG_VERSION = 2;
+
+export function upgradeLegacyDocumentRequests(role, ids) {
+  const saved = Array.isArray(ids) ? ids : [];
+  const legacyLists = LEGACY_FULL_DOCUMENT_IDS[role] || [];
+  const savedSet = new Set(saved);
+  const isLegacyDefault = legacyLists.some((legacy) => (
+    savedSet.size === saved.length
+    && saved.length === legacy.length
+    && legacy.every((id) => savedSet.has(id))
+  ));
+  if (!isLegacyDefault) return saved;
+  const current = idsOf(DOCUMENT_REQUESTS[role] || []);
+  return [...saved, ...current.filter((id) => !savedSet.has(id))];
+}
+
 export function sanitizeQualificationTemplates(input, role) {
   const defaults = defaultQualificationTemplates(role);
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
@@ -142,8 +176,40 @@ export function sanitizeQualificationTemplates(input, role) {
         if (!question.label || seen.has(question.id)) return false;
         seen.add(question.id);
         return true;
-      })
-      .slice(0, MAX_TEMPLATE_QUESTIONS);
+      });
+        // Upgrade legacy catalog templates that are missing newer defaults.
+    // Only append when the saved list is an ordered prefix of the current catalog
+    // (true legacy full templates). Skip hand-curated short/reordered lists and
+    // templates that already include custom questions.
+    const knownOnly = questions.length > 0 && questions.every((question) => !question.custom && baseById.has(question.id));
+    const missingDefaults = base.questions.filter((question) => !seen.has(question.id));
+    const savedIds = questions.map((question) => question.id);
+    const legacyIds = LEGACY_FULL_QUALIFICATION_IDS[role]?.[type];
+    // Upgrade only an exact prior full catalog — not every ordered prefix (that would
+    // erase hand-curated shortlists that happen to start like the defaults).
+    const isExactLegacyFullCatalog = knownOnly
+      && missingDefaults.length > 0
+      && Array.isArray(legacyIds)
+      && savedIds.length === legacyIds.length
+      && savedIds.every((id, index) => id === legacyIds[index]);
+    if (isExactLegacyFullCatalog) {
+      for (const question of missingDefaults) {
+        questions.push({ ...question });
+        seen.add(question.id);
+      }
+    }
+    // Prefer keeping catalog defaults when capping — drop trailing custom extras first.
+    while (questions.length > MAX_TEMPLATE_QUESTIONS) {
+      let dropAt = -1;
+      for (let i = questions.length - 1; i >= 0; i -= 1) {
+        if (questions[i].custom) {
+          dropAt = i;
+          break;
+        }
+      }
+      if (dropAt >= 0) questions.splice(dropAt, 1);
+      else questions.pop();
+    }
     return [type, {
       enabled: raw.enabled !== false,
       cta_label: clip(raw.cta_label, 60) || base.cta_label,
@@ -195,6 +261,7 @@ export function emptyAssistant(role) {
     use_emojis: false,
     address_by_first_name: true,
     suggest_consultation: true,
+    offer_property_matches: true,
     brand_colors: { ...DEFAULT_BRAND_COLORS },
     logo_url: '',
     avatar_url: '',
@@ -216,7 +283,9 @@ export function emptyAssistant(role) {
     qualification_templates: defaultQualificationTemplates(role),
     qualification_questions: idsOf(QUALIFICATION[role] || []),
     document_requests: idsOf(DOCUMENT_REQUESTS[role] || []),
-    next_actions: ['schedule', 'collect_contact', 'notify', 'save_lead'],
+    next_actions: role === 'agent'
+      ? ['schedule', 'notify', 'save_lead']
+      : ['schedule', 'collect_contact', 'notify', 'save_lead'],
     hot_guidance: 'Prospects who show strong intent, urgency, and readiness to take action.',
     warm_guidance: 'Prospects who are interested but need more guidance or time.',
     cold_guidance: 'Prospects who are researching or working on a longer timeline.',
@@ -255,7 +324,13 @@ export function sanitizeAssistant(input, role) {
   const style = idsOf(COMMUNICATION_STYLES).includes(source.communication_style)
     ? source.communication_style
     : base.communication_style;
-  const formality = FORMALITIES.includes(source.formality) ? source.formality : base.formality;
+  const toneLevelRaw = Number(source.tone_level);
+  const formalityFromDial = Number.isFinite(toneLevelRaw)
+    ? (toneLevelRaw < 34 ? 'casual' : toneLevelRaw > 66 ? 'formal' : 'professional')
+    : '';
+  const formality = FORMALITIES.includes(formalityFromDial)
+    ? formalityFromDial
+    : (FORMALITIES.includes(source.formality) ? source.formality : base.formality);
   const faqs = assistantFaqsForRole(role, source.faqs);
   const customToneIds = new Set();
   const customTones = (Array.isArray(source.custom_tones) ? source.custom_tones : [])
@@ -276,7 +351,7 @@ export function sanitizeAssistant(input, role) {
     validPersonalities,
     2,
   );
-  const toneLevel = Number(source.tone_level);
+  const toneLevel = toneLevelRaw;
   const responseLength = idsOf(RESPONSE_LENGTHS).includes(source.response_length)
     ? source.response_length
     : base.response_length;
@@ -311,6 +386,7 @@ export function sanitizeAssistant(input, role) {
     use_emojis: source.use_emojis === true,
     address_by_first_name: source.address_by_first_name !== false,
     suggest_consultation: source.suggest_consultation !== false,
+    offer_property_matches: source.offer_property_matches !== false,
     brand_colors: {
       primary: brandColor(sourceColors.primary, DEFAULT_BRAND_COLORS.primary),
       accent: brandColor(sourceColors.accent, DEFAULT_BRAND_COLORS.accent),
@@ -334,9 +410,13 @@ export function sanitizeAssistant(input, role) {
     services_pricing: clip(source.services_pricing, 800),
     custom_guidance: clip(source.custom_guidance, 2000),
     qualification_questions: list(source.qualification_questions, idsOf(QUALIFICATION[role] || []), 8),
+    // Read-time upgrade: only settings saved before this catalog version (no stamp) receive newer documents.
     document_requests: Array.isArray(source.document_requests)
-      ? list(source.document_requests, idsOf(DOCUMENT_REQUESTS[role] || []), 8)
+      ? (Number(source.document_catalog_version) >= DOCUMENT_CATALOG_VERSION
+        ? list(source.document_requests, idsOf(DOCUMENT_REQUESTS[role] || []), 8)
+        : upgradeLegacyDocumentRequests(role, list(source.document_requests, idsOf(DOCUMENT_REQUESTS[role] || []), 8)))
       : base.document_requests,
+    document_catalog_version: DOCUMENT_CATALOG_VERSION,
     next_actions: Array.isArray(source.next_actions)
       ? list(source.next_actions, idsOf(NEXT_ACTIONS), 8)
       : base.next_actions,
@@ -407,11 +487,29 @@ export function activeQualificationTemplate(setting, clientType) {
  * Everything downstream that reads `qualification_questions` keeps working unchanged.
  */
 export function settingForClientType(setting, clientType) {
+  if (!setting?.applied) return setting;
+  const type = idsOf(CLIENT_TYPES).includes(clientType) ? clientType : '';
+  if (
+    type
+    && Array.isArray(setting.client_types)
+    && setting.client_types.length
+    && !setting.client_types.includes(type)
+  ) {
+    return {
+      ...setting,
+      client_type: type,
+      client_type_blocked: true,
+      cta_label: '',
+      qualification_questions: [],
+      question_overrides: {},
+    };
+  }
   const template = activeQualificationTemplate(setting, clientType);
   if (!template) return setting;
   return {
     ...setting,
     client_type: template.client_type,
+    client_type_blocked: false,
     cta_label: template.cta_label,
     qualification_questions: template.questions.map((question) => question.id),
     question_overrides: Object.fromEntries(template.questions.map((question) => [

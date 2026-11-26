@@ -86,12 +86,87 @@ export function normalizeGradeForLeadType(grade) {
   return 'cold';
 }
 
-export const buildLeadType = (grade, intent) =>
-  `${normalizeGradeForLeadType(grade)}_${intent === 'sell' ? 'seller' : 'buyer'}`;
-export const buildMortgageBrokerLeadType = (grade) => `${normalizeGradeForLeadType(grade)}_client`;
-export const buildLawyerLeadType = (grade) => `${normalizeGradeForLeadType(grade)}_client`;
-export const buildLeadClassification = (grade, intent) => {
+export const buildLeadType = (grade, intent, clientType = '') => {
+  const g = normalizeGradeForLeadType(grade);
+  if (String(clientType || '').toLowerCase() === 'investor') return `${g}_investor`;
+  return `${g}_${intent === 'sell' ? 'seller' : 'buyer'}`;
+};
+export const buildMortgageBrokerLeadType = (grade, clientType = '') => {
+  const g = normalizeGradeForLeadType(grade);
+  if (String(clientType || '').toLowerCase() === 'investor') return `${g}_investor`;
+  return `${g}_client`;
+};
+export const buildLawyerLeadType = (grade, clientType = '') => {
+  const g = normalizeGradeForLeadType(grade);
+  if (String(clientType || '').toLowerCase() === 'investor') return `${g}_investor`;
+  return `${g}_client`;
+};
+export const buildLeadClassification = (grade, intent, clientType = '') => {
   const label = grade.charAt(0).toUpperCase() + grade.slice(1);
+  if (String(clientType || '').toLowerCase() === 'investor') return `${label} Investor`;
   const i = intent === 'sell' ? 'Seller' : 'Buyer';
   return `${label} ${i}`;
 };
+
+export function buildProfessionalLeadClassification(grade, roleSuffix, clientType = '') {
+  const label = String(grade || '').charAt(0).toUpperCase() + String(grade || '').slice(1);
+  if (String(clientType || '').toLowerCase() === 'investor') return `${label} Investor`;
+  return `${label} ${roleSuffix}`;
+}
+
+/** Prefer explicit investor client_type; also treat investment motivation / investment answers as investor. */
+export function resolveInvestorClientType({ clientType = '', motivationReason = '', investmentType = '', investmentGoal = '' } = {}) {
+  if (String(clientType || '').toLowerCase() === 'investor') return 'investor';
+  if (String(motivationReason || '').toLowerCase() === 'investment') return 'investor';
+  if (String(investmentType || '').trim() || String(investmentGoal || '').trim()) return 'investor';
+  return String(clientType || '').toLowerCase();
+}
+
+const INVESTMENT_TYPE_ALIASES = {
+  rental_property: 'rental_property',
+  rental: 'rental_property',
+  'rental property': 'rental_property',
+  fix_and_flip: 'fix_and_flip',
+  flip: 'fix_and_flip',
+  'fix and flip': 'fix_and_flip',
+  pre_construction: 'pre_construction',
+  preconstruction: 'pre_construction',
+  'pre-construction': 'pre_construction',
+  'pre construction': 'pre_construction',
+  multi_unit: 'multi_unit',
+  multiunit: 'multi_unit',
+  'multi-unit': 'multi_unit',
+  'multi unit': 'multi_unit',
+  commercial: 'commercial',
+};
+
+const INVESTMENT_GOAL_ALIASES = {
+  rental_income: 'rental_income',
+  'rental income': 'rental_income',
+  cash_flow: 'rental_income',
+  cashflow: 'rental_income',
+  appreciation: 'appreciation',
+  both: 'both',
+};
+
+/** Normalize chat/form investment type labels to stable enums. */
+export function normalizeInvestmentType(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const key = text.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const underscored = key.replace(/\s+/g, '_');
+  return INVESTMENT_TYPE_ALIASES[key]
+    || INVESTMENT_TYPE_ALIASES[underscored]
+    || underscored;
+}
+
+/** Normalize chat/form investment goal labels to stable enums. */
+export function normalizeInvestmentGoal(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const key = text.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const underscored = key.replace(/\s+/g, '_');
+  return INVESTMENT_GOAL_ALIASES[key]
+    || INVESTMENT_GOAL_ALIASES[underscored]
+    || underscored;
+}

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import User from '../../models/User.js';
+import { USER_ROLE } from '../../constants/roles.js';
 import Subscription from '../../models/Subscription.js';
 import ClientSubscription from '../../models/ClientSubscription.js';
 import {
@@ -55,6 +56,19 @@ async function buildSubFilter(query = {}) {
   return { empty: false, filter };
 }
 
+async function withoutAdminUsers(filter) {
+  const adminIds = await User.find({ role: USER_ROLE.ADMIN }).distinct('_id');
+  if (!adminIds.length) return filter;
+  const next = { ...filter };
+  if (next.user_id?.$in) {
+    const blocked = new Set(adminIds.map(String));
+    next.user_id = { $in: next.user_id.$in.filter((id) => !blocked.has(String(id))) };
+    return next;
+  }
+  next.user_id = { $nin: adminIds };
+  return next;
+}
+
 export async function listAdminSubscriptionsService(query = {}) {
   const { page, limit, skip } = parsePaging(query);
   const kind = query.kind || 'all';
@@ -85,14 +99,18 @@ export async function listAdminSubscriptionsService(query = {}) {
   }
 
   if (kind === 'professional') {
+    const professionalFilter = await withoutAdminUsers(filter);
+    if (professionalFilter.user_id?.$in && !professionalFilter.user_id.$in.length) {
+      return ok({ items: [], pagination: { page, limit, total: 0, pages: 1 } });
+    }
     const [items, total] = await Promise.all([
-      Subscription.find(filter)
+      Subscription.find(professionalFilter)
         .sort(sort)
         .skip(skip)
         .limit(limit)
         .populate('user_id', USER_LIST)
         .lean(),
-      Subscription.countDocuments(filter),
+      Subscription.countDocuments(professionalFilter),
     ]);
     return ok({
       items: items.map(mapProRow),
@@ -102,8 +120,9 @@ export async function listAdminSubscriptionsService(query = {}) {
 
   // kind=all: fetch skip+limit from each side, merge by updatedAt, then page-slice
   const fetchLimit = skip + limit;
+  const professionalFilter = await withoutAdminUsers(filter);
   const [proItems, clientItems, proTotal, clientTotal] = await Promise.all([
-    Subscription.find(filter)
+    Subscription.find(professionalFilter)
       .sort({ updatedAt: -1 })
       .limit(fetchLimit)
       .populate('user_id', USER_LIST)
@@ -113,7 +132,7 @@ export async function listAdminSubscriptionsService(query = {}) {
       .limit(fetchLimit)
       .populate('user_id', USER_LIST)
       .lean(),
-    Subscription.countDocuments(filter),
+    Subscription.countDocuments(professionalFilter),
     ClientSubscription.countDocuments(filter),
   ]);
 
@@ -147,6 +166,9 @@ export async function patchAdminSubscriptionService(userId, patch = {}) {
   if (!mongoose.Types.ObjectId.isValid(userId)) return fail(400, 'Invalid user id');
   const user = await User.findById(userId).select('_id role').lean();
   if (!user) return fail(404, 'User not found');
+  if (user.role === USER_ROLE.ADMIN && patch.kind !== 'client') {
+    return fail(400, 'Admin accounts do not use a professional subscription.');
+  }
 
   if (patch.kind === 'client') {
     const sub = await ClientSubscription.findOne({ user_id: userId });

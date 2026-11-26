@@ -5,6 +5,7 @@ import User from '../../models/User.js';
 import { SERVICES, idsOf, labelOf } from './catalog.js';
 import { clip, freeList } from './assistantText.js';
 import {
+  DOCUMENT_CATALOG_VERSION,
   assistantCatalog,
   applyProfileIdentity,
   introductionLine,
@@ -103,7 +104,8 @@ export async function saveAssistantForUser(user, body) {
   const profile = await ProfessionalProfile.findOne({ user_id: user._id }).lean();
   const role = roleForUser(user, profile);
   if (!role) return null;
-  const next = sanitizeAssistant({ ...body, role }, role);
+  // A save is the professional's explicit document choice: stamp the catalog version so it is never auto-upgraded.
+  const next = sanitizeAssistant({ ...body, role, document_catalog_version: DOCUMENT_CATALOG_VERSION }, role);
   const doc = await ProfessionalAssistantSetting.findOneAndUpdate(
     { user_id: user._id },
     {

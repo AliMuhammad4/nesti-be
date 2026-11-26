@@ -81,8 +81,8 @@ test('sales phones come from inquiry, professional profile, then user', () => {
   assert.equal(normalizeE164('(416) 555-0199'), '+14165550199');
   assert.equal(normalizeE164('not-a-phone'), '');
   assert.equal(pickSalesPhone({ inquiryPhone: '', profilePhone: '4165550100', userPhone: '+14165550101' }), '+14165550100');
-  assert.match(subscriptionPitchFacts('client'), /\$9\.99/);
-  assert.match(subscriptionPitchFacts('agent'), /\$150/);
+  assert.match(subscriptionPitchFacts('client'), /\$29\.99/);
+  assert.match(subscriptionPitchFacts('agent'), /\$200/);
 });
 
 test('admin and webhook entry points are wired', async () => {
@@ -130,6 +130,6 @@ test('browser sales brief names the caller and speaks prices in words', () => {
   assert.match(serviceLine('lawyer', {}), /newcomer/);
   assert.equal(parseGuide('agent', SERVICE_SEEDS.agent)?.length, 5);
   assert.equal(composeGuide('broker'), SERVICE_SEEDS.broker);
-  assert.match(liveSalesInstructions({ role: 'agent', caller: {}, settings: {} }), /one topic/);
+  assert.match(liveSalesInstructions({ role: 'agent', caller: {}, settings: {} }), /questions he asks come only from the Sales pipeline note/);
   assert.equal(serviceLine('agent', { agent_services: 'Custom storefront line' }), 'Custom storefront line');
 });

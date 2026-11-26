@@ -7,6 +7,27 @@ import {
   notifyUserAccountReinstated,
   notifyUserAccountSuspended,
 } from './accountStatusNotifications.js';
+import { disconnectUserSessions } from '../realtime/sessionSockets.js';
+
+/** Sends a suspend/reinstate notice without holding the request, then records the outcome. */
+function sendStatusNoticeInBackground(userId, kind, send) {
+  Promise.resolve()
+    .then(send)
+    .catch((error) => {
+      logger.error(`Account ${kind} email threw`, { user_id: String(userId), message: error?.message });
+      return { success: false };
+    })
+    .then((result) => {
+      const status = result?.success ? 'sent' : result?.skipped ? 'skipped' : 'failed';
+      return User.updateOne(
+        { _id: userId },
+        { $set: { account_status_email: { kind, status, at: new Date() } } },
+      );
+    })
+    .catch((error) => {
+      logger.warn('Could not record account status email result', { message: error?.message });
+    });
+}
 
 export async function suspendAdminUserService(actor, userId, { reason = '' } = {}) {
   if (!mongoose.Types.ObjectId.isValid(userId)) return fail(400, 'Invalid user id');
@@ -24,10 +45,13 @@ export async function suspendAdminUserService(actor, userId, { reason = '' } = {
   user.suspended_at = new Date();
   user.suspended_reason = reasonText;
   await user.save();
+  // Live sockets end now; HTTP requests are refused on the next call (is_active check).
+  disconnectUserSessions(user._id);
 
   const recipient = {
     email: String(user.email || '').trim().toLowerCase(),
     first_name: user.first_name,
+    role: user.role,
     suspended_reason: reasonText,
   };
   logger.info('Account suspended; sending notice', {
@@ -36,17 +60,14 @@ export async function suspendAdminUserService(actor, userId, { reason = '' } = {
     has_reason: Boolean(reasonText),
   });
 
-  const notified = await notifyUserAccountSuspended(recipient, { reason: reasonText }).catch((error) => {
-    logger.error('Account suspended email threw', {
-      email: recipient.email,
-      message: error?.message,
-    });
-    return { success: false };
-  });
+  // The notice goes out in the background so the admin's click returns straight away;
+  // the result is stored on the account (account_status_email) once it is known.
+  sendStatusNoticeInBackground(user._id, 'suspended', () => notifyUserAccountSuspended(recipient, { reason: reasonText }));
 
   return ok({
     user: serializeUser(user.toObject()),
-    email_notified: Boolean(notified?.success),
+    email_notified: false,
+    email_status: recipient.email ? 'sending' : 'skipped',
   });
 }
 
@@ -62,22 +83,18 @@ export async function unsuspendAdminUserService(userId) {
   const recipient = {
     email: String(user.email || '').trim().toLowerCase(),
     first_name: user.first_name,
+    role: user.role,
   };
   logger.info('Account reinstated; sending notice', {
     user_id: String(user._id),
     email: recipient.email,
   });
 
-  const notified = await notifyUserAccountReinstated(recipient).catch((error) => {
-    logger.error('Account reinstated email threw', {
-      email: recipient.email,
-      message: error?.message,
-    });
-    return { success: false };
-  });
+  sendStatusNoticeInBackground(user._id, 'reinstated', () => notifyUserAccountReinstated(recipient));
 
   return ok({
     user: serializeUser(user.toObject()),
-    email_notified: Boolean(notified?.success),
+    email_notified: false,
+    email_status: recipient.email ? 'sending' : 'skipped',
   });
 }

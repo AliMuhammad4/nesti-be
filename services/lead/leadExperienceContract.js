@@ -45,12 +45,22 @@ export function severityFromConversionPreview(preview) {
   return 'info';
 }
 
+/** Lead toasts and in-app notifications never name the source (chat, form, ...). */
+export const NEW_LEAD_NOTIFICATION_BODY = 'A new lead was captured.';
+const LEGACY_SOURCE_LEAD_BODY = /^A new lead was captured from [a-z ]+\.?$/i;
+
+/** Older stored notifications said "captured from chat" even for form leads; show them neutrally. */
+export function neutralLeadNotificationBody(body) {
+  const text = String(body ?? '');
+  return LEGACY_SOURCE_LEAD_BODY.test(text.trim()) ? NEW_LEAD_NOTIFICATION_BODY : body;
+}
+
 export function conversionPreviewBody(conversion_preview) {
   return (
     conversion_preview?.why_match_one_liner ||
     conversion_preview?.why_one_liner ||
     conversion_preview?.headline ||
-    'A new lead was captured from chat.'
+    NEW_LEAD_NOTIFICATION_BODY
   );
 }
 
@@ -162,13 +172,25 @@ export function buildCollectionEmptyState(kind, context = {}) {
     };
   }
   if (kind === 'property_matches') {
-    const side = context.intent === 'sell' ? 'buyer pipeline leads' : 'seller listings';
+    const clientType = String(context.client_type || context.clientType || '').trim().toLowerCase();
+    const isInvestor = clientType === 'investor'
+      || context.intent === 'investor'
+      || Boolean(context.investment_type || context.investment_goal);
+    if (context.intent === 'sell') {
+      return {
+        reason: 'No buyer pipeline leads currently match this lead profile.',
+        action: 'Update listing details and run matching again.',
+      };
+    }
+    if (isInvestor) {
+      return {
+        reason: 'No investment options currently match this lead profile.',
+        action: 'Adjust markets, budget, property type, or investment criteria and retry to surface more options.',
+      };
+    }
     return {
-      reason: `No ${side} currently match this lead profile.`,
-      action:
-        context.intent === 'sell'
-          ? 'Update listing details and run matching again.'
-          : 'Adjust budget/location/features and retry to surface more listings.',
+      reason: 'No seller listings currently match this lead profile.',
+      action: 'Adjust budget/location/features and retry to surface more listings.',
     };
   }
   return null;

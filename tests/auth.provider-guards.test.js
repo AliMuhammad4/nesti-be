@@ -34,6 +34,7 @@ function createRestoreBag() {
 }
 
 function mockGoogleFetch({ email = "user@example.com", sub = "google-sub-1" } = {}) {
+  const audience = String(process.env.GOOGLE_CLIENT_ID || "").split(",")[0].trim();
   return async () => ({
     ok: true,
     async json() {
@@ -43,6 +44,8 @@ function mockGoogleFetch({ email = "user@example.com", sub = "google-sub-1" } = 
         sub,
         given_name: "Test",
         family_name: "User",
+        aud: audience,
+        azp: audience,
       };
     },
   });
@@ -92,18 +95,28 @@ test("loginService still allows local users with valid password", async () => {
   }
 });
 
-test("forgotPasswordService blocks google-auth users", async () => {
+test("forgotPasswordService gives google-auth users the same generic answer and no code", async () => {
   const bag = createRestoreBag();
   try {
+    let saved = false;
     bag.stub(User, "findOne", async () => ({
       auth_provider: "google",
       email: "google-user@example.com",
+      save: async () => {
+        saved = true;
+      },
     }));
 
     const result = await forgotPasswordService({ email: "google-user@example.com" });
+    const unknown = await (async () => {
+      bag.stub(User, "findOne", async () => null);
+      return forgotPasswordService({ email: "nobody@example.com" });
+    })();
 
-    assert.equal(result.status, 400);
-    assert.match(result.body.message, /google/i);
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body, unknown.body);
+    assert.doesNotMatch(result.body.message, /google/i);
+    assert.equal(saved, false);
   } finally {
     bag.restoreAll();
   }
@@ -137,14 +150,14 @@ test("resetPasswordService blocks google-auth users", async () => {
     }));
 
     const resetToken = jwt.sign(
-      { id: "google-user-1", email: "google-user@example.com" },
+      { id: "google-user-1", purpose: "password_reset", tv: 0 },
       JWT_SECRET,
       { expiresIn: "15m" }
     );
 
     const result = await resetPasswordService({
       resetToken,
-      newPassword: "new-strong-password",
+      newPassword: "New-strong-pass1",
     });
 
     assert.equal(result.status, 400);
@@ -167,10 +180,12 @@ test("googleSignupService routes existing local account to email login", async (
       token: "token-value",
       token_type: "access_token",
       role: "lawyer",
+      phone: "+14155552671",
     });
 
     assert.equal(result.status, 409);
-    assert.match(result.body.message, /email\/password/i);
+    assert.equal(result.body.code, 'EMAIL_ALREADY_REGISTERED');
+    assert.match(result.body.message, /email and password/i);
   } finally {
     bag.restoreAll();
     global.fetch = originalFetch;
@@ -190,10 +205,12 @@ test("googleSignupService routes existing google account to google login", async
       token: "token-value",
       token_type: "access_token",
       role: "agent",
+      phone: "+14155552671",
     });
 
     assert.equal(result.status, 409);
-    assert.match(result.body.message, /google login/i);
+    assert.equal(result.body.code, 'GOOGLE_ACCOUNT_EXISTS');
+    assert.match(result.body.message, /log in with google/i);
   } finally {
     bag.restoreAll();
     global.fetch = originalFetch;

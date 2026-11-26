@@ -95,6 +95,9 @@ function authKeyByUserOrIp(req) {
   return `ip:${resolveClientIp(req)}`;
 }
 
+// Auth limits are kept in the database in production, so every server instance shares the same counts.
+const SHARE_AUTH_LIMITS = process.env.NODE_ENV === 'production';
+
 const buildLimiter = ({
   windowMs,
   max,
@@ -113,37 +116,36 @@ const buildLimiter = ({
       ? { store: new MongoRateLimitStore(`limiter-${limiterStoreSequence += 1}`) }
       : {}),
   });
-
-// Broad limiter for all auth routes.
 export const authGlobalLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000,
   max: 300,
   message: 'Too many auth requests from this IP. Please try again later.',
   keyGenerator: authKeyByIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
-// Sensitive auth actions (signup/login/reset/otp resend).
 export const authSensitiveLimiter = buildLimiter({
   windowMs: 10 * 60 * 1000,
   max: 25,
   message: 'Too many attempts. Please wait a few minutes and try again.',
   keyGenerator: authKeyByEmailAndIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
-// OTP verification can happen multiple times in short bursts.
 export const authOtpVerifyLimiter = buildLimiter({
   windowMs: 10 * 60 * 1000,
   max: 40,
   message: 'Too many OTP verification attempts. Please wait and retry.',
   keyGenerator: authKeyByEmailAndIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
-// Authenticated auth endpoints should rate-limit per user, not shared IP.
 export const authUserLimiter = buildLimiter({
   windowMs: 10 * 60 * 1000,
   max: 120,
   message: 'Too many account requests. Please wait and try again.',
   keyGenerator: authKeyByUserOrIp,
+  shared: SHARE_AUTH_LIMITS,
 });
 
 export const callTokenLimiter = buildLimiter({
@@ -166,6 +168,14 @@ export const publicChatSessionLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000,
   max: 60,
   message: 'Too many chat session requests. Please try again later.',
+  keyGenerator: authKeyByIp,
+  shared: true,
+});
+
+export const publicLeadSubmitLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many inquiries from this connection. Please try again in a few minutes.',
   keyGenerator: authKeyByIp,
   shared: true,
 });

@@ -48,6 +48,11 @@ const GREETING_ONLY_PATTERNS = [
   'أهلا',
   'اهلا',
   'السلام عليكم',
+  // Urdu spellings (Farsi yeh / keheh) of the same greetings.
+  'السلام علیکم',
+  'السلام و علیکم',
+  'اسلام علیکم',
+  'آداب',
   'سلام',
   'नमस्ते',
   'नमस्कार',
@@ -98,4 +103,4 @@ export function isGreetingOnly(message) {
   return GREETING_ONLY_PATTERNS.includes(normalizedVisitorText(message));
 }
 
-export const GREETING_START = /^[\s¡!¿?"'“”‘’]*(?:hello|hi|hey|bonjour|bonsoir|salut|hola|holas|holi|ola|olas|buenos|buenas|namaste|namaskar|sat sri akal|vanakkam|marhaba|wa alaikum|walaikum|assalam|asalam|asslam|salam|salaam|مرحبا|مرحبًا|أهلا|أهلاً|اهلا|وعليكم السلام|السلام عليكم|سلام|नमस्ते|नमस्कार|ਸਤ ਸ੍ਰੀ ਅਕਾਲ|வணக்கம்|您好|你好|good morning|good afternoon|good evening|good day|greetings)(?:[\s,!?.।؟]|$)/iu;
+export const GREETING_START = /^[\s¡!¿?"'“”‘’]*(?:hello|hi|hey|bonjour|bonsoir|salut|hola|holas|holi|ola|olas|buenos|buenas|namaste|namaskar|sat sri akal|vanakkam|marhaba|wa alaikum|walaikum|assalam|asalam|asslam|salam|salaam|مرحبا|مرحبًا|أهلا|أهلاً|اهلا|وعليكم السلام|السلام عليكم|وعلیکم السلام|السلام علیکم|السلام و علیکم|اسلام علیکم|آداب|سلام|नमस्ते|नमस्कार|ਸਤ ਸ੍ਰੀ ਅਕਾਲ|வணக்கம்|您好|你好|good morning|good afternoon|good evening|good day|greetings)(?:[\s,!?.।؟]|$)/iu;

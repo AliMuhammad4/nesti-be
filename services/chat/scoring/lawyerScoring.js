@@ -8,6 +8,35 @@ import {
   createOrReuseLeadProfile,
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
+import { leadAnswersSnapshot } from '../../lead/leadOwnAnswers.js';
+import {
+  isOtherMarket,
+  marketCountryFromForm,
+  marketRegionFromText,
+  normalizeMarketRegion,
+} from '../../professionalAssistant/brokerInvestorMarket.js';
+
+/** Lawyer market (Canada vs U.S.): explicit form/AI values, else inferred from the property address/location. */
+export function resolveLawyerMarket(formContact = {}, aiDetails = {}, contactInfo = {}) {
+  const f = formContact || {};
+  const ai = aiDetails || {};
+  const text = `${f.address || contactInfo?.address || ai.property_address || ''} ${f.location || ai.location || ''}`.trim();
+  const country = isOtherMarket(f.market_country) ? 'other' : marketCountryFromForm({
+    market_country: f.market_country || ai.market_country,
+    market_region: f.market_region || ai.market_region,
+    address: text,
+  });
+  const rawRegion = f.market_region || ai.market_region || '';
+  const region = normalizeMarketRegion(rawRegion, country) || String(rawRegion || '').trim() || marketRegionFromText(text, country);
+  const city = String(f.market_city || ai.market_city || '').trim();
+  const countryName = country === 'other' ? String(f.market_country_name || ai.market_country_name || '').trim().slice(0, 80) : '';
+  return {
+    market_country: country || '',
+    market_region: region || '',
+    ...(city ? { market_city: city } : {}),
+    ...(countryName ? { market_country_name: countryName } : {}),
+  };
+}
 const LAWYER_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestLawyerGrade = (a, b) =>
   (LAWYER_GRADE_ORDER[a] || 0) >= (LAWYER_GRADE_ORDER[b] || 0) ? a : b;
@@ -26,9 +55,12 @@ export const deriveLawyerQualificationFromText = (text = '') => {
   else if (/home sale|selling|sale of|selling my home/i.test(t)) out.transaction_type = 'home_sale';
   else if (/refinanc|refi/i.test(t)) out.transaction_type = 'refinance';
   else if (/title transfer|transfer title|estate transfer/i.test(t)) out.transaction_type = 'title_transfer';
-  if (/\$?1\s*m|\$?1,?000,?000|1m\+|million plus|over a million/i.test(t)) out.property_value = '1m_plus';
-  else if (/\$?700k|\$?700,?000|700k.?1m|700.?1\s*m|700k to 1m/i.test(t)) out.property_value = '700k_1m';
-  else if (/\$?400k|\$?400,?000|400k.?700k|400.?700/i.test(t)) out.property_value = '400k_700k';
+  // Ranges first ("$400k–$700k", "$700k–$1M" are form labels); "1 month" is not "$1M".
+  if (/\$?400\s*k?\s*(?:[-–—]|to)\s*\$?700\s*k/i.test(t)) out.property_value = '400k_700k';
+  else if (/\$?700\s*k?\s*(?:[-–—]|to)\s*\$?1\s*m\b/i.test(t)) out.property_value = '700k_1m';
+  else if (/\$1\s*m\b|\b1\s*m\+|\$?1,000,000|\b1m\b(?!\s*onth)|million plus|over a million/i.test(t)) out.property_value = '1m_plus';
+  else if (/\$?700k|\$?700,?000/i.test(t)) out.property_value = '700k_1m';
+  else if (/\$?400k|\$?400,?000/i.test(t)) out.property_value = '400k_700k';
   else if (/under 400|below 400|less than 400k/i.test(t)) out.property_value = 'under_400k';
   if (/fully approved|mortgage approved|loan approved|approved/i.test(t)) out.mortgage_status = 'fully_approved';
   else if (/conditional|conditions|subject to/i.test(t)) out.mortgage_status = 'conditional_approval';
@@ -47,6 +79,11 @@ export const deriveLawyerQualificationFromText = (text = '') => {
   else if (/property dispute|real estate dispute|legal advice|property advice|dispute advice/i.test(t)) out.legal_services_needed = 'property_dispute_advice';
   else if (/document review|review documents/i.test(t)) out.legal_services_needed = 'document_review';
   else if (/other legal|not listed|something else|other service/i.test(t)) out.legal_services_needed = 'other';
+  if (/(through|via|under) (a |my |our |the )?compan|corporation|holding company|\bllc\b/i.test(t)) out.via_company = 'company';
+  else if (/personally|in my (own )?name|personal name/i.test(t)) out.via_company = 'personally';
+  if (/investment (property|closing)|investor|rental property/i.test(t)) out.client_type = 'investor';
+  if (/\bcanada\b|\bcanadian\b/i.test(t)) out.market_country = 'CA';
+  else if (/\busa\b|united states|\bu\.s\.(a\.?)?(?![a-z])/i.test(t)) out.market_country = 'US';
   return out;
 };
 
@@ -65,6 +102,12 @@ export const mergeLawyerQualificationForScoring = (formQualification = {}, aiDet
     legal_services_needed: pick('legal_services_needed'),
     preferred_contact_method: pick('preferred_contact_method'),
     best_time_to_contact: pick('best_time_to_contact'),
+    client_type:          pick('client_type'),
+    via_company:          pick('via_company'),
+    market_country:       pick('market_country'),
+    market_region:        pick('market_region'),
+    market_city:          pick('market_city'),
+    market_country_name:          pick('market_country_name'),
   };
 };
 
@@ -134,10 +177,31 @@ export const scoreLawyerLead = ({
   else if (lsn === 'document_review') { legalServicesScore = 5; reasons.push('Legal services: document review'); }
   else if (lsn === 'other') { legalServicesScore = 3; reasons.push('Legal services: other'); }
 
+  let investorScore = 0;
+  const isInvestor = String(fq.client_type || '').toLowerCase() === 'investor';
+  if (isInvestor) {
+    investorScore += 4;
+    reasons.push('Client type: investor');
+    const via = String(fq.via_company || '').toLowerCase();
+    if (via === 'company' || via === 'through_a_company') {
+      investorScore += 3;
+      reasons.push('Purchasing through a company');
+    } else if (via === 'personally') {
+      investorScore += 2;
+      reasons.push('Purchasing personally');
+    } else if (via === 'not_sure') {
+      investorScore += 1;
+      reasons.push('Entity structure: not sure yet');
+    } else if (via) {
+      investorScore += 1;
+      reasons.push('Entity structure noted');
+    }
+  }
+
   const finalScore = Math.min(
     transactionStageScore + closingTimelineScore + transactionTypeScore +
     propertyValueScore + mortgageStatusScore + realtorScore +
-    firstTimeBuyerScore + legalServicesScore,
+    firstTimeBuyerScore + legalServicesScore + investorScore,
     100
   );
 
@@ -161,7 +225,7 @@ export const scoreLawyerLead = ({
       sub_scores:   {
         transactionStageScore, closingTimelineScore, transactionTypeScore,
         propertyValueScore, mortgageStatusScore, realtorScore,
-        firstTimeBuyerScore, legalServicesScore,
+        firstTimeBuyerScore, legalServicesScore, investorScore,
       },
       signals,
       ...(hasContact && contactInfo ? { contact: contactInfo } : {}),
@@ -187,11 +251,39 @@ export const createLawyerLeadRecords = async ({
   formContact,
   aiDetails,
 }) => {
-  const leadType = buildLawyerLeadType(leadGrade);
   const signals  = leadMeta.signals || {};
   const now      = new Date();
   const fq       = formContact || {};
   const ai       = aiDetails || {};
+  const rawClientType = String(fq.client_type || ai.client_type || '').toLowerCase();
+  const clientType = rawClientType === 'investor' ? 'investor' : '';
+  const leadType = buildLawyerLeadType(leadGrade, clientType);
+  // Purchasing entity belongs to investor inquiries, first-time buyer to personal ones.
+  const viaCompany = clientType === 'investor' ? (ai.via_company || fq.via_company || '') : '';
+  const market = resolveLawyerMarket(fq, ai, contactInfo);
+  const lawyerAnswers = {
+    transaction_stage: ai.transaction_stage || fq.transaction_stage || '',
+    closing_timeline: ai.closing_timeline || fq.closing_timeline || '',
+    transaction_type: ai.transaction_type || fq.transaction_type || '',
+    property_value: ai.property_value || fq.property_value || '',
+    mortgage_status: ai.mortgage_status || fq.mortgage_status || '',
+    realtor_involved: ai.realtor_involved || fq.realtor_involved || '',
+    first_time_buyer: clientType === 'investor' ? '' : (ai.first_time_buyer || fq.first_time_buyer || ''),
+    legal_services_needed: ai.legal_services_needed || fq.legal_services_needed || '',
+    via_company: viaCompany,
+    market_country: market.market_country,
+    market_region: market.market_region,
+    ...(market.market_city ? { market_city: market.market_city } : {}),
+    ...(market.market_country_name ? { market_country_name: market.market_country_name } : {}),
+  };
+  const lawyerTemplateAnswers = clientType === 'investor'
+    ? {
+        ...(viaCompany ? { via_company: viaCompany } : {}),
+        ...(fq.legal_services_needed || ai.legal_services_needed
+          ? { legal_service: fq.legal_services_needed || ai.legal_services_needed }
+          : {}),
+      }
+    : null;
 
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
@@ -213,17 +305,12 @@ export const createLawyerLeadRecords = async ({
         timeline: fq.closing_timeline || ai.closing_timeline || '',
       },
       qualification: {
-        lawyer: {
-          transaction_stage: ai.transaction_stage || fq.transaction_stage || '',
-          closing_timeline: ai.closing_timeline || fq.closing_timeline || '',
-          transaction_type: ai.transaction_type || fq.transaction_type || '',
-          property_value: ai.property_value || fq.property_value || '',
-          mortgage_status: ai.mortgage_status || fq.mortgage_status || '',
-          realtor_involved: ai.realtor_involved || fq.realtor_involved || '',
-          first_time_buyer: ai.first_time_buyer || fq.first_time_buyer || '',
-          legal_services_needed: ai.legal_services_needed || fq.legal_services_needed || '',
-        },
+        lawyer: lawyerAnswers,
       },
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(lawyerTemplateAnswers && Object.keys(lawyerTemplateAnswers).length
+        ? { template_answers: lawyerTemplateAnswers }
+        : {}),
       source: 'chatbot',
       total_score: leadScore,
     },
@@ -262,6 +349,17 @@ export const createLawyerLeadRecords = async ({
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
       professional_type: PROFESSIONAL_TYPE.LAWYER,
       repeat_visitor: reusedExisting,
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(viaCompany ? { via_company: viaCompany } : {}),
+      ...(market.market_country ? { market_country: market.market_country } : {}),
+      ...(market.market_region ? { market_region: market.market_region } : {}),
+      ...(market.market_city ? { market_city: market.market_city } : {}),
+      ...(market.market_country_name ? { market_country_name: market.market_country_name } : {}),
+      // This lead's own answers, so the person's other inquiries never change what this lead shows.
+      lead_answers: leadAnswersSnapshot(PROFESSIONAL_TYPE.LAWYER, lawyerAnswers),
+      ...(lawyerTemplateAnswers && Object.keys(lawyerTemplateAnswers).length
+        ? { template_answers: lawyerTemplateAnswers }
+        : {}),
     },
     ...(icpFit
       ? {

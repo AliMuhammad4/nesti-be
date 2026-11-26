@@ -31,7 +31,7 @@ function sanitizeEventMeta(meta, audience) {
   return next;
 }
 
-function serializeDocuments(docs, audience) {
+function serializeDocuments(docs) {
   return (docs || []).map((doc) => {
     const base = {
       id: String(doc._id),
@@ -41,13 +41,7 @@ function serializeDocuments(docs, audience) {
       uploaded_at: doc.uploaded_at,
       status: doc.status || 'uploaded',
     };
-    if (audience === 'admin') {
-      return {
-        ...base,
-        file_url: doc.file_url,
-        file_key: doc.file_key || '',
-      };
-    }
+    // Files are only read through the signed-in document endpoints, never by a storage link.
     return base;
   });
 }
@@ -133,7 +127,7 @@ export function serializeCredentialState(profile, role, { actorMap = {}, audienc
       audience,
     }),
     checklist: checklistItems,
-    documents: serializeDocuments(profile?.credential_documents, audience),
+    documents: serializeDocuments(profile?.credential_documents),
   };
 
   if (!isAdmin) {

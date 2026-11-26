@@ -13,6 +13,7 @@ import {
 import { locationOverlaps, rowMatchesSellerAddress } from './locationUtils.js';
 import {
   applyBuyerPreferenceFilter,
+  propertyKindsCompatible,
   buildBuyerScoringContext,
   buildMatchedLeadSnapshot,
   mapBuyerMatchResult,
@@ -24,6 +25,25 @@ import {
 
 function envAgentAreaFallbackEnabled() {
   return ['1', 'true', 'yes', 'on'].includes(String(process.env.PROPERTY_MATCH_AGENT_AREA_FALLBACK ?? '').trim().toLowerCase());
+}
+
+function propertyImageUrls(profile) {
+  const images = Array.isArray(profile?.property?.images) ? profile.property.images : [];
+  const urls = [];
+  const seen = new Set();
+  for (const image of images) {
+    let url = '';
+    if (typeof image === 'string') url = image.trim();
+    else url = String(image?.secure_url || image?.url || '').trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+  }
+  return urls;
+}
+
+function firstPropertyImage(profile) {
+  return propertyImageUrls(profile)[0] || '';
 }
 
 function sellerLeadProfileToRow(profile) {
@@ -54,7 +74,8 @@ function sellerLeadProfileToRow(profile) {
     bedrooms: Number.isFinite(beds) ? beds : 0,
     bathrooms: Number.isFinite(baths) ? baths : 0,
     property_type: profile.property?.property_type || '',
-    image_url: '',
+    image_url: firstPropertyImage(profile),
+    images: propertyImageUrls(profile),
     listing_url: '',
     summary: '',
     matched_contact: {
@@ -131,10 +152,6 @@ async function loadSellerInventoryRows(userId, excludeLeadProfileIds, inventoryL
   return out;
 }
 
-/**
- * One candidate per buyer-side LeadMatch row (same as leads list), not deduped by lead_profile_id.
- * Duplicate conversations often share one profile — seller matching should still surface each lead row.
- */
 async function loadBuyerLeadMatchCandidates(userId, excludeLeadProfileIds, limit = 40) {
   const exclude = new Set(excludeLeadProfileIds.filter(Boolean).map(String));
   const out = [];
@@ -142,7 +159,7 @@ async function loadBuyerLeadMatchCandidates(userId, excludeLeadProfileIds, limit
 
   const matchDocs = await LeadMatch.find({
     user_id: userId,
-    lead_type: { $regex: '_(buyer|client)$' },
+    lead_type: { $regex: '_(buyer|client|investor)$' },
     lead_profile_id: { $ne: null },
   })
     .sort({ createdAt: -1 })
@@ -236,10 +253,11 @@ export function propertyMatchesFooterNote(context, matchCount) {
   return null;
 }
 
-const emptyPropertyMatchesMeta = () => ({
+const emptyPropertyMatchesMeta = (status = 'unavailable') => ({
   property_matches: [],
   property_matches_context: null,
   property_matches_note: null,
+  property_matches_status: status,
 });
 
 async function leadProfileForAgentIntent({ conversationId, userId, intent }) {
@@ -294,7 +312,7 @@ export async function resolveAgentPropertyMatchesForChat({
   });
 
   if (!leadProfileDoc) {
-    return emptyPropertyMatchesMeta();
+    return emptyPropertyMatchesMeta('pending');
   }
 
   if (matchIntent === 'buy') {
@@ -310,10 +328,18 @@ export async function resolveAgentPropertyMatchesForChat({
           leadProfile: leadProfileDoc,
           signals: leadMetaSignals,
         });
+    const investorLead = String(leadProfileDoc?.client_type || '').toLowerCase() === 'investor'
+      || String(leadProfileDoc?.qualification?.agent?.motivation_reason || '').toLowerCase() === 'investment'
+      || Boolean(
+        leadProfileDoc?.qualification?.agent?.investment_type
+        || leadProfileDoc?.qualification?.agent?.investment_goal,
+      );
+    const context = investorLead ? 'investor' : 'buy';
     return {
       property_matches,
-      property_matches_context: 'buy',
-      property_matches_note: propertyMatchesFooterNote('buy', property_matches.length),
+      property_matches_context: context,
+      property_matches_note: propertyMatchesFooterNote(context, property_matches.length),
+      property_matches_status: 'ready',
     };
   }
 
@@ -326,6 +352,7 @@ export async function resolveAgentPropertyMatchesForChat({
     property_matches,
     property_matches_context: 'sell',
     property_matches_note:    propertyMatchesFooterNote('sell', property_matches.length),
+    property_matches_status: 'ready',
   };
 }
 
@@ -344,7 +371,9 @@ async function computeBuyerInventoryMatches(userId, leadProfile, signals, relaxL
   }
   const ctx = buildBuyerScoringContext(leadProfile, signals);
   const b = cfg.buyer;
-  const scored = scoreRowsForBuyer(rows, ctx, b);
+  const leadType = leadProfile?.property?.property_type;
+  const scored = scoreRowsForBuyer(rows, ctx, b)
+    .filter((x) => propertyKindsCompatible(leadType, x.row.property_type));
   let pool = applyBuyerPreferenceFilter(scored, ctx);
   if (relaxLocationIfEmpty && pool.length === 0 && scored.length > 0) {
     pool = scored;
@@ -357,15 +386,10 @@ export async function getBuyerPropertyMatches({ userId, leadProfile, signals = {
   return computeBuyerInventoryMatches(userId, leadProfile, signals, false);
 }
 
-/**
- * Nurture / referral contexts: if the lead has a location, strict overlap can drop every row
- * even though scored inventory exists — fall back to ranked inventory for best-effort picks.
- */
 export async function getBuyerPropertyMatchesForNurture({ userId, leadProfile, signals = {} }) {
   return computeBuyerInventoryMatches(userId, leadProfile, signals, true);
 }
 
-/** Chat widget: surface seller CRM leads with relaxed location filtering for "available options" requests. */
 export async function getBuyerPropertyMatchesForChat({ userId, leadProfile, signals = {} }) {
   return computeBuyerInventoryMatches(userId, leadProfile, signals, true);
 }
@@ -385,6 +409,7 @@ export async function getBuyerMatchesForSellerProperty({ userId, leadProfile, si
   const b = cfg.buyer;
   const scored = [];
   for (const { profile: bp, leadMatchId } of candidates) {
+    if (!propertyKindsCompatible(bp?.property?.property_type, sellerRow.property_type)) continue;
     const ctx = buildBuyerScoringContext(bp, {});
     const loc = String(ctx.leadLocation || '').trim();
     if (loc && !locationOverlaps(loc, sellerRow.location, sellerRow.address)) {
@@ -432,6 +457,7 @@ export async function getSellerComparableMatches({
   if (sellerGeo) {
     sellerRows = sellerRows.filter((r) => locationOverlaps(sellerGeo, r.location, r.address));
   }
+  sellerRows = sellerRows.filter((r) => propertyKindsCompatible(leadProfile?.property?.property_type, r.property_type));
   const askStr =
     leadProfile?.property?.expected_price || leadProfile?.property?.budget || signals?.budget || '';
   const askPrice = parseInventoryPrice(askStr) || parseMaxBudget(askStr) || null;

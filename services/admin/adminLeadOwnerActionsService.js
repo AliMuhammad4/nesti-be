@@ -23,7 +23,7 @@ import {
 } from '../../controllers/nurtureController.js';
 import { cancelCalendlyScheduledEvent } from '../calendly/cancelCalendlyBooking.js';
 import { applyCalendlyCancellationToLeadForUser } from '../calendly/calendlyWebhookService.js';
-import { refreshCalendlyAccessToken } from '../calendly/oauthService.js';
+import { CALENDLY_ACCESS_KIND, ensureFreshCalendlyAccess } from '../calendly/calendlyTokenService.js';
 import { recordAdminAudit } from './adminAuditService.js';
 
 export const adminLeadOwnerActionDeps = {
@@ -33,7 +33,6 @@ export const adminLeadOwnerActionDeps = {
   Referral,
 };
 
-const CALENDLY_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 async function loadLeadOwner(leadId) {
   if (!mongoose.Types.ObjectId.isValid(leadId)) return fail(400, 'Invalid lead id');
@@ -71,26 +70,21 @@ function invokeAsOwner(handler, owner, { body = {}, query = {}, params = {} } = 
 }
 
 async function loadOwnerCalendlyIntegration(userId) {
-  let integ = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' });
+  const integ = await CalendarIntegration.findOne({ user_id: userId, provider: 'calendly' });
   if (!integ?.access_token) {
     return { error: fail(400, 'Connect Calendly (OAuth) first for this professional.') };
   }
-  const expiresAt = integ.expires_at ? new Date(integ.expires_at).getTime() : 0;
-  const staleOrUnknownExpiry = !expiresAt || expiresAt < Date.now() + CALENDLY_REFRESH_SKEW_MS;
-  if (staleOrUnknownExpiry && integ.refresh_token) {
-    try {
-      const tokens = await refreshCalendlyAccessToken(integ.refresh_token);
-      integ.access_token = tokens.access_token;
-      if (tokens.refresh_token) integ.refresh_token = tokens.refresh_token;
-      integ.expires_at = new Date(Date.now() + (Number(tokens.expires_in) || 7200) * 1000);
-      await integ.save();
-    } catch {
-      return {
-        error: fail(400, 'Calendly token refresh failed. Reconnect Calendly for this professional.'),
-      };
+  try {
+    // Shared single-flight refresh: never races the professional's own requests for the rotating token.
+    return { integ: await ensureFreshCalendlyAccess(integ) };
+  } catch (err) {
+    if (err?.kind === CALENDLY_ACCESS_KIND.unavailable) {
+      return { error: fail(503, 'Calendly is not responding right now. Please try again in a moment.') };
     }
+    return {
+      error: fail(400, 'Calendly token refresh failed. Reconnect Calendly for this professional.'),
+    };
   }
-  return { integ };
 }
 
 async function auditOwnerAction({

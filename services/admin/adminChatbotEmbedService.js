@@ -7,7 +7,8 @@ import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { validateWidgetRoleAgainstProfile } from '../../utils/embedWidgetRole.js';
 import { getOrCreateSubscriptionForUser } from '../billing/subscriptionService.js';
 import { FEATURES, hasFeature } from '../billing/entitlements.js';
-import { ok, fail } from './adminCommon.js';
+import { ok, fail } from './adminCommon.js';
+import { mergeEmbedWidgetSettings } from '../chat/embedSettings.js';
 
 async function resolveProfessionalUserId(professionalId) {
   if (!mongoose.Types.ObjectId.isValid(professionalId)) {
@@ -162,20 +163,15 @@ export async function patchAdminProfessionalChatbotEmbedService(
     }
   }
 
-  // Pause/activate is stored on widget_settings (model has no top-level is_active).
-  if (Object.prototype.hasOwnProperty.call(patch, 'is_active')) {
-    const nextSettings = {
-      ...(existing.widget_settings || {}),
-      ...(patch.widget_settings && typeof patch.widget_settings === 'object'
-        ? patch.widget_settings
-        : {}),
-      is_active: Boolean(patch.is_active),
-    };
-    patch.widget_settings = nextSettings;
-    delete patch.is_active;
+  // Pause/activate is stored on widget_settings (model has no top-level is_active);
+  // settings are merged so keys that were not sent are kept.
+  if (patch.widget_settings !== undefined || Object.prototype.hasOwnProperty.call(patch, 'is_active')) {
+    patch.widget_settings = mergeEmbedWidgetSettings(existing.widget_settings, patch);
   }
+  delete patch.is_active;
 
   Object.assign(existing, patch);
+  if (patch.widget_settings) existing.markModified('widget_settings');
   await existing.save();
 
   return ok({ embed: serializeEmbed(existing.toObject()) });

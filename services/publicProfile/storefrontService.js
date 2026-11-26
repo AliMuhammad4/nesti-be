@@ -26,15 +26,128 @@ const PUBLIC_ESSENTIAL_KEYS = Object.freeze([
   'profile_photo_url',
   'service_area',
   'years_experience',
+  'investor_theme_preset',
+  'investor_color_mode',
+  'investor_gradients',
+  'investor_animations',
+  'aurora_theme_preset',
+  'aurora_color_mode',
+  'aurora_gradients',
+  'aurora_animations',
 ]);
+
+const PUBLIC_INVESTOR_THEME_PRESETS = new Set([
+  'emerald-mint',
+  'ocean-blue',
+  'royal-indigo',
+  'sunset-coral',
+  'graphite-gold',
+  'midnight-gold',
+  'clean-light',
+]);
+
+const PUBLIC_AURORA_THEME_PRESETS = new Set([
+  'royal-indigo',
+  'emerald-mint',
+  'midnight-gold',
+  'clean-light',
+  'custom',
+]);
+
+const PUBLIC_INVESTOR_VISUAL_OPTIONS = Object.freeze({
+  shadow: ['none', 'soft', 'medium', 'large'],
+  spacing: ['compact', 'comfortable', 'airy'],
+  content_width: ['narrow', 'standard', 'wide'],
+  card_radius: ['subtle', 'rounded', 'soft'],
+});
+
+const PUBLIC_AURORA_VISUAL_OPTIONS = Object.freeze({
+  shadow: ['none', 'soft', 'medium', 'large'],
+  spacing: ['compact', 'comfortable', 'spacious'],
+  content_width: ['narrow', 'standard', 'wide'],
+  card_radius: ['subtle', 'rounded', 'soft'],
+  card_style: ['flat', 'elevated', 'glass'],
+  divider_style: ['none', 'soft', 'angled'],
+  button_style: ['solid', 'gradient', 'outline', 'soft', 'ghost'],
+  button_size: ['small', 'medium', 'large'],
+});
+
+function publicInvestorVisuals(value) {
+  const source = toPlainObject(value);
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+
+  const visuals = {};
+  const gradientAngle = Number(source.gradient_angle);
+  if (source.gradient_angle !== null && source.gradient_angle !== ''
+    && Number.isFinite(gradientAngle) && gradientAngle >= 0 && gradientAngle <= 360) {
+    visuals.gradient_angle = gradientAngle;
+  }
+  const gradientIntensity = Number(source.gradient_intensity);
+  if (source.gradient_intensity !== null && source.gradient_intensity !== ''
+    && Number.isFinite(gradientIntensity) && gradientIntensity >= 0 && gradientIntensity <= 60) {
+    visuals.gradient_intensity = gradientIntensity;
+  }
+  for (const [key, options] of Object.entries(PUBLIC_INVESTOR_VISUAL_OPTIONS)) {
+    if (options.includes(source[key])) visuals[key] = source[key];
+  }
+
+  return Object.keys(visuals).length ? visuals : null;
+}
+
+function publicAuroraVisuals(value) {
+  const source = toPlainObject(value);
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+
+  const visuals = {};
+  const gradientAngle = Number(source.gradient_angle);
+  if (source.gradient_angle !== null && source.gradient_angle !== ''
+    && Number.isFinite(gradientAngle) && gradientAngle >= 0 && gradientAngle <= 360) {
+    visuals.gradient_angle = gradientAngle;
+  }
+  const gradientIntensity = Number(source.gradient_intensity);
+  if (source.gradient_intensity !== null && source.gradient_intensity !== ''
+    && Number.isFinite(gradientIntensity) && gradientIntensity >= 0 && gradientIntensity <= 60) {
+    visuals.gradient_intensity = gradientIntensity;
+  }
+  for (const [key, options] of Object.entries(PUBLIC_AURORA_VISUAL_OPTIONS)) {
+    if (options.includes(source[key])) visuals[key] = source[key];
+  }
+
+  return Object.keys(visuals).length ? visuals : null;
+}
 
 function publicEssentials(essentials) {
   const source = toPlainObject(essentials) || {};
-  return Object.fromEntries(
+  const result = Object.fromEntries(
     PUBLIC_ESSENTIAL_KEYS
       .filter((key) => Object.hasOwn(source, key))
       .map((key) => [key, source[key]]),
   );
+  if (!PUBLIC_INVESTOR_THEME_PRESETS.has(result.investor_theme_preset)) {
+    delete result.investor_theme_preset;
+  }
+  if (!PUBLIC_AURORA_THEME_PRESETS.has(result.aurora_theme_preset)) {
+    delete result.aurora_theme_preset;
+  }
+  if (!['light', 'dark', 'auto'].includes(result.investor_color_mode)) {
+    delete result.investor_color_mode;
+  }
+  for (const key of [
+    'investor_gradients',
+    'investor_animations',
+    'aurora_gradients',
+    'aurora_animations',
+  ]) {
+    if (typeof result[key] !== 'boolean') delete result[key];
+  }
+  if (!['light', 'dark', 'auto'].includes(result.aurora_color_mode)) {
+    delete result.aurora_color_mode;
+  }
+  const investorVisuals = publicInvestorVisuals(source.investor_visuals);
+  if (investorVisuals) result.investor_visuals = investorVisuals;
+  const auroraVisuals = publicAuroraVisuals(source.aurora_visuals);
+  if (auroraVisuals) result.aurora_visuals = auroraVisuals;
+  return result;
 }
 
 export function serializeStorefrontRevision(revision, { publicView = false } = {}) {
@@ -55,6 +168,7 @@ export function serializeStorefrontRevision(revision, { publicView = false } = {
       : 0,
     updated_at: source.updated_at || null,
     published_at: source.published_at || null,
+    ...(source.website ? { website: source.website } : {}),
   };
 }
 
@@ -71,6 +185,7 @@ export function createDraftRevision(draft, now = new Date(), { previousRevision 
       : 1,
     updated_at: now,
     published_at: null,
+    ...(draft?.website ? { website: draft.website } : {}),
   };
 }
 
@@ -261,6 +376,7 @@ export function createPublishedRevision(draft, now = new Date()) {
     revision_version: revision.revision_version,
     updated_at: revision.updated_at || now,
     published_at: now,
+    ...(revision.website ? { website: revision.website } : {}),
   };
 }
 

@@ -6,6 +6,7 @@ import { mapLeadProfileForApi } from './leadProfileFormat.js';
 import { extractInquiredPropertyContext, normalizeInquiredProperty } from './inquiredProperty.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from './leadExperienceContract.js';
 import { resolveListIntent } from './leadQueryUtils.js';
+import { applyLeadOwnAnswers, resolveLeadOwnClientType, resolveLeadOwnTemplateAnswers } from './leadOwnAnswers.js';
 
 function professionalTypeFromMatch(leadMatch, profile = null) {
   return (
@@ -47,6 +48,17 @@ function buildSpecificFacts(profileView, leadMatch) {
   if (q?.mortgage_timeline) facts.push(`Mortgage timeline: ${q.mortgage_timeline}`);
   if (q?.pre_approval_status) facts.push(`Financing: ${q.pre_approval_status}`);
   if (q?.transaction_stage) facts.push(`Transaction stage: ${q.transaction_stage}`);
+  if (q?.investment_type) facts.push(`Investment type: ${q.investment_type}`);
+  if (q?.investment_goal) facts.push(`Investment goal: ${q.investment_goal}`);
+  if (q?.owns_investments) facts.push(`Owns other investments: ${q.owns_investments}`);
+  if (q?.down_payment_readiness) facts.push(`Down payment / capital: ${q.down_payment_readiness}`);
+  if (q?.via_company) facts.push(`Purchasing entity: ${q.via_company}`);
+  if (q?.investment_financing) facts.push(`Investment financing: ${String(q.investment_financing).replace(/_/g, ' ')}`);
+  if (q?.borrower_entity) facts.push(`Borrowing as: ${q.borrower_entity === 'company' ? 'company' : String(q.borrower_entity).replace(/_/g, ' ')}`);
+  if (q?.market_country) {
+    const country = String(q.market_country).toLowerCase() === 'other' ? (q.market_country_name || 'other country') : q.market_country;
+    facts.push(`Market: ${[q.market_city, q.market_region, country].filter(Boolean).join(', ')}`);
+  }
   return facts;
 }
 
@@ -161,6 +173,15 @@ function emptyAgentQualification() {
     living_situation: null,
     urgency_readiness: null,
     buy_property_location: null,
+    investment_type: null,
+    investment_goal: null,
+    owns_investments: null,
+    down_payment_readiness: null,
+    buying_another: null,
+    market_country: null,
+    market_region: null,
+    market_city: null,
+    market_country_name: null,
   };
 }
 
@@ -241,9 +262,12 @@ function applyListedPropertyInquiryView(core, leadMatch, profile) {
   };
 }
 
-/** Additive RAVI customization fields (client type + suggested next action); null when the assistant never set them. */
-function formatClientTypeExtras(leadProfile) {
-  const clientType = String(leadProfile?.client_type || '').trim().toLowerCase();
+/**
+ * Additive RAVI customization fields (client type + suggested next action); null when the assistant never set them.
+ * Lawyer / broker leads take the client type and answers from the lead itself (shared profile only as fallback).
+ */
+function formatClientTypeExtras(leadProfile, leadMatch = null, professionalType = null) {
+  const clientType = resolveLeadOwnClientType(leadMatch, leadProfile, professionalType);
   const raw = leadProfile?.suggested_next_action;
   const next = raw && typeof raw === 'object' && (raw.action || raw.label)
     ? {
@@ -255,15 +279,10 @@ function formatClientTypeExtras(leadProfile) {
         updated_at: raw.updated_at || null,
       }
     : null;
-  const answers = leadProfile?.template_answers && typeof leadProfile.template_answers === 'object'
-    ? Object.fromEntries(
-        Object.entries(leadProfile.template_answers).filter(([, value]) => value != null && String(value).trim() !== ''),
-      )
-    : null;
   return {
     client_type: ['buyer', 'seller', 'investor'].includes(clientType) ? clientType : null,
     suggested_next_action: next,
-    template_answers: answers && Object.keys(answers).length ? answers : null,
+    template_answers: resolveLeadOwnTemplateAnswers(leadMatch, leadProfile, professionalType),
   };
 }
 
@@ -281,6 +300,10 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     leadProfile: opts.leadProfile || null,
     leadMatch,
   });
+  const role = leadMatch?.compatibility_factors?.professional_type || opts?.leadProfile?.ownership?.professional_type || null;
+  const profileStats = opts.leadProfile?.stats && typeof opts.leadProfile.stats === 'object'
+    ? opts.leadProfile.stats
+    : null;
   const core = {
     id: String(leadMatch._id),
     professional_type: null,
@@ -290,7 +313,13 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     status: leadMatch.match_status,
     contact: profileView.contact,
     property: profileView.property,
-    qualification: profileView.qualification,
+    qualification: applyLeadOwnAnswers(profileView.qualification, leadMatch, opts.leadProfile || null, role),
+    ...(profileStats
+      ? {
+          stats: profileStats,
+          total_matches: Number(profileStats.total_matches || 0),
+        }
+      : { total_matches: 0 }),
     appointment_status: resolveAppointmentStatus(
       leadMatch.match_status,
       convo?.calendly_booking_status,
@@ -301,6 +330,9 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     session_id: leadMatch.compatibility_factors?.session_id || convo?.session_id || null,
     conversation_id: String(leadMatch.conversation_id || ''),
     source: leadSource,
+    // The client's own words from a storefront form or inquiry popup (shown as "Message").
+    inquiry_message: String(leadMatch?.compatibility_factors?.inquiry_message || '').trim() || null,
+    photos_note: String(leadMatch?.compatibility_factors?.photos_note || '').trim() || null,
     inquired_property: inquiredProperty,
     client_profile: leadMatch?.compatibility_factors?.client_profile || null,
     linked_seller_lead_match_id: linkedSellerLeadMatchId,
@@ -312,7 +344,7 @@ function leadCore(leadMatch, profileView, convo, opts = {}) {
     close_summary: formatCloseSummary(leadMatch.compatibility_factors),
     conversionChecklist,
     conversion_checklist: conversionChecklist,
-    ...formatClientTypeExtras(opts.leadProfile),
+    ...formatClientTypeExtras(opts.leadProfile, leadMatch, role),
   };
   if (includeIntentField) {
     core.intent = resolveListIntent(profileView, leadMatch, opts.leadProfile);

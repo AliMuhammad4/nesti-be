@@ -9,6 +9,8 @@ import {
   createOrReuseLeadProfile,
 } from './leadPersistence.js';
 import { computeIcpFitForLead } from '../../lead/icpScoringService.js';
+import { leadAnswersSnapshot } from '../../lead/leadOwnAnswers.js';
+import { marketChoiceFromForm, marketCountryFromForm, marketCurrency, normalizeMarketRegion } from '../../professionalAssistant/brokerInvestorMarket.js';
 const MORTGAGE_GRADE_ORDER = { hot: 3, warm: 2, cold: 1, unscored: 0 };
 export const bestMortgageGrade = (a, b) =>
   (MORTGAGE_GRADE_ORDER[a] || 0) >= (MORTGAGE_GRADE_ORDER[b] || 0) ? a : b;
@@ -25,11 +27,15 @@ export const deriveMortgageQualificationFromText = (text = '') => {
   else if (/in progress|working on pre.?approval/i.test(t)) out.pre_approval_status = 'in_progress';
   else if (/already approved|already pre.?approv|have pre.?approval/i.test(t)) out.pre_approval_status = 'already_approved';
   else if (/just research|researching|exploring/i.test(t)) out.pre_approval_status = 'just_researching';
-  if (/75[0-9]|76[0-9]|7[7-9]\d|8[0-9]\d|9[0-9]\d|excellent credit/i.test(t)) out.credit_score_range = '750_plus';
-  else if (/70[0-9]|71[0-9]|72[0-9]|73[0-9]|74[0-9]|good credit/i.test(t)) out.credit_score_range = '700_749';
-  else if (/65[0-9]|66[0-9]|67[0-9]|68[0-9]|69[0-9]|fair credit/i.test(t)) out.credit_score_range = '650_699';
-  else if (/60[0-9]|61[0-9]|62[0-9]|63[0-9]|64[0-9]/i.test(t)) out.credit_score_range = '600_649';
-  else if (/under 600|below 600|poor credit|bad credit/i.test(t)) out.credit_score_range = 'under_600';
+  // A score only counts next to a credit word, so phone numbers ("+92 300...") and prices ("$700K") are ignored.
+  const scoreHit = t.match(/\b(?:credit|score|fico|beacon)\b[^0-9$+]{0,25}\b([3-8]\d{2})\b(?![,.]?\d|\s*k\b)/i)
+    || t.match(/(?<![\d$+.,])\b([3-8]\d{2})\b\s*(?:credit|score|fico|beacon)\b/i);
+  const score = scoreHit ? Number(scoreHit[1]) : 0;
+  if ((score >= 750 && score <= 900) || /excellent credit/i.test(t)) out.credit_score_range = '750_plus';
+  else if ((score >= 700 && score < 750) || /good credit/i.test(t)) out.credit_score_range = '700_749';
+  else if ((score >= 650 && score < 700) || /fair credit/i.test(t)) out.credit_score_range = '650_699';
+  else if (score >= 600 && score < 650) out.credit_score_range = '600_649';
+  else if ((score >= 300 && score < 600) || /under 600|below 600|poor credit|bad credit/i.test(t)) out.credit_score_range = 'under_600';
   if (/full.?time|employed full time|permanent job/i.test(t)) out.employment_status = 'full_time';
   else if (/self.?employed|self employed|own business/i.test(t)) out.employment_status = 'self_employed';
   else if (/contract|contractor|temporary/i.test(t)) out.employment_status = 'contract';
@@ -52,6 +58,26 @@ export const deriveMortgageQualificationFromText = (text = '') => {
   if (/yes.*approved tomorrow|start house hunting immediately|immediately.*house hunt/i.test(t)) out.urgency_signal = 'yes';
   else if (/maybe|might|consider/i.test(t) && /house hunt|approved/i.test(t)) out.urgency_signal = 'maybe';
   else if (/no.*not yet|not ready|take my time/i.test(t)) out.urgency_signal = 'no';
+  if (/\bbrrrr\b/i.test(t)) out.investment_type = 'brrrr';
+  else if (/fix.?and.?flip|\bflip/i.test(t)) out.investment_type = 'fix_and_flip';
+  else if (/vacation rental|airbnb|short.?term rental/i.test(t)) out.investment_type = 'vacation_rental';
+  else if (/rental|cash flow|buy.?to.?let/i.test(t)) out.investment_type = 'rental_property';
+  else if (/pre.?construction/i.test(t)) out.investment_type = 'pre_construction';
+  else if (/multi.?unit|multi.?family/i.test(t)) out.investment_type = 'multi_unit';
+  else if (/commercial/i.test(t)) out.investment_type = 'commercial';
+  else if (/vacation rental|airbnb|short.?term rental/i.test(t)) out.investment_type = 'vacation_rental';
+  if (/own other (investment )?propert|already (own|have) (an? )?investment|portfolio/i.test(t)) out.owns_investments = 'yes';
+  else if (/first investment|no other investment|don'?t own (any )?other/i.test(t)) out.owns_investments = 'no';
+  if (/\bdscr\b|debt service coverage/i.test(t)) out.investment_financing = 'dscr';
+  else if (/hard money|bridge loan/i.test(t)) out.investment_financing = 'hard_money_bridge';
+  else if (/\bb.?lender|private lender|private mortgage/i.test(t)) out.investment_financing = 'b_private_lender';
+  else if (/cash.?out refi|equity take.?out|\bheloc\b/i.test(t)) out.investment_financing = 'refinance_equity';
+  else if (/portfolio loan/i.test(t)) out.investment_financing = 'portfolio';
+  if (/\b(through|under|via) (my |an? |our )?(llc|corporation|holding company|holdco|company)\b/i.test(t)) out.borrower_entity = 'company';
+  if (/\bcanada\b|\bcanadian\b|\bcad\b/i.test(t)) out.market_country = 'CA';
+  // "USD" says nothing about the market: every market quotes amounts in USD.
+  else if (/\busa\b|united states/i.test(t)) out.market_country = 'US';
+  if (out.purchase_purpose === 'investment' || out.investment_type || out.investment_financing === 'dscr') out.client_type = 'investor';
   return out;
 };
 
@@ -59,6 +85,9 @@ export const mergeMortgageQualificationForScoring = (formQualification = {}, aiD
   const fq = formQualification || {};
   const ai = aiDetails || {};
   const pick = (key) => (ai[key] && String(ai[key]).trim() ? ai[key] : fq[key]) || null;
+  const purchasePurpose = pick('purchase_purpose');
+  const clientType = pick('client_type')
+    || (String(purchasePurpose || '').toLowerCase() === 'investment' ? 'investor' : null);
   return {
     mortgage_timeline:      pick('mortgage_timeline'),
     pre_approval_status:    pick('pre_approval_status'),
@@ -67,9 +96,19 @@ export const mergeMortgageQualificationForScoring = (formQualification = {}, aiD
     household_income:       pick('household_income'),
     down_payment_readiness:  pick('down_payment_readiness'),
     property_budget:        pick('property_budget'),
-    purchase_purpose:       pick('purchase_purpose'),
+    purchase_purpose:       purchasePurpose,
     urgency_signal:         pick('urgency_signal'),
     budget:                 pick('budget'),
+    client_type:            clientType,
+    investment_type:        pick('investment_type'),
+    owns_investments:       pick('owns_investments'),
+    investment_financing:   pick('investment_financing'),
+    borrower_entity:        pick('borrower_entity'),
+    // Explicit form market wins over a model guess.
+    market_country:         fq.market_country || ai.market_country || null,
+    market_region:          fq.market_region || ai.market_region || null,
+    market_city:            fq.market_city || ai.market_city || null,
+    market_country_name:            fq.market_country_name || ai.market_country_name || null,
   };
 };
 
@@ -99,6 +138,8 @@ export const scoreMortgageBrokerLead = ({
   else if (pas === 'in_progress') { preApprovalScore = 10; reasons.push('Pre-approval: in progress'); }
   else if (pas === 'already_approved') { preApprovalScore = 5; reasons.push('Pre-approval: already approved'); }
   else if (pas === 'just_researching') { preApprovalScore = 0; reasons.push('Pre-approval: just researching'); }
+  const cashInvestor = fq.investment_financing === 'cash_purchase' || fq.down_payment_readiness === 'cash_purchase';
+  if (!pas && cashInvestor) { preApprovalScore = 5; reasons.push('Pre-approval: not needed (cash purchase)'); }
 
   let creditScore = 0;
   const cs = fq.credit_score_range;
@@ -131,6 +172,13 @@ export const scoreMortgageBrokerLead = ({
   else if (dp === '5_9') { downPaymentScore = 8; reasons.push('Down payment: 5–9%'); }
   else if (dp === 'under_5') { downPaymentScore = 3; reasons.push('Down payment: under 5%'); }
   else if (dp === 'no_savings') { downPaymentScore = 0; reasons.push('Down payment: no savings yet'); }
+  // Investor capital bands (investment properties need more equity than owner-occupied homes).
+  else if (dp === 'cash_purchase') { downPaymentScore = 15; reasons.push('Capital: cash purchase'); }
+  else if (dp === '25_plus') { downPaymentScore = 15; reasons.push('Down payment: 25%+'); }
+  else if (dp === '20_24') { downPaymentScore = 13; reasons.push('Down payment: 20–24%'); }
+  else if (dp === '15_19') { downPaymentScore = 8; reasons.push('Down payment: 15–19%'); }
+  else if (dp === 'under_15') { downPaymentScore = 3; reasons.push('Down payment: under 15%'); }
+  else if (dp === 'not_sure') { downPaymentScore = 0; reasons.push('Down payment: not sure yet'); }
 
   let budgetScore = 0;
   const pb = fq.property_budget;
@@ -145,15 +193,41 @@ export const scoreMortgageBrokerLead = ({
   else if (pp === 'refinance') { purposeScore = 5; reasons.push('Purpose: refinance'); }
   else if (pp === 'vacation_home') { purposeScore = 3; reasons.push('Purpose: vacation home'); }
 
+  let investorScore = 0;
+  const isInvestor = String(fq.client_type || '').toLowerCase() === 'investor' || pp === 'investment';
+  if (isInvestor) {
+    investorScore += 4;
+    reasons.push('Client type: investor');
+    if (fq.investment_type) {
+      investorScore += 3;
+      reasons.push(`Investment type: ${String(fq.investment_type).replace(/_/g, ' ')}`);
+    }
+    if (fq.owns_investments === 'yes') {
+      investorScore += 3;
+      reasons.push('Owns other investment properties');
+    } else if (fq.owns_investments === 'no') {
+      investorScore += 1;
+      reasons.push('First investment property');
+    }
+    if (fq.investment_financing && fq.investment_financing !== 'not_sure') {
+      investorScore += 2;
+      reasons.push(`Financing path: ${String(fq.investment_financing).replace(/_/g, ' ')}`);
+    }
+    if (fq.borrower_entity === 'company') reasons.push('Borrowing through a company');
+  }
+
   let urgencyScore = 0;
   const us = fq.urgency_signal;
-  if (us === 'yes') { urgencyScore = 5; reasons.push('Urgency: would start house hunting immediately'); }
+  if (us === 'yes') {
+    urgencyScore = 5;
+    reasons.push(isInvestor ? 'Urgency: would start on investment deals immediately' : 'Urgency: would start house hunting immediately');
+  }
   else if (us === 'maybe') { urgencyScore = 3; reasons.push('Urgency: maybe'); }
   else if (us === 'no') { urgencyScore = 0; reasons.push('Urgency: no'); }
 
   const finalScore = Math.min(
     timelineScore + preApprovalScore + creditScore + employmentScore +
-    incomeScore + downPaymentScore + budgetScore + purposeScore + urgencyScore,
+    incomeScore + downPaymentScore + budgetScore + purposeScore + investorScore + urgencyScore,
     100
   );
 
@@ -176,7 +250,7 @@ export const scoreMortgageBrokerLead = ({
       lead_reasons: reasons,
       sub_scores:   {
         timelineScore, preApprovalScore, creditScore, employmentScore,
-        incomeScore, downPaymentScore, budgetScore, purposeScore, urgencyScore,
+        incomeScore, downPaymentScore, budgetScore, purposeScore, investorScore, urgencyScore,
       },
       signals,
       ...(hasContact && contactInfo ? { contact: contactInfo } : {}),
@@ -202,11 +276,29 @@ export const createMortgageLeadRecords = async ({
   formContact,
   aiDetails,
 }) => {
-  const leadType = buildMortgageBrokerLeadType(leadGrade);
   const signals  = leadMeta.signals || {};
   const now      = new Date();
   const fq       = formContact || {};
   const ai       = aiDetails || {};
+  const purchasePurpose = ai.purchase_purpose || fq.purchase_purpose || '';
+  const clientType = String(
+    fq.client_type || ai.client_type || (purchasePurpose === 'investment' ? 'investor' : ''),
+  ).toLowerCase();
+  const leadType = buildMortgageBrokerLeadType(leadGrade, clientType);
+  const investmentType = ai.investment_type || fq.investment_type || '';
+  const ownsInvestments = ai.owns_investments || fq.owns_investments || '';
+  const investmentFinancing = fq.investment_financing || ai.investment_financing || '';
+  const borrowerEntity = fq.borrower_entity || ai.borrower_entity || '';
+  const marketCountry = marketChoiceFromForm(fq) || marketCountryFromForm({
+    market_country: ai.market_country,
+    market_region: ai.market_region,
+    address: ai.property_address,
+    location: ai.location,
+  });
+  const marketRegion = normalizeMarketRegion(fq.market_region || ai.market_region, marketCountry)
+    || String(fq.market_region || ai.market_region || '').trim();
+  const marketCity = String(fq.market_city || ai.market_city || '').trim();
+  const marketCountryName = String(fq.market_country_name || ai.market_country_name || '').trim();
 
   const bedroomsVal = signals.beds ?? ai.bedrooms ?? fq.beds ?? '';
   const bathroomsVal = signals.baths ?? ai.bathrooms ?? fq.baths ?? '';
@@ -215,6 +307,35 @@ export const createMortgageLeadRecords = async ({
   const addressVal = contactInfo.address || ai.property_address || locationVal || '';
 
   const { budgetStr: mbBudgetStr } = partitionBuyerBudgetInputs(fq.budget, ai.budget);
+
+  const brokerTemplateAnswers = clientType === 'investor' || investmentType || ownsInvestments
+    ? {
+        ...(investmentType ? { investment_type: investmentType } : {}),
+        ...(ownsInvestments ? { owns_investments: ownsInvestments } : {}),
+        ...(purchasePurpose ? { purpose: purchasePurpose } : {}),
+        ...(investmentFinancing ? { investment_financing: investmentFinancing } : {}),
+        ...(borrowerEntity ? { borrower_entity: borrowerEntity } : {}),
+      }
+    : null;
+  const brokerAnswers = {
+    mortgage_timeline: ai.mortgage_timeline || fq.mortgage_timeline || '',
+    pre_approval_status: ai.pre_approval_status || fq.pre_approval_status || '',
+    credit_score_range: ai.credit_score_range || fq.credit_score_range || '',
+    employment_status: ai.employment_status || fq.employment_status || '',
+    household_income: ai.household_income || fq.household_income || '',
+    down_payment_readiness: ai.down_payment_readiness || fq.down_payment_readiness || '',
+    purchase_purpose: purchasePurpose,
+    urgency_signal: ai.urgency_signal || fq.urgency_signal || '',
+    property_budget: fq.property_budget || ai.property_budget || '',
+    investment_type: investmentType,
+    owns_investments: ownsInvestments,
+    investment_financing: investmentFinancing,
+    borrower_entity: borrowerEntity,
+    market_country: marketCountry,
+    market_region: marketRegion,
+    ...(marketCity ? { market_city: marketCity } : {}),
+    ...(marketCountryName ? { market_country_name: marketCountryName } : {}),
+  };
 
   const { leadProfile, reusedExisting } = await createOrReuseLeadProfile({
     payload: {
@@ -239,18 +360,11 @@ export const createMortgageLeadRecords = async ({
         square_footage: areaVal,
       },
       qualification: {
-        mortgage_broker: {
-          mortgage_timeline: ai.mortgage_timeline || fq.mortgage_timeline || '',
-          pre_approval_status: ai.pre_approval_status || fq.pre_approval_status || '',
-          credit_score_range: ai.credit_score_range || fq.credit_score_range || '',
-          employment_status: ai.employment_status || fq.employment_status || '',
-          household_income: ai.household_income || fq.household_income || '',
-          down_payment_readiness: ai.down_payment_readiness || fq.down_payment_readiness || '',
-          purchase_purpose: ai.purchase_purpose || fq.purchase_purpose || '',
-          urgency_signal: ai.urgency_signal || fq.urgency_signal || '',
-          property_budget: fq.property_budget || ai.property_budget || '',
-        },
+        mortgage_broker: brokerAnswers,
       },
+      ...(marketCountry ? { budget_profile: { currency: marketCurrency() } } : {}),
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(brokerTemplateAnswers ? { template_answers: brokerTemplateAnswers } : {}),
       source: 'chatbot',
       total_score: leadScore,
     },
@@ -289,6 +403,15 @@ export const createMortgageLeadRecords = async ({
       matched:         leadGrade === 'hot' || leadGrade === 'warm',
       professional_type: PROFESSIONAL_TYPE.MORTGAGE_BROKER,
       repeat_visitor: reusedExisting,
+      ...(clientType ? { client_type: clientType } : {}),
+      ...(purchasePurpose ? { purchase_purpose: purchasePurpose } : {}),
+      ...(investmentType ? { investment_type: investmentType } : {}),
+      ...(ownsInvestments ? { owns_investments: ownsInvestments } : {}),
+      ...(investmentFinancing ? { investment_financing: investmentFinancing } : {}),
+      ...(marketCountry ? { market_country: marketCountry } : {}),
+      // This lead's own answers, so the person's other inquiries never change what this lead shows.
+      lead_answers: leadAnswersSnapshot(PROFESSIONAL_TYPE.MORTGAGE_BROKER, brokerAnswers),
+      ...(brokerTemplateAnswers ? { template_answers: brokerTemplateAnswers } : {}),
     },
     ...(icpFit
       ? {

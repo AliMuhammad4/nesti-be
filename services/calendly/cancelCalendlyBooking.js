@@ -1,3 +1,5 @@
+import { calendlyFetch, calendlyHttpError, readCalendlyText } from './calendlyHttp.js';
+
 const API_BASE = 'https://api.calendly.com';
 
 /**
@@ -20,9 +22,14 @@ export function extractScheduledEventUuidFromCalendlyUri(uri) {
 }
 
 async function fetchInviteeResource(accessToken, inviteeUri) {
-  const res = await fetch(inviteeUri, {
+  // The bearer token is only ever sent to Calendly's API host.
+  if (!String(inviteeUri || '').startsWith(`${API_BASE}/`)) return null;
+  const res = await calendlyFetch(inviteeUri, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+  if (res.status === 401 || res.status === 403) {
+    throw calendlyHttpError(`Calendly invitee lookup failed (${res.status})`, res.status);
+  }
   if (!res.ok) return null;
   try {
     const data = await res.json();
@@ -72,7 +79,7 @@ export async function cancelCalendlyScheduledEvent(accessToken, storedCal, reaso
   }
 
   const url = `${API_BASE}/scheduled_events/${encodeURIComponent(eventUuid)}/cancellation`;
-  const res = await fetch(url, {
+  const res = await calendlyFetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -81,7 +88,7 @@ export async function cancelCalendlyScheduledEvent(accessToken, storedCal, reaso
     body: JSON.stringify({ reason: r }),
   });
 
-  const text = await res.text();
+  const text = await readCalendlyText(res);
   if (!res.ok) {
     let msg = text.slice(0, 500);
     try {
@@ -93,7 +100,7 @@ export async function cancelCalendlyScheduledEvent(accessToken, storedCal, reaso
     if (isCalendlyAlreadyCanceledMessage(res.status, msg)) {
       return { ok: true, already_canceled: true };
     }
-    throw new Error(`Calendly cancel failed (${res.status}): ${msg}`);
+    throw calendlyHttpError(`Calendly cancel failed (${res.status}): ${msg}`, res.status);
   }
   return { ok: true };
 }

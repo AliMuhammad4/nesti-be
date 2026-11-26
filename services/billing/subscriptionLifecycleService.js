@@ -1,9 +1,11 @@
 import Subscription from '../../models/Subscription.js';
-import { getPlan, getPlanTier, getStripePriceId } from './plans.js';
+import { getPlan, getPlanTier } from './plans.js';
+import { chargeForPlan, createRecurringPrice, normalizeBillingPeriod } from './planPrices.js';
 import { getStripeClient } from './stripeClient.js';
 import { ensureStripeCustomerForUser } from './subscriptionCustomerService.js';
 import { markSubscriptionStripeStateExpired } from './subscriptionLocalService.js';
 import { getFreshSubscriptionForUser } from './subscriptionReadService.js';
+import { clearPaymentActionCache } from './subscriptionInvoiceService.js';
 import {
   clearPendingScheduleIfAny,
   getOrCreateSubscriptionSchedule,
@@ -18,10 +20,12 @@ import {
   getStripeSubscriptionPeriodEnd,
   getStripeSubscriptionPeriodStart,
   invoiceRequiresPayment,
+  isProfessionalPlatformStripeSubscription,
   isStripeResourceMissing,
   isSubscriptionPeriodEnded,
   normalizeStripeId,
   stripeTimestampFromDate,
+  TERMINAL_PROFESSIONAL_STRIPE_STATUSES,
   toIsoDate,
   userHasActiveSubscriptionAccess,
 } from './subscriptionShared.js';
@@ -30,6 +34,12 @@ export async function cancelSubscriptionForUser(user, cancellationReason = '') {
   const reason = String(cancellationReason || '').trim();
   const subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription?.stripe_subscription_id) {
+    if (String(subscription?.status || '') === 'free_trial') {
+      subscription.status = 'expired';
+      subscription.cancel_at_period_end = false;
+      await subscription.save();
+      return { ok: true, subscription };
+    }
     return { ok: false, code: 404, message: 'No active Stripe subscription found.' };
   }
   const stripe = getStripeClient();
@@ -52,6 +62,14 @@ export async function cancelSubscriptionForUser(user, cancellationReason = '') {
   if (subscription.stripe_subscription_schedule_id || attachedScheduleId) {
     await clearPendingScheduleIfAny(stripe, subscription, attachedScheduleId);
   }
+  if (String(stripeSubscription.status || '').toLowerCase() === 'trialing') {
+    const canceled = await stripe.subscriptions.cancel(subscription.stripe_subscription_id);
+    const synced = await syncStripeSubscription(canceled, {
+      user_id: String(user._id),
+      clearPendingPlan: true,
+    });
+    return { ok: true, subscription: synced };
+  }
   const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
     cancel_at_period_end: true,
     metadata: {
@@ -72,6 +90,54 @@ export async function cancelSubscriptionForUser(user, cancellationReason = '') {
     { returnDocument: 'after' },
   );
   return { ok: true, subscription: synced };
+}
+
+export async function startSubscriptionNowForUser(user) {
+  const subscription = await getFreshSubscriptionForUser(user);
+  if (!subscription?.stripe_subscription_id) {
+    return { ok: false, code: 404, message: 'No paid subscription found. Choose a plan to subscribe.' };
+  }
+  const stripe = getStripeClient();
+  let stripeSubscription;
+  try {
+    stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return { ok: false, code: 409, message: 'The previous Stripe subscription no longer exists. Please subscribe again.', subscription: cleared };
+    }
+    throw error;
+  }
+  if (String(stripeSubscription.status || '').toLowerCase() !== 'trialing') {
+    const synced = await syncStripeSubscription(stripeSubscription, { user_id: String(user._id) });
+    return { ok: true, alreadyActive: true, subscription: synced, invoice: null };
+  }
+  const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+    trial_end: 'now',
+    proration_behavior: 'none',
+    payment_behavior: 'allow_incomplete',
+    cancel_at_period_end: false,
+    expand: ['latest_invoice'],
+  });
+  const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object'
+    ? updated.latest_invoice
+    : null;
+  const synced = await syncStripeSubscription(updated, { user_id: String(user._id) });
+  clearPaymentActionCache();
+  return {
+    ok: true,
+    subscription: synced,
+    invoice: invoice
+      ? {
+          id: invoice.id,
+          status: invoice.status,
+          hostedInvoiceUrl: invoice.hosted_invoice_url || '',
+          amountDue: invoice.amount_due,
+          amountPaid: invoice.amount_paid,
+          displayAmountDue: formatInvoiceAmount(invoice.amount_due, invoice.currency),
+        }
+      : null,
+  };
 }
 
 export async function resumeSubscriptionForUser(user) {
@@ -130,20 +196,23 @@ export async function resumeSubscriptionForUser(user) {
   return { ok: true, subscription: await syncStripeSubscription(updated) };
 }
 
-export async function changeSubscriptionPlanForUser(user, planKey) {
+export async function changeSubscriptionPlanForUser(user, planKey, billingPeriod) {
   const plan = getPlan(planKey);
   if (!plan) return { ok: false, code: 400, message: 'Invalid subscription plan.' };
-  const priceId = getStripePriceId(plan.plan_key);
-  if (!priceId) {
-    return { ok: false, code: 503, message: `${plan.name} Stripe price is not configured.` };
-  }
-
   const subscription = await getFreshSubscriptionForUser(user);
   if (!userHasActiveSubscriptionAccess(subscription)) {
     return {
       ok: false,
       code: 409,
       message: 'No active subscription to change. Subscribe to a plan first.',
+    };
+  }
+  const currentStatus = String(subscription.status || '').trim().toLowerCase();
+  if (currentStatus === 'past_due' || currentStatus === 'unpaid') {
+    return {
+      ok: false,
+      code: 409,
+      message: 'Update your payment method before changing plans.',
     };
   }
   if (!subscription?.stripe_subscription_id) {
@@ -177,6 +246,18 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
     }
     throw error;
   }
+  const period = normalizeBillingPeriod(
+    billingPeriod || subscription.billing_period || stripeSubscription.metadata?.billing_period,
+  );
+  const charge = chargeForPlan(plan, period);
+  const createdPrice = await createRecurringPrice(stripe, {
+    name: `Nesti ${plan.name}`,
+    amount: charge.amount,
+    currency: charge.currency,
+    interval: charge.interval,
+    metadata: { plan_key: plan.plan_key, billing_period: charge.billingPeriod },
+  });
+  const priceId = createdPrice.id;
   const subscriptionItemId = stripeSubscription.items?.data?.[0]?.id;
   if (!subscriptionItemId) {
     return { ok: false, code: 500, message: 'Unable to read subscription items from Stripe.' };
@@ -189,14 +270,19 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
       subscription,
       normalizeStripeId(stripeSubscription.schedule),
     );
+    const inStripeTrial = String(stripeSubscription.status || '').toLowerCase() === 'trialing';
     const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
       items: [{ id: subscriptionItemId, price: priceId }],
-      proration_behavior: 'always_invoice',
-      payment_behavior: 'pending_if_incomplete',
+      ...(inStripeTrial ? { trial_end: 'now' } : {}),
+      proration_behavior: inStripeTrial ? 'none' : 'always_invoice',
+      payment_behavior: inStripeTrial ? 'allow_incomplete' : 'pending_if_incomplete',
+      cancel_at_period_end: false,
       expand: ['latest_invoice'],
       metadata: {
         user_id: String(user._id),
         plan_key: plan.plan_key,
+        billing_period: charge.billingPeriod,
+        amount: String(charge.amount),
       },
     });
     const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object'
@@ -205,6 +291,7 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
     const synced = await syncStripeSubscription(updated, {
       user_id: String(user._id),
       plan_key: plan.plan_key,
+      billing_period: charge.billingPeriod,
       clearPendingPlan: true,
     });
     return {
@@ -333,3 +420,87 @@ export async function changeSubscriptionPlanForUser(user, planKey) {
     effectiveAt: toIsoDate(currentPeriodEnd),
   };
 }
+
+async function cancelStripeSubscriptionQuietly(stripe, subscriptionId, flags, flagName) {
+  const id = String(subscriptionId || '').trim();
+  if (!id) return false;
+  try {
+    await stripe.subscriptions.cancel(id);
+    return true;
+  } catch (error) {
+    if (isStripeResourceMissing(error)) return false;
+    flags.push(flagName);
+    console.warn('Stripe cancel failed during professional-to-client role change', {
+      subscription_id: id,
+      message: error?.message || error,
+    });
+    return false;
+  }
+}
+
+export async function cancelProfessionalBillingForConvertedClient(user) {
+  const flags = [];
+  const subscription = await Subscription.findOne({ user_id: user._id });
+  if (!subscription) return { ok: true, canceled: false, flags };
+
+  let canceled = false;
+  const stripeId = String(subscription.stripe_subscription_id || '').trim();
+  const customerId = String(subscription.stripe_customer_id || '').trim();
+
+  try {
+    if (stripeId || customerId) {
+      const stripe = getStripeClient();
+      if (stripeId) {
+        canceled = await cancelStripeSubscriptionQuietly(
+          stripe,
+          stripeId,
+          flags,
+          'platform_subscription_cancel_failed',
+        ) || canceled;
+      }
+      if (customerId) {
+        const listed = await stripe.subscriptions.list({
+          customer: customerId,
+          status: 'all',
+          limit: 20,
+        });
+        for (const sub of listed.data || []) {
+          const status = String(sub.status || '').trim().toLowerCase();
+          if (TERMINAL_PROFESSIONAL_STRIPE_STATUSES.has(status)) continue;
+          const type = String(sub?.metadata?.subscription_type || '').trim().toLowerCase();
+          const purchaseType = String(sub?.metadata?.purchase_type || '').trim().toLowerCase();
+          const isStorefront = type === 'storefront_template' || purchaseType === 'storefront_template';
+          if (!isProfessionalPlatformStripeSubscription(sub) && !isStorefront) continue;
+          if (String(sub.id) === stripeId && canceled) continue;
+          const ok = await cancelStripeSubscriptionQuietly(
+            stripe,
+            sub.id,
+            flags,
+            isStorefront ? 'storefront_subscription_cancel_failed' : 'platform_subscription_cancel_failed',
+          );
+          canceled = ok || canceled;
+        }
+      }
+    }
+  } catch (error) {
+    flags.push('stripe_unavailable');
+    console.warn('Unable to reach Stripe while converting a professional to a client', {
+      user_id: String(user._id),
+      message: error?.message || error,
+    });
+  }
+
+  if (flags.length) {
+    subscription.metadata = {
+      ...(subscription.metadata || {}),
+      role_change_cancel_failed: true,
+      role_change_cancel_flags: flags,
+      role_change_cancel_at: new Date().toISOString(),
+    };
+    await subscription.save();
+  }
+
+  await markSubscriptionStripeStateExpired(user._id);
+  return { ok: flags.length === 0, canceled, flags };
+}
+

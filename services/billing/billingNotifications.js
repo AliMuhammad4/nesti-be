@@ -4,9 +4,12 @@ import Subscription from '../../models/Subscription.js';
 import ClientSubscription from '../../models/ClientSubscription.js';
 import logger from '../../utils/logger.js';
 import { emitNotification } from '../realtime/workspaceSocket.js';
-import { getPlanByPriceId } from './plans.js';
+import { getPlan, getPlanByPriceId } from './plans.js';
 import { getStorefrontTemplateTier } from './storefrontTemplatePurchases.js';
 import { getInvoiceSubscriptionId, normalizeStripeId } from './subscriptionShared.js';
+import { sendBillingEmailInBackground, sendPaymentFailedEmail, sendPaymentRestoredEmail } from './billingEmails.js';
+import { clearPaymentActionCache } from './subscriptionInvoiceService.js';
+import { chargeForPlan } from './planPrices.js';
 
 function formatAmount(amount, currency = 'usd') {
   const value = Number(amount || 0) / 100;
@@ -27,12 +30,52 @@ function invoicePricePlans(invoice = {}) {
     const priceId =
       normalizeStripeId(line.price) ||
       String(line.pricing?.price_details?.price || '').trim();
-    const plan = getPlanByPriceId(priceId);
+    const plan = getPlanByPriceId(priceId) || getPlan(line.metadata?.plan_key);
     if (plan && !plans.some((p) => p.plan_key === plan.plan_key)) {
       plans.push(plan);
     }
   }
   return plans;
+}
+
+function invoiceMetadataSources(invoice = {}) {
+  return [
+    invoice.metadata,
+    invoice.subscription_details?.metadata,
+    invoice.parent?.subscription_details?.metadata,
+    ...(invoice.lines?.data || []).map((line) => line.metadata),
+    ...(invoice.lines?.data || []).map((line) => line.parent?.subscription_item_details?.metadata),
+  ].filter(Boolean);
+}
+
+function invoicePlanName(invoice = {}) {
+  const priced = invoicePricePlans(invoice).at(-1)?.name;
+  if (priced) return priced;
+  for (const source of invoiceMetadataSources(invoice)) {
+    const plan = getPlan(source.plan_key);
+    if (plan?.name) return plan.name;
+  }
+  const description = (invoice.lines?.data || []).map((line) => String(line.description || '')).join(' ');
+  const named = description.match(/Nesti\s+(Basic|Standard|Enterprise)/i);
+  if (named) return named[1].charAt(0).toUpperCase() + named[1].slice(1).toLowerCase();
+  return 'subscription';
+}
+
+function invoiceIsAnnual(invoice = {}) {
+  const period = invoiceMetadataSources(invoice)
+    .map((source) => String(source.billing_period || '').toLowerCase())
+    .find(Boolean);
+  if (period === 'year' || period === 'annual' || period === 'yearly') return true;
+  const description = (invoice.lines?.data || []).map((line) => String(line.description || '')).join(' ');
+  if (/\/\s*year/i.test(description)) return true;
+  return (invoice.lines?.data || []).some((line) => {
+    const interval = String(
+      line.price?.recurring?.interval
+      || line.pricing?.price_details?.recurring?.interval
+      || '',
+    ).toLowerCase();
+    return interval === 'year';
+  });
 }
 
 function isStorefrontTemplateMetadata(source = {}) {
@@ -115,7 +158,7 @@ async function persistAndEmit(userId, eventId, payload) {
     severity: payload.severity || 'info',
     action: {
       type: 'open_billing',
-      href: '/checkout',
+      href: '/billing',
       stripe_event_id: eventId,
       ...(payload.action || {}),
     },
@@ -131,6 +174,70 @@ async function persistAndEmit(userId, eventId, payload) {
   });
 
   return doc;
+}
+
+function invoiceHasProration(invoice = {}) {
+  return (invoice.lines?.data || []).some((line) => (
+    line.proration === true
+    || line.parent?.subscription_item_details?.proration === true
+    || line.parent?.invoice_item_details?.proration === true
+  ));
+}
+
+function formatShortDate(date) {
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
+function invoiceTrialEnd(invoice = {}) {
+  const ends = (invoice.lines?.data || [])
+    .map((line) => Number(line.period?.end || 0))
+    .filter((n) => n > 0);
+  const unix = ends.length ? Math.max(...ends) : Number(invoice.period_end || 0);
+  return unix ? new Date(unix * 1000) : null;
+}
+async function trialFirstCharge(invoice = {}) {
+  const subscriptionId = getInvoiceSubscriptionId(invoice);
+  const local = subscriptionId
+    ? await Subscription.findOne({ stripe_subscription_id: subscriptionId })
+      .select('plan_key billing_period trial_end').lean()
+    : null;
+  const plan = getPlan(local?.plan_key) || invoicePricePlans(invoice).at(-1) || null;
+  const period = local?.billing_period || (invoiceIsAnnual(invoice) ? 'year' : 'month');
+  const charge = plan ? chargeForPlan(plan, period) : null;
+  const endsAt = local?.trial_end ? new Date(local.trial_end) : invoiceTrialEnd(invoice);
+  return {
+    planName: plan?.name || invoicePlanName(invoice),
+    amountLabel: charge && Number.isFinite(charge.amount) && charge.amount > 0
+      ? `${formatAmount(charge.amount, charge.currency)}${charge.billingPeriod === 'year' ? '/year' : '/month'}`
+      : '',
+    dateLabel: formatShortDate(endsAt),
+  };
+}
+
+async function notifyZeroAmountInvoice(event, userId, invoice) {
+  const reason = String(invoice.billing_reason || '');
+  if (reason !== 'subscription_create' && reason !== 'subscription_update') return null;
+  const { planName, amountLabel, dateLabel } = await trialFirstCharge(invoice);
+  const firstCharge = amountLabel && dateLabel
+    ? ` Your first charge of ${amountLabel} is on ${dateLabel}.`
+    : dateLabel
+      ? ` Your first charge is on ${dateLabel}.`
+      : '';
+  const cancelNote = ' Cancel before then and you will not be charged.';
+  const isCreate = reason === 'subscription_create';
+  return persistAndEmit(userId, event.id, {
+    notification_type: isCreate ? 'billing_trial_started' : 'billing_trial_plan_changed',
+    title: isCreate ? 'Free trial started' : 'Plan changed during free trial',
+    body: isCreate
+      ? `Your ${planName} plan is in its free trial.${firstCharge}${firstCharge ? cancelNote : ''}`
+      : `You switched to ${planName}. Your free trial continues.${firstCharge}`,
+    severity: 'info',
+    action: {
+      href: '/settings?tab=subscription',
+      invoice_id: invoice.id,
+    },
+  });
 }
 
 async function notifyInvoicePaid(event) {
@@ -156,22 +263,31 @@ async function notifyInvoicePaid(event) {
     });
   }
 
+  if (Number(invoice.amount_paid || 0) <= 0) {
+    return notifyZeroAmountInvoice(event, userId, invoice);
+  }
+
+  sendBillingEmailInBackground('Payment restored', () => sendPaymentRestoredEmail(userId, invoice));
+
   const reason = String(invoice.billing_reason || '');
-  const plans = invoicePricePlans(invoice);
-  const planName = plans.at(-1)?.name || 'subscription';
+  const planName = invoicePlanName(invoice);
+  const periodLabel = invoiceIsAnnual(invoice) ? ' for the year' : '';
 
   let title = 'Payment paid';
-  let body = `Your ${planName} payment of ${amount} was paid.`;
+  let body = `Your ${planName} payment of ${amount}${periodLabel} was paid.`;
 
   if (reason === 'subscription_create') {
     title = 'Subscription started';
-    body = `Your ${planName} subscription is active. Amount paid: ${amount}.`;
+    body = `Your ${planName} subscription is active. Amount paid: ${amount}${periodLabel}.`;
   } else if (reason === 'subscription_cycle') {
     title = 'Subscription renewed';
-    body = `Your ${planName} subscription renewed successfully. Amount paid: ${amount}.`;
+    body = `Your ${planName} subscription renewed successfully. Amount paid: ${amount}${periodLabel}.`;
+  } else if (reason === 'subscription_update' && !invoiceHasProration(invoice)) {
+    title = 'Subscription started';
+    body = `Payment received: ${amount}${periodLabel} for ${planName}. Your subscription is active.`;
   } else if (reason === 'subscription_update') {
     title = 'Plan change payment paid';
-    body = `Your plan change payment of ${amount} was paid.`;
+    body = `Your plan change payment of ${amount}${periodLabel} was paid.`;
   }
 
   return persistAndEmit(userId, event.id, {
@@ -209,6 +325,8 @@ async function notifyInvoicePaymentFailed(event) {
     });
   }
 
+  sendBillingEmailInBackground('Payment failed', () => sendPaymentFailedEmail(userId, invoice));
+
   return persistAndEmit(userId, event.id, {
     notification_type: 'billing_payment_failed',
     title: 'Payment failed',
@@ -227,7 +345,6 @@ async function notifySubscriptionUpdated(event) {
   const userId = await findUserIdForStripeObject(stripeSubscription);
   if (!userId) return null;
 
-  // Template cancel/resume already shows one immediate toast from the settings action.
   if (isStorefrontTemplateMetadata(stripeSubscription?.metadata)) return null;
 
   if (
@@ -295,6 +412,7 @@ async function notifySubscriptionSchedule(event) {
 }
 
 export async function notifyBillingStripeEvent(event) {
+  if (String(event?.type || '').startsWith('invoice.')) clearPaymentActionCache();
   try {
     switch (event.type) {
       case 'invoice.paid':

@@ -43,12 +43,14 @@ export async function runChatOpenAiTurn({
 }) {
   const messages = withTurnReminder(openaiMessages, turnReminder);
   let rawContent = '';
+  // Preview always streams (cooler temp). When emojis are on, nudge up so greeting emoji is not suppressed.
+  const streamTemperature = assistantSetting?.use_emojis ? 0.55 : 0.4;
   if (onDelta) {
     const stream = await getOpenAI().chat.completions.create(
       {
         model: 'gpt-4o-mini',
         messages,
-        temperature: 0.4,
+        temperature: streamTemperature,
         max_tokens: maxTokens,
         stream: true,
       },

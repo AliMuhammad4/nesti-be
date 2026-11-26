@@ -3,7 +3,13 @@ import { USER_ROLE } from '../../constants/roles.js';
 import {
   ACTIVE_ACCESS_STATUSES,
   accountStatusFromSubscription,
+  getProfessionalAccessState,
+  getProfessionalPastDueGraceEndsAt,
+  getProfessionalPaymentMessage,
+  hasPaidProfessionalAccess,
+  isProfessionalSubscriptionActive,
   isSubscriptionPeriodEnded,
+  professionalHasUsedTrial,
   toIsoDate,
 } from './subscriptionShared.js';
 
@@ -50,16 +56,31 @@ export function serializeSubscription(subscription) {
     id: String(subscription._id),
     accountStatus: accountStatusFromSubscription(subscription),
     subscriptionPlan: subscription.plan_key || '',
+    billingPeriod: subscription.billing_period || '',
     subscriptionStatus: subscription.status || '',
     trialEndsAt: toIsoDate(subscription.trial_end),
+    lastPurchase: subscription.last_purchase?.confirmed_at
+      ? {
+          planKey: subscription.last_purchase.plan_key || subscription.plan_key || '',
+          billingPeriod: subscription.last_purchase.billing_period || subscription.billing_period || '',
+          amount: Number(subscription.last_purchase.amount || 0),
+          currency: subscription.last_purchase.currency || 'usd',
+          confirmedAt: toIsoDate(subscription.last_purchase.confirmed_at),
+        }
+      : null,
+    canPublishWebsite: hasPaidProfessionalAccess(subscription)
+      && ['standard', 'enterprise'].includes(String(subscription.plan_key || '')),
+    canRunVoiceAgent: hasPaidProfessionalAccess(subscription)
+      && String(subscription.plan_key || '') === 'enterprise',
     subscriptionEndsAt: toIsoDate(subscription.current_period_end),
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
     pendingPlanKey: subscription.pending_plan_key || '',
     pendingPlanEffectiveAt: toIsoDate(subscription.pending_plan_effective_at),
-    stripeSubscriptionScheduleId: subscription.stripe_subscription_schedule_id || '',
-    stripeCustomerId: subscription.stripe_customer_id || '',
-    stripeSubscriptionId: subscription.stripe_subscription_id || '',
-    stripePriceId: subscription.stripe_price_id || '',
+    accessState: getProfessionalAccessState(subscription),
+    paymentMessage: getProfessionalPaymentMessage(subscription),
+    pastDueGraceEndsAt: toIsoDate(getProfessionalPastDueGraceEndsAt(subscription)),
+    paymentActionUrl: '',
+    paymentActionLabel: '',
   };
 }
 
@@ -105,9 +126,15 @@ export async function expireCanceledSubscriptionIfNeeded(subscription) {
   const periodEnded = isSubscriptionPeriodEnded(subscription);
   const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
   const terminalStatus = ['canceled', 'cancelled', 'incomplete_expired'].includes(status);
+  const missedRenewalExpired =
+    (status === 'active' || status === 'trialing')
+    && periodEnded
+    && !cancelAtPeriodEnd
+    && !isProfessionalSubscriptionActive(subscription);
   const shouldExpire =
     terminalStatus
-    || (cancelAtPeriodEnd && periodEnded && ACTIVE_ACCESS_STATUSES.has(status));
+    || (cancelAtPeriodEnd && periodEnded && ACTIVE_ACCESS_STATUSES.has(status))
+    || missedRenewalExpired;
   if (!shouldExpire) return subscription;
 
   if (status === 'expired' || status === 'canceled') {
@@ -135,6 +162,8 @@ export async function createFreeTrialSubscription(userId, trialEndsAt) {
         status: 'free_trial',
         trial_start: now,
         trial_end: trialEnd,
+        trial_used: true,
+        metadata: { trial_used: true },
       },
     },
     { returnDocument: 'after', upsert: true },
@@ -146,11 +175,19 @@ export async function startProfessionalTrialFromApproval(userId) {
   const now = new Date();
   const trialEnd = new Date(now.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
-  // Do not reset an existing free_trial or active paid subscription on re-approve races.
+  // One trial per professional ever. Do not reset a used trial or a live paid plan.
   const existing = await Subscription.findOne({ user_id: userId });
   if (existing) {
     const status = String(existing.status || '').trim().toLowerCase();
     if (status === 'free_trial' || status === 'active' || status === 'past_due') {
+      if (!professionalHasUsedTrial(existing)) {
+        existing.trial_used = true;
+        existing.metadata = { ...(existing.metadata || {}), trial_used: true };
+        await existing.save();
+      }
+      return existing;
+    }
+    if (professionalHasUsedTrial(existing)) {
       return existing;
     }
   }
@@ -164,25 +201,38 @@ export async function startProfessionalTrialFromApproval(userId) {
         status: 'free_trial',
         trial_start: now,
         trial_end: trialEnd,
+        trial_used: true,
         cancel_at_period_end: false,
+        'metadata.trial_used': true,
       },
     },
     { returnDocument: 'after', upsert: true },
   );
 }
 
-export async function getOrCreateSubscriptionForUser(user) {
-  if (String(user?.role || '') === USER_ROLE.CLIENT) {
-    const existing = await Subscription.findOne({ user_id: user._id });
-    if (!existing) return null;
-    const status = String(existing.status || '').trim().toLowerCase();
-    if (status === 'free_trial' || ACTIVE_ACCESS_STATUSES.has(status)) {
-      existing.status = 'expired';
-      existing.cancel_at_period_end = false;
-      await existing.save();
-    }
-    return expireCanceledSubscriptionIfNeeded(existing);
+/**
+ * Callers sometimes pass only { _id }. Load the role so the admin, client, and
+ * awaiting-approval rules below still apply (no trial before credential approval).
+ */
+async function withKnownRole(user) {
+  if (!user?._id || String(user?.role || '').trim()) return user;
+  const { default: User } = await import('../../models/User.js');
+  const doc = await User.findById(user._id).select('role').lean();
+  return doc ? { ...user, role: doc.role } : null;
+}
+
+export async function getOrCreateSubscriptionForUser(inputUser) {
+  const user = await withKnownRole(inputUser);
+  if (!user) {
+    // Unknown account: read an existing row, never create a trial.
+    const orphan = inputUser?._id ? await Subscription.findOne({ user_id: inputUser._id }) : null;
+    return orphan ? expireTrialIfNeeded(orphan) : null;
   }
+  if (String(user?.role || '') === USER_ROLE.ADMIN) return null;
+
+  // Clients bill through ClientSubscription. Roles are fixed at signup, so a client
+  // never owns a professional Subscription row and none is created here.
+  if (String(user?.role || '') === USER_ROLE.CLIENT) return null;
 
   let subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription) {
@@ -198,9 +248,8 @@ export async function getOrCreateSubscriptionForUser(user) {
         return null;
       }
     }
-    const createdAt = user.createdAt ? new Date(user.createdAt) : new Date();
-    const trialEnd = new Date(createdAt.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
-    subscription = await createFreeTrialSubscription(user._id, trialEnd);
+    // First trial starts from approval time (now), not the account createdAt.
+    subscription = await createFreeTrialSubscription(user._id);
   }
   return expireTrialIfNeeded(subscription);
 }

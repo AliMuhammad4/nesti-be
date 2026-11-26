@@ -18,6 +18,7 @@ export const chatBodySchema = Joi.object({
   previewAssistantDraft: Joi.object().unknown(true).optional(),
   testPersona: Joi.string().valid('buyer', 'seller', 'investor').optional(),
   attachmentIds: Joi.array().items(Joi.string().trim()).max(3).optional(),
+  leadProfilePreview: Joi.object().unknown(true).optional(),
 });
 
 export const propertyMatchesSchema = Joi.object({
@@ -46,7 +47,6 @@ export const scorePreviewSchema = Joi.object({
   formContact: Joi.object().unknown(true).optional(),
 }).unknown(true);
 
-/** Body from dashboard; user_id is taken from JWT server-side. */
 export const referralPostBodySchema = Joi.object({
   target_user_id: objectId.required(),
   lead_match_id: objectId.required(),
@@ -99,11 +99,9 @@ export const nurtureSendBodySchema = Joi.object({
   conversation_id: objectId.optional(),
   to_email: Joi.string().email().allow('', null),
   subject: Joi.string().trim().max(200).required(),
-  /** Plain text; draft/refine responses use body_text — accept either for send. */
   body: Joi.string().trim().max(8000).allow('', null),
   body_text: Joi.string().trim().max(8000).allow('', null),
   body_html: Joi.string().trim().max(20000).allow('', null),
-  /** When true (default), HTML email appends styled property cards from server-fetched matches. */
   include_property_cards: Joi.boolean().optional(),
   referral_context: Joi.object({
     source_professional_name: Joi.string().trim().max(160).allow('', null),

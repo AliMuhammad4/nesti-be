@@ -7,9 +7,11 @@ import LeadProfile from '../../models/LeadProfile.js';
 import { PROFESSIONAL_TYPE } from '../../constants/roles.js';
 import { buildLeadConversionPack } from '../conversion/buildLeadConversionPack.js';
 import { mapLeadProfileForApi } from '../lead/leadProfileFormat.js';
+import { applyLeadOwnAnswers, resolveLeadOwnClientType } from '../lead/leadOwnAnswers.js';
 import { buildDecisionSupport, buildLeadTrust, buildFunnelTelemetry } from '../lead/leadExperienceContract.js';
 import { getLeadKpiEventsForLead } from '../analytics/leadKpiService.js';
 import { resolveAppointmentStatus } from '../../utils/resolveAppointmentStatus.js';
+import { marketFromLeadProfile } from '../professionalAssistant/brokerInvestorMarket.js';
 
 let _openaiClient = null;
 function getOpenAI() {
@@ -39,42 +41,69 @@ const KPI_EVENT_LABELS = {
 function norm(s) {
   return String(s || '').toLowerCase().trim();
 }
+/** Lawyer / broker: this lead's own client type (the shared profile only when the lead says nothing). */
+function isProfessionalInvestorLead(profile, leadMatch) {
+  if (resolveLeadOwnClientType(leadMatch, profile) === 'investor') return true;
+  const cf = leadMatch?.compatibility_factors || {};
+  const ownPurpose = cf.lead_answers?.purchase_purpose || cf.purchase_purpose;
+  if (ownPurpose) return norm(ownPurpose) === 'investment';
+  return !leadMatch?.lead_type && norm(profile?.qualification?.mortgage_broker?.purchase_purpose) === 'investment';
+}
 
-function resolveLeadType(profile, leadMatch, conversation, professionalType = PROFESSIONAL_TYPE.AGENT) {
+export function resolveLeadType(profile, leadMatch, conversation, professionalType = PROFESSIONAL_TYPE.AGENT) {
   if (professionalType === PROFESSIONAL_TYPE.LAWYER) {
-    const q = profile?.qualification?.lawyer || {};
-    const tx = norm(q.transaction_type);
-    const service = norm(q.legal_services_needed);
-    if (service.includes('property_dispute')) return 'property_dispute_matter';
-    if (service.includes('agreement_review') || service.includes('document_review')) return 'document_review_matter';
-    if (service.includes('title_transfer') || tx.includes('title_transfer') || tx.includes('title')) {
-      return 'title_transfer_matter';
-    }
-    if (service.includes('refinance_legal_work') || tx.includes('refinance')) return 'refinance_matter';
-    if (service.includes('sale_closing')) return 'home_sale_closing';
-    if (service.includes('purchase_closing')) return 'home_purchase_closing';
-    if (service.includes('full_closing')) {
-      if (tx.includes('home_sale') || tx.includes('sale')) return 'home_sale_closing';
-      if (tx.includes('home_purchase') || tx.includes('purchase')) return 'home_purchase_closing';
-      return 'closing_matter';
-    }
-    if (tx.includes('home_sale') || tx.includes('sale')) return 'home_sale_matter';
-    if (tx.includes('home_purchase') || tx.includes('purchase')) return 'home_purchase_matter';
-    return 'legal_matter';
+    const matter = resolveLawyerMatterType(profile);
+    return isProfessionalInvestorLead(profile, leadMatch) ? `investment_${matter}` : matter;
   }
   if (professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
-    return 'mortgage_client';
+    return isProfessionalInvestorLead(profile, leadMatch) ? 'mortgage_investor' : 'mortgage_client';
+  }
+  return resolveAgentLeadType(profile, leadMatch, conversation);
+}
+
+function resolveLawyerMatterType(profile) {
+  const q = profile?.qualification?.lawyer || {};
+  const tx = norm(q.transaction_type);
+  const service = norm(q.legal_services_needed);
+  if (service.includes('property_dispute')) return 'property_dispute_matter';
+  if (service.includes('agreement_review') || service.includes('document_review')) return 'document_review_matter';
+  if (service.includes('title_transfer') || tx.includes('title_transfer') || tx.includes('title')) {
+    return 'title_transfer_matter';
+  }
+  if (service.includes('refinance_legal_work') || tx.includes('refinance')) return 'refinance_matter';
+  if (service.includes('sale_closing')) return 'home_sale_closing';
+  if (service.includes('purchase_closing')) return 'home_purchase_closing';
+  if (service.includes('full_closing')) {
+    if (tx.includes('home_sale') || tx.includes('sale')) return 'home_sale_closing';
+    if (tx.includes('home_purchase') || tx.includes('purchase')) return 'home_purchase_closing';
+    return 'closing_matter';
+  }
+  if (tx.includes('home_sale') || tx.includes('sale')) return 'home_sale_matter';
+  if (tx.includes('home_purchase') || tx.includes('purchase')) return 'home_purchase_matter';
+  return 'legal_matter';
+}
+
+function resolveAgentLeadType(profile, leadMatch, conversation) {
+  const clientType = norm(profile?.client_type || leadMatch?.compatibility_factors?.client_type);
+  const lt = norm(leadMatch?.lead_type || '');
+  const motivation = norm(profile?.qualification?.agent?.motivation_reason);
+  const invType = norm(profile?.qualification?.agent?.investment_type);
+  const invGoal = norm(profile?.qualification?.agent?.investment_goal);
+  if (
+    clientType === 'investor'
+    || /investor/.test(lt)
+    || motivation === 'investment'
+    || invType
+    || invGoal
+  ) {
+    return 'investor';
   }
   const intent = profile?.intent || conversation?.intent;
   if (intent === 'sell') return 'seller';
   if (intent === 'buy') return 'buyer';
-  const lt = norm(leadMatch?.lead_type || '');
   if (/seller/.test(lt)) return 'seller';
   if (/buyer|client/.test(lt)) return 'buyer';
   if (/renter|rent/.test(lt)) return 'renter';
-  if (/invest/.test(lt)) return 'investor';
-  const motivation = norm(profile?.qualification?.agent?.motivation_reason);
-  if (motivation === 'investment') return 'investor';
   return 'lead';
 }
 
@@ -176,7 +205,6 @@ function normalizeCachedIntelligence(intelligence) {
   return rest;
 }
 
-/** Cached insights only — does not generate a new analysis. */
 export function getCachedLeadIntelligence(leadMatch) {
   const payload = leadMatch?.ai_insights?.payload;
   if (!payload || typeof payload !== 'object') return null;
@@ -199,6 +227,22 @@ function hasCurrentLeadTypeShape(intelligence, professionalType) {
   if (professionalType !== PROFESSIONAL_TYPE.LAWYER) return true;
   const leadType = norm(intelligence?.overview?.lead_type);
   return !['legal_purchase_client', 'legal_sale_client', 'legal_client'].includes(leadType);
+}
+
+export function isCachedLeadTypeStale(payload, currentLeadType) {
+  const cached = norm(payload?.overview?.lead_type);
+  const current = norm(currentLeadType);
+  return Boolean(current) && cached !== current;
+}
+
+export function withCurrentLeadType(payload, currentLeadType) {
+  if (!payload || typeof payload !== 'object' || !isCachedLeadTypeStale(payload, currentLeadType)) {
+    return { payload, stale: false };
+  }
+  return {
+    payload: { ...payload, overview: { ...(payload.overview || {}), lead_type: currentLeadType } },
+    stale: true,
+  };
 }
 
 function sanitizeAiIntelligence(ai, base) {
@@ -408,7 +452,7 @@ const getTemperatureLabel = (grade, professionalType) => {
   return grade === 'hot' ? 'Ready to Act' : grade === 'warm' ? 'Likely soon' : 'Early stage';
 };
 
-const buildQualificationData = (profile, professionalType) => {
+export const buildQualificationData = (profile, professionalType) => {
   if (!profile) return null;
   if (professionalType === PROFESSIONAL_TYPE.MORTGAGE_BROKER) {
     return {
@@ -422,6 +466,16 @@ const buildQualificationData = (profile, professionalType) => {
       down_payment_readiness: profile.qualification?.mortgage_broker?.down_payment_readiness,
       purchase_purpose: profile.qualification?.mortgage_broker?.purchase_purpose,
       urgency_signal: profile.qualification?.mortgage_broker?.urgency_signal,
+      investment_type: profile.qualification?.mortgage_broker?.investment_type,
+      owns_investments: profile.qualification?.mortgage_broker?.owns_investments,
+      investment_financing: profile.qualification?.mortgage_broker?.investment_financing,
+      borrower_entity: profile.qualification?.mortgage_broker?.borrower_entity,
+      // Saved market, else inferred from the stored address / location (older leads, no migration).
+      market_country: marketFromLeadProfile(profile, 'mortgage_broker').market_country || undefined,
+      market_region: marketFromLeadProfile(profile, 'mortgage_broker').market_region || undefined,
+      market_city: marketFromLeadProfile(profile, 'mortgage_broker').market_city || undefined,
+      market_country_name: marketFromLeadProfile(profile, 'mortgage_broker').market_country_name || undefined,
+      currency: profile.budget_profile?.currency ? 'USD' : undefined,
     };
   }
   if (professionalType === PROFESSIONAL_TYPE.LAWYER) {
@@ -434,6 +488,12 @@ const buildQualificationData = (profile, professionalType) => {
       realtor_involved: profile.qualification?.lawyer?.realtor_involved,
       first_time_buyer: profile.qualification?.lawyer?.first_time_buyer,
       legal_services_needed: profile.qualification?.lawyer?.legal_services_needed,
+      via_company: profile.qualification?.lawyer?.via_company,
+      client_type: profile.client_type,
+      market_country: marketFromLeadProfile(profile, 'lawyer').market_country || undefined,
+      market_region: marketFromLeadProfile(profile, 'lawyer').market_region || undefined,
+      market_city: marketFromLeadProfile(profile, 'lawyer').market_city || undefined,
+      market_country_name: marketFromLeadProfile(profile, 'lawyer').market_country_name || undefined,
     };
   }
   return {
@@ -459,7 +519,11 @@ export async function buildLeadIntelligence({
 
   const professionalType =
     leadMatch?.compatibility_factors?.professional_type || PROFESSIONAL_TYPE.AGENT;
-  const profileView = mapLeadProfileForApi(profile || {}, professionalType);
+  const sharedProfileView = mapLeadProfileForApi(profile || {}, professionalType);
+  const profileView = {
+    ...sharedProfileView,
+    qualification: applyLeadOwnAnswers(sharedProfileView.qualification, leadMatch, profile, professionalType),
+  };
   const grade = leadMatch?.lead_type?.split('_')[0] ?? conversation?.lead_grade ?? 'unscored';
   const score = Math.round(Number(leadMatch?.match_score ?? conversation?.lead_score ?? 0));
   const conversion = buildLeadConversionPack({
@@ -573,7 +637,7 @@ export const getLeadInsights = async ({ userId, conversationId }) => {
     });
   }
 
-  const qual = buildQualificationData(profile, professionalType);
+  const qual = applyLeadOwnAnswers(buildQualificationData(profile, professionalType), leadMatch, profile, professionalType);
   if (qual) {
     insights.push({
       type: 'qualification',
@@ -648,11 +712,25 @@ export const analyzeLeadIntelligence = async ({ userId, leadId, refresh = false 
     hasConversionGuidance(leadMatch.ai_insights.payload) &&
     hasCurrentLeadTypeShape(leadMatch.ai_insights.payload, professionalType)
   ) {
+    const [typeProfile, typeConversation] = await Promise.all([
+      leadMatch.lead_profile_id
+        ? LeadProfile.findById(leadMatch.lead_profile_id).select('intent client_type qualification').lean()
+        : null,
+      leadMatch.conversation_id ? ChatConversation.findById(leadMatch.conversation_id).select('intent').lean() : null,
+    ]);
+    const currentLeadType = resolveLeadType(typeProfile, leadMatch, typeConversation, professionalType);
+    const { payload, stale } = withCurrentLeadType(leadMatch.ai_insights.payload, currentLeadType);
+    if (stale) {
+      await LeadMatch.updateOne(
+        { _id: leadMatch._id, user_id: userId },
+        { $set: { 'ai_insights.payload.overview.lead_type': currentLeadType } },
+      );
+    }
     return {
       success: true,
       lead_id: String(leadMatch._id),
       conversation_id: leadMatch.conversation_id ? String(leadMatch.conversation_id) : null,
-      intelligence: normalizeCachedIntelligence(leadMatch.ai_insights.payload),
+      intelligence: normalizeCachedIntelligence(payload),
       cached: true,
     };
   }

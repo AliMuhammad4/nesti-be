@@ -324,6 +324,18 @@ export function canonicalizeStorefrontDraft(draft, generated = {}) {
   );
 }
 
+export function storefrontRevisionDraftForValidation(revision) {
+  const serialized = serializeStorefrontRevision(revision);
+  if (!serialized) return null;
+  return canonicalizeStorefrontDraft({
+    blocks: serialized.blocks,
+    brandKit: serialized.brandKit,
+    template: serialized.template,
+    seo_meta: serialized.seo_meta,
+    ...(serialized.website ? { website: serialized.website } : {}),
+  });
+}
+
 export function templateIdForRevision(revision) {
   return String(revision?.template?.id || '').trim();
 }

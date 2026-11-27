@@ -15,6 +15,7 @@ import {
   createPublishedRevision,
   serializeStorefrontDrafts,
   serializeStorefrontRevision,
+  storefrontRevisionDraftForValidation,
   storefrontDrafts,
   templateIdForRevision,
 } from './storefrontService.js';
@@ -549,13 +550,7 @@ export const publishStorefrontService = async (userId, draft = null, expected = 
   }
 
   const professionalType = professionalProfile?.professional_type || profile.professional_type;
-  const serializedSource = serializeStorefrontRevision(sourceDraft);
-  const sourcePayload = canonicalizeStorefrontDraft({
-    blocks: serializedSource?.blocks || [],
-    brandKit: serializedSource?.brandKit || {},
-    template: serializedSource?.template || {},
-    seo_meta: serializedSource?.seo_meta || {},
-  });
+  const sourcePayload = storefrontRevisionDraftForValidation(sourceDraft);
   const { error: validationError, value: validatedDraft } = validateStorefrontDraftForRole(
     sourcePayload,
     professionalType,

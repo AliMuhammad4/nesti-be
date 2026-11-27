@@ -207,7 +207,9 @@ const AGENT_REALEST_PATH_BLOCK_TYPES = Object.freeze([
   'footer',
 ]);
 const MAX_CONTENT_DEPTH = 4;
-const MAX_CONTENT_KEYS = 30;
+// Heroes and specialty sections accumulate dual CTAs, design versions, slides,
+// proof fields, and migration leftovers. 30 was rejecting newer templates.
+const MAX_CONTENT_KEYS = 60;
 const MAX_CONTENT_ITEMS = 30;
 const MAX_CONTENT_TEXT_LENGTH = 2000;
 const MAX_URL_LENGTH = 2048;
@@ -217,12 +219,33 @@ const SAFE_BLOCK_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const URL_KEY_PATTERN = /(?:url|uri|href|link|image|logo|target)$/i;
 const MEDIA_URL_KEY_PATTERN = /(?:image|logo|photo|avatar|cover)(?:[_-]?(?:url|uri|href|link))?$/i;
 const COLOR_KEY_PATTERN = /(?:color|colour|background)$/i;
+const CSS_VAR_HEX_FALLBACK_PATTERN = /^var\(\s*--[a-zA-Z0-9_-]+\s*,\s*(#[0-9A-Fa-f]{3,8})\s*\)$/;
+
+/** Normalize editable surface colors to #RRGGBB, or '' for empty tokens. null = invalid. */
+function normalizeHexColorValue(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw || EMPTY_SURFACE_COLORS.has(raw.toLowerCase())) return '';
+
+  const varFallback = raw.match(CSS_VAR_HEX_FALLBACK_PATTERN);
+  const hexSource = varFallback ? varFallback[1] : raw;
+  const withHash = hexSource.startsWith('#') ? hexSource : `#${hexSource}`;
+
+  if (/^#[0-9A-Fa-f]{3}$/.test(withHash)) {
+    const r = withHash[1];
+    const g = withHash[2];
+    const b = withHash[3];
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  if (/^#[0-9A-Fa-f]{6}$/.test(withHash)) return withHash;
+  // Drop alpha from 8-digit hex so content/style stay on the shared #RRGGBB contract.
+  if (/^#[0-9A-Fa-f]{8}$/.test(withHash)) return withHash.slice(0, 7);
+  return null;
+}
 
 function coerceOptionalColor(value, helpers) {
-  const next = String(value ?? '').trim();
-  if (!next || EMPTY_SURFACE_COLORS.has(next.toLowerCase())) return '';
-  if (!COLOR_VALUE_PATTERN.test(next)) return helpers.error('string.pattern.base');
-  return next;
+  const normalized = normalizeHexColorValue(value);
+  if (normalized === null) return helpers.error('string.pattern.base');
+  return normalized;
 }
 
 function isPlainObject(value) {
@@ -252,79 +275,85 @@ function isSafeNavigationValue(value) {
   }
 }
 
-function contentValidationError(value, depth = 0, key = '') {
-  if (value === null || typeof value === 'boolean') return null;
+function sanitizeStorefrontContent(value, depth = 0, key = '') {
+  if (value === null || typeof value === 'boolean') {
+    return { value, error: null };
+  }
 
   if (typeof value === 'string') {
     if (value.length > (URL_KEY_PATTERN.test(key) ? MAX_URL_LENGTH : MAX_CONTENT_TEXT_LENGTH)) {
-      return 'contains text that is too long';
+      return { value, error: 'contains text that is too long' };
     }
     if (URL_KEY_PATTERN.test(key) && value) {
       if (!MEDIA_URL_KEY_PATTERN.test(key) && isSafeNavigationValue(value)) {
-        return null;
+        return { value, error: null };
       }
       try {
         const url = new URL(value);
         if (!['http:', 'https:'].includes(url.protocol)) {
-          return 'contains a URL with an unsupported protocol';
+          return { value, error: 'contains a URL with an unsupported protocol' };
         }
       } catch {
-        return 'contains an invalid URL';
+        return { value, error: 'contains an invalid URL' };
       }
     }
-    if (
-      COLOR_KEY_PATTERN.test(key)
-      && value
-      && !EMPTY_SURFACE_COLORS.has(value.toLowerCase())
-      && !COLOR_VALUE_PATTERN.test(value)
-    ) {
-      return 'contains an invalid color';
+    if (COLOR_KEY_PATTERN.test(key) && value) {
+      const normalized = normalizeHexColorValue(value);
+      if (normalized === null) {
+        const field = key ? `"${key}"` : 'a color field';
+        return { value, error: `${field} contains an invalid color` };
+      }
+      return { value: normalized, error: null };
     }
-    return null;
+    return { value, error: null };
   }
 
   if (typeof value === 'number') {
     return Number.isFinite(value) && value >= -1000000 && value <= 1000000
-      ? null
-      : 'contains a number outside the supported range';
+      ? { value, error: null }
+      : { value, error: 'contains a number outside the supported range' };
   }
 
   if (depth >= MAX_CONTENT_DEPTH) {
-    return 'is nested too deeply';
+    return { value, error: 'is nested too deeply' };
   }
 
   if (Array.isArray(value)) {
     if (value.length > MAX_CONTENT_ITEMS) {
-      return 'contains too many items';
+      return { value, error: 'contains too many items' };
     }
+    const next = [];
     for (const item of value) {
-      const error = contentValidationError(item, depth + 1, key);
-      if (error) return error;
+      const result = sanitizeStorefrontContent(item, depth + 1, key);
+      if (result.error) return result;
+      next.push(result.value);
     }
-    return null;
+    return { value: next, error: null };
   }
 
   if (!isPlainObject(value)) {
-    return 'must contain only JSON-compatible values';
+    return { value, error: 'must contain only JSON-compatible values' };
   }
   const entries = Object.entries(value);
   if (entries.length > MAX_CONTENT_KEYS) {
-    return 'contains too many fields';
+    return { value, error: 'contains too many fields' };
   }
+  const next = {};
   for (const [childKey, childValue] of entries) {
     if (!childKey || childKey.length > 80 || ['__proto__', 'constructor', 'prototype'].includes(childKey)) {
-      return 'contains an invalid field name';
+      return { value, error: 'contains an invalid field name' };
     }
-    const error = contentValidationError(childValue, depth + 1, childKey);
-    if (error) return error;
+    const result = sanitizeStorefrontContent(childValue, depth + 1, childKey);
+    if (result.error) return result;
+    next[childKey] = result.value;
   }
-  return null;
+  return { value: next, error: null };
 }
 
 const storefrontContentSchema = Joi.object()
   .custom((value, helpers) => {
-    const error = contentValidationError(value);
-    return error ? helpers.message(`{{#label}} ${error}`) : value;
+    const { value: next, error } = sanitizeStorefrontContent(value);
+    return error ? helpers.message(`{{#label}} ${error}`) : next;
   })
   .default({});
 
@@ -557,6 +586,11 @@ const websiteSchema = Joi.object({
     favicon_url: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('', null).optional(),
     seo_title: Joi.string().trim().max(60).allow('').optional(),
     seo_description: Joi.string().trim().max(160).allow('').optional(),
+    header_variant: Joi.string().valid('standard', 'contact_bar', 'editorial', 'modern', 'atelier').optional(),
+    footer_variant: Joi.string().valid('signature', 'editorial', 'columns', 'contact', 'minimal').optional(),
+    header_phone: Joi.string().trim().max(80).allow('', null).optional(),
+    header_email: Joi.string().trim().email().max(160).allow('', null).optional(),
+    header_location: Joi.string().trim().max(160).allow('', null).optional(),
   }).unknown(false).optional(),
   navigation: Joi.object({
     header: Joi.array().items(websiteNavItemSchema).max(24).default([]),

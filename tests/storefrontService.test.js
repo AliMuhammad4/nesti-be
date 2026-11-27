@@ -818,6 +818,117 @@ test('storefront draft validation accepts transparent section backgrounds as emp
   assert.equal(value.draft.blocks[0].data.style.background, '');
 });
 
+test('storefront content normalizes short hex, alpha hex, and CSS-var color fallbacks', () => {
+  const { error, value } = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'listings',
+        type: 'featured-listings',
+        data: {
+          content: {
+            card_background: '#fff',
+            card_text_color: '#11223344',
+            panel_background: 'var(--storefront-surface, #FFFDF9)',
+          },
+        },
+      }],
+    },
+  });
+
+  assert.equal(error, undefined);
+  assert.equal(value.draft.blocks[0].data.content.card_background, '#ffffff');
+  assert.equal(value.draft.blocks[0].data.content.card_text_color, '#112233');
+  assert.equal(value.draft.blocks[0].data.content.panel_background, '#FFFDF9');
+});
+
+test('storefront content rejects truly invalid colors with the field name', () => {
+  const { error } = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{
+        id: 'listings',
+        type: 'featured-listings',
+        data: {
+          content: {
+            card_background: 'not-a-color',
+          },
+        },
+      }],
+    },
+  });
+
+  assert.match(String(error?.message || ''), /"card_background" contains an invalid color/);
+});
+
+test('storefront content allows richer hero fields used by newer templates', () => {
+  const content = {
+    eyebrow: 'Practice',
+    heading: 'A clear next step',
+    body: 'Support line',
+    subheading: '',
+    cta_label: 'Primary',
+    primary_cta_label: 'Primary',
+    secondary_cta_label: 'Secondary',
+    join_label: 'Join Nesti',
+    helper_text: '',
+    badge: '',
+    media: '',
+    image_url: 'https://cdn.example.com/hero.jpg',
+    show_header_links: true,
+    show_header_profile: false,
+    classic_cover_layout_version: 2,
+    broker_first_home_design_version: 13,
+    investor_design_version: 12,
+    newcomer_design_version: 1,
+    commercial_design_version: 1,
+    metrics_layout_version: 2,
+    sold_card_layout_version: 2,
+    seller_about_layout_version: 2,
+    trust_points: [{ label: 'Local', value: '12 yrs' }],
+    pathways: [{ id: 'buy', label: 'Buy', href: '#buy' }],
+    slides: [{
+      id: 'slide-1',
+      eyebrow: 'Start',
+      heading: 'Slide',
+      body: 'Copy',
+      image_url: '',
+      image_position_x: 50,
+      image_position_y: 50,
+      image_zoom: 1,
+      image_fit: 'cover',
+      image_position: { x: 50, y: 50, zoom: 1 },
+    }],
+    primary_cta_href: '#contact',
+    secondary_cta_href: '#about',
+    cta_href: '#contact',
+    hero_name: 'Advisor',
+    phone_label: '',
+    quick_links: [],
+    disclaimer: '',
+    resource_label: '',
+  };
+  assert.ok(Object.keys(content).length > 30);
+  assert.ok(Object.keys(content).length <= 60);
+
+  const accepted = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{ id: 'hero-1', type: 'hero', data: { enabled: true, content, layout: {}, style: {} } }],
+      template: { id: 'mortgage_broker-first-home' },
+    },
+  });
+  assert.equal(accepted.error, undefined);
+
+  const tooMany = {};
+  for (let index = 0; index < 61; index += 1) tooMany[`field_${index}`] = 'x';
+  const rejected = saveStorefrontDraftSchema.validate({
+    draft: {
+      blocks: [{ id: 'hero-1', type: 'hero', data: { enabled: true, content: tooMany, layout: {}, style: {} } }],
+      template: { id: 'agent-classic' },
+    },
+  });
+  assert.ok(rejected.error);
+  assert.match(String(rejected.error.message), /too many fields/);
+});
+
 test('storefront data rejects unsafe content and malformed layout or style', () => {
   const invalidUrl = saveStorefrontDraftSchema.validate({
     draft: {

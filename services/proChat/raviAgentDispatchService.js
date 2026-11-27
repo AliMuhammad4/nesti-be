@@ -52,25 +52,6 @@ async function listRoomDispatches(client, roomName) {
   return (await client.listDispatch(text(roomName))) || [];
 }
 
-export async function redispatchRaviAgent(options, client = raviDispatchClient()) {
-  if (!client) return { ok: false, message: 'LiveKit is not configured for the sales agent.' };
-  const roomName = text(options?.roomName);
-  let earlier;
-  try {
-    earlier = await listRoomDispatches(client, roomName);
-  } catch (error) {
-    logger.warn('Ravi dispatch list failed, keeping any first job', { call_id: text(options?.callId), message: error?.message });
-    return { ok: true, kept: true };
-  }
-  const live = existingRaviDispatch(earlier, { aliveOnly: true });
-  if (live) {
-    logger.info('Ravi is still joining, keeping the first dispatch', { call_id: text(options?.callId), dispatch_id: text(live.id) });
-    return { ok: true, dispatchId: text(live.id), kept: true };
-  }
-  await Promise.all((earlier || []).filter(isRaviDispatch).map((item) => client.deleteDispatch(item.id, roomName).catch(() => {})));
-  return dispatchRaviAgent(options, client);
-}
-
 export async function dispatchRaviAgent({ roomName, callId, role, greeting, test = null } = {}, client = raviDispatchClient()) {
   if (!client) {
     return { ok: false, message: 'LiveKit is not configured for the sales agent.' };
@@ -103,10 +84,10 @@ export async function dispatchRaviAgent({ roomName, callId, role, greeting, test
     try {
       const listed = await listRoomDispatches(client, roomName);
       const live = existingRaviDispatch(listed, { aliveOnly: true }) || existingRaviDispatch(listed);
-      return live ? { ok: true, dispatchId: text(live.id), kept: true } : null;
+      return live?.id ? { ok: true, dispatchId: text(live.id), kept: true } : null;
     } catch (error) {
       logger.warn('Ravi dispatch list failed after a timeout', { call_id: text(callId), message: error?.message });
-      return { ok: true, kept: true };
+      return null;
     }
   };
   try {
@@ -116,12 +97,12 @@ export async function dispatchRaviAgent({ roomName, callId, role, greeting, test
     } catch (error) {
       if (!networkProblem(error)) throw error;
       const existing = await reuseExisting();
-      if (existing) {
+      if (existing?.dispatchId) {
         logger.warn('Ravi agent dispatch timed out, first dispatch is still there', { call_id: text(callId), message: error?.message });
         return existing;
       }
       logger.warn('Ravi agent dispatch timed out and no first job was found, not sending a second Ravi', { call_id: text(callId), message: error?.message });
-      return { ok: true, kept: true };
+      return { ok: false, message: 'Ravi could not join the call. Try again.' };
     }
     return { ok: true, dispatchId: text(dispatch?.id) };
   } catch (error) {

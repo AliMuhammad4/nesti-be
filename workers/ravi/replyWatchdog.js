@@ -1,10 +1,12 @@
 import logger from '../../utils/logger.js';
+import { SPEECH_CAP_MS } from './callerPresence.js';
 import { text } from './text.js';
 
 export const REPLY_WAIT_MS = 1500;
 const CHECK_MS = 1000;
 const MAX_FORCED = 3;
 const ARM_AFTER_MS = 4000;
+const FORCED_REPLY_MS = 5000;
 
 function lastUserText(session) {
   const items = session.history?.items || session.chatCtx?.items || [];
@@ -23,6 +25,7 @@ export function watchReplies(c) {
   let pendingAt = 0;
   let timer = null;
   let forced = 0;
+  let forcedAt = 0;
   const clear = () => {
     pending = [];
     pendingAt = 0;
@@ -35,7 +38,8 @@ export function watchReplies(c) {
     if (c.skippedTurnAt && c.skippedTurnAt >= pendingAt) return clear();
     const quietFrom = Math.max(pendingAt, c.callerDoneAt || 0);
     const waited = Date.now() - quietFrom;
-    const talking = Boolean(c.callerPresent) || (session.userState === 'speaking' && (!c.heard?.current || (c.heard.current.partials || 0) > 0));
+    const presenceFresh = Boolean(c.callerPresent) && (!c.speechStartedAt || Date.now() - c.speechStartedAt < SPEECH_CAP_MS);
+    const talking = presenceFresh || (session.userState === 'speaking' && (!c.heard?.current || (c.heard.current.partials || 0) > 0));
     if (talking || session.agentState !== 'listening' || waited < REPLY_WAIT_MS - 50) {
       timer = setTimeout(check, Math.max(CHECK_MS, REPLY_WAIT_MS - waited));
       timer.unref?.();
@@ -44,10 +48,11 @@ export function watchReplies(c) {
     const said = text(pending.join(' '));
     clear();
     if (forced >= MAX_FORCED) {
-      logger.warn(`Ravi had the caller's words for ${Math.round(waited / 1000)} s with no reply, not forcing again (limit ${MAX_FORCED})`, { call_id: callId });
+      logger.warn(`Ravi had the caller's words for ${Math.round(waited / 1000)} s with no reply, not forcing again (${MAX_FORCED} in a row)`, { call_id: callId });
       return;
     }
     forced += 1;
+    forcedAt = Date.now();
     const inChat = lastUserText(session).endsWith(text(said.split(/\s+/).slice(-4).join(' ')));
     logger.warn(`Ravi had the caller's words for ${Math.round(waited / 1000)} s with no reply, replying now (${inChat ? 'turn was saved' : 'turn was not saved'})`, { call_id: callId });
     try {
@@ -75,7 +80,9 @@ export function watchReplies(c) {
     arm();
   });
   session.on('agent_state_changed', (event) => {
-    if (event?.newState === 'speaking' || event?.newState === 'thinking') clear();
+    if (event?.newState !== 'speaking' && event?.newState !== 'thinking') return;
+    clear();
+    if (Date.now() - forcedAt > FORCED_REPLY_MS) forced = 0;
   });
   session.on('close', clear);
 }

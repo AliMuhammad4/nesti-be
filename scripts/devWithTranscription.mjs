@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { freeDisk } from './freeDisk.mjs';
 import {
   appendTranscriptionWorkerLog,
   probeTranscriptionWorkerHealth,
@@ -690,6 +691,13 @@ function watchRaviCode() {
 }
 
 if (isDevLaunch) takeLauncherLock();
+if (!isDevLaunch) {
+  const cleaned = freeDisk();
+  if (cleaned.freed > 0) {
+    const mb = (bytes) => `${Math.round(bytes / 1048576)} MB`;
+    console.log(`[${logTag}] Freed ${mb(cleaned.freed)} of disk. ${cleaned.free == null ? '' : `${mb(cleaned.free)} still free.`}`);
+  }
+}
 if (!isDevLaunch && ports.apiPort) {
   console.log(`[${logTag}] API port ${ports.apiPort}`);
 }

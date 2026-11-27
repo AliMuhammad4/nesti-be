@@ -458,7 +458,7 @@ export async function startAdminTestVoice({ actorUser, role, overrides }) {
     canPublishSources: [TrackSource.MICROPHONE],
   });
   const jwt = await token.toJwt();
-  (async () => {
+  const saved = (async () => {
     try {
       const stale = await ProfessionalCall.find(openFilter).select('room_name').lean();
       if (stale.length) {
@@ -505,23 +505,23 @@ export async function startAdminTestVoice({ actorUser, role, overrides }) {
       logger.warn('Test call save failed', { call_id: String(callId), message: error?.message });
     }
   })();
-  (async () => {
-    const dispatched = await dispatchRaviAgent({
-      roomName,
-      callId,
-      role,
-      greeting: spokenGreeting(),
-      test: overrides || {},
-    });
-    if (!dispatched.ok) {
-      await ProfessionalCall.updateOne(
-        { _id: callId },
-        { $set: { status: 'ended', ended_at: new Date(), active_thread_key: null, transcription_error_message: dispatched.message } },
-      ).catch(() => {});
-      closeLiveKitRoomSoon(roomName);
-      logger.warn('Test call dispatch failed', { call_id: String(callId), message: dispatched.message });
-    }
-  })();
+  const dispatched = await dispatchRaviAgent({
+    roomName,
+    callId,
+    role,
+    greeting: spokenGreeting(),
+    test: overrides || {},
+  });
+  if (!dispatched.ok || !dispatched.dispatchId) {
+    await saved;
+    await ProfessionalCall.updateOne(
+      { _id: callId },
+      { $set: { status: 'ended', ended_at: new Date(), active_thread_key: null, transcription_error_message: dispatched.message || 'Ravi could not join the call.' } },
+    ).catch(() => {});
+    closeLiveKitRoomSoon(roomName);
+    logger.warn('Test call dispatch failed', { call_id: String(callId), message: dispatched.message });
+    return fail(503, dispatched.message || 'Ravi could not join the call.');
+  }
   Promise.resolve().then(() => recordAdminAudit({
     actorUserId: actorUser?._id,
     action: 'voice.test.start',

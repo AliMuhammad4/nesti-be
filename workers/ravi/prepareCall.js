@@ -89,9 +89,8 @@ function offlineCall(metadata) {
 async function findCall(callId, metadata) {
   const isTest = /^admin-voice:test:/.test(text(metadata?.room_name)) || Boolean(metadata?.test);
   // Test calls are saved in the background, so a fast click may reach here
-  // before the row exists. Three quick looks, then the offline fallback.
-  const tries = isTest ? 3 : 6;
-  for (let i = 0; callId && i < tries; i += 1) {
+  // before the row exists. Six quick looks, then the offline fallback.
+  for (let i = 0; callId && i < 6; i += 1) {
     const row = await ProfessionalCall.findById(callId).select('status voice_target_type voice_target_id voice_agent_voice').lean();
     if (row) return row;
     await new Promise((resolve) => setTimeout(resolve, 200));

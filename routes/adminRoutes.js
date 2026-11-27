@@ -90,7 +90,6 @@ import {
   adminStartLiveKitVoice,
   adminStartTestVoice,
   adminTestCallMinutes,
-  adminRedispatchTestVoice,
   adminVoicePreviewTurn,
   adminStopVoiceCall,
   adminListVoiceCalls,
@@ -374,7 +373,6 @@ router.post('/voice/calls/preview', adminStartVoicePreview);
 router.post('/voice/calls/livekit', adminStartLiveKitVoice);
 router.post('/voice/test-calls', adminStartTestVoice);
 router.get('/voice/test-calls/:id/minutes', adminTestCallMinutes);
-router.post('/voice/test-calls/:id/redispatch', adminRedispatchTestVoice);
 router.post('/voice/calls/:id/turns', adminVoicePreviewTurn);
 router.post('/voice/calls/:id/stop', adminStopVoiceCall);
 router.get('/voice/calls', adminListVoiceCalls);

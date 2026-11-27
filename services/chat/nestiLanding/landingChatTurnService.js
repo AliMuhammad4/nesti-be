@@ -13,7 +13,7 @@ import {
   personalityFor,
   formalityFor,
 } from './landingChatConfig.js';
-import { cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, nestiLandingFlow, replyFromSavedKnowledge, replyIsUsable, scoreLandingLead, shortenLandingReply } from './nestiLandingFlow.js';
+import { cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, landingEmojisOn, nestiLandingFlow, replyFromSavedKnowledge, replyIsUsable, savedAnswerInstruction, scoreLandingLead, shortenLandingReply } from './nestiLandingFlow.js';
 import { agreesToWalkthrough, askedForWalkthrough, detectPain, mentionsPricing, painById, roleFallbackQuestion } from './landingPainPoints.js';
 import { appendChatEvents, nextChatState, questionFromReply, readChatState } from './landingChatState.js';
 import { notifyAdminsOfAdminLead, queueLandingThanksEmail } from './notifyAdminsOfLandingLead.js';
@@ -276,8 +276,10 @@ export async function handleLandingChatTurn({
     questionsAsked: state.questions_asked,
     walkthrough,
   });
+  const savedFaq = greeting ? '' : replyFromSavedKnowledge(roleCustomization, spoken);
   const openaiMessages = [
     { role: 'system', content: system },
+    ...(savedFaq ? [{ role: 'system', content: savedAnswerInstruction(savedFaq) }] : []),
     ...history,
     { role: 'user', content: spoken },
   ];
@@ -298,57 +300,56 @@ export async function handleLandingChatTurn({
       visitorName: contact.name,
       botName,
       welcomeMessage: guides.welcome_message,
+      audience,
     });
   };
   let reply = '';
   let failed = false;
-  const savedFaq = greeting ? '' : replyFromSavedKnowledge(roleCustomization, spoken);
   const useSavedOrCanned = () => {
     if (greeting) {
       return greetingFallback();
     }
-    const saved = replyFromSavedKnowledge(roleCustomization, spoken);
-    if (saved) return saved;
-    return cannedLandingReply();
+    return savedFaq || cannedLandingReply();
   };
-  if (savedFaq) {
-    reply = savedFaq;
-  } else {
-    try {
-      const turn = await runChatOpenAiTurn({
-        openaiMessages,
-        sessionId: sid,
-        flow: nestiLandingFlow,
-        formQualification: {},
-        seedSignals: {},
-        conversationText: spoken,
-        hasContact: Boolean(contact.email || contact.phone),
-        contactInfo: { ...contact },
-        interactionCount: history.length + 1,
-        intent: 'unspecified',
-      });
-      reply = cleanLandingReply(visibleReply(turn?.aiReply));
-    } catch {
-      failed = true;
-      reply = useSavedOrCanned();
-    }
+  try {
+    const turn = await runChatOpenAiTurn({
+      openaiMessages,
+      sessionId: sid,
+      flow: nestiLandingFlow,
+      formQualification: {},
+      seedSignals: {},
+      conversationText: spoken,
+      hasContact: Boolean(contact.email || contact.phone),
+      contactInfo: { ...contact },
+      interactionCount: history.length + 1,
+      intent: 'unspecified',
+    });
+    reply = cleanLandingReply(visibleReply(turn?.aiReply));
+  } catch {
+    failed = true;
+    reply = useSavedOrCanned();
   }
   if (!failed && !replyIsUsable(reply)) {
     failed = true;
     reply = useSavedOrCanned();
   }
-  if (greeting) reply = reply.replace(/\[\[plans\]\]/gi, '').trim();
-  reply = shortenLandingReply(reply, {
-    greeting,
-    feature: failed ? '' : pain?.feature || '',
-    personality: personalityKey,
-    communicationStyle: roleCustomization?.communication_style || '',
-  }) || reply || roleFallbackQuestion(audience, personalityKey, formalityKey);
+  const showPlans = !greeting && /\[\[plans\]\]/i.test(reply);
+  reply = reply.replace(/\[\[plans\]\]/gi, '').trim();
+  if (!savedFaq) {
+    reply = shortenLandingReply(reply, {
+      greeting,
+      feature: failed ? '' : pain?.feature || '',
+      personality: landingBackupTone(roleCustomization, personalityKey),
+      communicationStyle: roleCustomization?.communication_style || '',
+    }) || reply;
+  }
+  reply = reply || roleFallbackQuestion(audience, personalityKey, formalityKey);
   reply = finishLandingSpokenReply(reply, {
     opening: greeting,
     visitorName: contact.name,
     addressByFirstName: roleCustomization?.address_by_first_name !== false,
     formality: formalityKey,
+    useEmojis: landingEmojisOn(roleCustomization, guides.welcome_message),
   });
   if (!text(reply)) {
     reply = applyRegister(`Tell me a little more. I am ${botName}, and I can help with the next step.`, formalityKey);
@@ -389,7 +390,7 @@ export async function handleLandingChatTurn({
     status: 200,
     body: {
       success: true,
-      reply,
+      reply: showPlans ? `${reply}\n[[plans]]` : reply,
       session_id: sid,
       lead_id: '',
     },

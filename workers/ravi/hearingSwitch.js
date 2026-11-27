@@ -7,6 +7,7 @@ export const FINAL_LATE_MS = 3000;
 export const LONG_SILENT_SEGMENT_MS = 4000;
 export const LATE_PARTIAL_MS = 1000;
 export const HOLD_QUIET_MS = 15_000;
+const DROP_LOG_MS = 30_000;
 
 export class HearingSwitch extends stt.STT {
   label = 'ravi.HearingSwitch';
@@ -133,6 +134,8 @@ class HearingStream extends stt.SpeechStream {
     this.primaryRestarts = 0;
     this.longTimer = null;
     this.finalTimer = null;
+    this.recoverTimer = null;
+    this.lastDropLogAt = 0;
   }
 
   async monitorMetrics() {
@@ -195,13 +198,26 @@ class HearingStream extends stt.SpeechStream {
       owner.spareBroken = true;
       logger.warn(`Ravi hearing: ${owner.spareName} stopped, going back to OpenAI speech-to-text`, { call_id: owner.callId });
     }
-    if (this.primaryRestarts >= 3) {
-      this.child = null;
-      return;
-    }
     this.primaryRestarts += 1;
     this.endSpeech();
-    this.open('primary');
+    const reopen = () => {
+      this.recoverTimer = null;
+      if (this.ending || this.abortSignal?.aborted) return;
+      if (this.open('primary')) return;
+      this.recoverTimer = setTimeout(reopen, 2000);
+      this.recoverTimer.unref?.();
+    };
+    clearTimeout(this.recoverTimer);
+    if (this.primaryRestarts > 3) {
+      if (this.primaryRestarts === 4 || Date.now() - this.lastDropLogAt >= DROP_LOG_MS) {
+        this.lastDropLogAt = Date.now();
+        logger.warn(`Ravi hearing: OpenAI dropped ${this.primaryRestarts} times, listening again in 2 s`, { call_id: owner.callId });
+      }
+      this.recoverTimer = setTimeout(reopen, 2000);
+      this.recoverTimer.unref?.();
+      return;
+    }
+    reopen();
   }
 
   endSpeech() {
@@ -277,6 +293,7 @@ class HearingStream extends stt.SpeechStream {
     }
     if (type === SpeechEventType.INTERIM_TRANSCRIPT) {
       this.textSinceStart = true;
+      this.primaryRestarts = 0;
       clearTimeout(this.owner.localSpeechTimer);
       this.owner.localSpeechTimer = null;
       if (!this.speaking && this.endAt && now - this.endAt > LATE_PARTIAL_MS) {
@@ -288,6 +305,7 @@ class HearingStream extends stt.SpeechStream {
     }
     if (type === SpeechEventType.FINAL_TRANSCRIPT) {
       this.textSinceStart = true;
+      this.primaryRestarts = 0;
       clearTimeout(this.owner.localSpeechTimer);
       this.owner.localSpeechTimer = null;
       clearTimeout(this.finalTimer);
@@ -318,6 +336,7 @@ class HearingStream extends stt.SpeechStream {
     this.ending = true;
     clearTimeout(this.longTimer);
     clearTimeout(this.finalTimer);
+    clearTimeout(this.recoverTimer);
     try {
       this.child?.endInput();
     } catch {
@@ -329,6 +348,7 @@ class HearingStream extends stt.SpeechStream {
     this.ending = true;
     clearTimeout(this.longTimer);
     clearTimeout(this.finalTimer);
+    clearTimeout(this.recoverTimer);
     try {
       this.child?.close();
     } catch {

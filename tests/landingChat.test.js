@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { deriveLeadInquirySource, sourceFilter } from '../services/admin/adminLeadService.js';
 import { applyRegister, FORMALITY_LEVELS, guideForAudience, landingBotIdentity, landingChatPlanCards, landingSettingsView, landingWelcomeCopy, PERSONALITY_PROFILES, planFacts, sanitizeLandingGuideText, sanitizeLandingRoleCustomizations, settingsPayload } from '../services/chat/nestiLanding/landingChatConfig.js';
 import { landingChatFaqGenerateSchema, landingChatPreviewSchema, landingChatSettingsSchema } from '../schemas/opsSchemas.js';
-import { asksHowNestiIsDifferent, cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, landingRoleReply, nestiLandingFlow, replyFromSavedFaq, replyFromSavedKnowledge, replyWithoutVisitorName, roleCustomizationUsesModelForDifference, scoreLandingLead, shortenLandingReply } from '../services/chat/nestiLanding/nestiLandingFlow.js';
+import { asksHowNestiIsDifferent, cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, landingRoleReply, nestiLandingFlow, replyFromSavedFaq, replyFromSavedKnowledge, replyWithoutVisitorName, roleCustomizationUsesModelForDifference, savedAnswerInstruction, scoreLandingLead, shapeLandingReply, shortenLandingReply, speakToVisitor } from '../services/chat/nestiLanding/nestiLandingFlow.js';
 import { shouldReuseLandingInquiry } from '../services/chat/nestiLanding/landingChatTurnService.js';
 import { agreesToWalkthrough, askedForWalkthrough, detectPain, mentionsPricing, roleFallbackQuestion } from '../services/chat/nestiLanding/landingPainPoints.js';
 import { emptyChatState, nextChatState } from '../services/chat/nestiLanding/landingChatState.js';
@@ -433,6 +433,22 @@ test('live and preview opening fallbacks use the same configured greeting', () =
     landingGreetingFallback({ botName: 'Ravi' }),
     'Hi, I am Ravi. How can I help?',
   );
+  assert.equal(
+    landingGreetingFallback({ botName: 'Ravi', welcomeMessage: 'warmly welcome with empathy', audience: 'agent' }),
+    'Hi, I am Ravi. Good to meet you. What part of the day is hardest to keep up with?',
+  );
+  assert.equal(
+    speakToVisitor('warmly welcome with empathy', 'welcome', 'client'),
+    'Good to meet you. Are you buying, selling, or still working that out?',
+  );
+  assert.equal(
+    speakToVisitor('invite them with warm greetings', 'signup'),
+    "If you'd like to keep going, you can open a Nesti account and start on the plan that fits what we talked about.",
+  );
+  assert.equal(
+    speakToVisitor('give me them all contact details if they ask', 'consent'),
+    'Your phone and email stay optional until you ask for a follow-up.',
+  );
 });
 
 test('bot identity defaults to Ravi and settings validation rejects unknown personas', () => {
@@ -525,7 +541,7 @@ test('homepage lead controls stay shared, except the difference line', () => {
     landingGuides: saved,
     contactKnown: true,
   });
-  assert.doesNotMatch(agentPrompt, /Nesti replies for the agent while they are in a showing/);
+  assert.match(agentPrompt, /Admin-approved facts for this audience.*Nesti replies for the agent while they are in a showing/);
   assert.doesNotMatch(agentPrompt, /Nesti keeps the buyer team in one place/);
   assert.match(agentPrompt, /their timeline/);
   assert.doesNotMatch(agentPrompt, /whether they are a buyer/);
@@ -572,8 +588,9 @@ test('an investor stays on the client catalog and keeps separate answers', () =>
     contactKnown: true,
   });
   assert.match(prompt, /This visitor is an investor/);
-  assert.doesNotMatch(prompt, /Investor line/);
-  assert.doesNotMatch(prompt, /Investor fact/);
+  assert.match(prompt, /Investor line/);
+  assert.match(prompt, /Investor fact/);
+  assert.doesNotMatch(prompt, /Buyer line|Buyer fact/);
   assert.doesNotMatch(prompt, /This visitor is a real estate agent/);
   assert.match(planFacts('investor'), /9\.99/);
   assert.match(guideForAudience({}, 'investor'), /next property/);
@@ -664,13 +681,13 @@ test('saved answers, leftover facts, and tone follow one order for live chat and
   assert.match(editedPrompt, /Sound elegant, refined, and selective/i);
   assert.match(editedPrompt, /Explain relevant Nesti features clearly/i);
   assert.match(editedPrompt, /english, french/i);
-  assert.match(editedPrompt, /Use emojis sparingly/i);
+  assert.match(editedPrompt, /End every reply with exactly one fitting emoji/i);
   assert.match(editedPrompt, /Do not address the visitor by first name/i);
-  assert.doesNotMatch(editedPrompt, /A leftover difference line/);
-  assert.doesNotMatch(editedPrompt, /A leftover fact about follow-up/);
+  assert.match(editedPrompt, /A leftover difference line/);
+  assert.match(editedPrompt, /A leftover fact about follow-up/);
   assert.match(editedPrompt, /Lead follow-up/);
   assert.match(editedPrompt, /Keep answers focused on follow-up workflows/);
-  assert.doesNotMatch(editedPrompt, /Pricing depends on the selected plan/);
+  assert.match(editedPrompt, /Pricing depends on the selected plan.*Never quote a price that is not in this visitor's plan catalog/);
   assert.match(editedPrompt, /Never write a price/);
   assert.match(editedPrompt, /Focus topics for this audience: Lead follow-up/);
   assert.match(editedPrompt, /Admin instructions for this audience: Keep answers focused on follow-up workflows/);
@@ -782,6 +799,15 @@ test('pricing and walkthrough fallbacks stay contextual without forcing emojis o
   });
   assert.match(walkthrough, /start with lead follow-up/i);
 
+  assert.equal(
+    shapeLandingReply("I'm doing well, thanks! Looking to explore how Nesti can help you with your real estate needs?", { useEmojis: true }),
+    "I'm doing well, thanks!\n\nAre you looking to explore how Nesti can help you with your real estate needs? 😊",
+  );
+  assert.equal(
+    shapeLandingReply('Got it! What specific challenges are you facing right now?', { useEmojis: true }),
+    'What specific challenges are you facing right now? 😊',
+  );
+  assert.equal(shapeLandingReply('That sounds good.', { useEmojis: false }), 'That sounds good.');
   assert.equal(finishLandingSpokenReply('That sounds good.'), 'That sounds good.');
   assert.equal(finishLandingSpokenReply('That sounds good 🙂'), 'That sounds good 🙂');
   assert.equal(finishLandingSpokenReply('Hi Alex, I am Ravi.', { opening: true }), 'Hi Alex, I am Ravi.');
@@ -791,4 +817,35 @@ test('landing lead alerts are limited to admins who can read leads', () => {
   assert.equal(adminHasPermission({ role: 'admin', admin_permissions: [ADMIN_PERMISSION.LEADS_READ] }, ADMIN_PERMISSION.LEADS_READ), true);
   assert.equal(adminHasPermission({ role: 'admin', admin_permissions: [] }, ADMIN_PERMISSION.LEADS_READ), false);
   assert.equal(adminHasPermission({ role: 'agent', admin_permissions: ['*'] }, ADMIN_PERMISSION.LEADS_READ), false);
+});
+
+test('studio customizations reach the live homepage prompt', () => {
+  const toneId = 'custom-0123456789abcdef0123456789abcdef';
+  const settings = settingsPayload({
+    personality: 'luxury',
+    role_customizations: {
+      client: {
+        personalities: [toneId],
+        custom_tones: [{ id: toneId, name: 'Plain helper', guidance: 'Short plain answers with one next step.' }],
+        languages: ['english', 'other'],
+      },
+      agent: { custom_guidance: 'Lead with follow-up.' },
+    },
+  });
+  assert.deepEqual(settings.role_customizations.agent.languages, ['english']);
+  const prompt = nestiLandingFlow.buildSystemPrompt(null, { audience: 'agent', landingGuides: settings, contactKnown: true });
+  assert.match(prompt, /admin-selected custom tone listed below as your voice/);
+  assert.match(prompt, /Plain helper: Short plain answers/);
+  assert.doesNotMatch(prompt, /Persona: Luxury and sophisticated/);
+  assert.match(prompt, /come first\. Use this built-in list only as background/);
+  const withPain = nestiLandingFlow.buildSystemPrompt(null, {
+    audience: 'agent',
+    landingGuides: settings,
+    contactKnown: true,
+    pain: { label: 'slow follow-up', feature: 'nurture follow-ups' },
+  });
+  assert.match(withPain, /If a saved answer, fact, or admin instruction above covers it, use that/);
+  assert.doesNotMatch(withPain, /Mention only this feature/);
+  const longAnswer = 'First fact. Second fact. Third fact. Fourth fact.';
+  assert.match(savedAnswerInstruction(longAnswer), /Keep every fact.*First fact\. Second fact\. Third fact\. Fourth fact\./);
 });

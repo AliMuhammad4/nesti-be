@@ -5,7 +5,7 @@ import ProfessionalCallMinutes from '../../models/ProfessionalCallMinutes.js';
 import VoiceAgentSuggestion from '../../models/VoiceAgentSuggestion.js';
 import { ok, fail } from './adminCommon.js';
 import { adminHasPermission, ADMIN_PERMISSION as P } from '../../constants/adminPermissions.js';
-import { startAdminVoiceCall, startAdminVoicePreview, startAdminLiveKitVoice, startAdminTestVoice, sendAdminVoicePreviewTurn, spokenGreeting, stopAdminVoiceCall } from '../proChat/twilioVoiceService.js';
+import { startAdminVoiceCall, startAdminVoicePreview, startAdminLiveKitVoice, startAdminTestVoice, sendAdminVoicePreviewTurn, stopAdminVoiceCall } from '../proChat/twilioVoiceService.js';
 import { normalizeE164 } from '../proChat/voicePhone.js';
 import { createPrivateRecordingReadUrl, isPrivateRecordingsConfigured, uploadPrivateRecordingBuffer } from '../media/r2Client.js';
 import VoiceAgentSalesSetting from '../../models/VoiceAgentSalesSetting.js';
@@ -16,8 +16,6 @@ import { decideVoiceSuggestion } from './adminVoiceActionService.js';
 import { testCallMinutes } from './voiceTestMinutesService.js';
 import { languageMode } from '../proChat/callLanguage.js';
 import { questionOverrides } from '../proChat/salesPipeline.js';
-import { redispatchRaviAgent } from '../proChat/raviAgentDispatchService.js';
-
 function canRead(user, targetType) {
   return adminHasPermission(user, targetType === 'client' ? P.CLIENTS_READ : P.LEADS_READ);
 }
@@ -280,28 +278,6 @@ export async function adminStartTestVoiceService(body, actorUser) {
   if (!canEditSalesSettings(actorUser)) return fail(403, 'Missing write permission');
   const role = TEST_ROLES.includes(String(body?.role || '')) ? String(body.role) : 'client';
   return startAdminTestVoice({ actorUser, role, overrides: testCallOverrides(body) });
-}
-
-// Ravi hasn't joined the admin's open test call yet: ask once more.
-export async function adminRedispatchTestVoiceService(callId, body, actorUser) {
-  if (!canEditSalesSettings(actorUser)) return fail(403, 'Missing write permission');
-  if (!/^[a-f0-9]{24}$/i.test(String(callId || ''))) return fail(404, 'Test call not found');
-  const actorId = String(actorUser?._id || actorUser?.id || 'admin');
-  const call = await ProfessionalCall.findOne({ _id: callId, voice_target_type: 'test', caller_id: actorId })
-    .select('room_name status')
-    .lean();
-  if (!call) return fail(404, 'Test call not found');
-  if (call.status !== 'active') return fail(409, 'This test call has ended');
-  const role = TEST_ROLES.includes(String(body?.role || '')) ? String(body.role) : 'client';
-  const sent = await redispatchRaviAgent({
-    roomName: call.room_name,
-    callId,
-    role,
-    greeting: spokenGreeting(),
-    test: testCallOverrides(body),
-  });
-  if (!sent.ok) return fail(503, sent.message);
-  return ok({ redispatched: true });
 }
 
 // Minutes for an admin test call (kept in memory, not saved to leads).

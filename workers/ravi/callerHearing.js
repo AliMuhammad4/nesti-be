@@ -1,4 +1,5 @@
 import logger from '../../utils/logger.js';
+import { SPEECH_CAP_MS } from './callerPresence.js';
 
 const PARTIAL_LOG_MS = 5000;
 const NO_TEXT_WAIT_MS = 8000;
@@ -23,7 +24,13 @@ export function watchCallerHearing(c) {
   const noTextTimers = new Set();
   c.heard = heard;
   c.heardAt = 0;
-  c.callerBusy = () => session.userState === 'speaking' || Boolean(c.callerPresent) || Date.now() - (c.heardAt || 0) < HEARD_GRACE_MS || Date.now() - (c.presentAt || 0) < HEARD_GRACE_MS || Boolean(session.stt?.inHearingGap?.());
+  c.callerBusy = () => {
+    if (c.callerPresent && c.speechStartedAt && Date.now() - c.speechStartedAt >= SPEECH_CAP_MS) {
+      c.callerPresent = false;
+      c.speechStartedAt = 0;
+    }
+    return session.userState === 'speaking' || Boolean(c.callerPresent) || Date.now() - (c.heardAt || 0) < HEARD_GRACE_MS || Date.now() - (c.presentAt || 0) < HEARD_GRACE_MS || Boolean(session.stt?.inHearingGap?.());
+  };
   const flushPartials = () => {
     partialTimer = null;
     if (!heard.windowPartials) return;

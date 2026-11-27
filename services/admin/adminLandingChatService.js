@@ -15,7 +15,7 @@ import {
   saveLandingChatSettings,
   settingsPayload,
 } from '../chat/nestiLanding/landingChatConfig.js';
-import { cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, nestiLandingFlow, replyFromSavedKnowledge, replyIsUsable, shortenLandingReply } from '../chat/nestiLanding/nestiLandingFlow.js';
+import { cleanLandingReply, enabledRoleCustomization, finishLandingSpokenReply, landingBackupTone, landingFallbackReply, landingGreetingFallback, nestiLandingFlow, landingEmojisOn, replyFromSavedKnowledge, replyIsUsable, savedAnswerInstruction, shortenLandingReply } from '../chat/nestiLanding/nestiLandingFlow.js';
 import { detectPain } from '../chat/nestiLanding/landingPainPoints.js';
 import { agreesToWalkthrough, askedForWalkthrough } from '../chat/nestiLanding/landingPainPoints.js';
 import { runChatOpenAiTurn } from '../chat/handleChat/chatOpenAiTurn.js';
@@ -252,27 +252,24 @@ export async function landingChatPreviewService(body = {}, actorUser) {
     plans: landingChatPlanCards(),
   };
 
-  if (!opening) {
-    const savedAnswer = replyFromSavedKnowledge(roleCustomization, message);
-    if (savedAnswer) {
-      return ok({
-        ...base,
-        reply: finishLandingSpokenReply(shortenLandingReply(savedAnswer, {
-          personality: landingBackupTone(roleCustomization, persona.id),
-          communicationStyle: roleCustomization?.communication_style || '',
-        }) || savedAnswer, {
-          opening,
-          visitorName: visitor.name,
-          addressByFirstName: roleCustomization?.address_by_first_name !== false,
-          formality: merged.formality,
-        }),
-        fallback: false,
-        matched_saved: true,
-      });
-    }
-  }
+  const savedAnswer = opening ? '' : replyFromSavedKnowledge(roleCustomization, message);
+  const finish = (reply) => finishLandingSpokenReply(reply, {
+    opening,
+    visitorName: visitor.name,
+    addressByFirstName: roleCustomization?.address_by_first_name !== false,
+    formality: merged.formality,
+    useEmojis: landingEmojisOn(roleCustomization, merged.welcome_message),
+  });
+  const savedFallback = (reason) => ok({
+    ...base,
+    reply: finish(savedAnswer),
+    fallback: true,
+    fallback_reason: reason,
+    matched_saved: true,
+  });
 
   if (!process.env.OPENAI_API_KEY) {
+    if (savedAnswer) return savedFallback('OpenAI key is not configured.');
     return ok({
       ...base,
       reply: finishLandingSpokenReply(previewFallbackReply({
@@ -292,6 +289,7 @@ export async function landingChatPreviewService(body = {}, actorUser) {
         visitorName: visitor.name,
         addressByFirstName: roleCustomization?.address_by_first_name !== false,
         formality: merged.formality,
+        useEmojis: landingEmojisOn(roleCustomization, merged.welcome_message),
       }),
       fallback: true,
       fallback_reason: 'OpenAI key is not configured.',
@@ -300,6 +298,7 @@ export async function landingChatPreviewService(body = {}, actorUser) {
 
   const openaiMessages = [
     { role: 'system', content: system },
+    ...(savedAnswer ? [{ role: 'system', content: savedAnswerInstruction(savedAnswer) }] : []),
     ...conversationHistory,
     { role: 'user', content: opening ? `Hi, I'm ${visitor.name}.` : message },
   ];
@@ -320,23 +319,22 @@ export async function landingChatPreviewService(body = {}, actorUser) {
     let reply = cleanLandingReply(String(turn?.aiReply || '').split('###META###')[0]);
     if (!replyIsUsable(reply)) throw new Error('Model reply was too short.');
     reply = reply.replace(/\[\[plans\]\]/gi, '').trim();
-    reply = shortenLandingReply(reply, {
-      greeting: opening,
-      feature: pain?.feature || '',
-      personality: landingBackupTone(roleCustomization, persona.id),
-      communicationStyle: roleCustomization?.communication_style || '',
-    }) || reply;
+    if (!savedAnswer) {
+      reply = shortenLandingReply(reply, {
+        greeting: opening,
+        feature: pain?.feature || '',
+        personality: landingBackupTone(roleCustomization, persona.id),
+        communicationStyle: roleCustomization?.communication_style || '',
+      }) || reply;
+    }
     return ok({
       ...base,
-      reply: finishLandingSpokenReply(reply, {
-        opening,
-        visitorName: visitor.name,
-        addressByFirstName: roleCustomization?.address_by_first_name !== false,
-        formality: merged.formality,
-      }),
+      reply: finish(reply),
       fallback: false,
+      ...(savedAnswer ? { matched_saved: true } : {}),
     });
   } catch (error) {
+    if (savedAnswer) return savedFallback(error?.message || 'Model unavailable.');
     logger.warn('Landing chat preview fell back to the canned landing reply', { error: error?.message });
     return ok({
       ...base,
@@ -357,6 +355,7 @@ export async function landingChatPreviewService(body = {}, actorUser) {
         visitorName: visitor.name,
         addressByFirstName: roleCustomization?.address_by_first_name !== false,
         formality: merged.formality,
+        useEmojis: landingEmojisOn(roleCustomization, merged.welcome_message),
       }),
       fallback: true,
       fallback_reason: error?.message || 'Model unavailable.',

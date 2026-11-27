@@ -121,12 +121,14 @@ if (isMain) {
     return emitWarning(warning, type, code, ...rest);
   };
   initializeLogger({ pretty: false, level: process.env.LOG_LEVEL || 'warn' });
-  try {
-    os.setPriority(0, os.constants.priority.PRIORITY_ABOVE_NORMAL);
-  } catch (error) {
-    const message = `Ravi worker could not raise its priority (${error?.message || 'unknown error'})`;
-    if (error?.code === 'EACCES' || /EACCES/i.test(String(error?.message || ''))) console.log(message);
-    else console.warn(message);
+  // Render does not allow a process to raise its own priority. Skipping it
+  // there avoids the permission line. The call runs the same either way.
+  if (!process.env.RENDER && process.platform === 'win32') {
+    try {
+      os.setPriority(0, os.constants.priority.PRIORITY_ABOVE_NORMAL);
+    } catch {
+      // A laptop that refuses the boost still runs the call.
+    }
   }
   skipLocalTurnModel();
   const totalMb = Math.round(os.totalmem() / 1048576);

@@ -75,10 +75,10 @@ const ROLE_CUSTOMIZATION_COMMUNICATION = ['quick', 'conversational', 'educationa
 const ROLE_CUSTOMIZATION_ACTIONS = LANDING_NEXT_ACTIONS;
 const ROLE_CUSTOMIZATION_LANGUAGES = [
   'english', 'french', 'spanish', 'hindi', 'tamil',
-  'punjabi', 'arabic', 'other',
+  'punjabi', 'arabic',
 ];
 const REMOVED_LANDING_LANGUAGES = new Set([
-  'mandarin', 'cantonese', 'urdu', 'portuguese', 'tagalog', 'italian', 'german', 'japanese', 'vietnamese',
+  'mandarin', 'cantonese', 'urdu', 'portuguese', 'tagalog', 'italian', 'german', 'japanese', 'vietnamese', 'other',
 ]);
 
 const SAMPLE_VISITOR = {
@@ -485,12 +485,15 @@ export function sanitizeLandingGuideText(value, { maxLength = 2000 } = {}) {
     .trim();
 
   if (!next) return '';
-  if (next.length > maxLength) next = next.slice(0, maxLength).trim();
+  if (next.length > maxLength) next = clip(next, maxLength).trim();
   return next.replace(/\s+([,.!?])/g, '$1');
 }
 
 function clip(value, max = 2000) {
-  return text(value).slice(0, max);
+  const raw = text(value);
+  if (raw.length <= max) return raw;
+  const cut = raw.slice(0, max);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
 const CLIENT_PLAN_CARDS = {

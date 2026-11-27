@@ -33,12 +33,12 @@ function prewarmDatabase() {
 
 const raviSalesAgent = defineAgent({
   prewarm: async () => {
-    try {
-      os.setPriority(0, os.constants.priority.PRIORITY_ABOVE_NORMAL);
-    } catch (error) {
-      const message = `Ravi call process could not raise its priority (${error?.message || 'unknown error'})`;
-      if (error?.code === 'EACCES' || /EACCES/i.test(String(error?.message || ''))) logger.info(message);
-      else logger.warn(message);
+    if (!process.env.RENDER && process.platform === 'win32') {
+      try {
+        os.setPriority(0, os.constants.priority.PRIORITY_ABOVE_NORMAL);
+      } catch {
+        // A laptop that refuses the boost still runs the call.
+      }
     }
     prewarmDatabase();
     prewarmHearing();

@@ -7,7 +7,8 @@ import { HearingSwitch } from '../workers/ravi/hearingSwitch.js';
 import { AFTER_QUESTION_MS, missedCaller, quietDelayMs, wordsStillArriving } from '../workers/ravi/quietCheckIn.js';
 import { missedLine } from '../workers/ravi/lines.js';
 import { answerTiming } from '../workers/ravi/turnLatency.js';
-import { REPLY_WAIT_MS } from '../workers/ravi/replyWatchdog.js';
+import { REPLY_WAIT_MS, watchReplies } from '../workers/ravi/replyWatchdog.js';
+import { SPEECH_CAP_MS } from '../workers/ravi/callerPresence.js';
 
 test('answer timing uses the wait the caller heard', () => {
   const turn = { end_of_turn_ms: 320, llm_first_token_ms: 610, tts_first_audio_ms: 290, heard_to_voice_ms: 1350 };
@@ -41,6 +42,35 @@ test('a spoken sentence with no text asks to repeat once, real silence does not'
   c.heard.sinceRavi = { starts: 0, partials: 0, finals: 0 };
   assert.equal(missedCaller(c), false);
   assert.match(missedLine('en'), /missed that/);
+});
+
+test('long speech is only cut off after 20 seconds', () => {
+  assert.equal(SPEECH_CAP_MS, 20_000);
+});
+
+test('forced replies are limited per stuck streak, not per call', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const session = new EventEmitter();
+  session.agentState = 'listening';
+  session.userState = 'listening';
+  session.history = { items: [] };
+  let forcedReplies = 0;
+  session.generateReply = () => { forcedReplies += 1; };
+  const c = { session, callId: 'test' };
+  watchReplies(c);
+  const stuckTurn = (words) => {
+    c.lastCallerText = words;
+    c.lastCallerAt = Date.now();
+    session.emit('user_input_transcribed', { isFinal: true, transcript: words });
+    t.mock.timers.tick(REPLY_WAIT_MS + 100);
+    t.mock.timers.tick(10_000);
+  };
+  for (let i = 0; i < 4; i += 1) stuckTurn(`stuck ${i}`);
+  assert.equal(forcedReplies, 3);
+  session.emit('agent_state_changed', { oldState: 'listening', newState: 'thinking' });
+  session.emit('agent_state_changed', { oldState: 'thinking', newState: 'listening' });
+  stuckTurn('stuck again');
+  assert.equal(forcedReplies, 4);
 });
 
 test('the check-in waits longer after Ravi asks a question', () => {

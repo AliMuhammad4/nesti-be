@@ -5,6 +5,7 @@ import logger from '../../utils/logger.js';
 let sharedVad;
 const presenceListeners = new Set();
 const wrappedVads = new WeakSet();
+export const SPEECH_CAP_MS = 20_000;
 
 function presenceAudioDetached(env = process.env) {
   return env.NESTI_RAVI_LAUNCH === 'start';
@@ -26,9 +27,42 @@ function shareVadEvents(vad) {
   vad.stream = () => {
     const stream = originalStream();
     const originalNext = stream.next.bind(stream);
+    let pending = null;
+    let speakingSince = 0;
+    const pull = () => {
+      if (!pending) pending = originalNext();
+      return pending;
+    };
     stream.next = async () => {
-      const result = await originalNext();
-      if (!result.done && result.value) emitPresenceVad(result.value);
+      const capIn = speakingSince ? Math.max(50, SPEECH_CAP_MS - (Date.now() - speakingSince)) : 0;
+      let timer;
+      const raced = await Promise.race([
+        pull().then((result) => ({ result })),
+        capIn ? new Promise((resolve) => { timer = setTimeout(() => resolve({ cap: true }), capIn); }) : new Promise(() => {}),
+      ]);
+      clearTimeout(timer);
+      if (raced.cap) {
+        speakingSince = 0;
+        const value = { type: VADEventType.END_OF_SPEECH };
+        emitPresenceVad(value);
+        return { done: false, value };
+      }
+      pending = null;
+      const result = raced.result;
+      if (!result.done && result.value) {
+        const type = result.value.type;
+        if (type === VADEventType.END_OF_SPEECH) speakingSince = 0;
+        else if (type === VADEventType.START_OF_SPEECH || (type === VADEventType.INFERENCE_DONE && result.value.speaking)) {
+          if (!speakingSince) speakingSince = Date.now();
+        }
+        if (speakingSince && Date.now() - speakingSince >= SPEECH_CAP_MS && type !== VADEventType.END_OF_SPEECH) {
+          speakingSince = 0;
+          const value = { type: VADEventType.END_OF_SPEECH };
+          emitPresenceVad(value);
+          return { done: false, value };
+        }
+        emitPresenceVad(result.value);
+      }
       return result;
     };
     return stream;
@@ -55,7 +89,7 @@ export function createPresenceVad() {
       minSilenceDuration: 200,
       activationThreshold: 0.5,
     });
-    return presenceAudioDetached() ? shareVadEvents(vad) : vad;
+    return shareVadEvents(vad);
   } catch (error) {
     logger.warn(`Ravi local speaking detector could not start (${error?.message || 'unknown error'})`);
     return null;
@@ -82,16 +116,25 @@ function applyPresenceEvent(c, session, callId, event) {
   if (event.type === VADEventType.START_OF_SPEECH) {
     c.callerPresent = true;
     c.presentAt = Date.now();
+    c.speechStartedAt = c.speechStartedAt || c.presentAt;
     session?.stt?.noteLocalSpeech?.(true);
     logger.info('Ravi local detector heard the caller start speaking', { call_id: callId });
   } else if (event.type === VADEventType.END_OF_SPEECH) {
     c.callerPresent = false;
     c.presentAt = Date.now();
+    c.speechStartedAt = 0;
     session?.stt?.noteLocalSpeech?.(false);
     logger.info('Ravi local detector heard the caller stop speaking', { call_id: callId });
   } else if (event.type === VADEventType.INFERENCE_DONE && event.speaking) {
+    if (c.speechStartedAt && Date.now() - c.speechStartedAt >= SPEECH_CAP_MS) {
+      c.callerPresent = false;
+      c.speechStartedAt = 0;
+      c.presentAt = Date.now();
+      return;
+    }
     c.callerPresent = true;
     c.presentAt = Date.now();
+    c.speechStartedAt = c.speechStartedAt || c.presentAt;
   }
 }
 

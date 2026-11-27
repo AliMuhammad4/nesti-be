@@ -70,7 +70,6 @@ import {
   adminStartVoicePreviewService,
   adminStartLiveKitVoiceService,
   adminStartTestVoiceService,
-  adminRedispatchTestVoiceService,
   adminTestCallMinutesService,
   adminVoicePreviewTurnService,
   adminStopVoiceCallService,
@@ -382,7 +381,6 @@ export const adminStartVoiceCall = handle((req) => adminStartVoiceCallService(re
 export const adminStartVoicePreview = handle((req) => adminStartVoicePreviewService(req.body, req.user));
 export const adminStartLiveKitVoice = handle((req) => adminStartLiveKitVoiceService(req.body, req.user));
 export const adminStartTestVoice = handle((req) => adminStartTestVoiceService(req.body, req.user));
-export const adminRedispatchTestVoice = handle((req) => adminRedispatchTestVoiceService(req.params.id, req.body, req.user));
 export const adminTestCallMinutes = handle((req) => adminTestCallMinutesService(req.params.id, req.query, req.user));
 export const adminVoicePreviewTurn = handle((req) => adminVoicePreviewTurnService(req.params.id, req.body, req.user));
 export const adminStopVoiceCall = handle((req) => adminStopVoiceCallService(req.params.id, req.user));

@@ -235,7 +235,18 @@ export function raviSalesInstructions(role) {
   return `You are Ravi, a passionate Nesti sales advisor on a live phone call. You lead. The caller may be a man or a woman. Sound energetic, warm, and sure of the product. Use contractions. Never assume their gender, pronouns, family, or budget. Start in English, introduce yourself as Ravi from Nesti, and ask what they want to get done. Languages: English first, then Urdu, Spanish, and French. If they speak one of those or ask you to switch, stay in that language. Never say you cannot speak them. ${subscriptionPitchFacts(role)} Every reply is two short sentences and the second one is a question. After they answer, connect one real benefit, name one plan and its monthly price when it fits, and ask the next question. Do not stop, summarize, or wait for them to carry the call. When they agree, decline, ask for a callback, or you recommend a plan, call record_sales_outcome. Never say the purchase is complete.`;
 }
 
-export async function persistSalesOutcome({ callId, outcome, plan, note }) {
+export async function persistSalesPipeline({ callId, pipeline }) {
+  if (!callId || !pipeline) return { ok: false };
+  const call = await ProfessionalCall.findById(callId).select('voice_target_type voice_target_id').lean();
+  if (!call) return { ok: false };
+  await ProfessionalCall.updateOne({ _id: callId }, { $set: { voice_pipeline: pipeline } });
+  if (call.voice_target_type === 'sales' && call.voice_target_id) {
+    await EnterpriseInquiry.updateOne({ _id: call.voice_target_id }, { $set: { voice_pipeline: pipeline } });
+  }
+  return { ok: true, call };
+}
+
+export async function persistSalesOutcome({ callId, outcome, plan, note, pipeline }) {
   const call = await ProfessionalCall.findById(callId).select('voice_target_type voice_target_id status').lean();
   if (!call) return { ok: false, message: 'Call was not found.' };
   const normalized = text(outcome).toLowerCase();
@@ -247,12 +258,13 @@ export async function persistSalesOutcome({ callId, outcome, plan, note }) {
     voice_outcome_plan: text(plan).slice(0, 80),
     voice_outcome_note: text(note).slice(0, 240),
     voice_outcome_at: new Date(),
+    ...(pipeline ? { voice_pipeline: pipeline } : {}),
   };
   if (call.voice_target_type === 'sales') {
     await saveSalesVoiceOutcome(call, fields);
     return { ok: true, message: 'Saved.' };
   }
-  if (call.voice_target_type === 'client' || call.voice_target_type === 'lead') {
+  if (call.voice_target_type === 'client' || call.voice_target_type === 'lead' || call.voice_target_type === 'test') {
     await ProfessionalCall.updateOne({ _id: callId }, { $set: fields });
     return { ok: true, message: 'Saved.' };
   }

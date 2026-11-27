@@ -34,6 +34,7 @@ function createRestoreBag() {
 }
 
 function mockGoogleFetch({ email = "user@example.com", sub = "google-sub-1" } = {}) {
+  const audience = String(process.env.GOOGLE_CLIENT_ID || "").split(",")[0].trim();
   return async () => ({
     ok: true,
     async json() {
@@ -43,6 +44,8 @@ function mockGoogleFetch({ email = "user@example.com", sub = "google-sub-1" } = 
         sub,
         given_name: "Test",
         family_name: "User",
+        aud: audience,
+        azp: audience,
       };
     },
   });

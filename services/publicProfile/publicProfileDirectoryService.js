@@ -1,5 +1,6 @@
 import { ProfessionalProfile, PublicProfile } from '../../models/index.js';
 import { filterPublicProfileAccessByUserId } from './publicProfileAccess.js';
+import { experienceLabel } from '../../utils/experienceYears.js';
 
 function professionalName(profile, user, fallback = 'Professional') {
   return profile.full_name
@@ -74,7 +75,7 @@ export async function getPublicProfessionalsListService({ role, limit = 12, excl
 
   const profProfiles = await ProfessionalProfile.find(profFilter)
     .populate('user_id', 'first_name last_name profile_image')
-    .select('user_id professional_type full_name company_name location experience')
+    .select('user_id professional_type full_name company_name location experience experience_level experience_years')
     .sort({ createdAt: -1 })
     .limit(limit * 3)
     .lean();
@@ -101,7 +102,7 @@ export async function getPublicProfessionalsListService({ role, limit = 12, excl
         headline: publicProfile?.headline || '',
         profile_photo_url: publicProfile?.profile_photo_url || user.profile_image || null,
         location: profile.location || '',
-        experience: profile.experience || '',
+        experience: experienceLabel(profile),
         company_name: profile.company_name || '',
         has_public_profile: hasPublicProfile,
       };
@@ -119,7 +120,7 @@ export async function getPublicProfessionalNetworkService({ role, limit = 60, ex
 
   const professionalProfiles = await ProfessionalProfile.find(profFilter)
     .populate('user_id', 'first_name last_name profile_image cover_image')
-    .select('user_id professional_type full_name company_name location experience')
+    .select('user_id professional_type full_name company_name location experience experience_level experience_years')
     .sort({ createdAt: -1 })
     .limit(safeLimit)
     .lean();
@@ -153,7 +154,7 @@ export async function getPublicProfessionalNetworkService({ role, limit = 60, ex
         cover_photo_url: publicProfile?.cover_photo_url || user.cover_image || null,
         company_name: profile.company_name || '',
         location: profile.location || '',
-        experience: profile.experience || '',
+        experience: experienceLabel(profile),
         has_public_profile: hasPublicProfile,
       };
     })

@@ -60,8 +60,9 @@ export async function ingestFinalTranscriptSegment({
   provider = 'openai',
   providerEventId = '',
   model,
+  anyLanguage = false,
 }) {
-  const finalText = refineTranscriptSegmentText(rawText);
+  const finalText = refineTranscriptSegmentText(rawText, { anyLanguage });
   if (!finalText || !callId || !segmentId) return false;
   const deleteAt = await resolveSegmentDeleteAt(callId);
   const eventKey = text(providerEventId);

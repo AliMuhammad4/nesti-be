@@ -13,20 +13,22 @@ import {
   storefrontTemplateCheckoutSessionSchema,
   storefrontTemplateSubscriptionActionSchema,
 } from '../schemas/billingSchemas.js';
-import Subscription from '../models/Subscription.js';
 import { getStripeClient } from '../services/billing/stripeClient.js';
 import { publicBillingPlans, publicBillingPlansFromStripe } from '../services/billing/plans.js';
 import {
   cancelSubscriptionForUser,
   changeSubscriptionPlanForUser,
   createCheckoutSessionForUser,
-  ensureStripeCustomerForUser,
-  getOrCreateSubscriptionForUser,
   getSubscriptionPresentationForUser,
   listPaidInvoicesForUser,
   resumeSubscriptionForUser,
   serializeSubscription,
 } from '../services/billing/subscriptionService.js';
+import {
+  confirmCardUpdateForUser,
+  createCardUpdateSessionForUser,
+  listPaymentMethodsForUser,
+} from '../services/billing/paymentMethodService.js';
 import {
   cancelStorefrontTemplateSubscriptionForUser,
   confirmStorefrontTemplateCheckoutSession,
@@ -55,19 +57,6 @@ function requireProfessionalRole(req, res, next) {
   }
   return next();
 }
-
-const setupIntent = async (req, res) => {
-  if (!(await requireCredentialApproved(req, res))) return;
-  const subscription = await getOrCreateSubscriptionForUser(req.user);
-  const customerId = await ensureStripeCustomerForUser(req.user, subscription);
-  const intent = await getStripeClient().setupIntents.create({
-    customer: customerId,
-    usage: 'off_session',
-    metadata: { user_id: String(req.user._id) },
-  });
-
-  res.json({ success: true, clientSecret: intent.client_secret });
-};
 
 const listPlans = async (req, res) => {
   try {
@@ -297,25 +286,32 @@ const getBillingInvoices = async (req, res) => {
 };
 
 const getPaymentMethods = async (req, res) => {
-  const subscription = await Subscription.findOne({ user_id: req.user._id }).lean();
-  if (!subscription?.stripe_customer_id) {
-    return res.json({ success: true, data: [] });
+  try {
+    const paymentMethods = await listPaymentMethodsForUser(req.user);
+    res.json({ success: true, data: paymentMethods });
+  } catch (err) {
+    res.status(502).json({ success: false, message: err?.message || 'Unable to load payment methods.' });
   }
+};
 
-  const methods = await getStripeClient().paymentMethods.list({
-    customer: subscription.stripe_customer_id,
-    type: 'card',
-  });
-  const paymentMethods = methods.data.map((method) => ({
-    id: method.id,
-    card: {
-      brand: method.card?.brand || '',
-      last4: method.card?.last4 || '',
-      exp_month: method.card?.exp_month || null,
-      exp_year: method.card?.exp_year || null,
-    },
-  }));
-  res.json({ success: true, data: paymentMethods });
+const createCardUpdateSession = async (req, res) => {
+  try {
+    const result = await createCardUpdateSessionForUser(req.user);
+    if (!result.ok) return res.status(result.code || 400).json({ success: false, message: result.message });
+    res.json({ success: true, url: result.url });
+  } catch (err) {
+    res.status(502).json({ success: false, message: err?.message || 'Unable to start the card update.' });
+  }
+};
+
+const confirmCardUpdate = async (req, res) => {
+  try {
+    const result = await confirmCardUpdateForUser(req.user, req.body?.session_id);
+    if (!result.ok) return res.status(result.code || 400).json({ success: false, message: result.message });
+    res.json({ success: true, message: 'Your card on file was updated.' });
+  } catch (err) {
+    res.status(502).json({ success: false, message: err?.message || 'Unable to confirm the card update.' });
+  }
 };
 
 const handleEnterpriseInquiry = async (req, res) => {
@@ -347,7 +343,6 @@ const getEnterpriseStatus = async (req, res) => {
 
 // Note: Stripe webhook is handled separately without protect middleware or JSON parsing
 router.get('/plans', listPlans);
-router.post('/setup-intent', protect, requireProfessionalRole, setupIntent);
 router.get('/storefront-templates', protect, requireProfessionalRole, getStorefrontTemplateEntitlements);
 router.post(
   '/storefront-templates/checkout-session',
@@ -408,6 +403,8 @@ router.post(
   changeCurrentSubscriptionPlan
 );
 router.get('/payment-methods', protect, requireProfessionalRole, getPaymentMethods);
+router.post('/payment-method/update-session', protect, requireProfessionalRole, createCardUpdateSession);
+router.post('/payment-method/confirm', protect, requireProfessionalRole, confirmCardUpdate);
 router.post(
   '/enterprise-inquiry',
   optionalAuth,

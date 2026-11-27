@@ -205,8 +205,12 @@ export function looksLikeLatinSttGibberish(raw) {
   return false;
 }
 
-/** Drop empty STT noise tokens only — not spoken content. */
-export function shouldPersistTranscriptText(raw) {
+/**
+ * Drop empty STT noise tokens only — not spoken content.
+ * `anyLanguage` keeps every script and short words of other languages
+ * ("Oui", "Hola"); it is used for calls where the caller may speak any language.
+ */
+export function shouldPersistTranscriptText(raw, { anyLanguage = false } = {}) {
   const cleaned = sanitizeTranscriptText(raw);
   if (!cleaned) return false;
   if (PUNCTUATION_ONLY.test(cleaned)) return false;
@@ -214,14 +218,15 @@ export function shouldPersistTranscriptText(raw) {
   if (FILLER_ONLY.test(cleaned)) return false;
   if (isLikelyHallucinationPhrase(cleaned)) return false;
   if (letterOrDigitCount(cleaned) < 1) return false;
+  if (anyLanguage) return true;
   if (!isAllowedCallTranscriptScript(cleaned)) return false;
   if (looksLikeLatinSttGibberish(cleaned)) return false;
   return true;
 }
 
-export function refineTranscriptSegmentText(raw) {
+export function refineTranscriptSegmentText(raw, options) {
   const cleaned = sanitizeTranscriptText(raw);
-  if (!shouldPersistTranscriptText(cleaned)) return '';
+  if (!shouldPersistTranscriptText(cleaned, options)) return '';
   return cleaned;
 }
 

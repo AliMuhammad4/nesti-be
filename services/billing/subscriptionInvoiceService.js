@@ -76,7 +76,9 @@ export async function listPaidInvoicesForUser(user, limit = 24, options = {}) {
     await markSubscriptionStripeStateExpired(userId);
     return [];
   }
-  const invoices = result.data.map((invoice) => {
+  // $0 invoices (Stripe's "Free trial for ..." records and trial plan switches) are not
+  // payments, so they stay out of the paid billing history.
+  const invoices = result.data.filter((invoice) => Number(invoice.amount_paid || 0) > 0).map((invoice) => {
     const templateId = invoiceTemplateId(invoice, templateBySubId);
     const catalog = templateId ? getStorefrontTemplateTier(templateId) : null;
     const kind = templateId ? 'template' : 'platform';
@@ -158,6 +160,8 @@ const paymentActionCache = new Map();
 
 export function clearPaymentActionCache() {
   paymentActionCache.clear();
+  // Invoice events also change the paid history; drop it so a new payment shows at once.
+  invoiceCache.clear();
 }
 
 export async function paymentActionForOpenInvoice({

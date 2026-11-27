@@ -19,6 +19,9 @@ import {
   changeClientSubscriptionPlanEndpoint,
   resumeClientSubscriptionEndpoint,
   listPublicClientPlans,
+  getClientPaymentMethods,
+  createClientCardUpdateSession,
+  confirmClientCardUpdate,
 } from '../controllers/clientController.js';
 import {
   requireClientFeature,
@@ -41,6 +44,9 @@ router.put('/settings', protect, requireClientRole, updateClientSettings);
 router.post('/subscription/checkout', protect, requireClientRole, createClientSubscriptionCheckout);
 router.get('/subscription/me', protect, requireClientRole, getClientSubscription);
 router.get('/subscription/invoices', protect, requireClientRole, getClientSubscriptionInvoices);
+router.get('/subscription/payment-methods', protect, requireClientRole, getClientPaymentMethods);
+router.post('/subscription/payment-method/update-session', protect, requireClientRole, createClientCardUpdateSession);
+router.post('/subscription/payment-method/confirm', protect, requireClientRole, confirmClientCardUpdate);
 router.post('/subscription/cancel', protect, requireClientRole, cancelClientSubscriptionEndpoint);
 router.post('/subscription/resume', protect, requireClientRole, resumeClientSubscriptionEndpoint);
 router.post('/subscription/change-plan', protect, requireClientRole, changeClientSubscriptionPlanEndpoint);

@@ -22,6 +22,7 @@ import {
   calculateProfileRating,
   serializeClientFeedbackItem,
 } from './publicProfileMappers.js';
+import { experienceLabel, experienceYearsEstimate, experienceYearsOf } from '../../utils/experienceYears.js';
 
 const PROFESSIONAL_PROFILE_FIELDS = [
   'full_name',
@@ -56,6 +57,7 @@ const PROFESSIONAL_PROFILE_FIELDS = [
   'other_language_text',
   'license_number',
   'experience_level',
+  'experience_years',
 ].join(' ');
 
 const PROFESSIONAL_PROFILE_ARRAY_FIELDS = [
@@ -88,7 +90,10 @@ function serializeProfessionalProfile(profile) {
     calendly_link: profile.calendly_link || '',
     location: profile.location || '',
     target_neighborhoods: profile.target_neighborhoods || '',
-    experience: profile.experience || '',
+    experience: experienceLabel(profile),
+    experience_years: experienceYearsOf(profile),
+    // Numeric years for storefront metrics (legacy levels give an estimate).
+    years_experience: experienceYearsEstimate(profile),
     awards: profile.awards || '',
     response_time: profile.response_time || '',
     availability: profile.availability || '',

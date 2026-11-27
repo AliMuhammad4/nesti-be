@@ -230,28 +230,9 @@ export async function getOrCreateSubscriptionForUser(inputUser) {
   }
   if (String(user?.role || '') === USER_ROLE.ADMIN) return null;
 
-  if (String(user?.role || '') === USER_ROLE.CLIENT) {
-    const existing = await Subscription.findOne({ user_id: user._id });
-    if (!existing) return null;
-    const status = String(existing.status || '').trim().toLowerCase();
-    const hasStripe = Boolean(String(existing.stripe_subscription_id || '').trim());
-    if (hasStripe || status === 'free_trial' || ACTIVE_ACCESS_STATUSES.has(status)) {
-      const { cancelProfessionalBillingForConvertedClient } = await import(
-        './subscriptionLifecycleService.js'
-      );
-      const canceled = await cancelProfessionalBillingForConvertedClient(user);
-      if (!canceled?.ok) {
-        console.warn('Professional Stripe cancel on role change was unsafe or failed', {
-          user_id: String(user._id),
-          flags: canceled?.flags || [],
-        });
-      }
-      return Subscription.findOne({ user_id: user._id }).then((row) =>
-        expireCanceledSubscriptionIfNeeded(row),
-      );
-    }
-    return expireCanceledSubscriptionIfNeeded(existing);
-  }
+  // Clients bill through ClientSubscription. Roles are fixed at signup, so a client
+  // never owns a professional Subscription row and none is created here.
+  if (String(user?.role || '') === USER_ROLE.CLIENT) return null;
 
   let subscription = await Subscription.findOne({ user_id: user._id });
   if (!subscription) {

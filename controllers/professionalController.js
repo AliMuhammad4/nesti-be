@@ -14,6 +14,12 @@ import IcpProfile from '../models/IcpProfile.js';
 import ClientProfile from '../models/ClientProfile.js';
 import { unknownNewServiceAreas } from '../utils/serviceAreaNames.js';
 import { calculateClientProfessionalAiMatch } from '../services/matching/matchRankingService.js';
+import {
+  experienceLabel,
+  experienceLevelFromYears,
+  experienceYearsOf,
+  normalizeExperienceYears,
+} from '../utils/experienceYears.js';
 
 function toCleanArray(value, limit = 0) {
   const items = (Array.isArray(value) ? value : [])
@@ -66,7 +72,8 @@ function normalizeProfessionalProfile(profileDoc) {
     phone: p.phone || '',
     location: p.location || '',
     target_neighborhoods: p.target_neighborhoods || '',
-    experience: p.experience || '',
+    experience: experienceLabel(p),
+    experience_years: experienceYearsOf(p),
     license_number: p.license_number || '',
     social_media: p.social_media || '',
     transaction_volume: p.transaction_volume || '',
@@ -215,6 +222,7 @@ export const upsertProfessionalProfile = async (req, res, next) => {
       other_language_text,
       working_style_structured,
       experience_level,
+      experience_years,
       core_specialization_tags,
       working_style_tags,
       specialty_strength_tags,
@@ -400,6 +408,15 @@ export const upsertProfessionalProfile = async (req, res, next) => {
     if (other_language_text !== undefined) update.other_language_text = String(other_language_text || '').trim();
     if (working_style_structured !== undefined) update.working_style_structured = working_style_structured;
     if (experience_level !== undefined) update.experience_level = experience_level;
+    // Years are the source of truth; the level (used by client matching) follows them.
+    const savedYears = experience_years !== undefined ? normalizeExperienceYears(experience_years) : undefined;
+    if (savedYears !== undefined) {
+      update.experience_years = savedYears;
+      if (savedYears !== null) {
+        update.experience_level = experienceLevelFromYears(savedYears);
+        update.experience = update.experience_level;
+      }
+    }
     if (core_specialization_tags !== undefined) {
       update.core_specialization_tags = toCleanArray(core_specialization_tags, 5);
       if (specializations === undefined) update.specializations = update.core_specialization_tags;
@@ -738,7 +755,7 @@ export const getProfessionalById = async (req, res, next) => {
 
     const profile = await ProfessionalProfile.findOne({ user_id: user._id })
       .select(
-        'professional_type full_name website company_name certificates phone location target_neighborhoods experience license_number social_media transaction_volume avg_sale_price avg_home_price commission_rate_percent response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken other_language_text working_style_structured experience_level core_specialization_tags working_style_tags specialty_strength_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions active_icp_profile_id',
+        'professional_type full_name website company_name certificates phone location target_neighborhoods experience experience_years license_number social_media transaction_volume avg_sale_price avg_home_price commission_rate_percent response_time availability support_level negotiation_style sales_approach energy_style personality_tag awards specializations communication_channels preferred_clients calendly_link bio languages_spoken other_language_text working_style_structured experience_level core_specialization_tags working_style_tags specialty_strength_tags personality_style_tags service_area_primary_zones service_area_secondary_zones service_area_cities service_area_regions active_icp_profile_id',
       )
       .lean();
 
@@ -790,7 +807,8 @@ export const getProfessionalById = async (req, res, next) => {
         bio: profile?.bio || '',
         certificates: Array.isArray(profile?.certificates) ? profile.certificates : [],
         target_neighborhoods: profile?.target_neighborhoods || '',
-        experience: profile?.experience || '',
+        experience: experienceLabel(profile),
+        experience_years: experienceYearsOf(profile),
         license_number: profile?.license_number || '',
         social_media: profile?.social_media || '',
         transaction_volume: profile?.transaction_volume || '',

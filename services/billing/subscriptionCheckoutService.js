@@ -1,6 +1,6 @@
 import Subscription from '../../models/Subscription.js';
 import { getPlan } from './plans.js';
-import { chargeForPlan, recurringPriceData, trialEndUnix } from './planPrices.js';
+import { chargeForPlan, recurringPriceData } from './planPrices.js';
 import { getStripeClient } from './stripeClient.js';
 import { ensureStripeCustomerForUser } from './subscriptionCustomerService.js';
 import { expireTrialIfNeeded } from './subscriptionLocalService.js';
@@ -92,7 +92,6 @@ export async function createCheckoutSessionForUser(user, planKey, billingPeriod)
     amount: String(charge.amount),
     subscription_type: 'professional',
   };
-  const trialEnd = trialEndUnix(freshSubscription?.trial_end);
   const stripe = getStripeClient();
   const reusableSession = await expireLeftoverOpenCheckoutSessions(stripe, customerId, {
     userId: String(user._id),
@@ -134,9 +133,10 @@ export async function createCheckoutSessionForUser(user, planKey, billingPeriod)
     success_url: `${frontendUrl}/settings?billing=success`,
     cancel_url: `${frontendUrl}/settings?billing=cancelled`,
     metadata,
+    // Paying for a plan ends the free trial: no trial carry-over, the first invoice is
+    // charged at checkout and the paid period starts now.
     subscription_data: {
       metadata,
-      ...(trialEnd ? { trial_end: trialEnd } : {}),
     },
   }, {
     idempotencyKey: buildCheckoutIdempotencyKey({

@@ -1,5 +1,6 @@
 import { DIFFERENTIATORS, ROLE_DIFFERENTIATORS, SERVICES, labelOf } from '../../professionalAssistant/catalog.js';
 import { normalizedVisitorText } from '../../professionalAssistant/visitorMessage.js';
+import { experienceYearsOf, formatExperienceYears } from '../../../utils/experienceYears.js';
 
 const EXPERIENCE_LABELS = {
   junior: 'Junior (0-2 years)',
@@ -9,6 +10,9 @@ const EXPERIENCE_LABELS = {
 };
 
 export function formatProfessionalExperience(profile, yearsExperience = 0) {
+  // Years saved on the profile (0-20 slider) win over the storefront stat.
+  const savedYears = experienceYearsOf(profile);
+  if (savedYears !== null) return formatExperienceYears(savedYears);
   const years = Number(yearsExperience) || Number(profile?.years_experience) || 0;
   if (Number.isFinite(years) && years > 0) {
     return `${years} ${years === 1 ? 'year' : 'years'}`;

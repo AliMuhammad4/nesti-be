@@ -255,6 +255,12 @@ const professionalProfileSchema = new mongoose.Schema({
     type: String,
     enum: ['junior', 'mid', 'senior', 'elite'],
   },
+  /** Years of experience, 0-20 (20 = "20+"). experience_level is derived from it. */
+  experience_years: {
+    type: Number,
+    min: 0,
+    max: 20,
+  },
   core_specialization_tags: [
     {
       type: String,

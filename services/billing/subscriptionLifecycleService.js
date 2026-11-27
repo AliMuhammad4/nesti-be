@@ -5,6 +5,7 @@ import { getStripeClient } from './stripeClient.js';
 import { ensureStripeCustomerForUser } from './subscriptionCustomerService.js';
 import { markSubscriptionStripeStateExpired } from './subscriptionLocalService.js';
 import { getFreshSubscriptionForUser } from './subscriptionReadService.js';
+import { clearPaymentActionCache } from './subscriptionInvoiceService.js';
 import {
   clearPendingScheduleIfAny,
   getOrCreateSubscriptionSchedule,
@@ -89,6 +90,54 @@ export async function cancelSubscriptionForUser(user, cancellationReason = '') {
     { returnDocument: 'after' },
   );
   return { ok: true, subscription: synced };
+}
+
+export async function startSubscriptionNowForUser(user) {
+  const subscription = await getFreshSubscriptionForUser(user);
+  if (!subscription?.stripe_subscription_id) {
+    return { ok: false, code: 404, message: 'No paid subscription found. Choose a plan to subscribe.' };
+  }
+  const stripe = getStripeClient();
+  let stripeSubscription;
+  try {
+    stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      const cleared = await markSubscriptionStripeStateExpired(user._id);
+      return { ok: false, code: 409, message: 'The previous Stripe subscription no longer exists. Please subscribe again.', subscription: cleared };
+    }
+    throw error;
+  }
+  if (String(stripeSubscription.status || '').toLowerCase() !== 'trialing') {
+    const synced = await syncStripeSubscription(stripeSubscription, { user_id: String(user._id) });
+    return { ok: true, alreadyActive: true, subscription: synced, invoice: null };
+  }
+  const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+    trial_end: 'now',
+    proration_behavior: 'none',
+    payment_behavior: 'allow_incomplete',
+    cancel_at_period_end: false,
+    expand: ['latest_invoice'],
+  });
+  const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object'
+    ? updated.latest_invoice
+    : null;
+  const synced = await syncStripeSubscription(updated, { user_id: String(user._id) });
+  clearPaymentActionCache();
+  return {
+    ok: true,
+    subscription: synced,
+    invoice: invoice
+      ? {
+          id: invoice.id,
+          status: invoice.status,
+          hostedInvoiceUrl: invoice.hosted_invoice_url || '',
+          amountDue: invoice.amount_due,
+          amountPaid: invoice.amount_paid,
+          displayAmountDue: formatInvoiceAmount(invoice.amount_due, invoice.currency),
+        }
+      : null,
+  };
 }
 
 export async function resumeSubscriptionForUser(user) {
@@ -221,10 +270,12 @@ export async function changeSubscriptionPlanForUser(user, planKey, billingPeriod
       subscription,
       normalizeStripeId(stripeSubscription.schedule),
     );
+    const inStripeTrial = String(stripeSubscription.status || '').toLowerCase() === 'trialing';
     const updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
       items: [{ id: subscriptionItemId, price: priceId }],
-      proration_behavior: 'always_invoice',
-      payment_behavior: 'pending_if_incomplete',
+      ...(inStripeTrial ? { trial_end: 'now' } : {}),
+      proration_behavior: inStripeTrial ? 'none' : 'always_invoice',
+      payment_behavior: inStripeTrial ? 'allow_incomplete' : 'pending_if_incomplete',
       cancel_at_period_end: false,
       expand: ['latest_invoice'],
       metadata: {
@@ -387,10 +438,6 @@ async function cancelStripeSubscriptionQuietly(stripe, subscriptionId, flags, fl
   }
 }
 
-/**
- * When a professional account is converted to a client, cancel leftover Stripe
- * professional (and storefront template) subscriptions instead of only expiring locally.
- */
 export async function cancelProfessionalBillingForConvertedClient(user) {
   const flags = [];
   const subscription = await Subscription.findOne({ user_id: user._id });

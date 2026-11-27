@@ -307,6 +307,8 @@ export async function reconcileCallMinutes() {
     transcription_status: { $in: ['completed', 'failed'] },
     minutes_status: { $in: ['not_ready', 'pending', 'processing', 'failed'] },
     transcription_error_code: { $nin: ['empty_minutes', 'no_transcript_segments'] },
+    // Admin test calls get in-memory minutes only (voiceTestMinutesService).
+    voice_target_type: { $ne: 'test' },
   })
     .sort({ ended_at: 1 })
     .limit(25)

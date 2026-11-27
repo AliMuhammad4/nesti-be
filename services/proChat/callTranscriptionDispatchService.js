@@ -16,6 +16,12 @@ function text(value) {
   return String(value || '').trim();
 }
 
+const RAVI_VOICE_TARGETS = new Set(['test', 'lead', 'client', 'sales']);
+
+export function isRaviVoiceCall(call) {
+  return RAVI_VOICE_TARGETS.has(text(call?.voice_target_type));
+}
+
 function httpLiveKitUrl(value) {
   return text(value).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
 }
@@ -188,6 +194,7 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
       // Join while the call is live so audio is not lost waiting for consent.
       status: { $in: ['connecting', 'active'] },
       transcription_status: 'pending',
+      voice_target_type: { $in: [null, ''] },
     },
     {
       $set: {
@@ -200,6 +207,9 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
   ).lean();
 
   if (claimed) {
+    if (isRaviVoiceCall(claimed)) {
+      return { ok: false, status: 'skipped', code: 'ravi_call' };
+    }
     const client = dispatchClient();
     if (!client) {
       return markFailed(
@@ -230,6 +240,9 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
 
   if (!existing) {
     return { ok: false, status: 'failed', code: 'call_not_found' };
+  }
+  if (isRaviVoiceCall(existing)) {
+    return { ok: false, status: 'skipped', code: 'ravi_call' };
   }
 
   const liveForDispatch = ['connecting', 'active'].includes(text(existing.status));
@@ -283,6 +296,7 @@ export async function dispatchTranscriptionWorkerForCall(callId) {
 }
 
 export async function ensureTranscriptionForActiveCall(call) {
+  if (isRaviVoiceCall(call)) return { ok: false, status: 'skipped', code: 'ravi_call' };
   if (!featureEnabled()) return { ok: false, status: 'disabled', code: 'transcription_disabled' };
   const normalizedCallId = text(call?._id || call?.call_id);
   const status = text(call?.status);

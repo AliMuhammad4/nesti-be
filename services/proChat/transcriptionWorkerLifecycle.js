@@ -4,6 +4,8 @@ import logger from '../../utils/logger.js';
 import ProfessionalCall from '../../models/ProfessionalCall.js';
 import {
   probeTranscriptionWorkerHealth,
+  RAVI_WORKER_REQUEST_WAIT_MS,
+  readWorkerHealthProblem,
   resolveRaviWorkerPort,
   resolveTranscriptionWorkerPort,
   spawnRaviWorkerProcess,
@@ -85,6 +87,33 @@ function killTrackedTranscriptionWorker() {
   transcriptionWorkerProcess = null;
 }
 
+// Under Render's default 30 s shutdown window, so live calls can finish on a deploy.
+export const SHUTDOWN_WAIT_MS = 25_000;
+let shuttingDown = false;
+
+export function waitForChildExit(child, ms) {
+  if (!child || child.exitCode !== null || child.signalCode) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+async function stopChildrenGently() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const children = [transcriptionWorkerProcess, raviWorkerProcess].filter((child) => child && child.exitCode === null);
+  logger.info('Shutting down: workers stop taking calls and finish the live ones', { workers: children.length, wait_ms: SHUTDOWN_WAIT_MS });
+  killTrackedTranscriptionWorker();
+  killTrackedRaviWorker();
+  const finished = await Promise.all(children.map((child) => waitForChildExit(child, SHUTDOWN_WAIT_MS)));
+  if (finished.includes(false)) logger.warn('A worker was still busy at shutdown', { wait_ms: SHUTDOWN_WAIT_MS });
+  process.exit(0);
+}
+
 function registerTranscriptionWorkerShutdownHooks() {
   if (shutdownHooksRegistered) return;
   shutdownHooksRegistered = true;
@@ -93,7 +122,7 @@ function registerTranscriptionWorkerShutdownHooks() {
     killTrackedRaviWorker();
   };
   process.once('SIGINT', stopChildren);
-  process.once('SIGTERM', stopChildren);
+  process.once('SIGTERM', () => void stopChildrenGently());
   process.once('exit', stopChildren);
 }
 
@@ -193,6 +222,7 @@ export async function ensureTranscriptionWorkerRunning() {
         const interruptedCalls = await ProfessionalCall.find({
           status: { $in: ['connecting', 'active'] },
           transcription_status: { $in: ['dispatching', 'active'] },
+          voice_target_type: { $in: [null, ''] },
         })
           .select('_id')
           .lean()
@@ -203,6 +233,7 @@ export async function ensureTranscriptionWorkerRunning() {
               _id: { $in: interruptedCalls.map((call) => call._id) },
               status: { $in: ['connecting', 'active'] },
               transcription_status: { $in: ['dispatching', 'active'] },
+              voice_target_type: { $in: [null, ''] },
             },
             {
               $set: {
@@ -287,6 +318,12 @@ let raviWorkerState = 'stopped';
 let raviReadyPromise = null;
 let raviReadyResolve = null;
 let usingExternalRaviWorker = false;
+let lastRaviWorkerProblem = '';
+
+/** Last reason the Ravi worker was not usable ('' when it was). */
+export function raviWorkerProblem() {
+  return lastRaviWorkerProblem;
+}
 
 function liveKitConfigured() {
   return Boolean(text(process.env.LIVEKIT_URL) && text(process.env.LIVEKIT_API_KEY) && text(process.env.LIVEKIT_API_SECRET));
@@ -319,6 +356,10 @@ function shouldStartEmbeddedRaviWorker() {
 /** Start Ravi as a child of this API process (npm start and npm run dev). */
 export async function ensureRaviWorkerRunning() {
   if (isTestLifecycle()) return true;
+  if (shuttingDown) {
+    lastRaviWorkerProblem = 'restarting';
+    return false;
+  }
   if (!liveKitConfigured()) {
     logger.warn('Ravi worker not started because LiveKit credentials are missing');
     return false;
@@ -328,12 +369,15 @@ export async function ensureRaviWorkerRunning() {
   const healthUrl = transcriptionWorkerHealthUrl(workerPort);
 
   if (!shouldStartEmbeddedRaviWorker()) {
-    if (await probeTranscriptionWorkerHealth(workerPort) || await waitForTranscriptionWorkerHealth(workerPort, 20_000)) {
+    // npm run dev owns the worker; a short wait covers a restart in progress.
+    if (await probeTranscriptionWorkerHealth(workerPort) || await waitForTranscriptionWorkerHealth(workerPort, RAVI_WORKER_REQUEST_WAIT_MS)) {
       usingExternalRaviWorker = true;
       raviWorkerState = 'ready';
+      lastRaviWorkerProblem = '';
       return true;
     }
-    logger.warn('External Ravi worker is not healthy', { port: workerPort, health_url: healthUrl });
+    lastRaviWorkerProblem = await readWorkerHealthProblem(workerPort);
+    logger.warn('External Ravi worker is not healthy', { port: workerPort, health_url: healthUrl, reason: lastRaviWorkerProblem });
     return false;
   }
 
@@ -376,10 +420,11 @@ export async function ensureRaviWorkerRunning() {
       logger.warn('Ravi worker process exited while starting', { code, signal, port: workerPort });
       return;
     }
+    if (!usingExternalRaviWorker) raviWorkerState = 'stopped';
+    if (shuttingDown) return;
     if (code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGINT') {
       logger.warn('Ravi worker exited unexpectedly', { code, signal, port: workerPort });
     }
-    if (!usingExternalRaviWorker) raviWorkerState = 'stopped';
     if (!usingExternalRaviWorker && shouldStartEmbeddedRaviWorker() && signal !== 'SIGTERM' && signal !== 'SIGINT') {
       setTimeout(() => {
         void ensureRaviWorkerRunning().catch((error) => {
@@ -401,6 +446,7 @@ export async function ensureRaviWorkerRunning() {
   }
 
   logger.warn('Ravi worker registration timed out', { port: workerPort });
+  lastRaviWorkerProblem = await readWorkerHealthProblem(workerPort);
   killTrackedRaviWorker();
   raviWorkerState = 'stopped';
   raviReadyResolve?.(false);

@@ -10,7 +10,7 @@ export async function rememberLine(callId, speaker, line) {
   const spoken = text(line);
   if (!callId || !spoken) return;
   const stamp = Date.now();
-  await ingestFinalTranscriptSegment({
+  const segment = {
     callId,
     segmentId: `${speaker}-${stamp}`,
     speakerUserId: speaker === 'agent' ? 'nesti-voice-agent' : 'caller',
@@ -20,12 +20,22 @@ export async function rememberLine(callId, speaker, line) {
     providerEventId: `ravi:${callId}:${speaker}:${stamp}`,
     model: REPLY_MODEL,
     anyLanguage: true,
-  }).catch((error) => {
-    const key = String(callId);
-    if (transcriptWarned.has(key)) return;
-    transcriptWarned.add(key);
-    logger.warn('Ravi transcript line was not saved', { call_id: callId, message: error?.message });
-  });
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await ingestFinalTranscriptSegment(segment);
+      return;
+    } catch (error) {
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+        continue;
+      }
+      const key = String(callId);
+      if (transcriptWarned.has(key)) return;
+      transcriptWarned.add(key);
+      logger.warn('Ravi transcript line was not saved', { call_id: callId, message: error?.message });
+    }
+  }
 }
 
 export function dropFiller(item, filler) {

@@ -1,7 +1,7 @@
 import logger from '../../utils/logger.js';
 
 const PARTIAL_LOG_MS = 5000;
-const NO_TEXT_WAIT_MS = 3000;
+const NO_TEXT_WAIT_MS = 8000;
 const WAITING_MAX_MS = 10_000;
 // Shorter sounds are usually a cough or a click, not a lost sentence.
 const MISSED_MIN_SPEECH_MS = 800;
@@ -59,6 +59,7 @@ export function watchCallerHearing(c) {
       noTextTimers.delete(timer);
       if (utterance.finals || c.closed) return;
       logger.warn(`Ravi heard the caller speak for ${spokeMs} ms but no final transcript arrived within ${NO_TEXT_WAIT_MS / 1000} s (partials=${utterance.partials})`, { call_id: callId });
+      if (utterance.partials > 0) return;
       if (spokeMs >= MISSED_MIN_SPEECH_MS && !heard.current) c.onMissedWords?.();
     }, NO_TEXT_WAIT_MS);
     timer.unref?.();

@@ -20,8 +20,37 @@ import {
 } from '../services/proChat/transcriptionWorkerRuntime.js';
 
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const workerPort = resolveTranscriptionWorkerPort();
-const logPath = transcriptionWorkerLogPath();
+const isDevLaunch = process.env.npm_lifecycle_event === 'dev' && !process.argv.includes('--production');
+const logTag = isDevLaunch ? 'dev' : 'start';
+
+function parseListenPort(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : null;
+}
+
+function nextFreePort(preferred, used) {
+  let port = preferred;
+  for (let i = 0; i < 65535; i += 1) {
+    if (!used.has(port)) return port;
+    port += 1;
+    if (port > 65535) port = 1024;
+  }
+  return preferred;
+}
+
+function assignWorkerPorts() {
+  const used = new Set();
+  const apiPort = parseListenPort(process.env.PORT);
+  if (!isDevLaunch && apiPort) used.add(apiPort);
+  const transcriptionPort = nextFreePort(resolveTranscriptionWorkerPort(), used);
+  used.add(transcriptionPort);
+  const raviPort = nextFreePort(resolveRaviWorkerPort(), used);
+  return { apiPort, transcriptionPort, raviPort };
+}
+
+const ports = assignWorkerPorts();
+const workerPort = ports.transcriptionPort;
+const logPath = isDevLaunch ? transcriptionWorkerLogPath() : null;
 const WORKER_HEALTH_POLL_MS = 15_000;
 const WORKER_HEALTH_FAILURE_THRESHOLD = Math.max(
   1,
@@ -58,7 +87,7 @@ function takeLauncherLock() {
   try {
     const other = Number(fs.readFileSync(lockPath, 'utf8').trim());
     if (other && other !== process.pid && isAlive(other)) {
-      console.error(`[dev] npm run dev is already running (pid ${other}). Stop that one first (Ctrl+C in its window, or: taskkill /PID ${other} /T /F), then start again.`);
+      console.error(`[${logTag}] npm run dev is already running (pid ${other}). Stop that one first (Ctrl+C in its window, or: taskkill /PID ${other} /T /F), then start again.`);
       process.exit(1);
     }
   } catch {
@@ -180,6 +209,13 @@ function readableMemoryLine(record) {
 
 function readableMessage(record) {
   const reason = typeof record.error?.message === 'string' ? record.error.message : '';
+  if (record.msg === 'VAD slower than realtime') {
+    const extra = Number(record.extraInferenceTimeMs);
+    if (Number.isFinite(extra) && extra > 0) {
+      return `The speaking detector is running behind the live audio (${Math.round(extra)} ms).`;
+    }
+    return 'The speaking detector is running behind the live audio.';
+  }
   const lost = record.msg.match(/^failed to connect to LiveKit server \([^)]*\), retrying in (\d+) seconds: \((\d+)\/([^)]+)\)$/);
   if (lost) return liveKitLostMessage(lost[1], lost[2], lost[3], reason);
   if (/failed to connect to LiveKit|worker connection closed unexpectedly/i.test(record.msg)) {
@@ -236,31 +272,38 @@ function quietDebugLines(stream, logPath) {
 
 async function startWorker({ reuseHealthy = true } = {}) {
   if (reuseHealthy && (await probeTranscriptionWorkerHealth(workerPort))) {
-    console.log(`[dev] Reusing transcription worker on :${workerPort}`);
+    console.log(`[${logTag}] Reusing transcription worker on :${workerPort}`);
     return null;
   }
 
-  console.log(`[dev] Starting transcription worker on :${workerPort}`);
-  console.log(`[dev] Worker log: ${logPath}`);
+  console.log(`[${logTag}] Starting transcription worker on :${workerPort}`);
+  if (logPath) console.log(`[${logTag}] Worker log: ${logPath}`);
 
   const child = spawnTranscriptionWorkerProcess({
     port: workerPort,
     logPath,
-    stdioMode: 'pipe-log',
+    stdioMode: isDevLaunch ? 'pipe-log' : 'pipe',
   });
 
-  child.stdout?.on('data', (chunk) => appendTranscriptionWorkerLog(chunk, logPath));
-  child.stderr?.on('data', (chunk) => appendTranscriptionWorkerLog(chunk, logPath));
+  if (isDevLaunch) {
+    child.stdout?.on('data', (chunk) => appendTranscriptionWorkerLog(chunk, logPath));
+    child.stderr?.on('data', (chunk) => appendTranscriptionWorkerLog(chunk, logPath));
+  } else {
+    const toStdout = quietDebugLines(process.stdout, null);
+    const toStderr = quietDebugLines(process.stderr, null);
+    child.stdout?.on('data', (chunk) => toStdout(chunk));
+    child.stderr?.on('data', (chunk) => toStderr(chunk));
+  }
   child.on('exit', (code, signal) => {
     if (!shuttingDown) {
-      console.warn(`[dev] Transcription worker exited (code=${code}, signal=${signal})`);
+      console.warn(`[${logTag}] Transcription worker exited (code=${code}, signal=${signal})`);
     }
   });
 
   const ready = await waitForTranscriptionWorkerHealth(workerPort);
   if (!ready) {
-    console.error('[dev] Transcription worker failed to become ready. The API will keep running and the worker will be retried.');
-    console.error(readTranscriptionWorkerLogTail());
+    console.error(`[${logTag}] Transcription worker failed to become ready. The API will keep running and the worker will be retried.`);
+    if (logPath) console.error(readTranscriptionWorkerLogTail());
     try {
       child.kill('SIGTERM');
     } catch {
@@ -269,25 +312,29 @@ async function startWorker({ reuseHealthy = true } = {}) {
     return null;
   }
 
-  console.log(`[dev] Transcription worker ready (pid ${child.pid})`);
+  console.log(`[${logTag}] Transcription worker ready (pid ${child.pid})`);
   return child;
 }
 
 async function startRaviWorker({ reuseHealthy = true } = {}) {
-  const raviPort = resolveRaviWorkerPort();
+  const raviPort = ports.raviPort;
   if (reuseHealthy && (await probeTranscriptionWorkerHealth(raviPort))) {
-    console.log(`[dev] Reusing Ravi worker on :${raviPort}`);
+    console.log(`[${logTag}] Reusing Ravi worker on :${raviPort}`);
     return null;
   }
-  const raviLog = raviWorkerLogPath();
-  console.log(`[dev] Starting Ravi worker on :${raviPort}`);
-  console.log(`[dev] Ravi worker log: ${raviLog}`);
+  const raviLog = isDevLaunch ? raviWorkerLogPath() : null;
+  console.log(`[${logTag}] Starting Ravi worker on :${raviPort}`);
+  if (raviLog) console.log(`[${logTag}] Ravi worker log: ${raviLog}`);
   // stdin stays open so the worker can be asked to stop cleanly (Windows
   // can't deliver SIGTERM to it) and stops by itself if this launcher dies.
   const child = spawnRaviWorkerProcess({
     port: raviPort,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, RAVI_STDIN_CONTROL: '1' },
+    env: {
+      ...process.env,
+      RAVI_STDIN_CONTROL: '1',
+      NESTI_RAVI_LAUNCH: isDevLaunch ? 'dev' : 'start',
+    },
   });
   child.stdin?.on('error', () => {});
   const toStdout = quietDebugLines(process.stdout, raviLog);
@@ -300,14 +347,14 @@ async function startRaviWorker({ reuseHealthy = true } = {}) {
   });
   child.on('exit', (code, signal) => {
     if (shuttingDown || raviStopRequested) return;
-    console.warn(`[dev] Ravi worker exited (code=${code}, signal=${signal})`);
+    console.warn(`[${logTag}] Ravi worker exited (code=${code}, signal=${signal})`);
     if (raviWorker === child) scheduleRaviRestart('exited');
   });
   const ready = await waitForTranscriptionWorkerHealth(raviPort);
   if (!ready) {
-    console.error('[dev] Ravi worker did not become ready. Test calls cannot connect until it does.');
+    console.error(`[${logTag}] Ravi worker did not become ready. Test calls cannot connect until it does.`);
   } else {
-    console.log(`[dev] Ravi worker ready (pid ${child.pid})`);
+    console.log(`[${logTag}] Ravi worker ready (pid ${child.pid})`);
   }
   return child;
 }
@@ -316,7 +363,7 @@ function scheduleRaviRestart(reason) {
   if (shuttingDown || raviRestartTimer || raviRestarting) return;
   const delayMs = Math.min(60_000, 2_000 * 2 ** raviRestartCount);
   raviRestartCount += 1;
-  console.warn(`[dev] Ravi worker ${reason}. Restarting in ${Math.round(delayMs / 1000)} s…`);
+  console.warn(`[${logTag}] Ravi worker ${reason}. Restarting in ${Math.round(delayMs / 1000)} s…`);
   raviRestartTimer = setTimeout(async () => {
     raviRestartTimer = null;
     if (shuttingDown) return;
@@ -325,14 +372,14 @@ function scheduleRaviRestart(reason) {
     raviWorker = null;
     await stopRaviWorker(previous);
     try {
-      if (await probeTranscriptionWorkerHealth(resolveRaviWorkerPort())) {
+      if (await probeTranscriptionWorkerHealth(ports.raviPort)) {
         // Something else still holds the port: usually a second npm run dev.
-        console.error(`[dev] Port ${resolveRaviWorkerPort()} is still used by another Ravi worker, probably from another npm run dev window. Close the other one; this one won't start a second worker.`);
+        console.error(`[${logTag}] Port ${ports.raviPort} is still used by another Ravi worker, probably from another npm run dev window. Close the other one; this one won't start a second worker.`);
         return;
       }
       raviWorker = await startRaviWorker({ reuseHealthy: false });
     } catch (error) {
-      console.error('[dev] Failed to restart Ravi worker:', error?.message || error);
+      console.error(`[${logTag}] Failed to restart Ravi worker:`, error?.message || error);
     } finally {
       raviRestarting = false;
     }
@@ -344,7 +391,7 @@ let raviNetworkWarned = false;
 
 async function checkRaviWorker() {
   if (shuttingDown || raviRestartTimer || raviRestarting) return;
-  const port = resolveRaviWorkerPort();
+  const port = ports.raviPort;
   // The process is still up. A dropped LiveKit lookup must not kill it and start another.
   if (raviWorker && raviWorker.exitCode === null) {
     const healthy = await probeTranscriptionWorkerHealth(port);
@@ -356,7 +403,7 @@ async function checkRaviWorker() {
     }
     if (!raviNetworkWarned) {
       raviNetworkWarned = true;
-      console.warn('[dev] Ravi is still running. A dropped connection will not restart him.');
+      console.warn(`[${logTag}] Ravi is still running. A dropped connection will not restart him.`);
     }
     return;
   }
@@ -371,7 +418,7 @@ async function checkRaviWorker() {
     return;
   }
   consecutiveRaviHealthFailures += 1;
-  console.warn(`[dev] Ravi worker health check failed (${consecutiveRaviHealthFailures}/${WORKER_HEALTH_FAILURE_THRESHOLD})`);
+  console.warn(`[${logTag}] Ravi worker health check failed (${consecutiveRaviHealthFailures}/${WORKER_HEALTH_FAILURE_THRESHOLD})`);
   if (consecutiveRaviHealthFailures < WORKER_HEALTH_FAILURE_THRESHOLD) return;
   consecutiveRaviHealthFailures = 0;
   scheduleRaviRestart('is unhealthy');
@@ -385,6 +432,7 @@ function startServer() {
       CALL_TRANSCRIPTION_WORKER_EMBEDDED: 'false',
       CALL_TRANSCRIPTION_WORKER_PORT: String(workerPort),
       RAVI_WORKER_EMBEDDED: 'false',
+      RAVI_WORKER_PORT: String(ports.raviPort),
     },
     stdio: 'inherit',
     windowsHide: true,
@@ -394,7 +442,7 @@ function startServer() {
 
 function scheduleServerRestart(reason = 'exited') {
   if (shuttingDown || serverRestartTimer || apiRestarting) return;
-  console.warn(`[dev] API server ${reason}. Restarting in ${Math.round(SERVER_RESTART_DELAY_MS / 1000)} s…`);
+  console.warn(`[${logTag}] API server ${reason}. Restarting in ${Math.round(SERVER_RESTART_DELAY_MS / 1000)} s…`);
   serverRestartTimer = setTimeout(() => {
     serverRestartTimer = null;
     if (shuttingDown) return;
@@ -413,7 +461,7 @@ function scheduleServerRestart(reason = 'exited') {
 function wireServerLifecycle(child) {
   child.on('exit', (code, signal) => {
     if (shuttingDown || apiRestarting) return;
-    console.warn(`[dev] API server exited (code=${code}, signal=${signal})`);
+    console.warn(`[${logTag}] API server exited (code=${code}, signal=${signal})`);
     scheduleServerRestart('exited');
   });
 }
@@ -475,17 +523,17 @@ function startHealthWatch() {
       }
       consecutiveWorkerHealthFailures += 1;
       console.warn(
-        `[dev] Transcription worker health check failed (${consecutiveWorkerHealthFailures}/${WORKER_HEALTH_FAILURE_THRESHOLD})`,
+        `[${logTag}] Transcription worker health check failed (${consecutiveWorkerHealthFailures}/${WORKER_HEALTH_FAILURE_THRESHOLD})`,
       );
       if (consecutiveWorkerHealthFailures < WORKER_HEALTH_FAILURE_THRESHOLD) return;
-      console.warn('[dev] Transcription worker unhealthy — restarting…');
+      console.warn(`[${logTag}] Transcription worker unhealthy — restarting…`);
       consecutiveWorkerHealthFailures = 0;
       stopWorkerProcess(worker);
       worker = null;
       try {
         worker = await startWorker({ reuseHealthy: false });
       } catch (error) {
-        console.error('[dev] Failed to restart transcription worker:', error?.message || error);
+        console.error(`[${logTag}] Failed to restart transcription worker:`, error?.message || error);
       }
     })().finally(() => {
       restartPromise = null;
@@ -641,12 +689,22 @@ function watchRaviCode() {
   }
 }
 
-takeLauncherLock();
+if (isDevLaunch) takeLauncherLock();
+if (!isDevLaunch && ports.apiPort) {
+  console.log(`[${logTag}] API port ${ports.apiPort}`);
+}
+if (!isDevLaunch) {
+  const defaultTranscriptionPort = resolveTranscriptionWorkerPort();
+  const defaultRaviPort = resolveRaviWorkerPort();
+  if (ports.transcriptionPort !== defaultTranscriptionPort || ports.raviPort !== defaultRaviPort) {
+    console.log(`[${logTag}] Worker ports moved off the API port: transcription ${ports.transcriptionPort}, Ravi ${ports.raviPort}`);
+  }
+}
 worker = await startWorker();
 raviWorker = await startRaviWorker();
 // npm run dev restarts when code changes. npm start runs the same workers
 // without that watcher, so a saved file does not bounce a live server.
-if (process.env.npm_lifecycle_event === 'dev') {
+if (isDevLaunch) {
   watchRaviCode();
   watchApiCode();
 }

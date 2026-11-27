@@ -81,9 +81,15 @@ async function generate(callId, call, role) {
   const entry = cache.get(callId);
   if (!entry) return;
   try {
-    const segments = await ProfessionalCallTranscriptSegment.find({ call_id: call._id, final: true })
-      .sort({ createdAt: 1, _id: 1 })
-      .lean();
+    let segments = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      segments = await ProfessionalCallTranscriptSegment.find({ call_id: call._id, final: true })
+        .sort({ createdAt: 1, _id: 1 })
+        .lean();
+      const heardCaller = segments.some((row) => row.speaker_user_id !== 'nesti-voice-agent');
+      if (heardCaller || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
     const callerSpoke = segments.some((row) => row.speaker_user_id !== 'nesti-voice-agent');
     const base = {
       caller_role: ROLE_LABELS[role] || ROLE_LABELS.client,

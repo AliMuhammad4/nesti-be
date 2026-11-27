@@ -150,6 +150,8 @@ export function spawnTranscriptionWorkerProcess({
     }
   } else if (stdioMode === 'ignore') {
     stdio = 'ignore';
+  } else if (stdioMode === 'pipe') {
+    stdio = ['ignore', 'pipe', 'pipe'];
   } else {
     stdio = 'inherit';
   }

@@ -10,10 +10,16 @@ export function waitingOnAnswer(c) {
   return /[?؟]/.test(String(c?.lastRaviText || ''));
 }
 
+/** Words are already arriving, so this is not silence and not a missed sentence. */
+export function wordsStillArriving(c) {
+  const since = c?.heard?.sinceRavi;
+  return Boolean(since && since.finals < 1 && since.partials > 0);
+}
+
 /** The caller spoke since Ravi's last line, but no final text came back, and Ravi has not asked again yet. */
 export function missedCaller(c) {
   const since = c?.heard?.sinceRavi;
-  if (!since || since.starts < 1 || since.finals > 0) return false;
+  if (!since || since.starts < 1 || since.finals > 0 || since.partials > 0) return false;
   return c.missedAskedAtFinals !== c.heard.allFinals;
 }
 
@@ -55,7 +61,7 @@ export function watchQuiet(c) {
     if (event?.oldState === 'speaking' && event?.newState !== 'speaking') {
       c.raviDoneAt = Date.now();
       c.greeted = true;
-      if (event?.newState === 'listening' && !c.nudged && !c.closing && !c.closed) armQuiet(QUIET_MS);
+      if (!c.isTest && event?.newState === 'listening' && !c.nudged && !c.closing && !c.closed) armQuiet(QUIET_MS);
     }
     if (event?.newState === 'thinking') stopAside();
     if (event?.newState === 'speaking' || event?.newState === 'thinking') clearTimeout(c.quietTimer);
@@ -63,13 +69,14 @@ export function watchQuiet(c) {
   session.on('user_state_changed', (event) => {
     if (event?.oldState !== 'speaking' || event?.newState === 'speaking') return;
     c.callerDoneAt = Date.now();
-    if (c.closing || c.closed || c.callerEnding) return;
+    if (c.closing || c.closed || c.callerEnding || c.isTest) return;
     if (c.nudged) armHangUp(SILENCE_HANGUP_MS);
     else if (c.greeted && session.agentState === 'listening') armQuiet(QUIET_MS);
   });
   function endAfterSilence() {
     c.silenceTimer = null;
     if (c.closing || c.closed || c.callerEnding) return;
+    if (c.isTest) return;
     if (callerBusy() || session.agentState === 'speaking' || session.agentState === 'thinking') {
       armHangUp(HEARD_GRACE_MS);
       return;
@@ -114,8 +121,8 @@ export function watchQuiet(c) {
   function sayCheckIn() {
     if (c.closing || c.closed || c.callerEnding || c.nudged || !c.greeted) return;
     if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
-    if (callerBusy()) {
-      armQuiet(HEARD_GRACE_MS);
+    if (c.isTest || wordsStillArriving(c) || callerBusy()) {
+      if (!c.isTest) armQuiet(HEARD_GRACE_MS);
       return;
     }
     const last = lastSound();

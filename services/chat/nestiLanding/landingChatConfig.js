@@ -614,6 +614,20 @@ export function landingSettingsView(doc, embed = null) {
   };
 }
 
+function faqBelongsToRole(id, role) {
+  const owner = String(id || '').match(/^(client|investor|agent|broker|lawyer)(?=-)/);
+  return !owner || owner[1] === role;
+}
+
+function questionOwnedByAnotherRole(question, role) {
+  const asked = String(question || '').trim().toLowerCase();
+  if (!asked) return false;
+  return LANDING_ROLE_CUSTOMIZATIONS.some((other) => (
+    other !== role
+    && (LANDING_CHAT_FAQS[other] || []).some((faq) => String(faq.question || '').trim().toLowerCase() === asked)
+  ));
+}
+
 export function normalizeLandingContactFields(raw) {
   if (!Array.isArray(raw)) return [...DEFAULT_CONTACT_FIELDS];
   return [...new Set(raw.map((item) => clip(String(item || '').trim(), 40)).filter((item) => LANDING_CONTACT_FIELDS.includes(item)))].slice(0, 4);
@@ -662,7 +676,12 @@ export function sanitizeLandingRoleCustomizations(input = {}) {
         answer: clip(faq?.answer, 1200),
         is_default: faq?.is_default === true,
       }))
-      .filter((faq) => faq.question && faq.answer);
+      .filter((faq) => (
+        faq.question
+        && faq.answer
+        && faqBelongsToRole(faq.id, role)
+        && !questionOwnedByAnotherRole(faq.question, role)
+      ));
     const defaultFaqs = LANDING_CHAT_FAQS[role].map((faq, index) => {
       const id = `${role}-faq-${String(index + 1).padStart(2, '0')}`;
       const saved = savedFaqs.find((item) => (

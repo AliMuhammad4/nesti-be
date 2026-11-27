@@ -849,3 +849,33 @@ test('studio customizations reach the live homepage prompt', () => {
   const longAnswer = 'First fact. Second fact. Third fact. Fourth fact.';
   assert.match(savedAnswerInstruction(longAnswer), /Keep every fact.*First fact\. Second fact\. Third fact\. Fourth fact\./);
 });
+
+test('an agent preview does not inherit client or investor answers', () => {
+  const saved = settingsPayload({
+    welcome_message: 'Are you buying, selling, or looking at the next property?',
+    role_customizations: {
+      agent: {
+        faqs: [
+          { id: 'client-faq-01', question: 'How does Nesti help me buy a home?', answer: 'Buyer journey answer.' },
+          { id: 'investor-custom-1', question: 'How does Nesti help with an investment property?', answer: 'Investor journey answer.' },
+        ],
+      },
+    },
+  });
+  assert.equal(saved.role_customizations.agent.faqs.some((faq) => String(faq.id).startsWith('client-')), false);
+  assert.equal(saved.role_customizations.agent.faqs.some((faq) => String(faq.id).startsWith('investor-')), false);
+  assert.equal(
+    speakToVisitor(saved.welcome_message, 'welcome', 'agent'),
+    'What would make the biggest difference in how you handle new leads?',
+  );
+  const prompt = nestiLandingFlow.buildSystemPrompt(null, {
+    audience: 'agent',
+    landingGuides: saved,
+    contactKnown: true,
+    opening: true,
+  });
+  assert.match(prompt, /This visitor is a real estate agent/);
+  assert.match(prompt, /new leads/);
+  assert.doesNotMatch(prompt, /How does Nesti help me buy a home|Buyer journey answer|Investor journey answer|looking at the next property/);
+  assert.doesNotMatch(prompt, /This visitor is a client|This visitor is an investor/);
+});

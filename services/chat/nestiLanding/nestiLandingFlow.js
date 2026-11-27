@@ -297,6 +297,14 @@ function writtenForTheVisitor(value) {
   return toYou && !aboutThem;
 }
 
+function clashesWithRole(line, role) {
+  const buyerOrInvestor = /\b(buy(?:ing)?|sell(?:ing)?|invest(?:or|ing|ment)?|next property|first[- ]time|home search)\b/i.test(line);
+  const workspace = /\b(leads?|storefront|follow-?ups?|pre-?approvals?|renewals?|closing file|borrowers?)\b/i.test(line);
+  if (role === 'agent' || role === 'broker' || role === 'lawyer') return buyerOrInvestor;
+  if (role === 'client' || role === 'investor') return workspace && !buyerOrInvestor;
+  return false;
+}
+
 const WARM_WELCOME = {
   client: 'Good to meet you. Are you buying, selling, or still working that out?',
   investor: 'Good to meet you. What do you want to get clear on for the next property?',
@@ -325,8 +333,8 @@ function spokenRole(role) {
 export function speakToVisitor(raw, kind = 'welcome', role = 'agent') {
   const line = String(raw || '').trim().replace(/\s+/g, ' ');
   if (!line) return '';
-  if (writtenForTheVisitor(line)) return tidyVisitorSentence(line);
   const key = spokenRole(role);
+  if (writtenForTheVisitor(line) && !clashesWithRole(line, key)) return tidyVisitorSentence(line);
   if (kind === 'signup') {
     return /warm|greet|kind|friend/i.test(line)
       ? "If you'd like to keep going, you can open a Nesti account and start on the plan that fits what we talked about."
@@ -536,7 +544,7 @@ export const nestiLandingFlow = {
         ? 'This visitor is a real estate lawyer. Answer only with the lawyer workspace: a chatbot they create and place on any page, a storefront that is their own web page, referrals, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent, plus the agreement, title, lender instructions, and closing. Do not describe buyer matching or budget tools.'
         : audience === 'broker'
           ? 'This visitor is a mortgage broker. Answer only with the broker workspace: a chatbot they create and place on any page, a storefront that is their own web page, referrals, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent, plus pre-approval, affordability, renewal, and first-home financing. Do not describe buyer matching or budget tools.'
-          : 'This visitor is a real estate agent. Answer only with the agent workspace: a chatbot they create and place on any page, a storefront that is their own web page, referrals, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent. Do not describe buyer matching or budget tools.';
+          : 'This visitor is a real estate agent. Answer only with the agent workspace: a chatbot they create and place on any page, a storefront that is their own web page, referrals, AI-generated emails, nurture follow-ups, pipeline management, performance tracking, autopilot, and a voice agent. Do not describe buyer matching or budget tools. Buyers, sellers, and investors named in a saved answer are this agent\'s customers, not this visitor. Do not ask this visitor if they are buying, selling, or investing.';
     const roleAnswer = knowledgeWins
       ? `${builtInRoleAnswer} The saved admin answers, facts, focus topics, and instructions for this role come first. Use this built-in list only as background.`
       : builtInRoleAnswer;
@@ -641,7 +649,7 @@ export const nestiLandingFlow = {
     const qualificationAsks = {
       visitor_role: 'whether they are a buyer, a seller, an agent, a broker, or a lawyer',
       nesti_goal: 'what they want from Nesti',
-      location: 'where they are looking or where they work',
+      location: audience === 'client' || audience === 'investor' ? 'where they are looking' : 'where they work',
       timeline: 'their timeline',
       demo_interest: 'whether they want a demo',
     };
@@ -675,8 +683,9 @@ export const nestiLandingFlow = {
     const welcomeNote = text(guides.welcome_message);
     const welcome = speakToVisitor(welcomeNote, 'welcome', audience);
     const hasTone = Boolean(roleCustomization?.personalities?.length);
+    const noteAgrees = welcome && tidyVisitorSentence(welcomeNote).toLowerCase() === welcome.toLowerCase();
     const openingTurn = welcome
-      ? `This is your first message. Write two short sentences and nothing more. Start with "${greetingLine}" The second sentence should feel like this, in your own words, for this ${audience}: ${welcome}. The admin's note was "${welcomeNote}". Do not quote that note. Do not say Welcome, I'm glad you're here, or one step at a time. Do not mention plans or prices.`
+      ? `This is your first message. Write two short sentences and nothing more. Start with "${greetingLine}" The second sentence should feel like this, in your own words, for this ${audience}: ${welcome}.${noteAgrees ? ` The admin's note was "${welcomeNote}". Do not quote that note.` : ''} Do not say Welcome, I'm glad you're here, or one step at a time. Do not mention plans or prices.`
       : hasTone
         ? `This is your first message. Write two short sentences and nothing more. Start with "${greetingLine}" The second sentence asks ${questionStyle} about what they hope for. Do not use a generic scripted opening. Do not mention plans, prices, subscriptions, or services. Do not write [[plans]].`
         : `This is your first message. Write three short sentences and nothing more. Start with "${greetingLine}" In the second sentence, ${personality.opening}${place ? `, and mention you can help in ${place}` : ''}${topicLabel ? `, for ${topicLabel}` : ''}. The third sentence asks ${questionStyle} about what they hope for. ${cadence} Do not mention plans, prices, subscriptions, or services. Do not write [[plans]]. Do not use bullets or dashes. Do not ask for company, city, country, or topic.`;
@@ -697,6 +706,7 @@ ${profileLine}
 ${nameLine}
 ${serviceRule}
 ${roleAnswer}
+Stay on this visitor's role, ${audience}. Do not answer an agent, broker, or lawyer as a buyer, a seller, or an investor. Do not answer a client or an investor with the agent, broker, or lawyer workspace.
 ${knowledgeWins ? 'Saved admin knowledge for this visitor role outranks the built-in role script. When a saved answer answers the question, use that answer. Keep this visitor inside their own plan catalog.' : ''}
 ${roleCustomizationBlock}
 ${painLine}
